@@ -1,0 +1,324 @@
+"""JSON-formatlı, rotasiya edilən struktur loglama (spesifikasiya bölmə 2).
+
+Dörd ayrı kanal:
+    audit.log     — audit-kritik biznes hadisələri (override, cərimə, icazə dəyişikliyi)
+    security.log  — autentifikasiya, PIN lockout, privilege dəyişiklikləri
+    error.log     — handled/unhandled exception-lar, crash izləri
+    app.log       — ümumi tətbiq axını, sync worker, health monitor
+
+İstifadə::
+
+    configure_logging()
+    log = get_logger(__name__)
+    log.info("Sync tamamlandı", extra={"server_id": 3, "rows": 120})
+
+    audit = get_logger("kompasos.audit", channel=LogChannel.AUDIT)
+    audit.info("MANUAL_TIME_OVERRIDE", extra={"operator_id": 7, "employee_id": 22})
+
+PII QAYDASI: `REDACTED_KEYS` siyahısındakı açarlar avtomatik maskalanır — PIN,
+şifrə, token, Fernet açarı heç vaxt log-a düşmür.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import logging.handlers
+import os
+import sys
+import threading
+import traceback
+from collections.abc import MutableMapping
+from datetime import UTC, datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any, Final
+
+# --------------------------------------------------------------------------- #
+# Konfiqurasiya sabitləri
+# --------------------------------------------------------------------------- #
+
+DEFAULT_LOG_DIR: Final[Path] = Path(os.environ.get("KOMPASOS_LOG_DIR", Path.cwd() / "logs"))
+MAX_BYTES: Final[int] = 10 * 1024 * 1024  # 10 MB / fayl
+BACKUP_COUNT: Final[int] = 10
+
+#: Bu açarların dəyəri log-a yazılmır (case-insensitive substring uyğunluğu).
+REDACTED_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "pin",
+        "pin_hash",
+        "password",
+        "password_hash",
+        "passwd",
+        "secret",
+        "token",
+        "totp_secret",
+        "api_key",
+        "apikey",
+        "authorization",
+        "fernet_key",
+        "master_key",
+        "encryption_key",
+        "credential",
+        "private_key",
+    }
+)
+
+REDACTED_PLACEHOLDER: Final[str] = "***REDACTED***"
+
+#: `extra` içində `LogRecord`-un qorunan sahə adı gələrsə bu prefiks əlavə olunur.
+RESERVED_KEY_PREFIX: Final[str] = "ctx_"
+
+#: `logging.LogRecord`-un öz standart sahələri — `extra` ayırd etmək üçün.
+_RESERVED_RECORD_ATTRS: Final[frozenset[str]] = frozenset(
+    {
+        "args",
+        "asctime",
+        "created",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "module",
+        "msecs",
+        "message",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "taskName",
+        "thread",
+        "threadName",
+    }
+)
+
+
+class LogChannel(str, Enum):
+    """Ayrı-ayrı fayllara yazan log kanalları."""
+
+    AUDIT = "audit"
+    SECURITY = "security"
+    ERROR = "error"
+    APP = "app"
+
+    @property
+    def filename(self) -> str:
+        return f"{self.value}.log"
+
+    @property
+    def logger_name(self) -> str:
+        return f"kompasos.{self.value}"
+
+
+# --------------------------------------------------------------------------- #
+# Redaksiya (PII maskalama)
+# --------------------------------------------------------------------------- #
+
+
+def _should_redact(key: str) -> bool:
+    lowered = key.lower()
+    return any(marker in lowered for marker in REDACTED_KEYS)
+
+
+#: Rekursiv maskalamanın maksimum dərinliyi (sonsuz dövrə qarşı qoruma).
+MAX_REDACT_DEPTH: Final[int] = 6
+
+
+def redact(value: Any, _depth: int = 0) -> Any:
+    """Həssas açarları rekursiv maskalayır."""
+    if _depth > MAX_REDACT_DEPTH:
+        return "<max-depth>"
+    if isinstance(value, dict):
+        return {
+            key: (REDACTED_PLACEHOLDER if _should_redact(str(key)) else redact(val, _depth + 1))
+            for key, val in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [redact(item, _depth + 1) for item in value]
+    return value
+
+
+# --------------------------------------------------------------------------- #
+# JSON formatter
+# --------------------------------------------------------------------------- #
+
+
+class JsonFormatter(logging.Formatter):
+    """Hər log sətrini tək sətirlik JSON obyektinə çevirir."""
+
+    def __init__(self, *, channel: LogChannel, app_version: str = "0.0.0") -> None:
+        super().__init__()
+        self.channel = channel
+        self.app_version = app_version
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, Any] = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
+            "level": record.levelname,
+            "channel": self.channel.value,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
+            "thread": record.threadName,
+            "app_version": self.app_version,
+        }
+
+        # `extra=` ilə ötürülən istifadəçi sahələri
+        custom = {
+            key: val
+            for key, val in record.__dict__.items()
+            if key not in _RESERVED_RECORD_ATTRS and not key.startswith("_")
+        }
+        if custom:
+            payload["context"] = redact(custom)
+
+        if record.exc_info:
+            exc_type, exc_value, exc_tb = record.exc_info
+            payload["exception"] = {
+                "type": exc_type.__name__ if exc_type else None,
+                "message": str(exc_value) if exc_value else None,
+                "stacktrace": "".join(traceback.format_exception(exc_type, exc_value, exc_tb)),
+            }
+
+        if record.stack_info:
+            payload["stack_info"] = record.stack_info
+
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+# --------------------------------------------------------------------------- #
+# Qurulum
+# --------------------------------------------------------------------------- #
+
+_configured: bool = False
+_configure_lock = threading.Lock()
+
+
+def configure_logging(
+    *,
+    log_dir: Path | None = None,
+    level: int | str = logging.INFO,
+    app_version: str = "0.0.0",
+    console: bool = True,
+    force: bool = False,
+) -> Path:
+    """Bütün log kanallarını qurur. Idempotent-dir (təkrar çağırış təsirsizdir).
+
+    Args:
+        log_dir: Log fayllarının qovluğu. Defolt: `KOMPASOS_LOG_DIR` və ya `./logs`.
+        level: Kök log səviyyəsi.
+        app_version: Hər sətrə əlavə olunan tətbiq versiyası.
+        console: `True` olduqda `app` kanalı həm də stdout-a yazır.
+        force: `True` olduqda mövcud konfiqurasiyanı sıfırlayıb yenidən qurur.
+
+    Returns:
+        İstifadə olunan log qovluğunun yolu.
+    """
+    global _configured
+
+    with _configure_lock:
+        if _configured and not force:
+            return log_dir or DEFAULT_LOG_DIR
+
+        target_dir = Path(log_dir) if log_dir else DEFAULT_LOG_DIR
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        for channel in LogChannel:
+            logger = logging.getLogger(channel.logger_name)
+            logger.setLevel(level)
+            # Kanallar bir-birinə "sızmasın" deyə propagate söndürülür.
+            logger.propagate = False
+
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+
+            file_handler = logging.handlers.RotatingFileHandler(
+                filename=target_dir / channel.filename,
+                maxBytes=MAX_BYTES,
+                backupCount=BACKUP_COUNT,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(JsonFormatter(channel=channel, app_version=app_version))
+            logger.addHandler(file_handler)
+
+            if console and channel is LogChannel.APP:
+                stream_handler = logging.StreamHandler(stream=sys.stdout)
+                stream_handler.setFormatter(JsonFormatter(channel=channel, app_version=app_version))
+                logger.addHandler(stream_handler)
+
+        _configured = True
+        return target_dir
+
+
+class _MergingLoggerAdapter(logging.LoggerAdapter):  # type: ignore[type-arg]
+    """`extra`-nı BİRLƏŞDİRƏN adapter.
+
+    Standart `logging.LoggerAdapter.process()` çağırış yerindəki `extra`-nı
+    adapterin öz `extra`-sı ilə ƏVƏZ EDİR (Python < 3.13-də `merge_extra`
+    parametri yoxdur). Bu, `log.info("X", extra={"server_id": 3})` yazısındakı
+    kontekstin sükutla itməsi deməkdir — struktur loglama üçün qəbuledilməzdir.
+    Ona görə birləşdirmə burada əl ilə edilir.
+    """
+
+    def process(
+        self, msg: Any, kwargs: MutableMapping[str, Any]
+    ) -> tuple[Any, MutableMapping[str, Any]]:
+        call_extra = kwargs.get("extra") or {}
+        merged = {**(self.extra or {}), **call_extra}
+        # QORUYUCU: `logging` qorunan sahə adının (`message`, `module`, `name`,
+        # `args`, ...) `extra` ilə üzərinə yazılmasına icazə vermir və
+        # `KeyError` atır — bu, BÜTÜN TƏTBİQİ çökdürür. Loglama heç vaxt
+        # tətbiqi dayandıra bilməz, ona görə belə açarlar səssizcə
+        # `ctx_` prefiksi ilə adlandırılır (məlumat itmir).
+        kwargs["extra"] = {
+            (f"{RESERVED_KEY_PREFIX}{key}" if key in _RESERVED_RECORD_ATTRS else key): value
+            for key, value in merged.items()
+        }
+        return msg, kwargs
+
+
+def get_logger(name: str, *, channel: LogChannel = LogChannel.APP) -> _MergingLoggerAdapter:
+    """Verilmiş kanala bağlı logger qaytarır.
+
+    `configure_logging()` çağırılmayıbsa, avtomatik defolt konfiqurasiya ilə qurur
+    ki, import sırasına görə log itkisi olmasın.
+    """
+    if not _configured:
+        configure_logging()
+
+    base = logging.getLogger(channel.logger_name)
+    return _MergingLoggerAdapter(base, extra={"source": name})
+
+
+def install_global_exception_hook(
+    *, on_crash: Any = None
+) -> None:  # pragma: no cover - proses səviyyəli
+    """Tutulmamış istisnaları `error.log`-a yazan qlobal hook quraşdırır.
+
+    Args:
+        on_crash: İstəyə bağlı callable — Faza 3-dəki anonim Crash Reporting
+            Client bura qoşulur (bax spesifikasiya bölmə 8).
+    """
+    error_log = get_logger("kompasos.global", channel=LogChannel.ERROR)
+
+    def _hook(exc_type: type[BaseException], exc: BaseException, tb: Any) -> None:
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        error_log.critical("UNHANDLED_EXCEPTION", exc_info=(exc_type, exc, tb))
+        if on_crash is not None:
+            try:
+                on_crash(exc_type, exc, tb)
+            except Exception:
+                error_log.exception("CRASH_REPORTER_FAILED")
+
+    sys.excepthook = _hook

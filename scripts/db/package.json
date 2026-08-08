@@ -1,0 +1,14 @@
+{
+  "name": "kompasos-db-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "psql olmadan schema.sql tətbiq etmək üçün köməkçi alətlər",
+  "scripts": {
+    "apply": "node apply.js ../../database/schema.sql DEV",
+    "test-guards": "node apply.js ../../database/tests/test_guards.sql",
+    "query": "node query.js"
+  },
+  "dependencies": {
+    "pg": "^8.11.0"
+  }
+}

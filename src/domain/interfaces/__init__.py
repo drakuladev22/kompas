@@ -1,0 +1,42 @@
+"""Repository/servis portları (Protocol) — domen tərəfindən TƏYİN olunur,
+infrastruktur tərəfindən İMPLEMENTASİYA olunur (Faza 3)."""
+
+from src.domain.interfaces.ports import (
+    AttendanceRepository,
+    AuditTrail,
+    CameraAssignmentRepository,
+    Clock,
+    EmployeeRepository,
+    EventPublisher,
+    FeatureToggles,
+    FineRepository,
+    LeaveRequestRepository,
+    LeaveTypeRepository,
+    Notifier,
+    NtpVerifier,
+    PermissionFlagRepository,
+    PositionRepository,
+    ShiftRepository,
+    SystemLimits,
+    UnitOfWork,
+)
+
+__all__ = [
+    "AttendanceRepository",
+    "AuditTrail",
+    "CameraAssignmentRepository",
+    "Clock",
+    "EmployeeRepository",
+    "EventPublisher",
+    "FeatureToggles",
+    "FineRepository",
+    "LeaveRequestRepository",
+    "LeaveTypeRepository",
+    "Notifier",
+    "NtpVerifier",
+    "PermissionFlagRepository",
+    "PositionRepository",
+    "ShiftRepository",
+    "SystemLimits",
+    "UnitOfWork",
+]

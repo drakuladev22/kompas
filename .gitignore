@@ -1,0 +1,59 @@
+# --- Sirlər (HEÇ VAXT commit edilmir) ---------------------------------------
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.pfx
+*.p12
+secrets/
+kompasos.key
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+
+# --- Test / lint keşləri ----------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+junit.xml
+
+# --- Tətbiq artefaktları ----------------------------------------------------
+logs/
+*.log
+data/
+*.db
+*.sqlite3
+offline_buffer.db
+
+# --- Build çıxışları --------------------------------------------------------
+*.spec
+!KompasOS.spec
+release/
+
+# --- Node (scripts/db alətləri) ---------------------------------------------
+node_modules/
+package-lock.json
+sbom.json
+
+# --- IDE / OS ---------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini

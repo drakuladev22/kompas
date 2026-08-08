@@ -1,0 +1,433 @@
+# ===========================================================================
+# KompasOS — CI/CD Pipeline (spesifikasiya bölmə 1)
+# ===========================================================================
+# ÜÇ MƏRHƏLƏ:
+#   dev        → lint + tip yoxlaması + testlər + asılılıq skanı (hər PR/push)
+#   staging    → İMZALANMAMIŞ test build (main branch-a merge zamanı)
+#   production → İMZALANMIŞ release (yalnız `v*` teq-i ilə, Authenticode)
+#
+# SİRLƏR (GitHub Secrets — heç bir sirr exe daxilinə hardcode olunmur):
+#   KOMPASOS_FERNET_KEY        — Fernet master açarı (test mühiti üçün ayrı açar)
+#   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
+#   DATABASE_URL               — inteqrasiya testləri üçün
+#   CODE_SIGNING_CERT_BASE64   — Authenticode .pfx, base64
+#   CODE_SIGNING_CERT_PASSWORD
+#   TIMESTAMP_SERVER_URL
+# ===========================================================================
+
+name: KompasOS CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Həftəlik asılılıq zəiflik skanı (yeni CVE-lər üçün)
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      allow_unsigned:
+        description: >-
+          TƏCİLİ HAL: imzasız istehsalat buraxılışına icazə ver (SEC-012).
+          Yalnız sertifikat müvəqqəti əlçatmaz olduqda və qəsdən istifadə edilir.
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.11'
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+
+permissions:
+  contents: read
+
+jobs:
+  # =========================================================================
+  # MƏRHƏLƏ 1 — DEV: keyfiyyət qapıları
+  # =========================================================================
+  lint:
+    name: 'dev · Lint (Ruff)'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Asılılıqları quraşdır
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Ruff — lint
+        run: ruff check src tests scripts --output-format=github
+
+      - name: Ruff — format yoxlaması
+        run: ruff format --check src tests scripts
+
+  typecheck:
+    name: 'dev · Tip yoxlaması (MyPy strict)'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Asılılıqları quraşdır
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # Spesifikasiya bölmə 1: 100% Type Hints (MyPy)
+      - name: MyPy — strict
+        run: mypy src
+
+  test:
+    name: 'dev · Testlər (${{ matrix.os }})'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows əsas hədəf platformadır (.exe), Linux CI sürəti üçün.
+        os: [ubuntu-latest, windows-latest]
+    env:
+      # Test mühiti üçün ayrıca, birdəfəlik açarlar — istehsalat açarları DEYİL.
+      KOMPASOS_FERNET_KEY: ${{ secrets.KOMPASOS_FERNET_KEY }}
+      KOMPASOS_HASH_PEPPER: ${{ secrets.KOMPASOS_HASH_PEPPER }}
+      KOMPASOS_ENV: DEV
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Qt sistem asılılıqları (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libdbus-1-3
+
+      - name: Asılılıqları quraşdır
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Test açarlarını hazırla
+        shell: bash
+        run: |
+          if [ -z "$KOMPASOS_FERNET_KEY" ]; then
+            echo "::notice::KOMPASOS_FERNET_KEY secret-i yoxdur — test üçün birdəfəlik açar yaradılır"
+            echo "KOMPASOS_FERNET_KEY=$(python -c 'import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$KOMPASOS_HASH_PEPPER" ]; then
+            echo "::notice::KOMPASOS_HASH_PEPPER secret-i yoxdur — test üçün birdəfəlik pepper yaradılır"
+            echo "KOMPASOS_HASH_PEPPER=$(python -c 'import secrets; print(secrets.token_hex(32))')" >> "$GITHUB_ENV"
+          fi
+
+      # Startup təhlükəsizlik yoxlaması: açar, AAD bağlantısı, pepper, saga reyestri
+      - name: Self-check (--strict)
+        run: python -m src.main --strict
+
+      # Domain qatı üçün minimum 85% coverage (spesifikasiya bölmə 1)
+      - name: Pytest — unit + domain coverage qapısı
+        run: >
+          pytest tests/unit
+          --cov=src/domain --cov=src/shared --cov=src/infrastructure/security
+          --cov-report=term-missing --cov-report=xml
+          --cov-fail-under=85
+          --junitxml=junit-unit.xml
+
+      # E2E (pytest-qt) — spesifikasiya bölmə 1: hər PR-da işə düşür.
+      # Faza 1-də ssenarilər hələ `skip` statusundadır (GUI Faza 4-dədir).
+      - name: Pytest — E2E (pytest-qt)
+        run: pytest tests/e2e -m e2e --junitxml=junit-e2e.xml
+
+      - name: Test nəticələrini yüklə
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: |
+            junit-*.xml
+            coverage.xml
+          retention-days: 14
+
+  db-schema:
+    name: 'dev · DB sxemi (schema.sql)'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci_test_password
+          POSTGRES_DB: kompasos_ci
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ['5432:5432']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: psql quraşdır
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      # Sxem təmiz bazada xətasız qurulmalıdır
+      - name: Sxemi tətbiq et (DEV seed tenant ilə)
+        env:
+          PGPASSWORD: ci_test_password
+        run: |
+          psql -h localhost -U postgres -d kompasos_ci \
+               -v ON_ERROR_STOP=1 -v kompasos_env=DEV \
+               -f database/schema.sql
+
+      # İdempotentlik: eyni skript ikinci dəfə də xətasız işləməlidir
+      - name: Sxemi TƏKRAR tətbiq et (idempotentlik yoxlaması)
+        env:
+          PGPASSWORD: ci_test_password
+        run: |
+          psql -h localhost -U postgres -d kompasos_ci \
+               -v ON_ERROR_STOP=1 -v kompasos_env=DEV \
+               -f database/schema.sql
+
+      # Hardcoded təhlükəsizlik zəmanətlərinin DB-səviyyəli yoxlanması (bölmə 3)
+      - name: Anti-fraud və hardlock trigger-lərini yoxla
+        env:
+          PGPASSWORD: ci_test_password
+        run: |
+          psql -h localhost -U postgres -d kompasos_ci \
+               -v ON_ERROR_STOP=1 -f database/tests/test_guards.sql
+
+  security-scan:
+    name: 'dev · Təhlükəsizlik skanı'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Asılılıqları quraşdır
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+
+      # Spesifikasiya bölmə 1: hər PR-da MƏCBURİ asılılıq zəiflik skanı
+      - name: pip-audit
+        run: pip-audit --requirement requirements.txt --strict --desc
+
+      # Sirlərin təsadüfən commit edilməsinə qarşı
+      - name: Sirr skanı (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Sirlərin repozitoriyada QALMASINA qarşı əlavə, sadə qapı
+      - name: İzlənən sirr fayllarını yoxla
+        run: |
+          set -e
+          if git ls-files --error-unmatch .env 2>/dev/null; then
+            echo "::error::.env faylı repozitoriyada izlənilir — dərhal silin"; exit 1
+          fi
+          if git ls-files | grep -E '\.(pfx|p12|pem|key)$' | grep -v '\.example$'; then
+            echo "::error::Sertifikat/açar faylı repozitoriyada izlənilir"; exit 1
+          fi
+          echo "İzlənən sirr faylı tapılmadı."
+
+      # SBOM — asılılıq mənşəyinin izlənməsi (supply-chain şəffaflığı)
+      - name: SBOM yarat (CycloneDX)
+        run: |
+          pip install cyclonedx-bom
+          cyclonedx-py requirements requirements.txt -o sbom.json --output-format json
+
+      - name: SBOM-u artefakt kimi yüklə
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+          retention-days: 90
+
+  # -------------------------------------------------------------------------
+  # WCAG AA kontrast yoxlaması (bölmə 9). Skript indi mövcuddur və testlərlə
+  # örtülüdür; dizayn tokenləri Faza 4-də yarananda avtomatik "atlandı"
+  # rejimindən "yoxlanılır" rejiminə keçir — CI-a yenidən toxunmaq lazım deyil.
+  # -------------------------------------------------------------------------
+  accessibility:
+    name: 'dev · WCAG AA kontrast'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Kontrast yoxlaması
+        run: python scripts/check_contrast.py --include-high-contrast
+
+  # =========================================================================
+  # MƏRHƏLƏ 2 — STAGING: İMZALANMAMIŞ test build
+  # =========================================================================
+  staging-build:
+    name: 'staging · İmzalanmamış build'
+    needs: [lint, typecheck, test, db-schema, security-scan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Asılılıqları quraşdır
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: PyInstaller ilə .exe yığ (imzasız)
+        run: |
+          pyinstaller --noconfirm --clean --onefile --windowed `
+            --name KompasOS `
+            --icon assets/kompasos.ico `
+            src/main.py
+
+      - name: Staging artefaktını yüklə
+        uses: actions/upload-artifact@v4
+        with:
+          name: KompasOS-staging-unsigned
+          path: dist/KompasOS.exe
+          retention-days: 30
+
+  # =========================================================================
+  # MƏRHƏLƏ 3 — PRODUCTION: Authenticode ilə İMZALANMIŞ release
+  # =========================================================================
+  production-release:
+    name: 'production · İmzalanmış release'
+    needs: [lint, typecheck, test, db-schema, security-scan]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    environment: production
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Asılılıqları quraşdır
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: PyInstaller ilə .exe yığ
+        run: |
+          pyinstaller --noconfirm --clean --onefile --windowed `
+            --name KompasOS `
+            --icon assets/kompasos.ico `
+            src/main.py
+
+      # -------------------------------------------------------------------
+      # AUTHENTICODE İMZALAMA (spesifikasiya bölmə 1: ".exe imzalanmalıdır")
+      #
+      # QƏRAR SEC-012 — SƏRT QAPI: sertifikat yoxdursa release UĞURSUZ olur.
+      # Əvvəlki "xəbərdarlıqla keç" davranışı təhlükəli idi: imzasız .exe
+      # müştəriyə çatır, Windows SmartScreen xəbərdarlıq verir, müştəri
+      # "virus?" deyə zəng edir — və ən pisi, auto-update kanalı imza
+      # yoxlamasına arxalandığı üçün imzasız buraxılış onu sındırır.
+      #
+      # Təcili hal üçün açıq nəzarətli istisna: workflow_dispatch →
+      # `allow_unsigned = true`. Bu, jurnalda görünən, qəsdən verilən qərardır.
+      # -------------------------------------------------------------------
+      - name: Kod imzalama sertifikatını hazırla
+        id: cert
+        shell: pwsh
+        env:
+          ALLOW_UNSIGNED: ${{ inputs.allow_unsigned }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.CODE_SIGNING_CERT_BASE64 }}")) {
+            if ($env:ALLOW_UNSIGNED -eq 'true') {
+              Write-Host "::warning::allow_unsigned=true — .exe İMZASIZ buraxılır (qəsdən)"
+              "signed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            } else {
+              Write-Host "::error::CODE_SIGNING_CERT_BASE64 secret-i təyin edilməyib."
+              Write-Host "::error::İmzasız istehsalat buraxılışı QADAĞANDIR (SEC-012)."
+              Write-Host "::error::Sertifikatı əlavə edin, və ya təcili halda workflow_dispatch ilə allow_unsigned=true seçin."
+              exit 1
+            }
+          } else {
+            $bytes = [Convert]::FromBase64String("${{ secrets.CODE_SIGNING_CERT_BASE64 }}")
+            [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", $bytes)
+            "signed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
+      - name: Authenticode ilə imzala
+        if: steps.cert.outputs.signed == 'true'
+        shell: pwsh
+        run: |
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" `
+            -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -like "*x64*" } |
+            Select-Object -First 1 -ExpandProperty FullName
+          & $signtool sign `
+            /f "$env:RUNNER_TEMP\cert.pfx" `
+            /p "${{ secrets.CODE_SIGNING_CERT_PASSWORD }}" `
+            /fd SHA256 `
+            /tr "${{ secrets.TIMESTAMP_SERVER_URL }}" `
+            /td SHA256 `
+            /d "KompasOS" `
+            dist/KompasOS.exe
+          if ($LASTEXITCODE -ne 0) { throw "signtool imzalama uğursuz oldu" }
+
+      - name: İmzanı doğrula
+        if: steps.cert.outputs.signed == 'true'
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature dist/KompasOS.exe
+          Write-Host "İmza statusu: $($sig.Status)"
+          if ($sig.Status -ne 'Valid') { throw "Authenticode imzası etibarsızdır" }
+
+      - name: Sertifikatı təmizlə
+        if: always()
+        shell: pwsh
+        run: Remove-Item "$env:RUNNER_TEMP\cert.pfx" -ErrorAction SilentlyContinue
+
+      - name: SHA256 checksum yarat
+        shell: pwsh
+        run: |
+          (Get-FileHash dist/KompasOS.exe -Algorithm SHA256).Hash |
+            Out-File -Encoding ascii dist/KompasOS.exe.sha256
+
+      # Auto-update client (Faza 3) bu release-i yoxlayır — bax bölmə 1, 8.
+      - name: GitHub Release yarat
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/KompasOS.exe
+            dist/KompasOS.exe.sha256
+          generate_release_notes: true

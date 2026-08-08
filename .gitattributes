@@ -1,0 +1,27 @@
+# Sətir sonu normallaşdırması.
+#
+# NİYƏ: CI Linux runner-də işləyir və `bash` addımları CRLF ilə qırılır
+# (`$'\r': command not found`). Repozitoriyada HƏMİŞƏ LF saxlanılır və
+# Windows-da da LF ilə checkout olunur — beləliklə lokal ilə CI arasında
+# fərq qalmır.
+* text=auto eol=lf
+
+# Binar fayllar — toxunulmamalıdır
+*.ico   binary
+*.png   binary
+*.jpg   binary
+*.webp  binary
+*.pdf   binary
+*.xlsx  binary
+*.pfx   binary
+*.p12   binary
+
+# Windows-a xas skriptlər CRLF tələb edir
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Diff-də daha oxunaqlı olsun
+*.py    text diff=python
+*.md    text diff=markdown
+*.sql   text
