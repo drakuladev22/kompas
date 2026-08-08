@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     KompasOS üçün müvəqqəti çox-ölçülü .ico faylı yaradır.
 

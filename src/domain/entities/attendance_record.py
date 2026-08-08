@@ -59,7 +59,14 @@ class CheckInStatus(str, Enum):
     NOT_STARTED = "NOT_STARTED"  # ⚪ Günə Başlamayıb
     PENDING_VERIFICATION = "PENDING_VERIFICATION"  # 🟡 Giriş Təsdiqi Gözləyir
     VERIFIED = "VERIFIED"  # 🟢 Mağazada
-    REJECTED = "REJECTED"  # Operator rədd etdi
+
+    #: QƏSDƏN İSTİFADƏ OLUNMUR — `reject()` statusu `NOT_STARTED`-ə qaytarır,
+    #: çünki bölmə 4 açıq şəkildə deyir: "status ⚪ Günə Başlamayıb-a QAYIDIR"
+    #: (işçi yenidən cəhd edə bilməlidir). Dəyər DB enum-u ilə paritet üçün
+    #: saxlanılır: `check_in_status` tipində mövcuddur və köhnə/xarici mənbədən
+    #: gələn sətir bu dəyəri daşısa, mapper çökməməlidir.
+    #: Rədd faktı `rejection` və `rejection_count` sahələrində saxlanılır.
+    REJECTED = "REJECTED"
 
     @property
     def is_present_in_store(self) -> bool:
