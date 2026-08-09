@@ -79,19 +79,68 @@ def test_brand_amber_on_navy_passes_large_text() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _minimal_theme(text: str, background: str) -> dict[str, str]:
-    return {
-        "--color-text-primary": text,
-        "--color-text-secondary": text,
-        "--color-bg-primary": background,
-        "--color-bg-surface": background,
-        "--color-text-on-accent": background,
-        "--color-accent": text,
-        "--color-success": text,
-        "--color-warning": text,
-        "--color-danger": text,
-        "--color-border": text,
+#: Fon (səth) rolunda çıxış edən tokenlər.
+#:
+#: Qalan bütün tokenlər "mürəkkəb" (mətn/ikon) sayılır. Bölgü belədir, çünki
+#: bəzi tokenlər HƏR İKİ rolda görünür: `--color-accent` "vurğu düyməsində
+#: mətn" cütündə FON, "vurğu (qrafik element)" cütündə isə MÜRƏKKƏB-dir.
+#: Eyni şey `--color-action-bg` üçün də doğrudur. Onları mürəkkəb saymaq
+#: hər iki cütü düzgün (kontrastlı) edir; fon saysaq, ikinci cütdə fon-fon
+#: müqayisəsi alınardı və nisbət 1:1 olardı.
+_SURFACE_TOKENS = frozenset(
+    {
+        "--color-bg-primary",
+        "--color-bg-surface",
+        "--color-card-bg",
+        "--color-sidebar-bg",
+        "--color-titlebar-bg",
+        "--color-nav-active-bg",
+        "--color-neutral-bg",
+        "--color-success-bg",
+        "--color-warning-bg",
+        "--color-danger-bg",
+        "--color-info-bg",
+        "--color-pin-bg",
+        "--color-text-on-accent",
+        "--color-action-text",
     }
+)
+
+
+def _all_pair_tokens() -> frozenset[str]:
+    """Yoxlanılan bütün cütlərdə adı keçən tokenlər."""
+    return frozenset(
+        token
+        for foreground, background, _, _ in (
+            *check_contrast.REQUIRED_PAIRS,
+            *check_contrast.HIGH_CONTRAST_PAIRS,
+        )
+        for token in (foreground, background)
+    )
+
+
+def _minimal_theme(text: str, background: str) -> dict[str, str]:
+    """Bütün tələb olunan tokenləri əhatə edən sintetik tema.
+
+    Siyahı ƏL İLƏ yazılmır — `REQUIRED_PAIRS`-dən qurulur. Beləliklə yeni
+    rəng cütü əlavə edildikdə bu fixture özü genişlənir və testlər
+    "çatışmayan token" xətası ilə qırılmır.
+    """
+    return {token: background if token in _SURFACE_TOKENS else text for token in _all_pair_tokens()}
+
+
+def test_minimal_theme_covers_every_required_token() -> None:
+    """Fixture-in qapısı: hər cüt tokeni sintetik temada olmalıdır.
+
+    Bu test olmasa, yeni cüt əlavə edən adam yalnız "36 çatışmayan token"
+    kimi dolayı bir səhvlə qarşılaşardı və səbəbi axtarmalı olardı.
+    """
+    assert _all_pair_tokens() <= set(_minimal_theme("#000000", "#FFFFFF"))
+
+
+def test_surface_tokens_are_all_real() -> None:
+    """`_SURFACE_TOKENS` içində artıq işlənməyən ad qalmasın."""
+    assert _all_pair_tokens() >= _SURFACE_TOKENS
 
 
 def test_check_theme_all_pass() -> None:
@@ -128,12 +177,39 @@ def test_check_theme_strict_missing_raises() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_cli_skips_when_tokens_absent(capsys: pytest.CaptureFixture[str]) -> None:
-    """Faza 1-3: tokenlər yoxdur → CI qırmızı olmamalıdır."""
+def test_cli_skips_when_tokens_absent(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Faza 1-3: tokenlər yoxdur → CI qırmızı olmamalıdır.
+
+    Yol MONKEYPATCH ilə mövcud olmayan fayla yönəldilir. Əvvəllər test
+    reponun vəziyyətindən asılı idi: `tokens.py` yaradılan kimi (Faza 4.1)
+    şərt öz-özünə pozuldu və test məzmununu deyil, tarixçəni yoxlamağa
+    başladı. İndi şərt testin ÖZ içindədir.
+    """
+    # Yol layihə kökünün İÇİNDƏ olmalıdır: skript hesabatda onu `relative_to`
+    # ilə qısaldır və kənar qovluq `ValueError` verərdi.
+    monkeypatch.setattr(
+        check_contrast,
+        "TOKENS_MODULE",
+        check_contrast.PROJECT_ROOT / "movcud-olmayan-tokens.py",
+    )
+
     exit_code = check_contrast.main([])
+
     captured = capsys.readouterr().out
     assert exit_code == 0
     assert "atlandı" in captured
+
+
+def test_cli_passes_with_project_tokens() -> None:
+    """Faza 4: layihənin FAKTİKİ tokenləri bütün cütlərdən keçir.
+
+    Bu, `check_contrast.py`-ın CI-dakı əsl çağırışıdır (arqumentsiz) —
+    yəni token faylı dəyişdikdə testin özü xəbərdarlıq verir.
+    """
+    assert check_contrast.main(["--include-high-contrast"]) == 0
 
 
 def test_cli_pair_mode(capsys: pytest.CaptureFixture[str]) -> None:

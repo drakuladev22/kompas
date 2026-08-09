@@ -18,6 +18,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src import __version__
 from src.infrastructure.security.encryption import EncryptionService
@@ -37,6 +38,13 @@ from src.shared.saga_orchestrator import (
     SagaStateRepository,
 )
 from src.shared.saga_policies import assert_registry_is_consistent, policy_for
+
+if TYPE_CHECKING:
+    # Bu iki modul yalnız `--developer-mode` yolunda lazımdır və orada
+    # funksiya daxilində idxal olunur (bax `_run_developer_panel`). Burada
+    # yalnız tip yoxlaması üçün görünürlər — icra zamanı yüklənmirlər.
+    from src.infrastructure.persistence.connection import Database
+    from src.infrastructure.updates.publisher import ReleasePublisher
 
 PRODUCTION_ENVS = frozenset({"PRODUCTION", "STAGING"})
 
@@ -291,6 +299,101 @@ def summarize(results: list[CheckResult]) -> int:
     return 0
 
 
+def _run_developer_panel(args: argparse.Namespace) -> int:
+    """Developer Panelini açır (konsol və ya pəncərə).
+
+    İdxallar QƏSDƏN funksiya daxilindədir: `src.developer_panel` müştəriyə
+    göndərilən paketə daxil EDİLMİR, ona görə modul səviyyəsində idxal
+    edilsəydi adi işə düşmə də ondan asılı olardı.
+    """
+    from src.developer_panel.console import run_console  # noqa: PLC0415
+    from src.infrastructure.licensing.developer_directory import (  # noqa: PLC0415
+        DEVELOPER_MODE_ENV,
+        SERVICE_ROLE_ENV,
+        DeveloperModeRequiredError,
+        DeveloperTenantDirectory,
+        developer_mode_enabled,
+    )
+
+    # Konfiqurasiya yoxlaması BAZADAN ƏVVƏL: əks halda müştəri PC-sində
+    # bayraq yazan istifadəçi "DATABASE_URL yoxdur" kimi yanıldıcı xəta
+    # alardı və əsl səbəbi (rejim ümumiyyətlə açıq deyil) görməzdi.
+    if not developer_mode_enabled():
+        raise DeveloperModeRequiredError(
+            f"`{DEVELOPER_MODE_ENV}` və `{SERVICE_ROLE_ENV}` təyin edilməyib",
+            context={"required_env": [DEVELOPER_MODE_ENV, SERVICE_ROLE_ENV]},
+        )
+
+    from src.infrastructure.persistence.connection import Database  # noqa: PLC0415
+
+    database = Database()
+    directory = DeveloperTenantDirectory(database)
+    publisher = _build_release_publisher(database)
+
+    if args.gui:
+        from src.developer_panel.ui import launch  # noqa: PLC0415
+
+        return launch(directory, publisher)
+
+    code, output = run_console(
+        directory,
+        search=args.search,
+        extend=args.extend,
+        force_version=args.force_version,
+        confirmed=args.yes,
+        publisher=publisher,
+        publish_package=args.publish,
+        publish_version=args.publish_version,
+        publish_notes=args.publish_notes,
+        publish_mandatory=args.publish_mandatory,
+    )
+    sys.stdout.write(output + "\n")
+    return code
+
+
+def _run_gui(args: argparse.Namespace) -> int:
+    """Əsas interfeysi açır (Faza 4).
+
+    İdxal funksiya daxilindədir: `--check` yolunda PySide6 yüklənməməlidir —
+    CI-ın başsız (headless) mühitində Qt-ni idxal etmək lazımsız asılılıq və
+    əlavə saniyələr deməkdir.
+    """
+    from src.presentation.app import run  # noqa: PLC0415
+    from src.presentation.theme.tokens import ThemeMode  # noqa: PLC0415
+
+    return run(
+        preview=args.preview,
+        kiosk=args.kiosk,
+        theme=ThemeMode(args.theme),
+    )
+
+
+def _build_release_publisher(database: Database) -> ReleasePublisher | None:
+    """Yayım qatı — Supabase ünvanı yoxdursa `None` (bölmə yalnız o zaman gizlənir).
+
+    Naşir yoxlayıcısı BURADA qurulur ki, panel yayımdan ƏVVƏL imzanı yoxlaya
+    bilsin. `KOMPASOS_UPDATE_PUBLISHER` boşdursa yoxlayıcı istənilən etibarlı
+    imzanı qəbul edərdi — bu, klient tərəfdəki qayda ilə eynidir və orada da
+    həmin dəyişənin doldurulması tələb olunur (bax `.env.example`).
+    """
+    from src.infrastructure.updates.catalog import SUPABASE_URL_ENV  # noqa: PLC0415
+    from src.infrastructure.updates.publisher import ReleasePublisher  # noqa: PLC0415
+    from src.infrastructure.updates.verification import AuthenticodeVerifier  # noqa: PLC0415
+
+    if not os.environ.get(SUPABASE_URL_ENV, "").strip():
+        get_logger(__name__).info(
+            "PUBLISHER_NOT_CONFIGURED", extra={"missing_env": SUPABASE_URL_ENV}
+        )
+        return None
+
+    return ReleasePublisher(
+        database,
+        verifier=AuthenticodeVerifier(
+            expected_subject=os.environ.get("KOMPASOS_UPDATE_PUBLISHER", "")
+        ),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Giriş nöqtəsi."""
     parser = argparse.ArgumentParser(prog="kompasos", description="KompasOS")
@@ -305,6 +408,74 @@ def main(argv: list[str] | None = None) -> int:
         help="xəbərdarlıqları da xəta say (istehsalat buraxılışı üçün)",
     )
     parser.add_argument("--log-dir", type=Path, default=None, help="log qovluğu")
+    # ---------------------------------------------------------------------
+    # GUI (Faza 4). `--gui` TƏK BAŞINA əsas interfeysi açır; `--developer-mode`
+    # ilə birlikdə verildikdə Developer Panelinin pəncərə variantını açır
+    # (bax `_run_developer_panel`) — ona görə ayrıca bayraq YARADILMIR.
+    #
+    # Bu yol sağlamlıq yoxlamasını ATLAYIR, çünki interfeys bazasız da
+    # açılmalıdır: quraşdırma sehrbazı məhz baza konfiqurasiya edilməmiş
+    # kompüterdə işə düşür.
+    # ---------------------------------------------------------------------
+    parser.add_argument(
+        "--kiosk",
+        action="store_true",
+        help="kiosk rejimi: tam ekran PIN klaviaturası",
+    )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="ekranları maketdəki nümunə məzmunla doldur (dizayn yoxlaması)",
+    )
+    parser.add_argument(
+        "--theme",
+        choices=("light", "dark", "system"),
+        default="system",
+        help="işə düşmə teması",
+    )
+    # ---------------------------------------------------------------------
+    # DEVELOPER PANELİ (bölmə 8) — YALNIZ hazırlayıcının öz kompüterində.
+    # Bayraq TƏK BAŞINA kifayət etmir: `KOMPASOS_DEVELOPER_MODE` və
+    # `KOMPASOS_SUPABASE_SERVICE_ROLE_KEY` təyin olunmayıbsa rejim açılmır
+    # (bax `developer_mode_enabled`). Müştəri quraşdırmasında həmin dəyişənlər
+    # ümumiyyətlə mövcud olmur, yəni bayraq təsadüfən işə düşə bilməz.
+    # ---------------------------------------------------------------------
+    parser.add_argument(
+        "--developer-mode",
+        action="store_true",
+        help="Developer Panelini aç (yalnız hazırlayıcının yerli mühiti)",
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="interfeysi aç; `--developer-mode` ilə birlikdə — Developer Paneli pəncərəsi",
+    )
+    parser.add_argument("--search", default="", help="Developer Paneli: ad/e-poçt üzrə süzgəc")
+    parser.add_argument(
+        "--extend", default="", metavar="TENANT_ID", help="Developer Paneli: 1 ay uzat"
+    )
+    parser.add_argument(
+        "--force-version",
+        default="",
+        metavar="TENANT_ID=X.Y.Z",
+        help="Developer Paneli: tenant üçün məcburi versiya (boş dəyər ləğv edir)",
+    )
+    parser.add_argument(
+        "--publish",
+        default="",
+        metavar="FAYL",
+        help="Developer Paneli: quraşdırıcını Storage-a yüklə və kataloqa yaz",
+    )
+    parser.add_argument(
+        "--publish-version", default="", metavar="X.Y.Z", help="yayımlanacaq versiya nömrəsi"
+    )
+    parser.add_argument("--publish-notes", default="", help="buraxılış qeydləri")
+    parser.add_argument(
+        "--publish-mandatory",
+        action="store_true",
+        help="buraxılışı məcburi yeniləmə kimi işarələ",
+    )
+    parser.add_argument("--yes", action="store_true", help="dəyişdirən əmrlər üçün təsdiq")
     args = parser.parse_args(argv)
 
     # `force=True` VACİBDİR: modul səviyyəsindəki `get_logger(...)` çağırışları
@@ -330,6 +501,10 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
+        if args.developer_mode:
+            return _run_developer_panel(args)
+        if args.gui:
+            return _run_gui(args)
         bus = get_event_bus()
         _register_audit_listener(bus)
         container = build_container(event_bus=bus)

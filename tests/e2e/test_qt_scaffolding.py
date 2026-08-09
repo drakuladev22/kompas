@@ -37,14 +37,38 @@ def test_widget_can_be_shown(qtbot) -> None:  # type: ignore[no-untyped-def]
     assert label.text() == "KompasOS"
 
 
-@pytest.mark.skip(reason="Faza 4-də implementasiya olunur — PIN handshake ekranı yoxdur")
+@pytest.mark.skip(
+    reason="Faza 5 — repository/use-case qoşulmayıb. İnterfeys tərəfi hazırdır: "
+    "bax tests/e2e/test_antifraud_flow_e2e.py"
+)
 def test_pin_handshake_to_fine_calculation_e2e() -> None:
-    """PLACEHOLDER: STEP 1 → STEP 2 → STEP 3 → cərimə → sync tam axını."""
+    """PLACEHOLDER: STEP 1 → STEP 2 → STEP 3 → cərimə → sync tam axını.
+
+    Faza 4.2-də TAMAMLANAN hissə (`test_antifraud_flow_e2e.py`):
+        * PIN daxil edilməsi və 4 rəqəmdən sonra göndərilməsi,
+        * səhv PIN / lockout davranışı,
+        * PIN → İşçi Ana Ekranı keçidi,
+        * cərimə formasının foto sübutu olmadan göndərilməməsi.
+
+    Burada QALAN hissə: cərimənin faktiki hesablanması və 1C sinxronizasiyası
+    — hər ikisi repository qatını tələb edir.
+    """
 
 
-@pytest.mark.skip(reason="Faza 4-də implementasiya olunur — override modalı yoxdur")
+@pytest.mark.skip(
+    reason="Faza 5 — ikinci təsdiqin SAXLANMASI repository tələb edir. "
+    "Eskalasiya şərti Faza 4.2-də yoxlanılır: tests/e2e/test_antifraud_flow_e2e.py"
+)
 def test_dual_control_escalation_e2e() -> None:
-    """PLACEHOLDER: 30+ dəqiqəlik manual override → HR_Admin/CEO ikinci təsdiqi."""
+    """PLACEHOLDER: 30+ dəqiqəlik manual override → HR_Admin/CEO ikinci təsdiqi.
+
+    Faza 4.2-də TAMAMLANAN hissə: 30 dəqiqə həddinin hesablanması, modalın
+    "Dual-Control tələb olunacaq" xəbərdarlığı və məcburi səbəb sahəsi
+    (`test_antifraud_flow_e2e.py`).
+
+    Burada QALAN hissə: ikinci səlahiyyətli şəxsin təsdiqi və gözləmə
+    vəziyyətinin bazada saxlanması.
+    """
 
 
 @pytest.mark.skip(reason="Faza 3/4-də implementasiya olunur — offline buffer yoxdur")

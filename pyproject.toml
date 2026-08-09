@@ -105,6 +105,20 @@ ignore = [
 "src/infrastructure/security/encryption.py" = ["PLC0415"]
 # Qlobal exception hook yalnız Windows/PySide6 mövcud olduqda idxal edir
 "src/shared/logger.py" = ["PLC0415"]
+# --------------------------------------------------------------------------- #
+# Ekran qurucuları (Faza 4) — PLR0915 (çox ifadə)
+# --------------------------------------------------------------------------- #
+# Qt-də interfeys DEKLARATİV yazılmır: hər etiket, boşluq və yerləşdirmə ayrıca
+# ifadədir, ona görə bir ekranın qurulması təbii olaraq 50+ sətir olur. Bu,
+# mürəkkəb MƏNTİQ deyil — düz gedən, budaqsız qurma ardıcıllığıdır.
+#
+# Onu süni "._build_part_1()/._build_part_2()" metodlarına bölmək oxunaqlığı
+# ARTIRMIR, əksinə: widget-in harada yarandığı ilə harada layout-a əlavə
+# olunduğu bir-birindən ayrılır və maketlə müqayisə etmək çətinləşir.
+# Buradakı fayllarda əsl məntiq (süzgəc, validasiya, icazə) ayrıca kiçik
+# metodlardadır və onlar bu istisnadan KƏNARDA qalır — çünki PLR0912
+# (budaqlanma) və digər qaydalar aktiv olaraq qalır.
+"src/presentation/screens/**" = ["PLR0915"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["src", "tests"]

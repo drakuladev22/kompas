@@ -56,6 +56,26 @@ REQUIRED_PAIRS: list[tuple[str, str, float, str]] = [
     ("--color-warning", "--color-bg-primary", AA_LARGE_TEXT, "Xəbərdarlıq göstəricisi"),
     ("--color-danger", "--color-bg-primary", AA_LARGE_TEXT, "Xəta göstəricisi"),
     ("--color-border", "--color-bg-primary", AA_LARGE_TEXT, "Sərhəd/ayırıcı"),
+    # --- örtük (shell) və nişanlar — Faza 4.2, dizayn maketlərindən ---
+    # Maket bu cütlərin bir neçəsində AA-dan aşağı qalırdı; `tokens.py`-dakı
+    # "DİZAYN MAKETİ İLƏ FƏRQLƏR" bölməsi hansı dəyərin niyə dəyişdiyini yazır.
+    # Cütlər burada qapıya salınır ki, gələcək bir "kiçik rəng düzəlişi"
+    # həmin kalibrlənməni səssizcə geri qaytarmasın.
+    ("--color-text-primary", "--color-card-bg", AA_NORMAL_TEXT, "Kart üzərində əsas mətn"),
+    ("--color-text-muted", "--color-card-bg", AA_NORMAL_TEXT, "Kartda solğun mətn"),
+    ("--color-nav-item-text", "--color-sidebar-bg", AA_NORMAL_TEXT, "Naviqasiya maddəsi"),
+    ("--color-nav-active-text", "--color-nav-active-bg", AA_NORMAL_TEXT, "Aktiv naviqasiya"),
+    ("--color-nav-item-icon", "--color-sidebar-bg", AA_LARGE_TEXT, "Naviqasiya ikonu"),
+    ("--color-titlebar-text", "--color-titlebar-bg", AA_NORMAL_TEXT, "Başlıq zolağı mətni"),
+    ("--color-titlebar-control", "--color-titlebar-bg", AA_LARGE_TEXT, "Pəncərə düymələri"),
+    ("--color-success", "--color-success-bg", AA_NORMAL_TEXT, "Uğur nişanı"),
+    ("--color-warning", "--color-warning-bg", AA_NORMAL_TEXT, "Xəbərdarlıq nişanı"),
+    ("--color-danger", "--color-danger-bg", AA_NORMAL_TEXT, "Xəta nişanı"),
+    ("--color-info", "--color-info-bg", AA_NORMAL_TEXT, "Məlumat nişanı"),
+    ("--color-text-primary", "--color-neutral-bg", AA_NORMAL_TEXT, "Neytral nişan"),
+    ("--color-action-text", "--color-action-bg", AA_NORMAL_TEXT, "Əsas hərəkət düyməsi"),
+    ("--color-action-bg", "--color-card-bg", AA_LARGE_TEXT, "Hərəkət düyməsi / kart"),
+    ("--color-chart-bar", "--color-card-bg", AA_LARGE_TEXT, "Qrafik sütunu"),
 ]
 
 #: PIN Handshake ekranı fərqli işıqlandırmada istifadə olunur — bölmə 9 orada
