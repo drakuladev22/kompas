@@ -1,0 +1,14 @@
+{
+  "projectId": "9bf4638f-7011-4dd8-97f5-8615d6c42660",
+  "projectName": "KompasOS Dizayn Sistemi",
+  "shape": "custom",
+  "scope": "tokens-and-icons",
+  "outDir": "ds-bundle",
+  "readmeHeader": ".design-sync/conventions.md",
+  "generator": "scripts/build_design_bundle.py",
+  "sources": {
+    "tokens": "src/presentation/theme/tokens.py",
+    "icons": "src/presentation/widgets/icons.py",
+    "metrics": "src/presentation/widgets/metrics.py"
+  }
+}

@@ -57,3 +57,6 @@ sbom.json
 *.swp
 Thumbs.db
 desktop.ini
+
+# design-sync ixracı — `scripts/build_design_bundle.py` ilə yenidən qurulur
+ds-bundle/
