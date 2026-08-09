@@ -20,7 +20,9 @@ from src.domain.value_objects.credentials import (
     EmailAddress,
     InvalidEmailError,
     InvalidPinError,
+    InvalidUsernameError,
     Pin,
+    Username,
 )
 from src.domain.value_objects.identifiers import (
     AppealId,
@@ -78,6 +80,7 @@ __all__ = [
     "InvalidPenaltyInputError",
     "InvalidPinError",
     "InvalidScheduleError",
+    "InvalidUsernameError",
     "LatenessAssessment",
     "LeavePenalty",
     "LeaveRequestId",
@@ -98,6 +101,7 @@ __all__ = [
     "TaskId",
     "TenantId",
     "TimeRange",
+    "Username",
     "WorkModeId",
     "assess_lateness",
     "calculate_leave_penalty",

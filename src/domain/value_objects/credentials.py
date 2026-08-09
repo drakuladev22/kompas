@@ -1,4 +1,4 @@
-"""Kimlik/giriş value object-ləri: PIN və e-poçt.
+"""Kimlik/giriş value object-ləri: PIN, istifadəçi adı və e-poçt.
 
 QAYDA: bu VO-lar sirrin ÖZÜNÜ daşıyır, ona görə:
     * `__repr__`/`__str__` maskalanıb — PIN heç vaxt log-a, traceback-ə və ya
@@ -23,6 +23,8 @@ from src.shared.exceptions import KompasOSError
 
 PIN_LENGTH: Final[int] = 4
 MAX_EMAIL_LENGTH: Final[int] = 254  # RFC 5321
+MIN_USERNAME_LENGTH: Final[int] = 3
+MAX_USERNAME_LENGTH: Final[int] = 32
 
 # DİQQƏT: `\d` YOX, `[0-9]`. Python-un `\d`-i defolt olaraq bütün Unicode
 # rəqəmlərini tutur (ərəb-hind `١٢٣٤`, deva-naqari və s.) — belə PIN qəbul
@@ -34,6 +36,17 @@ _PIN_PATTERN: Final[re.Pattern[str]] = re.compile(rf"^[0-9]{{{PIN_LENGTH}}}$")
 # Tam RFC 5322 uyğunluğu qəsdən hədəflənmir — həddindən artıq mürəkkəb naxış
 # real e-poçtları rədd etmə riskini artırır.
 _EMAIL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$", re.UNICODE)
+
+# İstifadəçi adı: ASCII hərf/rəqəm ilə başlayır, sonra nöqtə/alt-xətt/defis də
+# olar. DB-dəki `chk_employee_username` ilə EYNİ qayda.
+#
+# NİYƏ ASCII: giriş adı gündə onlarla dəfə yazılır və mağaza PC-lərində
+# klaviatura düzümü Azərbaycan, rus və ya ingilis ola bilər. "şəbnəm" adlı
+# hesab ingilis düzümündə yazıla bilməzdi. Ad-soyad üçün Azərbaycan hərfləri
+# sərbəstdir — məhdudiyyət yalnız GİRİŞ identifikatorunadır.
+_USERNAME_PATTERN: Final[re.Pattern[str]] = re.compile(
+    rf"^[a-z0-9][a-z0-9._-]{{{MIN_USERNAME_LENGTH - 1},{MAX_USERNAME_LENGTH - 1}}}$"
+)
 
 #: Aşkar zəif PIN-lər: təkrarlanan, ardıcıl (irəli/geri) və klaviatura naxışları.
 WEAK_PINS: Final[frozenset[str]] = frozenset(
@@ -54,6 +67,15 @@ class InvalidEmailError(KompasOSError):
     """E-poçt ünvanı yararsızdır."""
 
     user_message = "E-poçt ünvanı düzgün deyil."
+
+
+class InvalidUsernameError(KompasOSError):
+    """İstifadəçi adı format qaydasına uyğun deyil."""
+
+    user_message = (
+        "İstifadəçi adı 3–32 simvol olmalı, hərf və ya rəqəmlə başlamalı, "
+        "yalnız ingilis hərfləri, rəqəm, nöqtə, alt-xətt və defis saxlamalıdır."
+    )
 
 
 @dataclass(frozen=True)
@@ -105,8 +127,45 @@ class Pin:
 
 
 @dataclass(frozen=True)
+class Username:
+    """Admin-tier GİRİŞ identifikatoru (spesifikasiya bölmə 2, qərar SEC-016).
+
+    E-poçtu əvəz edir. Fərq təkcə formatda deyil:
+
+        * Giriş adı DƏYİŞMİR — e-poçt isə işçinin şəxsi həyatı ilə dəyişirdi
+          (evlilik, provayder dəyişikliyi), yəni identifikator sabit deyildi.
+        * Sistem e-poçt göndərmə infrastrukturundan TAM ASILI DEYİL.
+        * Mağaza işçisinin şəxsi e-poçtu olmaya bilər — giriş adı isə həmişə
+          HR tərəfindən verilə bilir.
+
+    Normallaşdırma: kənar boşluqlar silinir, kiçik hərfə salınır (DB-də
+    `CITEXT` — "Rashad" və "rashad" EYNİ hesabdır).
+    """
+
+    value: str
+
+    def __post_init__(self) -> None:
+        if not _USERNAME_PATTERN.fullmatch(self.value):
+            raise InvalidUsernameError(
+                f"İstifadəçi adı qaydaya uyğun deyil: {self.value!r}",
+                context={"value": self.value, "length": len(self.value)},
+            )
+
+    @classmethod
+    def parse(cls, raw: str) -> Username:
+        return cls(raw.strip().lower())
+
+    def __str__(self) -> str:
+        return self.value
+
+
+@dataclass(frozen=True)
 class EmailAddress:
-    """Admin-tier autentifikasiya üçün e-poçt (spesifikasiya bölmə 2).
+    """E-poçt ünvanı — YALNIZ bildiriş üçün (spesifikasiya bölmə 7).
+
+    ARTIQ AUTENTİFİKASİYA İDENTİFİKATORU DEYİL (qərar SEC-016). Admin girişi
+    `Username` + şifrə ilə aparılır; bu VO indi yalnız `notification_email`
+    və tenant-səviyyəli əlaqə ünvanı üçün istifadə olunur.
 
     Normallaşdırma: kənar boşluqlar silinir, domen hissəsi kiçik hərfə salınır.
     Lokal hissə RFC-yə görə case-sensitive-dir, lakin praktikada bütün böyük
@@ -148,10 +207,14 @@ class EmailAddress:
 
 __all__ = [
     "MAX_EMAIL_LENGTH",
+    "MAX_USERNAME_LENGTH",
+    "MIN_USERNAME_LENGTH",
     "PIN_LENGTH",
     "WEAK_PINS",
     "EmailAddress",
     "InvalidEmailError",
     "InvalidPinError",
+    "InvalidUsernameError",
     "Pin",
+    "Username",
 ]

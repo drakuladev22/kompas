@@ -3,10 +3,10 @@
 QAYDA: domen entity-ləri DB-ni tanımır, ona görə çevirmə BURADA, tək yerdə
 saxlanılır. Sütun adı dəyişikliyi yalnız bu faylı toxundurur.
 
-HASH-LƏR ENTITY-DƏ SAXLANILMIR: `pin_hash`, `password_hash`,
-`totp_secret_encrypted` domen `Employee` obyektinə KEÇMİR — onlar ayrıca
-`Credentials` DTO-su ilə qaytarılır. Səbəb: entity log-a, DTO-ya və ya GUI-yə
-ötürülə bilər; sirr orada olmamalıdır.
+HASH-LƏR ENTITY-DƏ SAXLANILMIR: `pin_hash` və `password_hash` domen
+`Employee` obyektinə KEÇMİR — onlar ayrıca `Credentials` DTO-su ilə
+qaytarılır. Səbəb: entity log-a, DTO-ya və ya GUI-yə ötürülə bilər; sirr
+orada olmamalıdır.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from src.domain.value_objects.authorization import (
     PermissionEffect,
     RolePriority,
 )
-from src.domain.value_objects.credentials import EmailAddress
+from src.domain.value_objects.credentials import EmailAddress, Username
 from src.domain.value_objects.identifiers import (
     AttendanceRecordId,
     EmployeeId,
@@ -61,9 +61,6 @@ class Credentials:
     employee_id: EmployeeId
     pin_hash: str | None
     password_hash: str | None
-    totp_secret_encrypted: str | None
-    totp_last_used_counter: int | None
-    totp_backup_code_hashes: tuple[str, ...]
     pepper_version: int
 
     def __repr__(self) -> str:  # pragma: no cover - sadə maskalama
@@ -115,10 +112,12 @@ def employee_from_row(row: Row, position: Position) -> Employee:
         first_name=row["first_name"],
         last_name=row["last_name"],
         store_id=StoreId(row["store_id"]) if row.get("store_id") else None,
-        email=EmailAddress.parse(row["email"]) if row.get("email") else None,
+        username=Username.parse(row["username"]) if row.get("username") else None,
+        notification_email=(
+            EmailAddress.parse(row["notification_email"]) if row.get("notification_email") else None
+        ),
         has_password=bool(row.get("password_hash")),
         has_pin=bool(row.get("pin_hash")),
-        totp_enabled=row.get("totp_enabled", False),
         must_change_password=row.get("must_change_password", False),
         is_active=row.get("is_active", True),
     )
@@ -133,9 +132,6 @@ def credentials_from_row(row: Row) -> Credentials:
         employee_id=EmployeeId(row["id"]),
         pin_hash=row.get("pin_hash"),
         password_hash=row.get("password_hash"),
-        totp_secret_encrypted=row.get("totp_secret_encrypted"),
-        totp_last_used_counter=row.get("totp_last_used_counter"),
-        totp_backup_code_hashes=tuple(row.get("totp_backup_code_hashes") or ()),
         pepper_version=row.get("pepper_version", 1),
     )
 

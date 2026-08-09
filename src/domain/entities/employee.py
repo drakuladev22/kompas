@@ -5,10 +5,13 @@
 * **Kiosk PIN** — 4 rəqəm, YALNIZ İcazə/Qayıdış və Morning Check-in axını üçün.
   Mağaza Meneceri daxil HƏR işçi rolunu əhatə edir (menecer də mağazadan
   çıxıb-qayıda bilər). Admin panelə giriş üçün İSTİFADƏ OLUNMUR.
-* **Admin-tier** — e-poçt + güclü şifrə + məcburi TOTP 2FA.
+* **Admin-tier** — istifadəçi adı + güclü şifrə (qərar SEC-016).
   `Kamera_Nəzarətçisi` DƏ bu tier-dədir (bölmə 2 düzəlişi): rol birbaşa
   maliyyə nəticəli qərarlar verdiyi üçün sadə PIN kifayət qədər güclü
   "kim etdi" sübutu (non-repudiation) vermir.
+
+E-POÇT AUTENTİFİKASİYADAN AYRILIB (SEC-016): `notification_email` yalnız
+bildiriş ünvanıdır, girişə HEÇ BİR təsiri yoxdur və boş ola bilər.
 
 EFFEKTİV İCAZƏ = rol-defolt + fərdi override (override ÜSTÜNDÜR).
 """
@@ -25,7 +28,7 @@ from src.domain.value_objects.authorization import (
     RolePriority,
     SystemRole,
 )
-from src.domain.value_objects.credentials import EmailAddress
+from src.domain.value_objects.credentials import EmailAddress, Username
 from src.domain.value_objects.identifiers import EmployeeId, StoreId, TenantId
 from src.domain.value_objects.scheduling import require_aware
 
@@ -78,10 +81,10 @@ class Employee(AggregateRoot):
         first_name: str,
         last_name: str,
         store_id: StoreId | None = None,
-        email: EmailAddress | None = None,
+        username: Username | None = None,
+        notification_email: EmailAddress | None = None,
         has_password: bool = False,
         has_pin: bool = False,
-        totp_enabled: bool = False,
         must_change_password: bool = False,
         is_active: bool = True,
     ) -> None:
@@ -92,10 +95,12 @@ class Employee(AggregateRoot):
         self.first_name = first_name.strip()
         self.last_name = last_name.strip()
         self.store_id = store_id
-        self.email = email
+        #: Admin-tier giriş identifikatoru. Kiosk-yalnız işçilərdə `None`.
+        self.username = username
+        #: YALNIZ bildiriş üçün — girişə təsiri YOXDUR (SEC-016).
+        self.notification_email = notification_email
         self.has_password = has_password
         self.has_pin = has_pin
-        self.totp_enabled = totp_enabled
         self.must_change_password = must_change_password
         self.is_active = is_active
 
@@ -110,16 +115,17 @@ class Employee(AggregateRoot):
 
     def _assert_has_authentication_method(self) -> None:
         """DB-dəki `chk_employee_auth` ilə eyni invariant."""
-        if not self.has_pin and not (self.email and self.has_password):
+        if not self.has_pin and not (self.username and self.has_password):
             raise DomainRuleError(
-                "İşçinin ən azı bir autentifikasiya vasitəsi olmalıdır (PIN, və ya e-poçt + şifrə)",
-                user_message="İşçi üçün PIN və ya e-poçt/şifrə təyin edilməlidir.",
+                "İşçinin ən azı bir autentifikasiya vasitəsi olmalıdır "
+                "(PIN, və ya istifadəçi adı + şifrə)",
+                user_message="İşçi üçün PIN və ya istifadəçi adı/şifrə təyin edilməlidir.",
                 context={"employee_id": str(self.id)},
             )
 
     @property
     def requires_admin_tier_auth(self) -> bool:
-        """Bu rol admin panelinə e-poçt+şifrə+2FA ilə girməlidirmi (bölmə 2)."""
+        """Bu rol admin panelinə istifadəçi adı + şifrə ilə girməlidirmi (bölmə 2)."""
         role = self.position.effective_system_role
         return role in ADMIN_TIER_ROLES
 
@@ -139,10 +145,10 @@ class Employee(AggregateRoot):
         """Admin panelə giriş ön-şərtləri."""
         if not self.is_active:
             raise DomainRuleError("Deaktiv edilmiş hesab", user_message="Hesabınız deaktiv edilib.")
-        if self.email is None or not self.has_password:
+        if self.username is None or not self.has_password:
             raise DomainRuleError(
-                "Admin girişi üçün e-poçt və şifrə təyin edilməlidir",
-                user_message="Hesabınız üçün e-poçt və şifrə təyin edilməyib.",
+                "Admin girişi üçün istifadəçi adı və şifrə təyin edilməlidir",
+                user_message="Hesabınız üçün istifadəçi adı və şifrə təyin edilməyib.",
             )
 
     # ------------------------------ PIN lockout ----------------------------- #

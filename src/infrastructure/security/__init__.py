@@ -1,6 +1,10 @@
 """Təhlükəsizlik infrastrukturu (spesifikasiya bölmə 2).
 
 Qərarlar və əsaslandırma: `docs/security_decisions.md`.
+
+QEYD (SEC-016): TOTP/2FA servisi ÇIXARILIB — admin girişi artıq istifadəçi
+adı + şifrədən ibarətdir. `totp.py` və onun testləri silinib,
+`pyotp` asılılığı layihədən çıxarılıb.
 """
 
 from src.infrastructure.security.encryption import (
@@ -25,12 +29,6 @@ from src.infrastructure.security.hashing import (
     evaluate_pin_attempt,
     generate_pepper,
 )
-from src.infrastructure.security.totp import (
-    TotpEnrollment,
-    TotpError,
-    TotpService,
-    TotpVerification,
-)
 
 __all__ = [
     "AccountLockedError",
@@ -45,10 +43,6 @@ __all__ = [
     "PepperProvider",
     "PepperSet",
     "PinPolicy",
-    "TotpEnrollment",
-    "TotpError",
-    "TotpService",
-    "TotpVerification",
     "WeakSecretError",
     "WindowsDpapiKeyProvider",
     "default_key_provider",

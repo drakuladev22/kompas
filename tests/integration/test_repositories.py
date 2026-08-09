@@ -83,7 +83,7 @@ def tenant(database: Database) -> Iterator[TenantId]:
         conn.execute(
             """
             INSERT INTO license_tenants
-                (tenant_id, tenant_name, license_key_hash, status, contact_email)
+                (tenant_id, tenant_name, license_key_hash, status, company_contact_email)
             VALUES (%s, %s, 'test', 'AKTIV', %s)
             """,
             (tenant_id, f"IT-{suffix}", f"it-{suffix}@test.local"),
@@ -143,7 +143,7 @@ def make_employee_row(
             """
             INSERT INTO employees
                 (id, tenant_id, store_id, position_id, first_name, last_name,
-                 email, password_hash, pin_hash, is_active)
+                 username, password_hash, pin_hash, is_active)
             VALUES (%s, %s, %s, %s, 'Test', %s, %s, 'argon2-hash', %s, TRUE)
             """,
             (
@@ -152,7 +152,7 @@ def make_employee_row(
                 store,
                 position_id,
                 role.value,
-                f"{suffix}@test.local",
+                f"u{suffix}",  # username — `chk_employee_username` qaydasına uyğun
                 "argon2-pin" if with_pin else None,
             ),
         )

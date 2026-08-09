@@ -33,13 +33,13 @@ from src.domain.events import (
 from src.domain.value_objects import (
     DUAL_CONTROL_APPROVAL_FLAG,
     AuthorizationError,
-    EmailAddress,
     HardlockLevel,
     Money,
     PermissionEffect,
     PermissionFlag,
     RolePriority,
     SystemRole,
+    Username,
 )
 from src.domain.value_objects.identifiers import (
     AttendanceRecordId,
@@ -90,7 +90,7 @@ def make_employee(
         first_name="Test",
         last_name=role.value,
         store_id=STORE,
-        email=EmailAddress.parse(f"{role.value.lower()}@kompas.az") if admin_tier else None,
+        username=Username.parse(f"u{role.value.lower()}") if admin_tier else None,
         has_password=admin_tier,
         has_pin=not admin_tier or role is SystemRole.HR_ADMIN,
     )
@@ -567,7 +567,7 @@ def test_camera_operator_cannot_use_kiosk_pin() -> None:
         position=make_position(SystemRole.CAMERA_OPERATOR),
         first_name="Rizvan",
         last_name="Operator",
-        email=EmailAddress.parse("rizvan@kompas.az"),
+        username=Username.parse("rizvan.operator"),
         has_password=True,
         has_pin=True,  # DB-də olsa belə
     )
@@ -644,7 +644,7 @@ def test_camera_operator_store_scoping_is_fail_safe() -> None:
         position=make_position(SystemRole.CAMERA_OPERATOR),
         first_name="Rizvan",
         last_name="Operator",
-        email=EmailAddress.parse("rizvan2@kompas.az"),
+        username=Username.parse("rizvan.operator2"),
         has_password=True,
     )
 

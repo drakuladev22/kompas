@@ -18,6 +18,7 @@ from src.domain.value_objects import (
     InvalidPenaltyInputError,
     InvalidPinError,
     InvalidScheduleError,
+    InvalidUsernameError,
     Money,
     NaiveDatetimeError,
     PermissionFlag,
@@ -25,6 +26,7 @@ from src.domain.value_objects import (
     RolePriority,
     SystemRole,
     TimeRange,
+    Username,
     assess_lateness,
     calculate_leave_penalty,
     require_aware,
@@ -104,6 +106,58 @@ def test_invalid_email(raw: str) -> None:
 def test_email_length_limit() -> None:
     with pytest.raises(InvalidEmailError, match="uzun"):
         EmailAddress.parse("a" * 250 + "@kompas.az")
+
+
+# --------------------------------------------------------------------------- #
+# Username (SEC-016)
+# --------------------------------------------------------------------------- #
+
+
+def test_username_normalised() -> None:
+    """DB-də CITEXT — VO da eyni normallaşdırmanı tətbiq etməlidir."""
+    assert Username.parse("  HR.Admin  ").value == "hr.admin"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "rashad",
+        "hr.admin",
+        "store_manager_01",
+        "a1b",  # minimum uzunluq
+        "u" * 32,  # maksimum uzunluq
+        "kamera-operator",
+    ],
+)
+def test_valid_usernames(raw: str) -> None:
+    assert Username.parse(raw).value == raw.lower()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "ab",  # çox qısa
+        "u" * 33,  # çox uzun
+        ".admin",  # nöqtə ilə başlayır
+        "-admin",  # defis ilə başlayır
+        "_admin",  # alt-xətt ilə başlayır
+        "admin@kompas.az",  # e-poçt DEYİL
+        "admin user",  # boşluq
+        "şəbnəm",  # Azərbaycan hərfləri — kiosk klaviaturasında yazıla bilməz
+        "админ",  # kiril
+        "admin!",  # xüsusi simvol
+    ],
+)
+def test_invalid_usernames(raw: str) -> None:
+    with pytest.raises(InvalidUsernameError):
+        Username.parse(raw)
+
+
+def test_username_is_not_an_email() -> None:
+    """SEC-016 reqressiya qoruyucusu: e-poçt formatı giriş adı kimi qəbul edilməməlidir."""
+    with pytest.raises(InvalidUsernameError):
+        Username.parse("admin@kompas.az")
 
 
 # --------------------------------------------------------------------------- #

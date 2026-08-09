@@ -27,8 +27,8 @@ sərtləşdirmə mərhələsində). Qərarların tam əsaslandırması:
 | # | Risk | Həll |
 |---|---|---|
 | A9 | **4-rəqəmli PIN cəmi 10 000 variantdır** — DB sızarsa Argon2 tək başına kifayət etmir | Məcburi **pepper** (`KOMPASOS_HASH_PEPPER`), HMAC-a `employee_id` daxil edilir; zəif PIN-lər rədd olunur | SEC-005 |
-| A10 | TOTP kodu 30 saniyə ərzində **təkrar istifadə** oluna bilərdi | Replay qorunması: `totp_last_used_counter`; ehtiyat kodları (Argon2id) | SEC-004 |
-| A11 | Şifrəli dəyəri başqa sətrə **köçürmək** mümkün idi | AES-GCM **AAD** ilə kontekst bağlantısı (`erp_server:<id>`, `totp:<id>`) | SEC-002 |
+| ~~A10~~ | ~~TOTP replay~~ — **artıq aktual deyil**: 2FA tamamilə çıxarıldı | — | SEC-016 (SEC-004-ü ləğv edir) |
+| A11 | Şifrəli dəyəri başqa sətrə **köçürmək** mümkün idi | AES-GCM **AAD** ilə kontekst bağlantısı (`erp_server:<id>`, `offline:<table>:<id>`) | SEC-002 |
 | A12 | "İstifadəçi var/yoxdur" cavab vaxtından sızırdı | Hesab olmasa da dummy Argon2 hash yoxlanılır | SEC-014 |
 | A13 | Kamera operatorunun "növbə boyu" sessiyasının müddəti/ləğvi yox idi | `auth_sessions`: token hash-i, ikiqat müddət, `revoked_at` | SEC-011 |
 | A14 | Tətbiq owner ilə qoşulsa bütün DB qorumaları yan keçilir | `kompasos_app` rolu (NOSUPERUSER, DDL yox, audit-ə UPDATE/DELETE yox) | SEC-009 |
@@ -230,7 +230,7 @@ psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f database/tests/test_guards.sql
 | 38 | `PinPolicy(max_attempts=3, lockout_minutes=30)` | `system_limits` konfiqurasiyası işləyir |
 | 39 | Mövcud olmayan hesab | `False`, istisna YOX (enumeration) |
 
-### D7. TOTP 2FA
+### D7. TOTP 2FA — ⛔ LƏĞV EDİLDİ (SEC-016), aşağıdakı testlər silinib
 
 | # | Ssenari | Gözlənilən nəticə |
 |---|---|---|

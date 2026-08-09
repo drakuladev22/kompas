@@ -2,15 +2,36 @@
 
 İKİ AYRI KONTEKST:
 
-* **Admin-tier** (`AdminLoginUseCase`) — e-poçt + Argon2id şifrə + TOTP 2FA.
-  `Root`/`CEO`/`Admin`/`HR_Admin`/`Kamera_Nəzarətçisi` bu yolla girir.
+* **Admin-tier** (`AdminLoginUseCase`) — istifadəçi adı + Argon2id şifrə.
+  `Root`/`CEO`/`Admin`/`HR_Admin`/`Mağaza_Meneceri`/`Kamera_Nəzarətçisi`
+  bu yolla girir.
 * **Kiosk PIN** (`PinHandshakeUseCase`) — 4 rəqəm, yalnız İcazə/Qayıdış və
   Morning Check-in axını üçün. `Kamera_Nəzarətçisi` bundan İSTİSNADIR.
 
-ŞİFRƏ YENİLƏNMƏSİ ADMİN-TƏRƏFİNDƏNDİR (bölmə 2): e-poçt token axını YOXDUR —
-daha yüksək və ya bərabər səlahiyyətli admin müvəqqəti şifrə təyin edir,
-istifadəçi ilk girişdə onu MƏCBURİ dəyişir. Bu, e-poçt göndərmə
-infrastrukturuna asılılığı aradan qaldırır.
+──────────────────────────────────────────────────────────────────────────────
+SEC-016: 2FA ÇIXARILDI, GİRİŞ İDENTİFİKATORU E-POÇTDAN USERNAME-Ə KEÇDİ
+──────────────────────────────────────────────────────────────────────────────
+Əvvəlki model e-poçt + şifrə + məcburi TOTP idi. Qərar dəyişikliyi ilə admin
+girişi bir addıma endirildi: **istifadəçi adı + şifrə → dərhal sessiya**.
+
+Bunun təhlükəsizliyə real təsiri var və gizlədilmir: TOTP oğurlanmış şifrəyə
+qarşı ikinci maneə idi, indi o maneə yoxdur. Kompensasiya edən mövcud
+tədbirlər:
+
+    * Argon2id + `employee_id`-yə bağlı pepper (SEC-005) — sızmış hash-lərin
+      kütləvi açılması praktik deyil;
+    * admin-tərəfindən sıfırlama + `must_change_password` (e-poçt token axını
+      YOXDUR, yəni poçt qutusunun ələ keçirilməsi giriş vermir);
+    * hər cəhdin `security.log`-a və `security_events`-ə yazılması;
+    * sessiya müddətləri (`auth_sessions`) və audit izi.
+
+`AuthenticationError` mesajı QƏSDƏN ümumidir — "belə istifadəçi yoxdur" ilə
+"şifrə səhvdir" ayrılsaydı, hesab adlarını sadalamaq mümkün olardı.
+
+ŞİFRƏ YENİLƏNMƏSİ ADMİN-TƏRƏFİNDƏNDİR (bölmə 2): daha yüksək və ya bərabər
+səlahiyyətli admin müvəqqəti şifrə təyin edir, istifadəçi ilk girişdə onu
+MƏCBURİ dəyişir. Bu, e-poçt göndərmə infrastrukturuna asılılığı aradan
+qaldırır.
 
 LAZY PEPPER MIGRATION (SEC-005): uğurlu yoxlamadan sonra hash köhnə pepper
 versiyası ilə yaradılıbsa, avtomatik yenidən yazılır.
@@ -31,11 +52,10 @@ from src.domain.interfaces.ports import (
 )
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.authorization import SystemRole
-from src.domain.value_objects.credentials import EmailAddress
+from src.domain.value_objects.credentials import Username
 from src.domain.value_objects.identifiers import EmployeeId, StoreId, TenantId
 from src.infrastructure.security.hashing import HashingService, evaluate_pin_attempt
 from src.infrastructure.security.hashing import PinPolicy as HashPinPolicy
-from src.infrastructure.security.totp import TotpService
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
@@ -49,16 +69,22 @@ RESET_PIN_FLAG = "can_reset_pin"
 #: Emergency Access Recovery üçün kimlik təsdiqi istinadının minimum uzunluğu.
 MIN_RECOVERY_REFERENCE_LENGTH = 5
 
+#: Telefon müqayisəsində nəzərə alınan son rəqəm sayı (AZ nömrəsi: 9 rəqəm).
+#: Səbəb: eyni nömrə "+994 50 123 45 67", "0501234567", "994501234567" kimi
+#: yazıla bilər — ölkə kodu və sıfır prefiksi normallaşdırmadan sonra da fərqli
+#: qalır, ona görə müqayisə abunəçi hissəsi üzrə aparılır.
+PHONE_SIGNIFICANT_DIGITS = 9
+
 
 class AuthenticationError(KompasOSError):
     """Giriş uğursuz oldu.
 
-    QƏSDƏN ÜMUMİ MESAJ: "e-poçt yanlışdır" və "şifrə yanlışdır" ayrılmır —
-    əks halda hücumçu hansı e-poçtların sistemdə olduğunu öyrənə bilər
-    (user enumeration).
+    QƏSDƏN ÜMUMİ MESAJ: "belə istifadəçi yoxdur" və "şifrə yanlışdır"
+    ayrılmır — əks halda hücumçu hansı hesab adlarının sistemdə olduğunu
+    öyrənə bilər (user enumeration).
     """
 
-    user_message = "E-poçt və ya şifrə yanlışdır."
+    user_message = "İstifadəçi adı və ya şifrə yanlışdır."
 
 
 class AccountLockedError(KompasOSError):
@@ -67,19 +93,16 @@ class AccountLockedError(KompasOSError):
     user_message = "Hesab müvəqqəti bloklanıb. Bir az sonra yenidən cəhd edin."
 
 
-class TwoFactorRequiredError(KompasOSError):
-    """Şifrə düzgündür, lakin TOTP kodu tələb olunur."""
-
-    user_message = "İki-faktorlu təsdiq kodunu daxil edin."
-
-
 class LoginStage(str, Enum):
-    """Çox-addımlı girişin mərhələsi.
+    """Girişin nəticə vəziyyəti.
+
+    SEC-016-dan sonra "aralıq" mərhələ YOXDUR: uğurlu istifadəçi adı + şifrə
+    birbaşa `AUTHENTICATED` verir. `MUST_CHANGE_PASSWORD` isə mərhələ deyil,
+    məcburi ilk-giriş şərtidir.
 
     `noqa: S105` — bunlar vəziyyət adlarıdır, sirr deyil.
     """
 
-    PASSWORD_OK_AWAITING_TOTP = "PASSWORD_OK_AWAITING_TOTP"  # noqa: S105
     AUTHENTICATED = "AUTHENTICATED"
     MUST_CHANGE_PASSWORD = "MUST_CHANGE_PASSWORD"  # noqa: S105
 
@@ -90,7 +113,6 @@ class LoginResult:
 
     employee: Employee
     stage: LoginStage
-    totp_counter: int | None = None
     needs_pepper_rehash: bool = False
 
     @property
@@ -116,46 +138,87 @@ class TemporaryCredential:
     pepper_version: int
 
 
+@dataclass(frozen=True)
+class TenantContact:
+    """`license_tenants.company_contact_email` / `_phone` (bölmə 2, 8).
+
+    ŞİRKƏT-SƏVİYYƏLİ əlaqədir — fərdi işçi hesabından TAM AYRI. Emergency
+    Access Recovery-də kimlik təsdiqinin YEGANƏ mənbəyidir.
+
+    Niyə fərdi e-poçt DEYİL: bərpa məhz bütün admin hesabları itiriləndə
+    işə düşür. Həmin hesablardan birinin e-poçtuna güvənmək məntiqsizdir —
+    hesab artıq əlçatmazdır və ya ələ keçirilib. Müqavilə imzalanarkən qeyd
+    olunan şirkət əlaqəsi isə hesablardan asılı deyil.
+    """
+
+    email: str
+    phone: str | None = None
+
+    def matches(self, claimed: str) -> bool:
+        """Təqdim olunan əlaqə qeydiyyatdakı ilə üst-üstə düşürmü."""
+        candidate = claimed.strip()
+        if not candidate:
+            return False
+        if candidate.casefold() == self.email.strip().casefold():
+            return True
+        if self.phone is None:
+            return False
+        registered_digits = _phone_digits(self.phone)
+        claimed_digits = _phone_digits(candidate)
+        if not registered_digits or not claimed_digits:
+            return False
+        return registered_digits == claimed_digits
+
+
+def _phone_digits(value: str) -> str:
+    """Telefonun müqayisə üçün normallaşdırılmış son rəqəmləri."""
+    digits = "".join(ch for ch in value if ch.isdigit())
+    return digits[-PHONE_SIGNIFICANT_DIGITS:] if len(digits) >= PHONE_SIGNIFICANT_DIGITS else ""
+
+
 # --------------------------------------------------------------------------- #
 # Admin-tier giriş
 # --------------------------------------------------------------------------- #
 
 
 class AdminLoginUseCase:
-    """E-poçt + şifrə + TOTP 2FA girişi (bölmə 2)."""
+    """İstifadəçi adı + şifrə girişi (bölmə 2, qərar SEC-016).
+
+    TƏK ADDIM: uğurlu yoxlama birbaşa sessiya yaradır — 2FA mərhələsi yoxdur.
+    """
 
     def __init__(
         self,
         *,
         employees: EmployeeRepository,
         hashing: HashingService,
-        totp: TotpService,
         clock: Clock,
         audit: AuditTrail,
     ) -> None:
         self._employees = employees
         self._hashing = hashing
-        self._totp = totp
         self._clock = clock
         self._audit = audit
 
-    def verify_password(
+    def login(
         self,
         *,
         tenant_id: TenantId,
-        email: EmailAddress,
+        username: Username,
         password: str,
         stored_hash: str | None,
         pepper_version: int = 1,
     ) -> LoginResult:
-        """Birinci addım — şifrə yoxlaması.
+        """İstifadəçi adı + şifrə yoxlaması.
 
         `stored_hash` repo-dan AYRICA ötürülür: hash domen entity-sində
         saxlanılmır ki, təsadüfən log-a və ya DTO-ya düşməsin.
         """
-        employee = self._employees.get_by_email(tenant_id, email)
+        employee = self._employees.get_by_username(tenant_id, username)
 
-        # Hesab yoxdursa belə sabit vaxt sərf olunur (enumeration qorunması).
+        # Hesab yoxdursa belə Argon2 hesablaması APARILIR: əks halda mövcud
+        # olmayan hesab ~milisaniyələrlə daha tez cavab verər və hücumçu
+        # cavab müddətinə görə hesabları sadalaya bilərdi (timing oracle).
         password_ok = self._hashing.verify_password(
             stored_hash, password, pepper_version=pepper_version
         )
@@ -163,17 +226,19 @@ class AdminLoginUseCase:
             _security_log.warning(
                 "LOGIN_FAILED",
                 extra={
-                    "email_attempt": str(email),
+                    "username_attempt": str(username),
                     "tenant_id": str(tenant_id),
                     "reason": "UNKNOWN_ACCOUNT" if employee is None else "BAD_PASSWORD",
                 },
             )
             raise AuthenticationError(
-                "E-poçt və ya şifrə yanlışdır",
-                context={"email": str(email)},
+                "İstifadəçi adı və ya şifrə yanlışdır",
+                context={"username": str(username)},
             )
 
         employee.assert_admin_login_allowed()
+
+        needs_rehash = self._hashing.needs_pepper_rehash(pepper_version)
 
         if employee.must_change_password:
             _security_log.info(
@@ -182,83 +247,15 @@ class AdminLoginUseCase:
             return LoginResult(
                 employee=employee,
                 stage=LoginStage.MUST_CHANGE_PASSWORD,
-                needs_pepper_rehash=self._hashing.needs_pepper_rehash(pepper_version),
+                needs_pepper_rehash=needs_rehash,
             )
 
-        if employee.totp_enabled:
-            return LoginResult(
-                employee=employee,
-                stage=LoginStage.PASSWORD_OK_AWAITING_TOTP,
-                needs_pepper_rehash=self._hashing.needs_pepper_rehash(pepper_version),
-            )
-
-        # 2FA qurulmayıb — bölmə 2 onu MƏCBURİ sayır, ona görə xəbərdarlıq.
-        _security_log.warning(
-            "LOGIN_WITHOUT_2FA",
-            extra={
-                "employee_id": str(employee.id),
-                "role": employee.position.code,
-                "impact": "bölmə 2 admin-tier üçün TOTP-u məcburi sayır",
-            },
-        )
-        self._record_login(employee, method="PASSWORD_ONLY")
-        return LoginResult(employee=employee, stage=LoginStage.AUTHENTICATED)
-
-    def verify_totp(
-        self,
-        *,
-        employee: Employee,
-        code: str,
-        encrypted_secret: str,
-        last_used_counter: int | None,
-    ) -> LoginResult:
-        """İkinci addım — TOTP kodu (replay qorunması ilə, SEC-004)."""
-        verification = self._totp.verify(
-            encrypted_secret=encrypted_secret,
-            code=code,
-            employee_id=str(employee.id),
-            last_used_counter=last_used_counter,
-        )
-        if not verification.is_valid:
-            _security_log.warning(
-                "LOGIN_2FA_FAILED",
-                extra={"employee_id": str(employee.id), "reason": verification.reason},
-            )
-            raise AuthenticationError(
-                f"2FA kodu qəbul edilmədi ({verification.reason})",
-                user_message="Təsdiq kodu yanlışdır və ya vaxtı keçib.",
-            )
-
-        self._record_login(employee, method="PASSWORD_TOTP")
+        self._record_login(employee, method="USERNAME_PASSWORD")
         return LoginResult(
             employee=employee,
             stage=LoginStage.AUTHENTICATED,
-            totp_counter=verification.used_counter,
+            needs_pepper_rehash=needs_rehash,
         )
-
-    def verify_backup_code(
-        self,
-        *,
-        employee: Employee,
-        code: str,
-        stored_hashes: list[str],
-    ) -> tuple[LoginResult, int]:
-        """Ehtiyat kodu ilə giriş — telefonu itən admin üçün (SEC-004).
-
-        Returns:
-            `(nəticə, istifadə olunmuş kodun indeksi)`. Çağıran tərəf həmin
-            indeksi DB-dən SİLMƏLİDİR (birdəfəlik istifadə).
-        """
-        index = self._totp.verify_backup_code(
-            code=code, stored_hashes=stored_hashes, employee_id=str(employee.id)
-        )
-        if index is None:
-            raise AuthenticationError(
-                "Ehtiyat kodu tapılmadı",
-                user_message="Ehtiyat kodu yanlışdır və ya artıq istifadə olunub.",
-            )
-        self._record_login(employee, method="BACKUP_CODE")
-        return LoginResult(employee=employee, stage=LoginStage.AUTHENTICATED), index
 
     def _record_login(self, employee: Employee, *, method: str) -> None:
         _security_log.info(
@@ -561,8 +558,15 @@ class EmergencyAccessRecoveryUseCase:
     Developer Panelindən, kimlik təsdiqi əsasında, BİR DƏFƏLİK işə salınır.
     Tam audit-lənir və tenant-a bildiriş göndərilir.
 
-    QORUYUCU: yalnız tenant-da AKTİV admin-tier hesab QALMADIQDA icazə verilir —
-    əks halda bu prosedur adi "arxa qapı"ya çevrilərdi.
+    ÜÇ QORUYUCU BİRLİKDƏ İŞLƏYİR:
+
+        1. Tenant-da AKTİV admin-tier hesab QALMAMALIDIR — əks halda bu
+           prosedur adi "arxa qapı"ya çevrilərdi.
+        2. Müraciət edən şəxs `license_tenants.company_contact_email` və ya
+           `company_contact_phone` ilə təsdiqlənməlidir (SEC-016) — fərdi
+           işçi e-poçtu ilə DEYİL.
+        3. Kimlik təsdiqinin izi (`developer_reference`) məcburidir və
+           audit-ə yazılır.
     """
 
     def __init__(
@@ -587,12 +591,17 @@ class EmergencyAccessRecoveryUseCase:
         target: Employee,
         developer_reference: str,
         active_admin_count: int,
+        tenant_contact: TenantContact,
+        verified_contact: str,
     ) -> TemporaryCredential:
         """Args:
         active_admin_count: Tenant-da qalan aktiv admin-tier hesab sayı.
             Sıfırdan böyükdürsə prosedur RƏDD edilir.
         developer_reference: Kimlik təsdiqinin izi (ticket/əlaqə qeydi) —
             audit üçün MƏCBURİDİR.
+        tenant_contact: `license_tenants`-dəki qeydiyyatlı şirkət əlaqəsi.
+        verified_contact: Müraciət edənin təsdiqləndiyi kanal (e-poçt və ya
+            telefon). `tenant_contact` ilə üst-üstə düşməlidir.
         """
         if active_admin_count > 0:
             raise AuthenticationError(
@@ -606,6 +615,22 @@ class EmergencyAccessRecoveryUseCase:
                 f"Kimlik təsdiqi istinadı məcburidir "
                 f"(minimum {MIN_RECOVERY_REFERENCE_LENGTH} simvol)",
                 user_message="Prosedur üçün istinad nömrəsi göstərilməlidir.",
+            )
+        if not tenant_contact.matches(verified_contact):
+            # Bu, prosedurun ƏSAS qapısıdır: uyğunsuzluq halında bərpa
+            # istənilən şəxsə admin hesabı verən arxa qapıya çevrilərdi.
+            _security_log.critical(
+                "EMERGENCY_RECOVERY_CONTACT_MISMATCH",
+                extra={
+                    "tenant_id": str(tenant_id),
+                    "target_id": str(target.id),
+                    "impact": "bərpa cəhdi rədd edildi",
+                },
+            )
+            raise AuthenticationError(
+                "Təqdim olunan əlaqə tenant-ın qeydiyyatdakı şirkət əlaqəsi ilə üst-üstə düşmür",
+                user_message="Kimlik təsdiqi alınmadı — şirkət əlaqə məlumatı uyğun gəlmir.",
+                context={"tenant_id": str(tenant_id)},
             )
         if target.position.effective_system_role not in (
             SystemRole.ROOT,
@@ -628,6 +653,7 @@ class EmergencyAccessRecoveryUseCase:
                 "tenant_id": str(tenant_id),
                 "target_id": str(target.id),
                 "developer_reference": developer_reference,
+                "verified_via": "COMPANY_CONTACT",
             },
         )
         self._audit.record(
@@ -636,7 +662,10 @@ class EmergencyAccessRecoveryUseCase:
             action="EMERGENCY_ACCESS_RECOVERY",
             entity_type="employees",
             entity_id=target.id,
-            after_state={"developer_reference": developer_reference},
+            after_state={
+                "developer_reference": developer_reference,
+                "verified_via": "COMPANY_CONTACT",
+            },
             reason="Bütün admin hesabları itirilib — Developer Panelindən bərpa",
         )
         self._notifier.notify(
@@ -670,5 +699,5 @@ __all__ = [
     "PinHandshakeUseCase",
     "PinResult",
     "TemporaryCredential",
-    "TwoFactorRequiredError",
+    "TenantContact",
 ]

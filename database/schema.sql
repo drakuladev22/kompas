@@ -194,15 +194,19 @@ CREATE TABLE IF NOT EXISTS license_tenants (
     offline_grace_days   SMALLINT    NOT NULL DEFAULT 14  -- LICENSE_UNVERIFIED (bölmə 8)
                             CHECK (offline_grace_days BETWEEN 7 AND 14),
     last_check_in_at     TIMESTAMPTZ,
-    contact_email        TEXT        NOT NULL,
-    contact_phone        TEXT,
+    -- ŞİRKƏT-SƏVİYYƏLİ ƏLAQƏ — fərdi hesabdan TAM AYRI (bölmə 2, 8).
+    -- Emergency Access Recovery-də kimlik təsdiqinin YEGANƏ mənbəyi və
+    -- ödəniş/lisenziya bildirişlərinin ünvanıdır. Admin girişi ilə ƏLAQƏSİ YOX.
+    company_contact_email TEXT       NOT NULL,
+    company_contact_phone TEXT,
     -- LICENSE_INACTIVE ekranında göstərilən şəffaf məlumat (bölmə 8)
     deactivation_reason  TEXT,
     deactivated_at       TIMESTAMPTZ,
     app_version          TEXT,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT chk_tenant_email CHECK (contact_email ~* '^[^@\s]+@[^@\s]+\.[^@\s]+$')
+    CONSTRAINT chk_tenant_company_contact_email
+        CHECK (company_contact_email ~* '^[^@\s]+@[^@\s]+\.[^@\s]+$')
 );
 
 DROP TRIGGER IF EXISTS trg_license_tenants_updated ON license_tenants;
@@ -354,21 +358,17 @@ CREATE TABLE IF NOT EXISTS employees (
     last_name             TEXT NOT NULL,
     employee_code         TEXT,
 
-    -- ADMIN-TIER AUTENTİFİKASİYA (bölmə 2): e-poçt + Argon2 şifrə + TOTP 2FA.
+    -- ADMIN-TIER AUTENTİFİKASİYA (bölmə 2): istifadəçi adı + Argon2 şifrə.
     -- Kamera_Nəzarətçisi də bu tier-dədir (sadə PIN-dən istisna edilib).
-    email                 CITEXT,
+    -- 2FA/TOTP YOXDUR — bax migrations/001_username_auth.sql.
+    username              CITEXT,                     -- giriş identifikatoru
     password_hash         TEXT,                       -- Argon2id
     must_change_password  BOOLEAN NOT NULL DEFAULT FALSE,
     password_changed_at   TIMESTAMPTZ,
-    -- AES-256-GCM token (AAD = 'totp:<employee_id>') — bax SEC-002/SEC-004
-    totp_secret_encrypted TEXT,
-    totp_enabled          BOOLEAN NOT NULL DEFAULT FALSE,
-    totp_enrolled_at      TIMESTAMPTZ,
-    -- REPLAY QORUNMASI (SEC-004): sonuncu uğurlu TOTP time-step counter-i.
-    -- Eyni və ya daha köhnə counter bir daha qəbul edilmir.
-    totp_last_used_counter BIGINT,
-    -- Argon2id ilə hash-lənmiş birdəfəlik ehtiyat kodları (plaintext YOX)
-    totp_backup_code_hashes TEXT[] NOT NULL DEFAULT '{}',
+
+    -- YALNIZ BİLDİRİŞ ÜÇÜN — autentifikasiyadan TAM ASILI DEYİL (bölmə 7).
+    -- Boşdursa kritik bildiriş yalnız tətbiq-daxili qalır (gözlənilən davranış).
+    notification_email    CITEXT,
 
     -- KIOSK PIN (bölmə 2, 4): YALNIZ Satıcı və digər işçi rolları üçün.
     -- Admin panelə giriş üçün İSTİFADƏ OLUNMUR.
@@ -395,14 +395,22 @@ CREATE TABLE IF NOT EXISTS employees (
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
     sync_status           sync_status NOT NULL DEFAULT 'SYNCED',
 
-    UNIQUE (tenant_id, email),
+    -- `notification_email` UNİKAL DEYİL: iki işçi eyni ünvanı göstərə bilər
+    -- (ortaq şöbə qutusu). Unikallıq yalnız GİRİŞ identifikatoruna aiddir.
     UNIQUE (tenant_id, employee_code),
-    CONSTRAINT chk_employee_email
-        CHECK (email IS NULL OR email ~* '^[^@\s]+@[^@\s]+\.[^@\s]+$'),
+    CONSTRAINT chk_employee_username
+        CHECK (username IS NULL OR username ~* '^[a-z0-9][a-z0-9._-]{2,31}$'),
+    CONSTRAINT chk_employee_notification_email
+        CHECK (notification_email IS NULL
+               OR notification_email ~* '^[^@\s]+@[^@\s]+\.[^@\s]+$'),
     -- Hər işçinin ən azı bir autentifikasiya vasitəsi olmalıdır
     CONSTRAINT chk_employee_auth
-        CHECK (pin_hash IS NOT NULL OR (email IS NOT NULL AND password_hash IS NOT NULL))
+        CHECK (pin_hash IS NOT NULL OR (username IS NOT NULL AND password_hash IS NOT NULL))
 );
+
+-- Partial unique: kiosk-yalnız işçilərdə `username` NULL-dur və məhdudlaşmır.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_tenant_username
+    ON employees (tenant_id, username) WHERE username IS NOT NULL;
 
 DROP TRIGGER IF EXISTS trg_employees_updated ON employees;
 CREATE TRIGGER trg_employees_updated BEFORE UPDATE ON employees
@@ -1256,9 +1264,10 @@ CREATE TABLE IF NOT EXISTS security_events (
     id            BIGSERIAL PRIMARY KEY,
     tenant_id     UUID REFERENCES license_tenants(tenant_id) ON DELETE CASCADE,
     occurred_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    event_type    TEXT NOT NULL,   -- PIN_FAILED, PIN_LOCKOUT, LOGIN_FAILED, 2FA_FAILED, ...
+    event_type    TEXT NOT NULL,   -- PIN_FAILED, PIN_LOCKOUT, LOGIN_FAILED, ...
     employee_id   UUID REFERENCES employees(id) ON DELETE SET NULL,
-    email_attempt CITEXT,
+    -- Cəhd edilən GİRİŞ identifikatoru (mövcud olmayan hesab da qeyd olunur).
+    username_attempt CITEXT,
     ip_address    INET,
     machine_name  TEXT,
     details       JSONB
@@ -1422,7 +1431,6 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
     revocation_reason TEXT,
     machine_name     TEXT,
     ip_address       INET,
-    totp_verified    BOOLEAN NOT NULL DEFAULT FALSE,
     CONSTRAINT chk_session_expiry CHECK (expires_at <= absolute_expiry)
 );
 
@@ -2245,7 +2253,7 @@ BEGIN
     IF v_tenant IS NULL THEN
         INSERT INTO license_tenants (
             tenant_name, license_key_hash, status,
-            last_payment_date, next_payment_date, contact_email
+            last_payment_date, next_payment_date, company_contact_email
         ) VALUES (
             'DEV — Lokal Test',
             'DEV_ONLY_NOT_A_REAL_HASH',

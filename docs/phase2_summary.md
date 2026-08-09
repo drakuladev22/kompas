@@ -23,7 +23,7 @@
 | 2.3 | `domain/interfaces/ports.py` | 17 `Protocol`: repo-lar, `Clock`, `NtpVerifier`, `SystemLimits`, `FeatureToggles`, `AuditTrail`, `UnitOfWork` |
 | 2.4 | `application/use_cases/` | `PermissionHierarchyGuard`, `DualControlDeadlockGuard` |
 | 2.5 | `application/use_cases/` | `LeaveVerificationUseCase` (Saga ilə), `MorningCheckInUseCase` |
-| 2.6 | `application/use_cases/authentication.py` | `AdminLogin`(2FA), `PinHandshake`(lockout), `CredentialReset`, `EmergencyAccessRecovery` |
+| 2.6 | `application/use_cases/authentication.py` | `AdminLogin`(username+şifrə, SEC-016), `PinHandshake`(lockout), `CredentialReset`, `EmergencyAccessRecovery`(şirkət əlaqəsi ilə) |
 | 2.7 | `infrastructure/plugins/` | Ed25519 imza, proses sandbox-u, capability whitelist |
 | 2.8 | `presentation/navigation.py` | `NavigationRegistry` — "GÖRMƏK = SƏLAHİYYƏTİN OLMASI" |
 
@@ -159,7 +159,7 @@ saxlanılıb; `rejection` sahəsi və `rejection_count` rədd tarixçəsini daş
 ### Autentifikasiya (2.6)
 
 35. Naməlum e-poçt və yanlış şifrə **eyni mesaj** (enumeration qorunması)
-36. 2FA aktivdirsə iki addım; ehtiyat kodu ilə giriş işləyir
+36. Giriş TƏK addımdır (SEC-016); naməlum username və səhv şifrə eyni mesaj verir
 37. `Kamera_Nəzarətçisi` kiosk PIN-i istifadə **edə bilmir**
 38. 5 səhv → lockout; bloklanmış hesabda **doğru PIN də** rədd
 39. Pepper rotasiyasından sonra köhnə hash işləyir + `needs_pepper_rehash`

@@ -20,7 +20,7 @@ from src.domain.entities.fine import Fine
 from src.domain.entities.leave_request import LeaveRequest
 from src.domain.entities.position import Position
 from src.domain.value_objects.authorization import PermissionFlag
-from src.domain.value_objects.credentials import EmailAddress
+from src.domain.value_objects.credentials import Username
 from src.domain.value_objects.identifiers import (
     AttendanceRecordId,
     EmployeeId,
@@ -140,7 +140,7 @@ class EventPublisher(Protocol):
 class EmployeeRepository(Protocol):
     def get(self, employee_id: EmployeeId) -> Employee | None: ...
 
-    def get_by_email(self, tenant_id: TenantId, email: EmailAddress) -> Employee | None: ...
+    def get_by_username(self, tenant_id: TenantId, username: Username) -> Employee | None: ...
 
     def find_by_pin_candidates(self, tenant_id: TenantId, store_id: StoreId) -> list[Employee]:
         """Mağazadakı aktiv, PIN-i olan işçilər.

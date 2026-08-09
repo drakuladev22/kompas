@@ -21,7 +21,7 @@ from src.domain.entities.employee import Employee
 from src.domain.entities.fine import Fine
 from src.domain.entities.leave_request import LeaveRequest, LeaveStatus
 from src.domain.entities.position import Position
-from src.domain.value_objects.credentials import EmailAddress
+from src.domain.value_objects.credentials import Username
 from src.domain.value_objects.identifiers import (
     AttendanceRecordId,
     EmployeeId,
@@ -178,8 +178,7 @@ class PostgresPositionRepository(_BaseRepository):
 class PostgresEmployeeRepository(_BaseRepository):
     _SELECT = """
         SELECT id, tenant_id, store_id, position_id, first_name, last_name,
-               email, password_hash, must_change_password, totp_secret_encrypted,
-               totp_enabled, totp_last_used_counter, totp_backup_code_hashes,
+               username, notification_email, password_hash, must_change_password,
                pin_hash, pin_failed_attempts, pin_locked_until, pepper_version,
                profile_photo_url, is_active
         FROM employees
@@ -192,10 +191,13 @@ class PostgresEmployeeRepository(_BaseRepository):
         )
         return self._hydrate(row) if row else None
 
-    def get_by_email(self, tenant_id: TenantId, email: EmailAddress) -> Employee | None:
+    def get_by_username(self, tenant_id: TenantId, username: Username) -> Employee | None:
+        # `username` sütunu CITEXT-dir — böyük/kiçik hərf fərqi DB tərəfindən
+        # nəzərə alınmır, ona görə burada əlavə `lower()` LAZIM DEYİL
+        # (əlavə edilsəydi indeksdən istifadə də pozulardı).
         row = self._fetch_one(
-            self._SELECT + " WHERE tenant_id = %s AND email = %s",
-            (tenant_id, str(email)),
+            self._SELECT + " WHERE tenant_id = %s AND username = %s",
+            (tenant_id, str(username)),
         )
         return self._hydrate(row) if row else None
 
@@ -214,8 +216,7 @@ class PostgresEmployeeRepository(_BaseRepository):
         """Sirr materialı — entity-dən AYRI (log-a düşməsin deyə)."""
         row = self._fetch_one(
             """
-            SELECT id, pin_hash, password_hash, totp_secret_encrypted,
-                   totp_last_used_counter, totp_backup_code_hashes, pepper_version
+            SELECT id, pin_hash, password_hash, pepper_version
             FROM employees WHERE id = %s AND tenant_id = %s
             """,
             (employee_id, self._tenant),
@@ -239,9 +240,13 @@ class PostgresEmployeeRepository(_BaseRepository):
     def save(self, employee: Employee) -> None:
         """Entity-dən gələn sahələri yeniləyir.
 
-        SİRRLƏRƏ TOXUNMUR: `pin_hash`/`password_hash`/`totp_secret_encrypted`
-        burada YAZILMIR — onlar üçün ayrıca `update_credentials()` var.
-        Beləliklə adi `save()` çağırışı təsadüfən sirri sıfırlaya bilməz.
+        SİRRLƏRƏ TOXUNMUR: `pin_hash`/`password_hash` burada YAZILMIR —
+        onlar üçün ayrıca `update_credentials()` var. Beləliklə adi `save()`
+        çağırışı təsadüfən sirri sıfırlaya bilməz.
+
+        `username` DƏ BURADA YAZILMIR: giriş identifikatorunun dəyişməsi
+        ayrıca, audit-lənən əməliyyatdır (`rename_username()`) — adi profil
+        yeniləməsi ilə birlikdə sükutla baş verməməlidir.
         """
         self._execute(
             """
@@ -250,8 +255,8 @@ class PostgresEmployeeRepository(_BaseRepository):
                 position_id          = %s,
                 first_name           = %s,
                 last_name            = %s,
+                notification_email   = %s,
                 must_change_password = %s,
-                totp_enabled         = %s,
                 pin_failed_attempts  = %s,
                 pin_locked_until     = %s,
                 is_active            = %s
@@ -262,8 +267,8 @@ class PostgresEmployeeRepository(_BaseRepository):
                 employee.position.id,
                 employee.first_name,
                 employee.last_name,
+                str(employee.notification_email) if employee.notification_email else None,
                 employee.must_change_password,
-                employee.totp_enabled,
                 employee.pin_security.failed_attempts,
                 employee.pin_security.locked_until,
                 employee.is_active,
@@ -280,9 +285,9 @@ class PostgresEmployeeRepository(_BaseRepository):
             """
             INSERT INTO employees
                 (id, tenant_id, store_id, position_id, first_name, last_name,
-                 email, password_hash, must_change_password, totp_secret_encrypted,
-                 totp_enabled, pin_hash, pepper_version, is_active)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 username, notification_email, password_hash, must_change_password,
+                 pin_hash, pepper_version, is_active)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 employee.id,
@@ -291,11 +296,10 @@ class PostgresEmployeeRepository(_BaseRepository):
                 employee.position.id,
                 employee.first_name,
                 employee.last_name,
-                str(employee.email) if employee.email else None,
+                str(employee.username) if employee.username else None,
+                str(employee.notification_email) if employee.notification_email else None,
                 credentials.password_hash,
                 employee.must_change_password,
-                credentials.totp_secret_encrypted,
-                employee.totp_enabled,
                 credentials.pin_hash,
                 credentials.pepper_version,
                 employee.is_active,
@@ -309,9 +313,6 @@ class PostgresEmployeeRepository(_BaseRepository):
         pin_hash: str | None = None,
         password_hash: str | None = None,
         pepper_version: int | None = None,
-        totp_secret_encrypted: str | None = None,
-        totp_last_used_counter: int | None = None,
-        totp_backup_code_hashes: list[str] | None = None,
     ) -> None:
         """Sirrləri AYRICA yeniləyir — `None` verilən sahə TOXUNULMUR.
 
@@ -322,24 +323,24 @@ class PostgresEmployeeRepository(_BaseRepository):
         self._execute(
             """
             UPDATE employees SET
-                pin_hash                = COALESCE(%s, pin_hash),
-                password_hash           = COALESCE(%s, password_hash),
-                pepper_version          = COALESCE(%s, pepper_version),
-                totp_secret_encrypted   = COALESCE(%s, totp_secret_encrypted),
-                totp_last_used_counter  = COALESCE(%s, totp_last_used_counter),
-                totp_backup_code_hashes = COALESCE(%s, totp_backup_code_hashes)
+                pin_hash       = COALESCE(%s, pin_hash),
+                password_hash  = COALESCE(%s, password_hash),
+                pepper_version = COALESCE(%s, pepper_version)
             WHERE id = %s AND tenant_id = %s
             """,
-            (
-                pin_hash,
-                password_hash,
-                pepper_version,
-                totp_secret_encrypted,
-                totp_last_used_counter,
-                totp_backup_code_hashes,
-                employee_id,
-                self._tenant,
-            ),
+            (pin_hash, password_hash, pepper_version, employee_id, self._tenant),
+        )
+
+    def rename_username(self, employee_id: EmployeeId, username: Username) -> None:
+        """Giriş identifikatorunu dəyişir — AYRICA əməliyyat.
+
+        `save()`-dən qəsdən ayrılıb: giriş adının dəyişməsi istifadəçinin
+        sistemə girə bilməməsi ilə nəticələnə bilər, ona görə profil
+        redaktəsinin yan təsiri kimi baş verməməlidir.
+        """
+        self._execute(
+            "UPDATE employees SET username = %s WHERE id = %s AND tenant_id = %s",
+            (str(username), employee_id, self._tenant),
         )
 
     # ------------------------------ köməkçi --------------------------------- #

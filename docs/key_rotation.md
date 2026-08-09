@@ -12,7 +12,7 @@
 |---|---|
 | 1C server şifrələri | `erp_servers.password_encrypted` |
 | Server konfiqurasiya backup-ları | `erp_server_config_backups.config_json_encrypted` |
-| TOTP 2FA sirləri | `employees.totp_secret_encrypted` |
+| ~~TOTP 2FA sirləri~~ | *silinib — SEC-016* |
 
 **Açar bunları qorumur:** şifrələr və PIN-lər Argon2id ilə *hash*-lənir (geri
 çevrilə bilməz), Fernet ilə şifrələnmir. Açarın itməsi hesabları bağlamır,
@@ -122,7 +122,7 @@ for row in repo.fetch_all_encrypted_rows():
 1. Hesablar və PIN-lər **təsirlənmir** (Argon2 hash-ləri açardan asılı deyil).
 2. `erp_servers` sətirlərindəki şifrələr oxunmaz olur → Bağlantı Sihirbazından
    (bölmə 7) hər server üçün şifrə yenidən daxil edilir.
-3. TOTP sirləri oxunmaz olur → hər admin-tier istifadəçi üçün 2FA yenidən
+3. (SEC-016-dan sonra aktual deyil — TOTP sirləri artıq saxlanılmır) 2FA yenidən
    qurulur (`can_reset_password` sahibi tərəfindən).
 4. Hadisə `audit_logs`-a yazılır və tenant-a bildirilir.
 
@@ -165,7 +165,7 @@ Standart kontekstlər:
 |---|---|
 | `erp_servers.password_encrypted` | `erp_server:<server_id>` |
 | `erp_server_config_backups.config_json_encrypted` | `erp_server:<server_id>` |
-| `employees.totp_secret_encrypted` | `totp:<employee_id>` |
+| ~~`employees.totp_secret_encrypted`~~ | *silinib — SEC-016* |
 
 ---
 

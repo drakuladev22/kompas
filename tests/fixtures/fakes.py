@@ -217,9 +217,9 @@ class InMemoryEmployees:
     def get(self, employee_id: EmployeeId) -> Employee | None:
         return self.items.get(employee_id)
 
-    def get_by_email(self, tenant_id: TenantId, email: Any) -> Employee | None:
+    def get_by_username(self, tenant_id: TenantId, username: Any) -> Employee | None:
         for employee in self.items.values():
-            if employee.email == email and employee.tenant_id == tenant_id:
+            if employee.username == username and employee.tenant_id == tenant_id:
                 return employee
         return None
 

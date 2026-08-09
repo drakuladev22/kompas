@@ -33,7 +33,7 @@ DECLARE
     v_passed     INTEGER := 0;
 BEGIN
     -- ---------------------------------------------------------------- setup
-    INSERT INTO license_tenants (tenant_name, license_key_hash, status, contact_email)
+    INSERT INTO license_tenants (tenant_name, license_key_hash, status, company_contact_email)
     VALUES ('GUARD-TEST', 'test', 'AKTIV', 'guard@test.local')
     RETURNING tenant_id INTO v_tenant;
 
@@ -52,18 +52,18 @@ BEGIN
     SELECT id INTO v_pos_seller FROM positions WHERE tenant_id = v_tenant AND code = 'SATICI';
 
     INSERT INTO employees (tenant_id, store_id, position_id, first_name, last_name,
-                           email, password_hash)
-    VALUES (v_tenant, v_store, v_pos_root, 'Test', 'Root', 'root@test.local', 'argon2-hash')
+                           username, password_hash)
+    VALUES (v_tenant, v_store, v_pos_root, 'Test', 'Root', 'guard.root', 'argon2-hash')
     RETURNING id INTO v_root;
 
     INSERT INTO employees (tenant_id, store_id, position_id, first_name, last_name,
-                           email, password_hash)
-    VALUES (v_tenant, v_store, v_pos_admin, 'Test', 'Admin', 'admin@test.local', 'argon2-hash')
+                           username, password_hash)
+    VALUES (v_tenant, v_store, v_pos_admin, 'Test', 'Admin', 'guard.admin', 'argon2-hash')
     RETURNING id INTO v_admin;
 
     INSERT INTO employees (tenant_id, store_id, position_id, first_name, last_name,
-                           email, password_hash)
-    VALUES (v_tenant, v_store, v_pos_store, 'Test', 'Manager', 'manager@test.local', 'argon2-hash')
+                           username, password_hash)
+    VALUES (v_tenant, v_store, v_pos_store, 'Test', 'Manager', 'guard.manager', 'argon2-hash')
     RETURNING id INTO v_manager;
 
     INSERT INTO employees (tenant_id, store_id, position_id, first_name, last_name, pin_hash)
@@ -300,13 +300,13 @@ BEGIN
         v_ceo_b UUID;
     BEGIN
         INSERT INTO employees (tenant_id, store_id, position_id, first_name, last_name,
-                               email, password_hash)
-        VALUES (v_tenant, v_store, v_pos_ceo, 'Test', 'CeoA', 'ceoa@test.local', 'h')
+                               username, password_hash)
+        VALUES (v_tenant, v_store, v_pos_ceo, 'Test', 'CeoA', 'guard.ceoa', 'h')
         RETURNING id INTO v_ceo_a;
 
         INSERT INTO employees (tenant_id, store_id, position_id, first_name, last_name,
-                               email, password_hash)
-        VALUES (v_tenant, v_store, v_pos_ceo, 'Test', 'CeoB', 'ceob@test.local', 'h')
+                               username, password_hash)
+        VALUES (v_tenant, v_store, v_pos_ceo, 'Test', 'CeoB', 'guard.ceob', 'h')
         RETURNING id INTO v_ceo_b;
 
         v_failed := FALSE;

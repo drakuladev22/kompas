@@ -17,12 +17,15 @@ from src.application.use_cases.authentication import (
     EmergencyAccessRecoveryUseCase,
     LoginStage,
     PinHandshakeUseCase,
+    TenantContact,
 )
 from src.domain.entities import Employee, Position
+from src.domain.entities.base import DomainRuleError
 from src.domain.value_objects import (
     EmailAddress,
     PermissionFlag,
     SystemRole,
+    Username,
 )
 from src.domain.value_objects.identifiers import (
     EmployeeId,
@@ -31,7 +34,6 @@ from src.domain.value_objects.identifiers import (
     TenantId,
 )
 from src.infrastructure.security.hashing import HashingService
-from src.infrastructure.security.totp import TotpService
 from tests.fixtures.fakes import (
     FakeClock,
     FakeSystemLimits,
@@ -46,6 +48,9 @@ TENANT = TenantId(uuid.uuid4())
 STORE = StoreId(uuid.uuid4())
 NOW = datetime(2026, 8, 8, 9, 0, tzinfo=UTC)
 GOOD_PASSWORD = "Güclü-Şifrə-2026!"
+
+#: Tenant-səviyyəli şirkət əlaqəsi (`license_tenants.company_contact_*`).
+COMPANY_CONTACT = TenantContact(email="rehber@kompas.az", phone="+994 50 123 45 67")
 
 
 def make_position(role: SystemRole) -> Position:
@@ -62,9 +67,9 @@ def make_position(role: SystemRole) -> Position:
 def make_employee(
     role: SystemRole,
     *,
-    email: str | None = None,
+    username: str | None = None,
+    notification_email: str | None = None,
     has_pin: bool = False,
-    totp: bool = False,
     must_change: bool = False,
     flags: list[str] | None = None,
 ) -> Employee:
@@ -72,20 +77,19 @@ def make_employee(
     for code in flags or []:
         position.grant(PermissionFlag(code=code, category="HR"))
 
-    employee = Employee(
+    return Employee(
         employee_id=EmployeeId(uuid.uuid4()),
         tenant_id=TENANT,
         position=position,
         first_name="Test",
         last_name=role.value,
         store_id=STORE,
-        email=EmailAddress.parse(email or f"{uuid.uuid4().hex[:8]}@kompas.az"),
+        username=Username.parse(username or f"u{uuid.uuid4().hex[:8]}"),
+        notification_email=(EmailAddress.parse(notification_email) if notification_email else None),
         has_password=True,
         has_pin=has_pin,
-        totp_enabled=totp,
         must_change_password=must_change,
     )
-    return employee
 
 
 @pytest.fixture
@@ -118,29 +122,28 @@ def notifier() -> RecordingNotifier:
 def login_uc(
     employees: InMemoryEmployees,
     hashing: HashingService,
-    encryption_service,
     clock: FakeClock,
     audit: RecordingAudit,
 ) -> AdminLoginUseCase:
     return AdminLoginUseCase(
         employees=employees,  # type: ignore[arg-type]
         hashing=hashing,
-        totp=TotpService(encryption_service, hashing),
         clock=clock,  # type: ignore[arg-type]
         audit=audit,  # type: ignore[arg-type]
     )
 
 
-def test_login_without_2fa_succeeds_with_warning(
-    hashing: HashingService, encryption_service, clock: FakeClock, audit: RecordingAudit
+def test_login_succeeds_in_one_step(
+    hashing: HashingService, clock: FakeClock, audit: RecordingAudit
 ) -> None:
-    employee = make_employee(SystemRole.HR_ADMIN, email="hr@kompas.az")
+    """SEC-016: uğurlu username+şifrə DƏRHAL sessiya verir — 2FA addımı yoxdur."""
+    employee = make_employee(SystemRole.HR_ADMIN, username="hr.admin")
     employees = InMemoryEmployees([employee])
     stored = hashing.hash_password(GOOD_PASSWORD)
 
-    result = login_uc(employees, hashing, encryption_service, clock, audit).verify_password(
+    result = login_uc(employees, hashing, clock, audit).login(
         tenant_id=TENANT,
-        email=EmailAddress.parse("hr@kompas.az"),
+        username=Username.parse("hr.admin"),
         password=GOOD_PASSWORD,
         stored_hash=stored,
     )
@@ -150,141 +153,151 @@ def test_login_without_2fa_succeeds_with_warning(
     assert "ADMIN_LOGIN" in audit.actions()
 
 
-def test_login_with_2fa_requires_second_step(
-    hashing: HashingService, encryption_service, clock: FakeClock, audit: RecordingAudit
+def test_login_is_case_insensitive(
+    hashing: HashingService, clock: FakeClock, audit: RecordingAudit
 ) -> None:
-    employee = make_employee(SystemRole.CEO, email="ceo@kompas.az", totp=True)
+    """DB-də CITEXT — "HR.Admin" ilə "hr.admin" EYNİ hesabdır."""
+    employee = make_employee(SystemRole.HR_ADMIN, username="hr.admin")
     employees = InMemoryEmployees([employee])
-    uc = login_uc(employees, hashing, encryption_service, clock, audit)
     stored = hashing.hash_password(GOOD_PASSWORD)
 
-    first = uc.verify_password(
+    result = login_uc(employees, hashing, clock, audit).login(
         tenant_id=TENANT,
-        email=EmailAddress.parse("ceo@kompas.az"),
+        username=Username.parse("  HR.Admin  "),
         password=GOOD_PASSWORD,
         stored_hash=stored,
     )
-    assert first.stage is LoginStage.PASSWORD_OK_AWAITING_TOTP
-    assert first.is_complete is False
 
-    totp = TotpService(encryption_service, hashing)
-    enrollment = totp.enroll(employee_id=str(employee.id), account_label="ceo@kompas.az")
-    import pyotp
-
-    code = pyotp.TOTP(enrollment.manual_entry_key).now()
-
-    second = uc.verify_totp(
-        employee=employee,
-        code=code,
-        encrypted_secret=enrollment.encrypted_secret,
-        last_used_counter=None,
-    )
-    assert second.stage is LoginStage.AUTHENTICATED
-    assert second.totp_counter is not None
+    assert result.stage is LoginStage.AUTHENTICATED
 
 
 def test_wrong_password_rejected(
-    hashing: HashingService, encryption_service, clock: FakeClock, audit: RecordingAudit
+    hashing: HashingService, clock: FakeClock, audit: RecordingAudit
 ) -> None:
-    employee = make_employee(SystemRole.HR_ADMIN, email="hr@kompas.az")
+    employee = make_employee(SystemRole.HR_ADMIN, username="hr.admin")
     employees = InMemoryEmployees([employee])
     stored = hashing.hash_password(GOOD_PASSWORD)
 
     with pytest.raises(AuthenticationError):
-        login_uc(employees, hashing, encryption_service, clock, audit).verify_password(
+        login_uc(employees, hashing, clock, audit).login(
             tenant_id=TENANT,
-            email=EmailAddress.parse("hr@kompas.az"),
+            username=Username.parse("hr.admin"),
             password="yanlış-şifrə",
             stored_hash=stored,
         )
 
+    assert "ADMIN_LOGIN" not in audit.actions()
 
-def test_unknown_email_gives_same_error(
-    hashing: HashingService, encryption_service, clock: FakeClock, audit: RecordingAudit
+
+def test_unknown_username_gives_same_error(
+    hashing: HashingService, clock: FakeClock, audit: RecordingAudit
 ) -> None:
-    """User enumeration qorunması: mesaj eynidir."""
+    """User enumeration qorunması: mövcud olmayan hesab da eyni mesaj verir."""
     employees = InMemoryEmployees([])
 
     with pytest.raises(AuthenticationError) as exc_info:
-        login_uc(employees, hashing, encryption_service, clock, audit).verify_password(
+        login_uc(employees, hashing, clock, audit).login(
             tenant_id=TENANT,
-            email=EmailAddress.parse("yoxdur@kompas.az"),
+            username=Username.parse("yoxdur"),
             password=GOOD_PASSWORD,
             stored_hash=None,
         )
 
-    assert exc_info.value.user_message == "E-poçt və ya şifrə yanlışdır."
+    assert exc_info.value.user_message == "İstifadəçi adı və ya şifrə yanlışdır."
+
+
+def test_unknown_username_and_bad_password_messages_are_identical(
+    hashing: HashingService, clock: FakeClock, audit: RecordingAudit
+) -> None:
+    """İki fərqli səbəb — İSTİFADƏÇİYƏ eyni cavab."""
+    employee = make_employee(SystemRole.HR_ADMIN, username="hr.admin")
+    stored = hashing.hash_password(GOOD_PASSWORD)
+    uc = login_uc(InMemoryEmployees([employee]), hashing, clock, audit)
+
+    with pytest.raises(AuthenticationError) as unknown:
+        uc.login(
+            tenant_id=TENANT,
+            username=Username.parse("yoxdur"),
+            password=GOOD_PASSWORD,
+            stored_hash=None,
+        )
+    with pytest.raises(AuthenticationError) as bad_password:
+        uc.login(
+            tenant_id=TENANT,
+            username=Username.parse("hr.admin"),
+            password="səhv",
+            stored_hash=stored,
+        )
+
+    assert unknown.value.user_message == bad_password.value.user_message
+
+
+def test_deactivated_account_cannot_log_in(
+    hashing: HashingService, clock: FakeClock, audit: RecordingAudit
+) -> None:
+    employee = make_employee(SystemRole.CEO, username="ceo")
+    employee.is_active = False
+    stored = hashing.hash_password(GOOD_PASSWORD)
+
+    with pytest.raises(DomainRuleError, match=r"[Dd]eaktiv"):
+        login_uc(InMemoryEmployees([employee]), hashing, clock, audit).login(
+            tenant_id=TENANT,
+            username=Username.parse("ceo"),
+            password=GOOD_PASSWORD,
+            stored_hash=stored,
+        )
 
 
 def test_must_change_password_stage(
-    hashing: HashingService, encryption_service, clock: FakeClock, audit: RecordingAudit
+    hashing: HashingService, clock: FakeClock, audit: RecordingAudit
 ) -> None:
-    employee = make_employee(SystemRole.HR_ADMIN, email="hr@kompas.az", must_change=True, totp=True)
+    employee = make_employee(SystemRole.HR_ADMIN, username="hr.admin", must_change=True)
     employees = InMemoryEmployees([employee])
     stored = hashing.hash_password(GOOD_PASSWORD)
 
-    result = login_uc(employees, hashing, encryption_service, clock, audit).verify_password(
+    result = login_uc(employees, hashing, clock, audit).login(
         tenant_id=TENANT,
-        email=EmailAddress.parse("hr@kompas.az"),
+        username=Username.parse("hr.admin"),
         password=GOOD_PASSWORD,
         stored_hash=stored,
     )
 
     assert result.stage is LoginStage.MUST_CHANGE_PASSWORD
+    assert result.is_complete is False
+    # Şifrə dəyişdirilməyib — bu, tam giriş sayılmır və audit-ə yazılmır.
+    assert "ADMIN_LOGIN" not in audit.actions()
 
 
-def test_wrong_totp_rejected(
-    hashing: HashingService, encryption_service, clock: FakeClock, audit: RecordingAudit
+def test_login_lazy_pepper_migration_flag(
+    hashing: HashingService,
+    clock: FakeClock,
+    audit: RecordingAudit,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    employee = make_employee(SystemRole.CEO, email="ceo@kompas.az", totp=True)
-    uc = login_uc(InMemoryEmployees([employee]), hashing, encryption_service, clock, audit)
-    enrollment = TotpService(encryption_service, hashing).enroll(
-        employee_id=str(employee.id), account_label="ceo@kompas.az"
-    )
+    """SEC-005: köhnə pepper ilə yaradılmış şifrə hash-i hələ də işləyir."""
+    employee = make_employee(SystemRole.CEO, username="ceo")
+    stored = hashing.hash_password(GOOD_PASSWORD)
 
-    with pytest.raises(AuthenticationError, match="2FA"):
-        uc.verify_totp(
-            employee=employee,
-            code="000000",
-            encrypted_secret=enrollment.encrypted_secret,
-            last_used_counter=None,
-        )
+    monkeypatch.setenv("KOMPASOS_HASH_PEPPER", "b" * 64)
+    monkeypatch.setenv("KOMPASOS_HASH_PEPPER_PREVIOUS", "a" * 64)
+    rotated = HashingService(time_cost=1, memory_cost=8, parallelism=1)
 
-
-def test_backup_code_login(
-    hashing: HashingService, encryption_service, clock: FakeClock, audit: RecordingAudit
-) -> None:
-    employee = make_employee(SystemRole.ROOT, email="root@kompas.az", totp=True)
-    uc = login_uc(InMemoryEmployees([employee]), hashing, encryption_service, clock, audit)
-    enrollment = TotpService(encryption_service, hashing).enroll(
-        employee_id=str(employee.id), account_label="root@kompas.az"
-    )
-
-    result, index = uc.verify_backup_code(
-        employee=employee,
-        code=enrollment.backup_codes[2],
-        stored_hashes=list(enrollment.backup_code_hashes),
+    result = login_uc(InMemoryEmployees([employee]), rotated, clock, audit).login(
+        tenant_id=TENANT,
+        username=Username.parse("ceo"),
+        password=GOOD_PASSWORD,
+        stored_hash=stored,
+        pepper_version=1,
     )
 
     assert result.stage is LoginStage.AUTHENTICATED
-    assert index == 2
+    assert result.needs_pepper_rehash is True
 
 
-def test_unknown_backup_code_rejected(
-    hashing: HashingService, encryption_service, clock: FakeClock, audit: RecordingAudit
-) -> None:
-    employee = make_employee(SystemRole.ROOT, email="root@kompas.az", totp=True)
-    uc = login_uc(InMemoryEmployees([employee]), hashing, encryption_service, clock, audit)
-    enrollment = TotpService(encryption_service, hashing).enroll(
-        employee_id=str(employee.id), account_label="root@kompas.az"
-    )
-
-    with pytest.raises(AuthenticationError, match="Ehtiyat"):
-        uc.verify_backup_code(
-            employee=employee,
-            code="ZZZZZ-ZZZZZ",
-            stored_hashes=list(enrollment.backup_code_hashes),
-        )
+def test_login_use_case_has_no_two_factor_surface() -> None:
+    """SEC-016 reqressiya qoruyucusu: 2FA metodları geri qayıtmamalıdır."""
+    for removed in ("verify_totp", "verify_backup_code", "verify_password"):
+        assert not hasattr(AdminLoginUseCase, removed), removed
 
 
 # --------------------------------------------------------------------------- #
@@ -364,7 +377,7 @@ def test_camera_operator_cannot_use_kiosk_pin(
         first_name="Rizvan",
         last_name="Operator",
         store_id=STORE,
-        email=EmailAddress.parse("rizvan@kompas.az"),
+        username=Username.parse("rizvan.operator"),
         has_password=True,
         has_pin=True,
     )
@@ -606,6 +619,8 @@ def test_recovery_blocked_when_admin_exists(
             target=target,
             developer_reference="TICKET-1234",
             active_admin_count=1,
+            tenant_contact=COMPANY_CONTACT,
+            verified_contact=COMPANY_CONTACT.email,
         )
 
 
@@ -624,6 +639,8 @@ def test_recovery_requires_identity_reference(
             target=target,
             developer_reference="x",
             active_admin_count=0,
+            tenant_contact=COMPANY_CONTACT,
+            verified_contact=COMPANY_CONTACT.email,
         )
 
 
@@ -642,6 +659,8 @@ def test_recovery_only_for_root_or_ceo(
             target=target,
             developer_reference="TICKET-1234",
             active_admin_count=0,
+            tenant_contact=COMPANY_CONTACT,
+            verified_contact=COMPANY_CONTACT.email,
         )
 
 
@@ -660,6 +679,8 @@ def test_recovery_succeeds_and_is_audited(
         target=target,
         developer_reference="TICKET-1234",
         active_admin_count=0,
+        tenant_contact=COMPANY_CONTACT,
+        verified_contact=COMPANY_CONTACT.email,
     )
 
     assert target.is_active is True
@@ -667,3 +688,83 @@ def test_recovery_succeeds_and_is_audited(
     assert hashing.verify_password(credential.hashed, credential.plaintext) is True
     assert "EMERGENCY_ACCESS_RECOVERY" in audit.actions()
     assert notifier.messages[0]["is_critical"] is True
+
+
+# --------------------------------------------------------------------------- #
+# SEC-016: bərpa şirkət əlaqəsinə əsaslanır, fərdi e-poçta YOX
+# --------------------------------------------------------------------------- #
+
+
+def test_recovery_rejects_contact_that_is_not_the_company_contact(
+    hashing: HashingService,
+    clock: FakeClock,
+    audit: RecordingAudit,
+    notifier: RecordingNotifier,
+) -> None:
+    """ƏSAS QAPI: uyğunsuz əlaqə → bərpa yoxdur.
+
+    Yoxlanılmasaydı, prosedur istənilən şəxsə Root hesabı verən arxa qapı
+    olardı — aktiv admin qalmadıqda onu dayandıracaq başqa maneə yoxdur.
+    """
+    target = make_employee(SystemRole.ROOT, notification_email="oqru@hacker.test")
+    target.is_active = False
+    uc = recovery_uc(InMemoryEmployees([target]), hashing, clock, audit, notifier)
+
+    with pytest.raises(AuthenticationError, match="şirkət əlaqə"):
+        uc.recover(
+            tenant_id=TENANT,
+            target=target,
+            developer_reference="TICKET-1234",
+            active_admin_count=0,
+            tenant_contact=COMPANY_CONTACT,
+            verified_contact="oqru@hacker.test",
+        )
+
+    assert target.is_active is False
+    assert "EMERGENCY_ACCESS_RECOVERY" not in audit.actions()
+
+
+def test_recovery_accepts_company_phone_as_alternative_channel(
+    hashing: HashingService,
+    clock: FakeClock,
+    audit: RecordingAudit,
+    notifier: RecordingNotifier,
+) -> None:
+    """Telefon fərqli formatda yazıla bilər — normallaşdırma tələb olunur."""
+    target = make_employee(SystemRole.CEO)
+    uc = recovery_uc(InMemoryEmployees([target]), hashing, clock, audit, notifier)
+
+    credential = uc.recover(
+        tenant_id=TENANT,
+        target=target,
+        developer_reference="TICKET-9",
+        active_admin_count=0,
+        tenant_contact=COMPANY_CONTACT,
+        verified_contact="0501234567",  # qeydiyyatda "+994 50 123 45 67"
+    )
+
+    assert credential.plaintext
+
+
+@pytest.mark.parametrize(
+    "claimed",
+    ["", "   ", "başqa@kompas.az", "0559999999", "12345"],
+)
+def test_tenant_contact_rejects_non_matching_values(claimed: str) -> None:
+    assert COMPANY_CONTACT.matches(claimed) is False
+
+
+@pytest.mark.parametrize(
+    "claimed",
+    ["rehber@kompas.az", "  REHBER@Kompas.AZ  ", "+994501234567", "994 50 123 45 67"],
+)
+def test_tenant_contact_accepts_matching_values(claimed: str) -> None:
+    assert COMPANY_CONTACT.matches(claimed) is True
+
+
+def test_tenant_contact_without_phone_rejects_any_number() -> None:
+    """Telefon qeydiyyatda yoxdursa, telefonla təsdiq mümkün olmamalıdır."""
+    contact = TenantContact(email="rehber@kompas.az")
+
+    assert contact.matches("+994501234567") is False
+    assert contact.matches("rehber@kompas.az") is True

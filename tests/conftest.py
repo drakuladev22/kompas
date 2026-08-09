@@ -30,7 +30,6 @@ from src.infrastructure.security.hashing import (  # noqa: E402
     PepperProvider,
     generate_pepper,
 )
-from src.infrastructure.security.totp import TotpService  # noqa: E402
 from src.shared.di_container import DIContainer, reset_container  # noqa: E402
 from src.shared.event_bus import EventBus, reset_event_bus  # noqa: E402
 from src.shared.logger import configure_logging  # noqa: E402
@@ -133,7 +132,7 @@ def static_key_provider_factory() -> type[StaticKeyProvider]:
 
 
 # --------------------------------------------------------------------------- #
-# Hash-ləmə / 2FA
+# Hash-ləmə
 # --------------------------------------------------------------------------- #
 
 #: Argon2 testdə SÜRƏTLİ parametrlərlə işləyir — istehsalat dəyərləri
@@ -159,13 +158,6 @@ def hashing_service_no_pepper(monkeypatch: pytest.MonkeyPatch) -> HashingService
     """Pepper OLMADAN — deqradasiya rejimini yoxlamaq üçün."""
     monkeypatch.delenv("KOMPASOS_HASH_PEPPER", raising=False)
     return HashingService(pepper_provider=PepperProvider(), **FAST_ARGON2)
-
-
-@pytest.fixture
-def totp_service(
-    encryption_service: EncryptionService, hashing_service: HashingService
-) -> TotpService:
-    return TotpService(encryption_service, hashing_service)
 
 
 # --------------------------------------------------------------------------- #

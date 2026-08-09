@@ -22,12 +22,12 @@ from src.domain.policies import (
 from src.domain.value_objects import (
     DUAL_CONTROL_APPROVAL_FLAG,
     AuthorizationError,
-    EmailAddress,
     HardlockLevel,
     PermissionEffect,
     PermissionFlag,
     RolePriority,
     SystemRole,
+    Username,
 )
 from src.domain.value_objects.identifiers import (
     EmployeeId,
@@ -81,7 +81,7 @@ def make_employee(role: SystemRole, *, flags: list[PermissionFlag] | None = None
         first_name="T",
         last_name=role.value,
         store_id=STORE,
-        email=EmailAddress.parse(f"{uuid.uuid4().hex[:8]}@kompas.az"),
+        username=Username.parse(f"u{uuid.uuid4().hex[:8]}"),
         has_password=True,
     )
 

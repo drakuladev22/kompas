@@ -37,7 +37,7 @@ KompasOS/
 │   │   └── events/          # ✅ domen hadisələri (LeaveVerifiedEvent, ...)
 │   ├── application/         # ✅ use case-lər (Saga, Guard-lar, auth)
 │   ├── infrastructure/
-│   │   ├── security/        # ✅ AES-256-GCM, Argon2id+pepper, TOTP 2FA
+│   │   ├── security/        # ✅ AES-256-GCM, Argon2id+pepper
 │   │   ├── persistence/     # Faza 3
 │   │   ├── erp/             # Faza 3 — çoxsaylı 1C konnektorları
 │   │   └── notifications/   # Faza 3 — e-poçt fallback, crash reporting
@@ -155,7 +155,7 @@ pip-audit -r requirements.txt  # asılılıq zəiflik skanı
 | Master açar DB/config-də plaintext saxlanılmır | `EnvironmentKeyProvider`, `WindowsDpapiKeyProvider` | — |
 | **4-rəqəmli PIN üçün pepper** (10 000 variant problemi) | `security/hashing.py` | SEC-005 |
 | Argon2id + zəif PIN/şifrə rədd + timing-safe verify | `security/hashing.py` | SEC-014 |
-| **TOTP replay qorunması** + ehtiyat kodları | `security/totp.py` | SEC-004 |
+| **Username + şifrə girişi** (2FA yoxdur) | `use_cases/authentication.py` | SEC-016 |
 | Sessiya: token hash-i, ikiqat müddət, ləğv | `auth_sessions` | SEC-011 |
 | PIN/şifrə/token/sirr log-a düşmür | `logger.REDACTED_KEYS` | SEC-013 |
 | Anti-fraud vəzifə ayrılığı (DB trigger-i) | `schema.sql` §18 | SEC-001 |

@@ -86,7 +86,11 @@ olunur:
 
 ## SEC-004 — TOTP replay qorunması və AAD bağlantısı
 
-**Vəziyyət:** Qəbul edildi
+**Vəziyyət:** ⛔ **LƏĞV EDİLDİ — SEC-016 ilə əvəz olundu (2026-08-09)**
+
+> Bu qərar artıq qüvvədə deyil. Müştəri qərarı ilə 2FA/TOTP tamamilə
+> çıxarıldı; `totp.py`, DB sütunları və `pyotp` asılılığı silindi.
+> Aşağıdakı mətn tarixi arayış üçün saxlanılır — **tətbiq etməyin**.
 
 **Problem.** Spesifikasiya 2FA tələb edir, lakin TOTP-un iki praktik zəifliyini
 göstərmir: (a) kod 30 saniyə etibarlıdır — çiynin üstündən baxan şəxs həmin
@@ -103,7 +107,7 @@ köçürülə bilər.
   admin üçün; bu, bölmə 2-dəki "Emergency Access Recovery" prosedurunun işə
   düşmə ehtimalını azaldır.
 
-**Tətbiq:** `src/infrastructure/security/totp.py`, `schema.sql` §7.
+**Tətbiq:** ~~`src/infrastructure/security/totp.py`~~ (silinib, bax SEC-016).
 
 ---
 
@@ -321,6 +325,62 @@ lakin son **təmizləmə** addımı (`DELETE FROM license_tenants`) uğursuz old
 Statik nəzərdən keçirmə bunu tutmazdı — yalnız real icra göstərdi.
 
 **Tətbiq:** `schema.sql` §7, §11; mövcud bazalar üçün idempotent ALTER bloku.
+
+---
+
+## SEC-016 — Admin girişi: username + şifrə; 2FA ÇIXARILDI
+
+**Vəziyyət:** Qəbul edildi (müştəri qərarı, 2026-08-09) — **SEC-004-ü ləğv edir**
+
+**Kontekst.** Spesifikasiya bölmə 2 (sətir 43, 44, 223, 290, 307) admin-tier
+giriş üçün "e-poçt + güclü şifrə + məcburi TOTP 2FA" tələb edirdi. Müştəri
+bunu sadələşdirmək qərarına gəldi. Spesifikasiyanın həmin bəndləri bu qərarla
+**əvəz olunmuş sayılır** — mətn qəsdən redaktə edilmir ki, dəyişikliyin nə
+olduğu görünsün.
+
+**Qərar.**
+
+| Sahə | Əvvəl | İndi |
+|---|---|---|
+| Giriş identifikatoru | `employees.email` (CITEXT, unikal) | `employees.username` (CITEXT, tenant-daxili unikal) |
+| İkinci faktor | Məcburi TOTP + 10 ehtiyat kodu | **Yoxdur** |
+| Giriş axını | 2 addım (şifrə → kod) | **1 addım** |
+| E-poçt | Autentifikasiya identifikatoru | `notification_email` — yalnız bildiriş, nullable |
+| Bərpa kimlik təsdiqi | Fərdi hesab e-poçtu | `license_tenants.company_contact_email` / `_phone` |
+
+**Təhlükəsizliyə təsiri açıq etiraf olunur.** TOTP oğurlanmış şifrəyə qarşı
+ikinci maneə idi; o maneə artıq yoxdur. Qalan tədbirlər: Argon2id +
+`employee_id`-yə bağlı pepper (SEC-005), admin-tərəfindən sıfırlama +
+`must_change_password`, `security_events` qeydiyyatı, sessiya limitləri
+(SEC-011), enumeration qorunması (SEC-014). Kompensasiya tam deyil — bu,
+qəbul edilmiş biznes riskidir.
+
+**Niyə `email` sütunu silinmədi, ADI DƏYİŞDİRİLDİ.** Tələb həm "email
+identifikator kimi çıxarılsın", həm "yeni nullable `notification_email`
+əlavə edilsin" deyirdi. İki ayrı sütun saxlanılsaydı mövcud ünvanlar itər və
+eyni məlumat üçün iki mənbə qalardı. Ad dəyişikliyi hər iki tələbi ödəyir.
+
+**Niyə `license_tenants`-a yeni `company_contact_*` cütü ƏLAVƏ edilmədi.**
+Mövcud `contact_email`/`contact_phone` artıq dəqiq bu rolu oynayırdı.
+Yanına eyni məzmunlu ikinci cüt qoymaq Emergency Access Recovery-nin SƏHV
+sütunu yoxlaması riskini yaradardı — bu isə birbaşa təhlükəsizlik qüsurudur.
+Ona görə sütunlar tələb olunan adlara **yenidən adlandırıldı**.
+
+**Emergency Access Recovery gücləndirildi.** Əvvəl yalnız iki şərt vardı
+(aktiv admin qalmaması + istinad nömrəsi). İndi üçüncü və ƏSAS şərt əlavə
+olundu: müraciət edən `TenantContact.matches()` ilə şirkət əlaqəsinə qarşı
+təsdiqlənməlidir. Bu olmasaydı prosedur istənilən şəxsə Root hesabı verən
+arxa qapı olardı.
+
+**Username formatı ASCII-dir** (`^[a-z0-9][a-z0-9._-]{2,31}$`). Mağaza
+PC-lərində klaviatura düzümü Azərbaycan, rus və ya ingilis ola bilər —
+"şəbnəm" adlı hesab ingilis düzümündə yazıla bilməzdi. Ad-soyad sahələrində
+Azərbaycan hərfləri sərbəstdir; məhdudiyyət yalnız giriş identifikatorunadır.
+
+**Tətbiq:** `database/migrations/001_username_auth.sql`,
+`domain/value_objects/credentials.py` (`Username`),
+`application/use_cases/authentication.py` (`AdminLoginUseCase.login`,
+`TenantContact`), `infrastructure/persistence/{mappers,repositories}.py`.
 
 ---
 

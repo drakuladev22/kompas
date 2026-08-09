@@ -39,7 +39,18 @@ function Invoke-CiStep {
     $label = "$Job / $Name"
     Write-Host "`n=== $label ===" -ForegroundColor Cyan
     $started = Get-Date
+    $global:LASTEXITCODE = 0
     try {
+        # PowerShell 5.1 QÜSURU: `$ErrorActionPreference = 'Stop'` qüvvədə
+        # olduqda XARİCİ proqramın stderr-ə yazdığı hər sətir dayandırıcı
+        # xətaya çevrilir. Nəticədə `pip-audit` "No known vulnerabilities
+        # found" (uğur mesajı, stderr-ə gedir) yazdığına görə addım UĞURSUZ
+        # görünürdü — yəni CI-ın yaşıl/qırmızı siqnalı stderr-in necə tutulmasından
+        # asılı idi, faktiki nəticədən yox.
+        #
+        # Addım daxilində 'Continue'-ya keçirik: uğur meyarı YALNIZ çıxış
+        # kodudur. Cmdlet xətaları `throw` ilə hələ də tutulur.
+        $ErrorActionPreference = 'Continue'
         & $Action
         if ($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0) {
             throw "çıxış kodu $LASTEXITCODE"

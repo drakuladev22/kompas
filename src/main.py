@@ -22,7 +22,6 @@ from pathlib import Path
 from src import __version__
 from src.infrastructure.security.encryption import EncryptionService
 from src.infrastructure.security.hashing import HashingService
-from src.infrastructure.security.totp import TotpService
 from src.shared.di_container import DIContainer, Lifetime, get_container
 from src.shared.event_bus import DomainEvent, EventBus, get_event_bus
 from src.shared.exceptions import EncryptionKeyError, KompasOSError
@@ -55,12 +54,6 @@ def build_container(*, event_bus: EventBus | None = None) -> DIContainer:
     container.register_instance(EventBus, bus, override=True)
     container.register_singleton(EncryptionService, override=True)
     container.register_singleton(HashingService, override=True)
-    container.register_factory(
-        TotpService,
-        lambda c: TotpService(c.resolve(EncryptionService), c.resolve(HashingService)),
-        lifetime=Lifetime.SINGLETON,
-        override=True,
-    )
     container.register_factory(
         SagaStateRepository,  # type: ignore[type-abstract]
         InMemorySagaStateRepository,
@@ -188,9 +181,16 @@ def _check_pepper(container: DIContainer, *, is_production: bool) -> CheckResult
     )
 
 
-def _check_totp(container: DIContainer) -> CheckResult:
-    container.resolve(TotpService)
-    return CheckResult("totp", True, "INFO", "2FA servisi hazırdır")
+def _check_migrations() -> CheckResult:
+    """Miqrasiya faylları mövcuddurmu (schema.sql tək başına kifayət etmir)."""
+    folder = Path(__file__).resolve().parents[1] / "database" / "migrations"
+    files = sorted(folder.glob("*.sql")) if folder.exists() else []
+    return CheckResult(
+        "migrations",
+        bool(files),
+        "INFO" if files else "WARNING",
+        f"{len(files)} miqrasiya faylı: {', '.join(f.name for f in files) or 'yoxdur'}",
+    )
 
 
 def _check_schema_file() -> CheckResult:
@@ -234,8 +234,8 @@ def run_self_check(container: DIContainer, *, strict: bool = False) -> list[Chec
         _check_pending_reconciliation(container),
         _check_encryption(container),
         _check_pepper(container, is_production=is_production),
-        _check_totp(container),
         _check_schema_file(),
+        _check_migrations(),
         _check_dotenv(is_production=is_production),
     ]
     results: list[CheckResult] = [item for item in candidates if item is not None]
