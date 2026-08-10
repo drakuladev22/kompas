@@ -83,3 +83,6 @@ azaldılma qərarı `security_decisions.md`-də qeyd olunmalıdır.
 | — | Saga siyasəti | Açıq reyestr, naməlum → ən sərt (SEC-003) | 2026-08-08 |
 | — | CEO ↔ CEO iyerarxiya | Bloklanır, yalnız Root istisnadır (SEC-006) | 2026-08-08 |
 | — | Pepper rotasiyası | Lazy migration (`employees.pepper_version`) | 2026-08-08 |
+| — | Gecikmə dəqiqələri AZN-ə necə çevrilir? | Root təyin edir (`DELAY_FINE_RATE_PER_MINUTE`), **defolt 0.00** — təyin edilməmiş dərəcə ilə pul kəsmək hüquqi riskdir (BR-002) | 2026-08-09 |
+| — | Aylıq 240 dəq. limiti aşıldıqda nə olur? | Spesifikasiya qadağa təyin etmir → **xəbərdarlıq, bloklama YOX**: audit + HR bildirişi (`MonthlyLeaveUsage`). Bloklamaq olmayan qadağa uydurmaq, susmaq isə Root sürüşdürücüsünü mənasız etmək olardı | 2026-08-10 |
+| — | Drive razılığı hansı OAuth axını ilə? | Loopback + PKCE; `oob` Google tərəfindən 2022-də qapadılıb (SEC-017) | 2026-08-10 |

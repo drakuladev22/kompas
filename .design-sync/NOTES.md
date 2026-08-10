@@ -24,6 +24,18 @@ Ona görə **əhatə qəsdən məhdudlaşdırılıb**:
 KompasOS palitrası, tipoqrafiyası və ikonları ilə. Yeni maketlər (Qrup H, I…)
 brendə uyğun çıxır və PySide6-da tətbiqi birbaşa olur.
 
+**Faza 4-dən sonra əlavə olunan ekranlar** maket sənədində YOXDUR — onlar
+mövcud token və widget-lərdən qurulub, ona görə bundle dəyişmir:
+
+| Ekran | Modul | Qeyd |
+|---|---|---|
+| ROOT Control Center | `screens/group_d.py` | 3 bölmə: limitlər, modul açarları, icazə registri |
+| Drive Bağlantısı | `screens/group_d.py` | OAuth razılığı; `image` ikonu |
+| Qrup H / I ekranları | `screens/group_h.py`, `group_i.py` | Kataloqlar, hesabat, plugin, dashboard qurucusu |
+
+Yeni ikon lazım olsa `widgets/icons.py`-a əlavə edin və bundle-ı yenidən
+qurun — `guidelines/icons.md` avtomatik yenilənir.
+
 ## Bundle necə qurulur
 
 ```

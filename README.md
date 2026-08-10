@@ -6,8 +6,9 @@ Windows masaüstü tətbiqi (`.exe`).
 
 > **Status: altı fazanın hamısının qatları yazılıb.** DDD nüvəsi, domen
 > məntiqi, təhlükəsizlik qatı, tam DB sxemi, CI/CD, persistence, 1C
-> konnektorları, lisenziya/auto-update, dizayn sistemi + 27 ekran, Faza 5/6
-> əməliyyat modulları və GUI kompozisiya kökü hazırdır.
+> konnektorları, lisenziya/auto-update, dizayn sistemi + 27 maket ekranı,
+> Faza 5/6 əməliyyat modulları, ROOT Control Center və GUI kompozisiya kökü
+> hazırdır (naviqasiyada 28 bölmə).
 > Tam plan: [`kompasos.md`](kompasos.md), bölmə 10.
 
 ---
@@ -42,6 +43,41 @@ Windows masaüstü tətbiqi (`.exe`).
 > Əlavə olaraq (spesifikasiyada bölmə 4/6-dan gələn qərar dəyişiklikləri):
 > cərimə sübut şəkillərinin Google Drive-da saxlanması, aylıq cərimə icmalı
 > (`PENDING_REVIEW` → `PUBLISHED`) və universal İşçi Detal Paneli.
+
+### ROOT Control Center — Soft-Coded System Rules (bölmə 3)
+
+Təhlükəsizlik nüvəsindən (şifrə hash-i, JWT, DB bağlantısı, Anti-Fraud,
+Hierarchy/Self-Escalation Guard) **kənarda qalan hər şey** GUI-dan idarə
+olunur — kodda sabit ədəd yoxdur.
+
+| Bölmə | Yer |
+|---|---|
+| Dinamik limitlər / taymaut-lar (`system_limits`) | `domain/policies.py`, `presentation/controllers/root_control.py` |
+| Feature Toggles (`feature_toggles`) — retroaktiv-təsirsiz | `application/use_cases/root_control.py` |
+| Permission Registry (yeni flag, YALNIZ Root) | `application/use_cases/root_control.py` |
+| Dynamic UI Integration (söndürülmüş modul render-dən kəsilir) | `presentation/shell/menu.py`, `presentation/app.py` |
+
+> Struktur-kritik modulu (Kamera Təsdiqi) söndürmək bir-kliklik toggle
+> DEYİL: əlavə xəbərdarlıq modalı **və yazılı təsdiq sahəsi** tələb olunur;
+> mətnin uzunluğu həm use case-də, həm repository qatında yoxlanılır.
+
+### Sübut şəkli zənciri (miqrasiya 002, SEC-017)
+
+```
+Cərimə forması → lokal növbə (SQLite + disk spool) → Drive
+                 ↑ şəkil ƏVVƏLCƏ diskə yazılır
+```
+
+Sıra qəsdəndir: tərsi olsaydı aradakı çökmə **sübutu olmayan cərimə**
+yaradardı, bölmə 4 isə manual cəriməni sübutsuz qadağan edir. Drive hesabı
+qoşulmayıbsa cərimələr yenə normal yaranır, şəkillər növbədə gözləyir və
+bağlantı qurulan kimi avtomatik yüklənir.
+
+| Hissə | Yer |
+|---|---|
+| Razılıq (OAuth consent) axını — loopback + PKCE | `infrastructure/storage/oauth_flow.py` |
+| "Drive Bağlantısı" ekranı (`can_manage_drive_connection`) | `presentation/screens/group_d.py` |
+| Lokal növbə + fon işçisi | `infrastructure/storage/upload_queue.py` |
 
 ---
 
@@ -201,6 +237,23 @@ python -m src.main --strict
 > içində bərpa oluna bilər (bax [SEC-005](docs/security_decisions.md)).
 > Bu dəyər dəyişdirilərsə bütün mövcud PIN/şifrələr etibarsız olur.
 
+### Google Drive — sübut şəkilləri (isteğe bağlı, bax SEC-017)
+
+Cərimə sübut şəkilləri müştərinin ÖZ Drive hesabında saxlanılır. Google Cloud
+Console-da OAuth klienti yaradın — **tip mütləq "Desktop app" olmalıdır**
+(razılıq axını `http://127.0.0.1:<port>`-a yönləndirir; port hər dəfə OS
+tərəfindən seçildiyi üçün Console-da konkret port qeydiyyatdan keçirilmir):
+
+```powershell
+# .env
+KOMPASOS_GOOGLE_CLIENT_ID=...
+KOMPASOS_GOOGLE_CLIENT_SECRET=...
+```
+
+Sonra tətbiqdə **Drive Bağlantısı** bölməsini açıb (`can_manage_drive_connection`
+— defolt Root/CEO) hesabı qoşun. Açarlar boş buraxıla bilər: cərimələr yenə
+normal yaranır, şəkillər lokal növbədə gözləyir.
+
 ### Baza — ✅ QURULUB VƏ DOĞRULANIB
 
 Sxem canlı Supabase layihəsinə tətbiq olunub (ap-southeast-1, PostgreSQL 17.6):
@@ -234,12 +287,17 @@ Skript **idempotentdir** — təkrar icra oluna bilər. İstehsalatda
 ```powershell
 ruff check src tests           # lint
 ruff format --check src tests  # format
-mypy src                       # 100% tip yoxlaması (strict)
-pytest tests/unit -v           # unit testlər
+mypy src                       # 100% tip yoxlaması (strict) — 200 fayl
+pytest tests/ -q               # 1363 test (43 skip: DB tələb edənlər)
 pytest tests/unit --cov=src/domain --cov=src/shared --cov-fail-under=85
 pytest tests/e2e -m e2e        # pytest-qt karkası
+python scripts/check_contrast.py --include-high-contrast  # WCAG AA
 pip-audit -r requirements.txt  # asılılıq zəiflik skanı
 ```
+
+> İnteqrasiya testləri `DATABASE_URL` təyin edilmədikdə atlanır — lokalda
+> "43 skipped" normaldır. Windows konsolunda Azərbaycan hərfləri üçün
+> `PYTHONIOENCODING=utf-8` verin.
 
 ---
 

@@ -384,6 +384,51 @@ Azərbaycan hərfləri sərbəstdir; məhdudiyyət yalnız giriş identifikatoru
 
 ---
 
+## SEC-017 — Drive razılığı: loopback + PKCE; `oob` axını istifadə edilmir
+
+**Vəziyyət:** Qəbul edildi (2026-08-10) — miqrasiya 002-nin davamı
+
+**Kontekst.** Cərimə sübut şəkilləri müştərinin ÖZ Google Drive hesabında
+saxlanılır (bax `migrations/002` başlığı). Hesabı qoşmaq üçün OAuth razılığı
+lazımdır və masaüstü tətbiqində bunun iki tarixi yolu var idi:
+
+1. `urn:ietf:wg:oauth:2.0:oob` — kod ekranda göstərilir, istifadəçi yapışdırır;
+2. loopback yönləndirmə — brauzer kodu `http://127.0.0.1:<port>`-a göndərir.
+
+**Qərar: loopback + PKCE.** Google `oob` axınını 2022-də qapadıb; yeni
+klientlərdə o, ümumiyyətlə işləmir, ona görə seçim əslində texniki
+məcburiyyətdir. Google Cloud Console-da klient tipi **"Desktop app"**
+olmalıdır.
+
+| Element | Seçim | Səbəb |
+|---|---|---|
+| Port | `0` (OS seçir) | Sabit port onu tutan başqa proqram tərəfindən bloklanardı |
+| PKCE | S256, hər axında yeni `code_verifier` | Masaüstündə `client_secret` sirr DEYİL (.exe-ni açan görür) — real müdafiə budur |
+| `state` | 32 baytlıq təsadüfi, uyğunsuzluqda rədd | CSRF: cavab BAŞQA axına aid ola bilər |
+| Scope | yalnız `drive.file` + `userinfo.email` | Bütöv `drive` istifadəçinin BÜTÜN sənədlərini açardı və Google yoxlaması tələb edərdi |
+| `access_type` | `offline` + `prompt=consent` | `refresh_token` yalnız belə gəlir; ikincisi olmasa TƏKRAR qoşulma sükutla sınardı |
+| Gözləmə | `poll()` (≤50 ms), Qt taymeri | Bloklayan gözləmə interfeysi dondurardı; ayrıca sap əlavə sinxronizasiya tələb edərdi |
+| Vaxt həddi | 300 san, sonra port bağlanır | Açıq qalan lokal dinləyici müddətsiz yaşamamalıdır |
+
+**Token saxlanması.** `refresh_token` ekrandan KEÇMİR: kontrollerin
+yaddaşında bir an qalır və `DriveConnectionRepository.connect()`-ə verilir;
+orada AES-256-GCM ilə, AAD konteksti `drive_connection:<id>` olmaqla
+şifrələnir (SEC-002 modeli). Şifrəli sətir başqa bağlantıya köçürülsə
+deşifrə OLUNMUR. Jurnalda yalnız hesabın e-poçtu qalır; HTTP xəta cavabının
+gövdəsi HEÇ VAXT loglanmır (SEC-013).
+
+**Səlahiyyət.** `can_manage_drive_connection` (hardlock 0, defolt yalnız
+ROOT/CEO). Yoxlama İKİ yerdədir: menyu maddəsi (görünmür) və
+`DriveConnectionController._on_connect` (ekran birbaşa açılsa da port
+açılmır) — "GÖRMƏK = SƏLAHİYYƏTİN OLMASI" tək qapı ola bilməz.
+
+**Tətbiq:** `infrastructure/storage/oauth_flow.py`,
+`presentation/controllers/drive_connection.py`,
+`presentation/screens/group_d.py` (`DriveConnectionScreen`),
+`tests/unit/test_drive_oauth_flow.py` (real loopback serveri ilə).
+
+---
+
 ## Açıq qalan (Faza 3-də bağlanır)
 
 | # | Məsələ | Faza |

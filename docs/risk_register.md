@@ -3,7 +3,8 @@
 > Faza 1 və Faza 2-nin bütün açıq riskləri. Hər sətir ya **BAĞLI** (sübutla),
 > ya da aydın sahibi/tarixi olan **AÇIQ** vəziyyətdədir.
 
-**Son yenilənmə:** 2026-08-09 · **Açıq risk sayı: 0**
+**Son yenilənmə:** 2026-08-10 · **Açıq risk sayı: 2** (R7, R8 — hər ikisi
+istismar riskidir, kod qüsuru deyil)
 
 ---
 
@@ -17,6 +18,20 @@
 | **R4** | `pg_cron` aktiv deyildi | `CREATE EXTENSION pg_cron` + sxem yenidən tətbiq olundu | **9 cron job** qeydiyyatdadır (`cron.job`) |
 | **R5** | Argon2 parametrləri ölçülməmişdi | `scripts/benchmark_argon2.py` yazıldı və icra olundu | İstehsalat parametrləri **34 ms** (hədd 250 ms) — 7× zəif PC-də belə uyğun |
 | **R6** | `CheckInStatus.REJECTED` istifadə olunmurdu | Səbəb kodda açıq sənədləşdirildi (DB paritet üçün saxlanılır) | `attendance_record.py` şərhi + `rejection_count` testi |
+
+---
+
+## Açıq risklər — sübut şəkillərinin saxlanması (miqrasiya 002, SEC-017)
+
+| # | Risk | Təsir | Azaldıcı tədbir | Sahib |
+|---|---|---|---|---|
+| **R7** | Drive hesabı heç vaxt qoşulmaya bilər (OAuth açarları boş, administrator ekranı açmır) | Sübut şəkilləri mağaza PC-sində toplanır; disk dolarsa yeni yükləmə uğursuz olur | Cərimə YARADILMASI bloklanmır (bölmə 4 tələbi); növbə statusu `evidence_upload_status = 'PENDING'` ilə görünür və `idx_fines_evidence_pending` üzərindən sorğulana bilir | müştəri |
+| **R8** | Drive kvotası dolur | Yeni şəkillər yüklənmir | Bağlantı `QUOTA_EXCEEDED` statusuna keçir, `quota_monitor` xəbərdarlıq göndərir, elementlər növbədə eksponensial backoff ilə qalır — yeni hesab qoşulan kimi avtomatik yüklənir | müştəri |
+
+**Nə qəsdən EDİLMƏYİB.** Növbədə gözləyən şəkillər üçün avtomatik təmizləmə
+(retention) YOXDUR: sübut şəkli real pul kəsintisinin əsasıdır və mübahisə
+halında lazım ola bilər — yer qənaətinə görə onu silmək cəriməni sübutsuz
+qoyardı. Disk idarəetməsi administratorun qərarıdır.
 
 ### R2 doğrulama detalları
 

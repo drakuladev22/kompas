@@ -32,8 +32,8 @@ Hər dəyişiklikdən sonra HAMISI keçməlidir:
 ```bash
 .venv/Scripts/python.exe -m ruff check src/ tests/ scripts/
 .venv/Scripts/python.exe -m ruff format src/ tests/ scripts/
-.venv/Scripts/python.exe -m mypy src            # strict, 100% type hints
-.venv/Scripts/python.exe -m pytest tests/ -q    # 1300+ test
+.venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (200 fayl)
+.venv/Scripts/python.exe -m pytest tests/ -q    # 1363 test, 43 skip
 .venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast
 ```
 
@@ -154,6 +154,32 @@ trigger-ində (`schema.sql` §18). Birini dəyişəndə DİGƏRİ də dəyişmə
 əməliyyat geri qaytarılır — məcburi olan bir şeyin sükutla buraxılması onu
 məcburi olmaqdan çıxarır.
 
+### Bunlardan KƏNARDA qalan hər şey soft-coded-dir (bölmə 3)
+
+Yeni sabit ədəd yazmazdan əvvəl özünüzə sual verin: bu, yuxarıdakı struktur
+zəmanətlərdən biridirmi? Deyilsə, yeri `system_limits`-dədir.
+
+| Nə | Hara yazılır | Kodda oxunur |
+|---|---|---|
+| Limit / taymaut | `SystemLimitKey` + `DEFAULT_LIMITS` (`policies.py`) | `SystemLimits` portu ilə, `_limit_int(...)` |
+| Modul açarı | `FeatureModule` (`policies.py`) | `FeatureToggles.is_enabled(...)` |
+| Yeni icazə flag-i | `permission_flags` (GUI-dan, Root) | `Employee.has_permission(...)` |
+
+Sinifdəki sabit YALNIZ **fallback** ola bilər (məs. `MIN_APPEAL_SLA_HOURS`,
+`MAX_UPLOAD_BYTES`, `DUAL_CONTROL_THRESHOLD_MINUTES`) və şərhində bunun
+fallback olduğu, həqiqi mənbənin isə `system_limits` olduğu YAZILMALIDIR.
+
+**Feature Toggle retroaktiv təsir etmir.** Söndürmə yalnız YENİ instansiyanı
+bloklayır; mövcud qeydlər axınını tamamlayır, silinmir və export-dan çıxmır.
+Ona görə yoxlama YARADAN metoddadır (`assign`, `request_reward`,
+`request_leave`), emal edən metodlarda (`submit_evidence`, `review`,
+`decide_reward`) YOXDUR.
+
+**Struktur-kritik modul** (`FeatureModule.is_structural`) sadə toggle ilə
+söndürülmür — yazılı təsdiq tələb olunur və qayda İKİ yerdədir: use case-də
+(uzunluq) və repository-də (mövcudluq), çünki ekranı yan keçən skript də ona
+tabe olmalıdır.
+
 ---
 
 ## 6. Naxışlar (mövcud kodu təkrarlayın)
@@ -200,6 +226,25 @@ Ekranlar yalnız `theme` alır və setter API-si təqdim edir. Məlumat İKİ yo
 gəlir: `preview_screens.populate()` (maket) və `controllers/screen_data.py`
 (canlı). İkisi eyni imzalıdır — `app.py` yalnız hansını çağıracağını seçir.
 
+**Maket və canlı yol EYNİ AÇARLARI işlətməlidir.** `preview_screens` öz ad
+məkanını qursaydı (məs. `"fines"`, halbuki toggle cədvəli `"FINE_MODULE"`
+saxlayır), uyğunsuzluq maketdə görünməz qalar və yalnız istehsalatda üzə
+çıxardı — layihədə məhz bu qüsur olub (bax `menu.py` başlığı).
+
+### Ekranın YAZI yolu
+
+Yalnız oxuyan ekran `screen_data.py`-a bağlanır. Həm oxuyub həm yazan ekranın
+isə ÖZ kontrolleri olur (`controllers/root_control.py`, `fine_entry.py`,
+`camera_queue.py`, `drive_connection.py`) — çünki hər yazıdan sonra siyahı
+yenidən oxunmalıdır və bu dövrə `populate()`-ın tək çağırışından uzun yaşayır.
+
+Kontroller sessiyanı SAXLAMIR — hər əməliyyat üçün yenisini açır və commit
+edir. Panel saatlarla açıq qala bilər; uzun-ömürlü tranzaksiya bu müddət boyu
+kilid saxlayardı.
+
+Kontrollerə istinad da saxlanmır: o, siqnallara bağladığı `lambda`-ların
+bağlamasında yaşayır və ekranla birlikdə ölür.
+
 ---
 
 ## 7. Baza
@@ -220,10 +265,27 @@ gəlir: `preview_screens.populate()` (maket) və `controllers/screen_data.py`
 | Hardlock/anti-fraud qaydaları | `src/domain/value_objects/authorization.py` |
 | Menyu maddələri + flag bağlantısı | `src/presentation/shell/menu.py` |
 | Sistem limitləri & Feature Toggle açarları | `src/domain/policies.py` |
-| GUI obyekt qrafı | `src/presentation/composition.py` |
+| GUI obyekt qrafı + sübut yükləmə qatı | `src/presentation/composition.py` |
+| ROOT paneli (limit / toggle / registry) | `src/application/use_cases/root_control.py`, `presentation/controllers/root_control.py` |
+| Ekranların CANLI məlumatı (yalnız oxu) | `src/presentation/controllers/screen_data.py` |
+| Ekranların YAZI yolu | `src/presentation/controllers/{fine_entry,camera_queue,drive_connection}.py` |
+| Drive razılığı (OAuth) | `src/infrastructure/storage/oauth_flow.py` |
+| Sübut şəkli növbəsi (SQLite + spool) | `src/infrastructure/storage/upload_queue.py` |
 | Test sahtələri (fakes) | `tests/fixtures/fakes.py` |
 | Qərar jurnalı (SEC-NNN, BR-NNN) | `docs/security_decisions.md`, `docs/open_questions.md` |
 | Risk reyestri | `docs/risk_register.md` |
+
+### Mühit dəyişənləri
+
+Tam siyahı `.env.example`-dədir. Yenisini əlavə edərkən HƏMİŞƏ ora da yazın
+və **boş buraxıla bilərmi** sualına şərhdə cavab verin — quraşdırıcı hansı
+açarın məcburi olduğunu oradan öyrənir.
+
+| Açar | Boş ola bilər? | Nəticə |
+|---|---|---|
+| `KOMPASOS_FERNET_KEY`, `KOMPASOS_HASH_PEPPER` | ❌ istehsalatda | `--strict` işə düşmür |
+| `KOMPASOS_GOOGLE_CLIENT_ID` / `_SECRET` | ✅ | Şəkillər lokal növbədə gözləyir, cərimələr normal yaranır |
+| `KOMPASOS_EVIDENCE_QUEUE_PATH` | ✅ | Defolt `./data/evidence_uploads.db` |
 
 ---
 
@@ -238,3 +300,7 @@ oxuyun:
 | Cərimələr `PENDING_REVIEW` → aylıq icmal → `PUBLISHED` (spesifikasiya "dərhal görünür" deyir) | `use_cases/fine_review.py` başlığı |
 | Master Panel `mTLS` əvəzinə `service_role` + RLS | `docs/security_decisions.md` |
 | SEC-016: TOTP/2FA çıxarılıb, giriş = istifadəçi adı + şifrə | `migrations/001`, bölmə 2 |
+| SEC-017: Drive razılığı loopback + PKCE (Google `oob`-u qapadıb) | `storage/oauth_flow.py` başlığı |
+| BR-001: icazə güzəştinin mənbəyi konfiqurasiya edilir (defolt `LEAVE_TYPE`) | `policies.py`, OQ-001 |
+| BR-002: gecikmə→AZN dərəcəsi Root-dan, **defolt 0.00** | `policies.py` (`DelayFinePolicy`) |
+| Aylıq 240 dəq. aşıldıqda XƏBƏRDARLIQ olur, bloklama YOX | `leave_verification.py` (`MonthlyLeaveUsage`) |
