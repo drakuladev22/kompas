@@ -36,6 +36,48 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
+
+def resolve_mono_family(candidates: str) -> str:
+    """`--font-family-mono` siyahısından FAKTİKİ mövcud olan ilk adı seçir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ SİYAHINI OLDUĞU KİMİ QSS-Ə YAZMAQ OLMAZ
+    ──────────────────────────────────────────────────────────────────────────
+    CSS-də `font-family: A, B, monospace` fallback zənciridir. Qt Style
+    Sheet-də isə belə deyil: Qt siyahının BİRİNCİ adını götürür və qalanını
+    nəzərə almır. Nəticədə "IBM Plex Mono" quraşdırılmamış maşında (minimal
+    Windows imici, konteyner, CI runner-i) mono etiketlər SÜKUTLA proporsional
+    şriftə düşürdü — cədvəldəki rəqəm sütunları şaquli düzülməsini itirirdi,
+    yəni bu rolun bütün mövcudluq səbəbi yox olurdu.
+
+    `QFont.setFamilies()` həqiqi fallback verir, lakin QSS qaydası widget-in
+    `setFont()` dəyərini ƏZİR — ona görə həll QSS-in ÖZÜNƏ tək, mövcud ad
+    yazmaqdır.
+
+    Sıra: (1) siyahıdakı quraşdırılmış ilk ad, (2) sistemdə sabit-enli olan
+    hər hansı şrift, (3) generik `monospace`. Üçüncüsünə düşmək o deməkdir ki,
+    sistemdə heç bir sabit-enli şrift yoxdur — o halda seçim onsuz da yoxdur.
+    """
+    try:
+        from PySide6.QtGui import QFontDatabase  # noqa: PLC0415
+
+        available = set(QFontDatabase.families())
+    except Exception:
+        # `QApplication` hələ yoxdursa şrift bazası oxunmur — şablon dəyəri
+        # olduğu kimi qalır və `apply()` çağırılanda yenidən həll olunur.
+        return candidates
+
+    names = [name.strip().strip('"') for name in candidates.split(",")]
+    for name in names:
+        if name and name != "monospace" and name in available:
+            return f'"{name}"'
+
+    for name in sorted(available):
+        if QFontDatabase.isFixedPitch(name):
+            return f'"{name}"'
+    return "monospace"
+
+
 #: OS seçimi bilinmədikdə istifadə olunan rejim.
 #:
 #: İŞIQLI seçilir, çünki bu, bilinməyən mühitdə daha təhlükəsiz nəticədir:
@@ -175,7 +217,14 @@ class ThemeManager:
     # ------------------------------- tətbiq --------------------------------- #
 
     def stylesheet(self) -> str:
-        return build_stylesheet(self.tokens)
+        """QSS mətni — mono şrift ailəsi CANLI olaraq həll edilmiş halda.
+
+        Bax `resolve_mono_family` — QSS-dəki ailə SİYAHISI Qt-də fallback kimi
+        işləmir, ona görə şablona TƏK, mövcud ad yazılır.
+        """
+        tokens = dict(self.tokens)
+        tokens["--font-family-mono"] = resolve_mono_family(tokens["--font-family-mono"])
+        return build_stylesheet(tokens)
 
     def apply(self, app: QApplication) -> None:
         """Baza şriftini və QSS-i tətbiqə yazır.

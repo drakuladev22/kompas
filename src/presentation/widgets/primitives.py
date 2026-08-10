@@ -83,11 +83,29 @@ def muted_label(text: str, *, size: int = metrics.FONT_CAPTION) -> QLabel:
 
 
 def mono_label(text: str, *, muted: bool = False, size: int = metrics.FONT_CAPTION) -> QLabel:
-    """Monoaralıqlı mətn — saat, xəta kodu, `tenant_id` kimi dəyərlər üçün."""
+    """Monoaralıqlı mətn — saat, xəta kodu, `tenant_id` kimi dəyərlər üçün.
+
+    ──────────────────────────────────────────────────────────────────────
+    NİYƏ QSS-dəki `font-family` KİFAYƏT DEYİL
+    ──────────────────────────────────────────────────────────────────────
+    QSS `"IBM Plex Mono", "Cascadia Mono", Consolas, monospace` verir, lakin
+    sondakı `monospace` GENERİK ad-dır və Qt onu yalnız ad-uyğunlaşdırma ilə
+    həll etməyə çalışır. Siyahıdakı konkret şriftlərin heç biri quraşdırılmasa
+    (minimal Windows imici, konteyner, CI runner-i) nəticə PROPORSİONAL şrift
+    olur — cədvəldəki rəqəm sütunları şaquli düzülməsini itirir, yəni bu
+    etiketin bütün mövcudluq səbəbi yox olur.
+
+    `setStyleHint(Monospace)` isə ad deyil, Qt-nin şrift-uyğunlaşdırma
+    mühərrikinə verilən TƏLƏBDİR: ad tapılmasa sistemdəki sabit-enli şriftə
+    düşür. Ona görə QSS ilə birlikdə işlədilir — QSS gözəl şrifti seçir, style
+    hint isə heç biri yoxdursa nəticənin yenə sabit-enli olmasını təmin edir.
+    """
     label = QLabel(text)
     label.setProperty("variant", "mono-muted" if muted else "mono")
     font = label.font()
     font.setPixelSize(size)
+    font.setStyleHint(QFont.StyleHint.Monospace, QFont.StyleStrategy.PreferMatch)
+    font.setFixedPitch(True)
     label.setFont(font)
     return label
 

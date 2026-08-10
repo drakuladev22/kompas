@@ -214,6 +214,19 @@ def test_heading_size_is_not_overridden_by_qss(qt_app, size: int) -> None:  # ty
     assert label.font().pixelSize() == size
 
 
+def _system_has_a_fixed_pitch_font() -> bool:
+    """Sistemdə ÜMUMİYYƏTLƏ sabit enli şrift varmı.
+
+    Bəzi başsız mühitlərdə (`QT_QPA_PLATFORM=offscreen`, fontconfig-siz
+    konteyner) Qt-nin şrift bazası TAM BOŞ olur — `QFontDatabase.families()`
+    sıfır element qaytarır. Belə mühitdə "mono sabit enlidirmi" sualının
+    cavabı bizim kodumuzdan asılı deyil: seçiləcək şrift yoxdur.
+    """
+    from PySide6.QtGui import QFontDatabase
+
+    return any(QFontDatabase.isFixedPitch(name) for name in QFontDatabase.families())
+
+
 def test_mono_role_resolves_to_a_fixed_pitch_font(qt_app) -> None:  # type: ignore[no-untyped-def]
     """`mono` rolu ƏSLİNDƏ sabit enli şriftlə render olunmalıdır.
 
@@ -221,17 +234,45 @@ def test_mono_role_resolves_to_a_fixed_pitch_font(qt_app) -> None:  # type: igno
     (IBM Plex Mono) quraşdırılmaya bilər, ona görə burada konkret ad DEYİL,
     şriftin sabit enli olması yoxlanılır — maketin rəqəm sütunlarını şaquli
     düzən xassə məhz budur.
+
+    Test bir müddət CI-da qırılırdı: QSS-ə ailə SİYAHISI yazılırdı, Qt isə
+    onun yalnız BİRİNCİ adını götürür (CSS fallback zənciri QSS-də yoxdur).
+    Həll `resolve_mono_family`-dədir — indi QSS-ə tək, mövcud ad yazılır.
     """
     from PySide6.QtGui import QFontInfo
 
     from src.presentation.theme.manager import ThemeManager
     from src.presentation.widgets.primitives import mono_label
 
+    if not _system_has_a_fixed_pitch_font():
+        pytest.skip("Mühitdə heç bir sabit enli şrift yoxdur — yoxlanacaq bir şey yoxdur")
+
     ThemeManager(preference=ThemeMode.LIGHT).apply(qt_app)
     label = mono_label("12.08 09:58")
     label.ensurePolished()
 
     assert QFontInfo(label.font()).fixedPitch()
+
+
+def test_mono_family_resolution_prefers_an_installed_name(qt_app) -> None:  # type: ignore[no-untyped-def]
+    """`resolve_mono_family` QSS-ə MÖVCUD ad yazmalıdır, siyahı yox.
+
+    Bu, yuxarıdakı testin səbəb tərəfidir: nəticə (sabit enli render) mühitdən
+    asılıdır, seçim məntiqi isə asılı DEYİL və hər yerdə yoxlanıla bilər.
+    """
+    from PySide6.QtGui import QFontDatabase
+
+    from src.presentation.theme.manager import resolve_mono_family
+
+    resolved = resolve_mono_family('"Yoxdur Bir", "Yoxdur İki", monospace')
+    assert "," not in resolved, "QSS-ə siyahı yazılmamalıdır — Qt yalnız ilkini götürür"
+
+    available = set(QFontDatabase.families())
+    if available:
+        name = resolved.strip('"')
+        assert name == "monospace" or name in available, (
+            f"Seçilmiş şrift sistemdə yoxdur: {resolved}"
+        )
 
 
 def test_table_footnote_wraps_instead_of_widening_the_screen(qt_app) -> None:  # type: ignore[no-untyped-def]
