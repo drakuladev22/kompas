@@ -222,6 +222,18 @@ jobs:
   security-scan:
     name: 'dev · Təhlükəsizlik skanı'
     runs-on: ubuntu-latest
+    # Faylın başındakı `permissions: contents: read` BÜTÜN digər scope-ları
+    # kəsir. gitleaks `pull_request` hadisəsində `ScanPullRequest` yolu ilə
+    # gedir və PR-ın commit siyahısını API-dən oxuyur — bunun üçün
+    # `pull-requests: read` lazımdır. Onsuz addım sirr TAPMASA BELƏ
+    # `Resource not accessible by integration` ilə çökürdü.
+    #
+    # YALNIZ `read` verilir: `write` şərh yazmağa imkan verərdi, lakin o,
+    # hər PR-a (o cümlədən kənar fork-lara) repozitoriyaya yazan token
+    # açardı — şərh bu riskə dəymir (bax `GITLEAKS_ENABLE_COMMENTS`).
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
 
