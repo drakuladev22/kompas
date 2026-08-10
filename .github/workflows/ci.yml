@@ -240,10 +240,23 @@ jobs:
         run: pip-audit --requirement requirements.txt --strict --desc
 
       # Sirlərin təsadüfən commit edilməsinə qarşı
+      #
+      # `GITLEAKS_ENABLE_COMMENTS: false` MƏCBURİDİR. Defolt olaraq action
+      # tapıntı üçün PR-a şərh yazmağa çalışır, bunun üçünsə `pull-requests:
+      # write` lazımdır. `pull_request` hadisəsində (xüsusən Dependabot və
+      # fork PR-larında) `GITHUB_TOKEN` YALNIZ-OXUNANdır, ona görə addım
+      # sirr TAPMASA BELƏ `Resource not accessible by integration` ilə
+      # qırılırdı — yəni bütün PR-lar qırmızı idi.
+      #
+      # Alternativ yol yazma icazəsi verməkdir; seçilmədi, çünki bu, hər PR-a
+      # (o cümlədən kənar fork-lara) repozitoriyaya yazma səlahiyyəti verən
+      # token açardı — sirr skanının şərh yazması bu riskə dəymir. Tapıntı
+      # onsuz da addımı qırır və SARIF artefaktında görünür.
       - name: Sirr skanı (gitleaks)
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
 
       # Sirlərin repozitoriyada QALMASINA qarşı əlavə, sadə qapı
       - name: İzlənən sirr fayllarını yoxla
