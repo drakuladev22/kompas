@@ -22,7 +22,11 @@ PySide6>=6.11,<7.0
 cryptography>=50.0,<51.0
 argon2-cffi>=25.1,<26.0
 supabase>=2.31,<3.0
-psycopg[binary]>=3.3,<4.0
+# `pool` ekstrası MƏCBURİDİR — `persistence/connection.py` `psycopg_pool`-u
+# idxal edir, lakin o, `psycopg[binary]`-yə DAXİL DEYİL (ayrıca paketdir).
+# Lokal mühitdə təsadüfən quraşdırılmışdı, ona görə qüsur yalnız təmiz CI
+# maşınında üzə çıxdı: `ModuleNotFoundError: No module named 'psycopg_pool'`.
+psycopg[binary,pool]>=3.3,<4.0
 httpx>=0.28,<0.29
 pydantic>=2.13,<3.0
 python-dotenv>=1.2,<2.0

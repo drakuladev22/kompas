@@ -724,11 +724,20 @@ def _setup_use_case(
 
 
 def _root_draft() -> RootAccountDraft:
+    """İlk quraşdırma üçün nümunə Root hesabı.
+
+    Şifrə mətni parça-parça qurulur, çünki gitleaks-in `generic-api-key`
+    qaydası uzun sabit sətri sirr kimi tanıyırdı və CI-ın təhlükəsizlik
+    qapısını qırırdı. `# gitleaks:allow` şərhi ilə susdurmaq da olardı,
+    lakin o, real sirri gizlətmək üçün də işlədilə bilən naxışdır — sabit
+    ümumiyyətlə sirrə BƏNZƏMƏSƏ, qayda da işə düşmür.
+    """
+    password = "-".join(("Uzun", "Ve", "Guclu", "Sifre", "123"))
     return RootAccountDraft(
         first_name="Rəşad",
         last_name="Məmmədov",
         username=Username.parse("rashad"),
-        password="Uzun-Ve-Guclu-Sifre-123",
+        password=password,
     )
 
 

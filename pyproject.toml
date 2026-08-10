@@ -19,7 +19,8 @@ dependencies = [
     "cryptography>=50.0,<51.0",
     "argon2-cffi>=25.1,<26.0",
     "supabase>=2.31,<3.0",
-    "psycopg[binary]>=3.3,<4.0",
+    # `pool` ekstrası olmadan `psycopg_pool` quraşdırılmır (bax requirements.txt)
+    "psycopg[binary,pool]>=3.3,<4.0",
     "httpx>=0.28,<0.29",
     "pydantic>=2.13,<3.0",
     "python-dotenv>=1.2,<2.0",
@@ -136,6 +137,16 @@ indent-style = "space"
 # --------------------------------------------------------------------------- #
 [tool.mypy]
 python_version = "3.11"
+# KompasOS YALNIZ Windows-da işləyir (mağaza PC-ləri, `.exe` paketi). Bu sətir
+# olmadan mypy HOST platformasını götürür və CI (ubuntu) `ctypes.windll` /
+# `ctypes.GetLastError` üçün "Module has no attribute" verirdi — halbuki həmin
+# kod (`WindowsDpapiKeyProvider`) məhz Windows API-sidir və başqa platformada
+# ÇAĞIRILMIR. Lokal (Windows) yaşıl, CI (Linux) qırmızı olurdu.
+#
+# `sys.platform` qapısı ilə həll etmək olmazdı: `warn_unreachable = true`
+# həmin bloku bu dəfə "əlçatmaz kod" kimi işarələyərdi. Düzgün cavab mypy-a
+# HANSI platforma üçün yoxladığını demək idi.
+platform = "win32"
 strict = true
 warn_unreachable = true
 warn_no_return = true
