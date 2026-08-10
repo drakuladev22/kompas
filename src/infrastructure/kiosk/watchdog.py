@@ -48,14 +48,13 @@ from __future__ import annotations
 # Nəzarətçinin işi məhz prosesi idarə etməkdir; əmr siyahı kimi ötürülür,
 # `shell=False` saxlanılır (bax `_spawn`).
 import subprocess
-import sys
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from src.shared.logger import LogChannel, get_logger
+from src.shared.runtime import deployment_root, relaunch_command
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -140,12 +139,14 @@ class KioskWatchdog:
 
     @staticmethod
     def _default_command() -> list[str]:
-        """Cari interpretator ilə kiosk rejimini işə salan əmr.
+        """Kiosk rejimini işə salan əmr.
 
-        `sys.executable` istifadə olunur ki, PyInstaller ilə paketlənmiş
-        `.exe`-də də, virtual mühitdə də eyni fayl çağırılsın.
+        Prefiks `relaunch_command()`-dən gəlir, çünki paketlənmiş `.exe`
+        Python interpretatoru DEYİL: ona `-m src.main` ötürülsəydi, `argparse`
+        onu tanımayıb 2 kodu ilə çıxardı və nəzarətçi hər cəhdi "çökmə" sayıb
+        dərhal restart fırtınası limitinə dəyərdi (bax `shared/runtime.py`).
         """
-        return [sys.executable, "-m", "src.main", "--gui", "--kiosk"]
+        return [*relaunch_command(), "--gui", "--kiosk"]
 
     @property
     def command(self) -> tuple[str, ...]:
@@ -265,8 +266,12 @@ class KioskWatchdog:
 
         `shell=False` (defolt) QƏSDƏN saxlanılır: əmr siyahı kimi ötürülür və
         heç bir hissəsi qabıq tərəfindən şərh edilmir.
+
+        İş qovluğu `deployment_root()`-dur: paketlənmiş rejimdə
+        `Path(__file__).parents[3]` arxivin müvəqqəti qovluğunu göstərərdi və
+        alt-proses tətbiq bağlananda silinən qovluqda işləyərdi.
         """
-        cwd = Path(__file__).resolve().parents[3]
+        cwd = deployment_root()
         completed = subprocess.run(command, check=False, cwd=cwd)  # noqa: S603
         return completed.returncode
 

@@ -43,7 +43,7 @@ qoruyucusu (bölmə 3) deaktivləşdirmədən ƏVVƏL işə düşür.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from src.domain.entities.employee import Employee
 from src.domain.value_objects.authorization import AuthorizationError, SystemRole
@@ -53,13 +53,19 @@ from src.shared.logger import LogChannel, get_logger
 if TYPE_CHECKING:
     from datetime import date, datetime
 
+    from src.application.use_cases.dual_control_guard import (
+        DualControlDeadlockGuardUseCase,
+    )
     from src.domain.entities.position import Position
     from src.domain.interfaces.ports import (
         AuditTrail,
         CameraAssignmentRepository,
         Clock,
         EmployeeRepository,
+        Notifier,
+        PermissionFlagRepository,
     )
+    from src.domain.value_objects.authorization import PermissionFlag
     from src.domain.value_objects.credentials import EmailAddress, Username
     from src.domain.value_objects.identifiers import EmployeeId, StoreId, TenantId
 
@@ -127,12 +133,27 @@ class UserManagementUseCase:
         audit: AuditTrail,
         clock: Clock,
         camera_assignments: CameraAssignmentRepository | None = None,
+        flags: PermissionFlagRepository | None = None,
+        notifier: Notifier | None = None,
+        deadlock_guard: DualControlDeadlockGuardUseCase | None = None,
     ) -> None:
         self._employees = employees
         self._credentials = credentials
         self._audit = audit
         self._clock = clock
         self._camera_assignments = camera_assignments
+        # Flag kataloqu rol dəyişikliyində anti-fraud override-larını süzmək
+        # üçündür (bax `Employee.change_position`). `None` olduqda süzgəc
+        # TƏTBİQ EDİLMİR — bu, yalnız kataloqsuz test yollarıdır; istehsalat
+        # qrafı onu HƏMİŞƏ ötürür (`composition.py`).
+        self._flags = flags
+        # PIN/şifrə sıfırlaması sahibinə bildiriş göndərir (bölmə 2, sətir 42).
+        self._notifier = notifier
+        # Dual-Control deadlock qoruyucusu (bölmə 3, sətir 56). Modul başlığı
+        # onun deaktivləşdirmədən ƏVVƏL işə düşdüyünü iddia edirdi, lakin
+        # çağırış YOX İDİ — sistemin son təsdiqçisini deaktiv etmək mümkün idi
+        # və gözləyən override-lar sonsuza qədər təsdiqsiz qalardı.
+        self._deadlock_guard = deadlock_guard
 
     # ------------------------------- yaratma --------------------------------- #
 
@@ -222,10 +243,18 @@ class UserManagementUseCase:
         }
 
         role_changed = employee.position.code != draft.position.code
+        removed_overrides: list[str] = []
         if role_changed:
             self._require(actor, MANAGE_ROLES_FLAG, now=now)
             self._assert_may_assign_position(actor, draft.position, now=now)
-            employee.position = draft.position
+            # ANTI-FRAUD İNVARİANTI: yeni rolda qadağan olan fərdi override
+            # SİLİNİR. Əks halda HR_Admin ikən verilmiş
+            # `can_approve_dual_control_override` işçi Mağaza_Menecerinə
+            # keçiriləndə qüvvədə qalır və Dual-Control mexanizmi mənasız olur
+            # (bax `Employee.change_position` docstring-i).
+            removed_overrides = employee.change_position(
+                draft.position, catalog=self._flag_catalog()
+            )
 
         employee.first_name = draft.first_name.strip()
         employee.last_name = draft.last_name.strip()
@@ -251,8 +280,21 @@ class UserManagementUseCase:
                 "position": employee.position.code,
                 "store_id": str(employee.store_id) if employee.store_id else None,
                 "role_changed": role_changed,
+                # Silinən override-lar audit-də AÇIQ görünməlidir: bu, işçinin
+                # səlahiyyətinin AZALMASIDIR və mübahisə halında nəyin nə vaxt
+                # götürüldüyü sübut edilə bilməlidir.
+                "removed_overrides": removed_overrides,
             },
         )
+        if removed_overrides:
+            _security_log.warning(
+                "ANTI_FRAUD_OVERRIDES_REVOKED",
+                extra={
+                    "employee_id": str(employee_id),
+                    "new_position": employee.position.code,
+                    "flags": removed_overrides,
+                },
+            )
         return employee
 
     def deactivate_employee(
@@ -271,6 +313,7 @@ class UserManagementUseCase:
                 user_message="Öz hesabınızı deaktiv edə bilməzsiniz.",
             )
 
+        deadlock = self._check_deadlock(tenant_id, subject=employee)
         employee.deactivate()
         self._employees.save(employee)
 
@@ -281,7 +324,14 @@ class UserManagementUseCase:
             entity_type="employee",
             entity_id=employee_id,
             before_state={"is_active": True},
-            after_state={"is_active": False},
+            after_state={
+                "is_active": False,
+                # Deadlock vəziyyəti audit-də görünməlidir: sonradan "niyə
+                # override-lar təsdiqsiz qaldı" sualının cavabı budur.
+                "dual_control_approvers_left": deadlock.approver_count
+                if deadlock is not None
+                else None,
+            },
             reason=reason,
         )
         _security_log.info(
@@ -303,6 +353,7 @@ class UserManagementUseCase:
         """
         now = self._clock.now()
         self._require(actor, RESET_PASSWORD_FLAG, now=now)
+        self._assert_not_self(actor, employee_id, operation="şifrə")
 
         employee = self._load(employee_id)
         self._assert_may_manage(actor, employee, now=now)
@@ -324,6 +375,16 @@ class UserManagementUseCase:
             "PASSWORD_RESET_BY_ADMIN",
             extra={"actor_id": str(actor.id), "employee_id": str(employee_id)},
         )
+        self._notify_owner(
+            tenant_id=tenant_id,
+            employee_id=employee_id,
+            title="Şifrəniz sıfırlandı",
+            body=(
+                "Admin şifrənizi müvəqqəti şifrə ilə əvəz etdi və ilk girişdə "
+                "onu dəyişməlisiniz. Bu, sizin xahişinizlə olmayıbsa dərhal "
+                "rəhbərliyinizə məlumat verin."
+            ),
+        )
 
     def reset_pin(
         self, *, tenant_id: TenantId, actor: Employee, employee_id: EmployeeId, new_pin: str
@@ -335,6 +396,7 @@ class UserManagementUseCase:
         """
         now = self._clock.now()
         self._require(actor, RESET_PIN_FLAG, now=now)
+        self._assert_not_self(actor, employee_id, operation="PIN")
 
         employee = self._load(employee_id)
         self._assert_may_manage(actor, employee, now=now)
@@ -354,6 +416,15 @@ class UserManagementUseCase:
         _security_log.warning(
             "PIN_RESET_BY_ADMIN",
             extra={"actor_id": str(actor.id), "employee_id": str(employee_id)},
+        )
+        self._notify_owner(
+            tenant_id=tenant_id,
+            employee_id=employee_id,
+            title="PIN-iniz sıfırlandı",
+            body=(
+                "Admin PIN kodunuzu sıfırladı. Bu, sizin xahişinizlə olmayıbsa "
+                "dərhal rəhbərliyinizə məlumat verin."
+            ),
         )
 
     # ------------------------ kamera mağaza təyinatı ------------------------- #
@@ -410,6 +481,85 @@ class UserManagementUseCase:
             employee.assign_store(store_id)
             if self._camera_assignments is not None:
                 self._camera_assignments.assign(employee.id, store_id, assigned_by=actor.id)
+
+    def _check_deadlock(self, tenant_id: TenantId, *, subject: Employee) -> Any:
+        """Dual-Control təsdiqçisi itirilirsə XƏBƏRDARLIQ verir (bölmə 3, 56).
+
+        BLOKLAMIR — spesifikasiya "xəbərdarlıq göstərilir" deyir, qadağa yox.
+        Bloklamaq son HR_Admin-i işdən çıxaran şirkətdə istifadəçi silməyi
+        tamamilə mümkünsüz edərdi; xəbərdarlıq isə problemi görünən edir.
+        Bildirişi qoruyucunun özü göndərir (`Notifier` ona verilib).
+        """
+        if self._deadlock_guard is None:
+            return None
+        approver_roles = (SystemRole.HR_ADMIN, SystemRole.CEO, SystemRole.ROOT)
+        removing = subject.position.effective_system_role in approver_roles
+        return self._deadlock_guard.check_before_change(tenant_id, removing_approver=removing)
+
+    @staticmethod
+    def _assert_not_self(actor: Employee, employee_id: EmployeeId, *, operation: str) -> None:
+        """Öz PIN/şifrəsini BU AXINLA sıfırlamaq qadağandır (bölmə 2, sətir 42).
+
+        SEC-016 TOTP-ni çıxaranda onun yerini üç struktur qorunma tutdu və
+        BİRİNCİSİ məhz budur: sıfırlamanı HƏMİŞƏ BAŞQA autentifikasiya olunmuş
+        admin edir, yəni vəzifə ayrılığı qorunur. Əks halda `can_reset_pin`
+        sahibi öz lockout-unu özü açardı (`clear_pin_lockout` bu axındadır) —
+        yəni 5 səhv cəhd + 15 dəqiqəlik bloklama qaydası öz-özünə yan keçilərdi.
+
+        Öz şifrəsini dəyişmək AYRI axındır (`CredentialResetUseCase`) və orada
+        köhnə şifrənin bilinməsi tələb olunur.
+        """
+        if actor.id != employee_id:
+            return
+        _security_log.warning(
+            "SELF_CREDENTIAL_RESET_BLOCKED",
+            extra={"actor_id": str(actor.id), "operation": operation},
+        )
+        raise UserManagementError(
+            f"İstifadəçi öz {operation} məlumatını bu axınla sıfırlaya bilməz "
+            f"— sıfırlamanı başqa admin etməlidir (bölmə 2)",
+            user_message=(
+                f"Öz {operation} məlumatınızı bu ekrandan sıfırlaya bilməzsiniz. "
+                f"Başqa admin müraciət etməlidir."
+            ),
+        )
+
+    def _notify_owner(
+        self, *, tenant_id: TenantId, employee_id: EmployeeId, title: str, body: str
+    ) -> None:
+        """Sıfırlamadan sahibin XƏBƏRİ olmalıdır (bölmə 2, sətir 42).
+
+        Bildiriş uğursuz olarsa əməliyyat GERİ QAYTARILMIR: sıfırlama artıq baş
+        verib və onu ləğv etmək işçini girişsiz qoyardı. Audit yazısından
+        fərqi budur — audit məcburidir, bildiriş isə xəbərdarlıqdır.
+        """
+        if self._notifier is None:
+            return
+        try:
+            self._notifier.notify(
+                tenant_id=tenant_id,
+                recipient_id=employee_id,
+                category="CREDENTIAL_RESET",
+                title_az=title,
+                body_az=body,
+                is_critical=True,
+            )
+        except Exception:
+            _security_log.exception(
+                "CREDENTIAL_RESET_NOTIFY_FAILED", extra={"employee_id": str(employee_id)}
+            )
+
+    def _flag_catalog(self) -> dict[str, PermissionFlag]:
+        """`kod → PermissionFlag` — rol dəyişikliyində süzgəc üçün.
+
+        Kataloq verilməyibsə BOŞ lüğət qaytarılır: `change_position` naməlum
+        flag-ə toxunmur, yəni davranış əvvəlki kimi qalır. Bu, qəsdən
+        fail-open-dur — kataloqa çatmamaq rol dəyişikliyini bloklamamalıdır,
+        lakin istehsalat qrafı kataloqu HƏMİŞƏ verir.
+        """
+        if self._flags is None:
+            return {}
+        return {flag.code: flag for flag in self._flags.list_all()}
 
     def _load(self, employee_id: EmployeeId) -> Employee:
         employee = self._employees.get(employee_id)

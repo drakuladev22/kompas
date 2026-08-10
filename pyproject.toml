@@ -40,6 +40,10 @@ dev = [
     "ruff>=0.16.2,<0.17",
     "pip-audit>=2.7,<3.0",
     "cyclonedx-bom>=7.3,<8.0",
+    # Buraxılış aləti də QAPIDIR: PyInstaller-in major buraxılışı bootloader-i
+    # və hook-ları dəyişir, yəni pinsiz hədd İMZALANMIŞ `.exe`-ni sınanmamış
+    # alətlə qurardı (bax `requirements-dev.txt`).
+    "pyinstaller>=6.22,<7.0",
     "types-openpyxl>=3.1",
 ]
 

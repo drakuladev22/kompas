@@ -1,4 +1,8 @@
+# -*- coding: utf-8 -*-
 # KompasOS — development / CI asılılıqları
+#
+# Birinci sətirdəki kodlaşdırma elanının səbəbi `requirements.txt`-dədir
+# (Windows-da cp1252 fallback-ı asılılıq skanını çökdürürdü).
 #
 # Alt hədd = bu repoda qapılardan keçmiş versiya, üst hədd = növbəti major.
 # Səbəb `requirements.txt` başlığındadır: alət versiyası dəyişəndə qapının
@@ -18,4 +22,9 @@ mypy>=2.3,<3.0
 ruff>=0.16.2,<0.17
 pip-audit>=2.7,<3.0
 cyclonedx-bom>=7.3,<8.0
+# `.exe` qurma aləti. CI-da əvvəl PİNSİZ (`pip install ... pyinstaller`)
+# quraşdırılırdı — yəni yeni major çıxan gün İMZALANMIŞ istehsalat buraxılışı
+# (SEC-012) heç vaxt sınanmamış bootloader və hook dəsti ilə qurulacaqdı.
+# Hədd burada saxlanılır ki, CI onu `grep` ilə tək mənbədən götürsün.
+pyinstaller>=6.22,<7.0
 types-openpyxl>=3.1

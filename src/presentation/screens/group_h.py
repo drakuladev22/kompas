@@ -136,7 +136,7 @@ class CatalogScreen(Screen):
         clear_layout(self._table_layout)
 
         if not rows:
-            self.show_empty(title=self._empty_title, body=self._empty_body)
+            self.show_empty(icon_name="list", title=self._empty_title, message=self._empty_body)
             return
 
         active_count = sum(1 for row in rows if row.get("is_active", "1") == "1")
@@ -592,8 +592,9 @@ class HelpCenterScreen(Screen):
         topics = [topic for topic in HELP_TOPICS if keys is None or topic[0] in keys]
         if not topics:
             self.show_empty(
+                icon_name="help",
                 title="Yardım mövzusu yoxdur",
-                body="Sizin görə bildiyiniz modullar üçün hələ təlimat əlavə edilməyib.",
+                message="Sizin görə bildiyiniz modullar üçün hələ təlimat əlavə edilməyib.",
             )
             return
 

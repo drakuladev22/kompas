@@ -53,6 +53,45 @@ LOGIN_CARD_WIDTH: Final = 420
 WIZARD_STEP_PANEL_WIDTH: Final = 300
 
 
+def _field_text(owner: object, attribute: str) -> str:
+    """Sehrbaz sahəsinin mətni — sahə hələ qurulmayıbsa boş sətir.
+
+    Sahələr addım açılanda yaradılır (`_apply_step` → `_build_*_fields`), ona
+    görə keçilmiş addımın sahəsi ÜMUMİYYƏTLƏ mövcud olmur. `getattr` ilə
+    yoxlamaq `hasattr` şəlaləsindən qısa və hər sahə üçün eynidir.
+    """
+    field = getattr(owner, attribute, None)
+    return field.text().strip() if field is not None else ""
+
+
+def _split_full_name(full_name: str) -> tuple[str, str]:
+    """«Ad Soyad» → (`first_name`, `last_name`).
+
+    Domen ayrı sahələr saxlayır, sihirbaz isə TƏK sahə soruşur (maketdə belədir
+    və iki sahə soruşmaq ilk təəssüratı ağırlaşdırardı). Bir sözlük ad
+    verilərsə soyad boş qalır — `RootAccountDraft` bunu qəbul edir və istifadəçi
+    sonradan profilindən düzəldə bilər.
+    """
+    parts = full_name.split()
+    if not parts:
+        return ("", "")
+    if len(parts) == 1:
+        return (parts[0], "")
+    return (" ".join(parts[:-1]), parts[-1])
+
+
+def _store_code(name: str) -> str:
+    """Mağaza adından qısa kod törədir («28 May» → `28-MAY`).
+
+    Spesifikasiya (bölmə 7) sihirbazda yalnız ad/brend/ünvan soruşur, `StoreDraft`
+    isə `code` tələb edir. Kodu istifadəçidən ayrıca soruşmaq ilk quraşdırmanı
+    uzadardı; törədilən kod sonradan «Mağazalar» ekranından dəyişdirilə bilər.
+    """
+    cleaned = "".join(char if char.isalnum() else "-" for char in name.upper())
+    collapsed = "-".join(part for part in cleaned.split("-") if part)
+    return collapsed[:32] or "MAGAZA-1"
+
+
 # --------------------------------------------------------------------------- #
 # 01 — Splash
 # --------------------------------------------------------------------------- #
@@ -325,11 +364,23 @@ class _WizardStep(QWidget):
 
 
 class FirstRunWizard(QWidget):
-    """İlk quraşdırma — 3 addım: Admin hesabı → Mağaza → 1C server.
+    """İlk quraşdırma — 4 addım: Admin → Mağaza → 1C server → HR dəvəti.
 
     Signals:
         completed: Bütün addımlar doldurulub (`dict` şəklində məlumat).
         cancelled: İstifadəçi imtina etdi.
+
+    ──────────────────────────────────────────────────────────────────────
+    `collected()` NİYƏ YUVALANMIŞ QAYTARIR
+    ──────────────────────────────────────────────────────────────────────
+    `ApplicationContext.complete_setup()` `payload["root"]`, `["stores"]`,
+    `["invites"]` gözləyir. Sihirbaz əvvəl YASTI lüğət qaytarırdı
+    (`{"full_name": ..., "store_name": ...}`), ona görə `root_raw` boş
+    çıxır və `Username.parse("")` istisna atırdı — yəni GUI ilə yeni
+    quraşdırma FAKTİKİ OLARAQ MÜMKÜN DEYİLDİ və səhv fatal ekran kimi
+    görünürdü. İki tərəfin formasını burada birləşdiririk, çünki domen
+    tiplərini (`Username`, `EmailAddress`) tanıyan yer kompozisiya köküdür,
+    ekran deyil (bax `controllers/__init__.py`).
     """
 
     completed = Signal(dict)
@@ -340,7 +391,14 @@ class FirstRunWizard(QWidget):
         ("İlk Admin Hesabı", "E-poçt, istifadəçi adı, şifrə"),
         ("İlk Mağaza", "Ad, brend, ünvan"),
         ("1C Server", "İstəyə görə keçilə bilər"),
+        ("HR_Admin Dəvəti", "İstəyə görə keçilə bilər"),
     )
+
+    #: Dəvət olunan hesabın rolu — spesifikasiya (bölmə 7) HR_Admin deyir.
+    INVITE_ROLE_CODE: Final = "HR_ADMIN"
+
+    #: Bu indeksdən başlayaraq addımlar keçilə bilər (1C server, HR dəvəti).
+    FIRST_OPTIONAL_STEP: Final = 2
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -465,13 +523,15 @@ class FirstRunWizard(QWidget):
             self._build_admin_fields,
             self._build_store_fields,
             self._build_server_fields,
+            self._build_invite_fields,
         )[self._index]
         builder()
 
         self._progress_label.setText(f"Addım {self._index + 1} / {len(self.STEPS)}")
         self._back.setEnabled(self._index > 0)
-        # Yalnız 1C addımı keçilə bilər (maket: "İstəyə görə keçilə bilər").
-        self._skip.setVisible(self._index == len(self.STEPS) - 1)
+        # 1C server və HR dəvəti addımları keçilə bilər — hər ikisi
+        # spesifikasiyada "istəyə görə"dir (bölmə 7, sətir 223).
+        self._skip.setVisible(self._index >= self.FIRST_OPTIONAL_STEP)
         self._next.setText("Tamamla" if self._index == len(self.STEPS) - 1 else "Davam Et")
 
     def _build_admin_fields(self) -> None:
@@ -523,6 +583,31 @@ class FirstRunWizard(QWidget):
         ):
             self._fields_layout.addWidget(field)
 
+    def _build_invite_fields(self) -> None:
+        """Addım 4 — HR_Admin dəvəti (bölmə 7, sətir 223).
+
+        Müvəqqəti şifrə ilk girişdə məcburi dəyişdirilir — e-poçt token
+        axını YOXDUR (SEC-016, bölmə 2). E-poçt sahəsi yalnız BİLDİRİŞ
+        üçündür, giriş identifikatoru istifadəçi adıdır.
+        """
+        self._heading.setText("HR_Admin Dəvəti")
+        self._description.setText(
+            "İkinci admin-səviyyəli hesab yaradın. Tək hesab qalıb bloklanmasın "
+            "deyə bu tövsiyə olunur — indi keçsəniz, sonradan «İstifadəçilər» "
+            "bölməsindən əlavə edə bilərsiniz."
+        )
+        self._invite_full_name = FormField("Ad, Soyad", placeholder="Aysel Quliyeva")
+        self._invite_username = FormField("İstifadəçi adı", placeholder="a.quliyeva")
+        self._invite_password = FormField("Müvəqqəti şifrə", password=True)
+        self._invite_email = FormField("E-poçt (istəyə görə)", placeholder="hr@kompas.az")
+        for field in (
+            self._invite_full_name,
+            self._invite_username,
+            self._invite_password,
+            self._invite_email,
+        ):
+            self._fields_layout.addWidget(field)
+
     # ------------------------------ naviqasiya ------------------------------- #
 
     def _on_back(self) -> None:
@@ -568,25 +653,65 @@ class FirstRunWizard(QWidget):
                 return False
         return True
 
-    def collected(self) -> dict[str, str]:
-        """Sehrbazda doldurulmuş bütün dəyərlər."""
-        data: dict[str, str] = {}
-        for name, field in (
-            ("full_name", getattr(self, "_full_name", None)),
-            ("email", getattr(self, "_email", None)),
-            ("username", getattr(self, "_username", None)),
-            ("password", getattr(self, "_password", None)),
-            ("store_name", getattr(self, "_store_name", None)),
-            ("store_brand", getattr(self, "_store_brand", None)),
-            ("store_address", getattr(self, "_store_address", None)),
-            ("server_name", getattr(self, "_server_name", None)),
-            ("server_host", getattr(self, "_server_host", None)),
-            ("server_user", getattr(self, "_server_user", None)),
-            ("server_password", getattr(self, "_server_password", None)),
-        ):
-            if field is not None:
-                data[name] = field.text()
-        return data
+    def collected(self) -> dict[str, object]:
+        """Sihirbazın nəticəsi — `complete_setup()`-ın gözlədiyi FORMADA.
+
+        Bax sinif docstring-i: yastı lüğət qaytarmaq quraşdırmanı tamamilə
+        sındırırdı. Burada yalnız FORMA çevrilir; domen tiplərinə çevirmə
+        (`Username.parse`, `EmailAddress.parse`) və validasiya kompozisiya
+        kökündədir — ekran domen tiplərini tanımır.
+        """
+        first_name, last_name = _split_full_name(_field_text(self, "_full_name"))
+        payload: dict[str, object] = {
+            "root": {
+                "first_name": first_name,
+                "last_name": last_name,
+                "email": _field_text(self, "_email"),
+                "username": _field_text(self, "_username"),
+                "password": _field_text(self, "_password"),
+            },
+            "stores": [],
+            "invites": [],
+        }
+
+        store_name = _field_text(self, "_store_name")
+        if store_name:
+            payload["stores"] = [
+                {
+                    # Kod verilmirsə addan törədilir — `StoreDraft.code`
+                    # məcburidir və istifadəçidən ayrıca soruşmaq sihirbazı
+                    # uzadardı (spesifikasiya yalnız ad/brend/ünvan deyir).
+                    "code": _store_code(store_name),
+                    "name": store_name,
+                    "brand": _field_text(self, "_store_brand"),
+                    "address": _field_text(self, "_store_address"),
+                }
+            ]
+
+        invite_name = _field_text(self, "_invite_full_name")
+        invite_username = _field_text(self, "_invite_username")
+        if invite_name and invite_username:
+            invite_first, invite_last = _split_full_name(invite_name)
+            payload["invites"] = [
+                {
+                    "first_name": invite_first,
+                    "last_name": invite_last,
+                    "username": invite_username,
+                    "role_code": self.INVITE_ROLE_CODE,
+                    "temporary_password": _field_text(self, "_invite_password"),
+                    "email": _field_text(self, "_invite_email"),
+                }
+            ]
+
+        server_host = _field_text(self, "_server_host")
+        if server_host:
+            payload["server"] = {
+                "name": _field_text(self, "_server_name"),
+                "host": server_host,
+                "username": _field_text(self, "_server_user"),
+                "password": _field_text(self, "_server_password"),
+            }
+        return payload
 
     @property
     def step_index(self) -> int:

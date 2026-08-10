@@ -53,6 +53,9 @@ if TYPE_CHECKING:
     from src.application.use_cases.first_run_setup import FirstRunSetupUseCase
     from src.application.use_cases.leave_verification import LeaveVerificationUseCase
     from src.application.use_cases.morning_check_in import MorningCheckInUseCase
+    from src.application.use_cases.permission_guards import (
+        PermissionHierarchyGuardUseCase,
+    )
     from src.application.use_cases.position_management import PositionManagementUseCase
     from src.application.use_cases.reporting import MonthlyReportUseCase
     from src.application.use_cases.root_control import RootControlUseCase
@@ -124,6 +127,7 @@ class Session:
     sync_conflicts: SyncConflictUseCase
     setup: FirstRunSetupUseCase
     root_control: RootControlUseCase
+    permission_guard: PermissionHierarchyGuardUseCase
 
     def commit(self) -> None:
         self.uow.commit()
@@ -277,6 +281,7 @@ class ApplicationContext:
                 username=Username.parse(str(item.get("username", ""))),
                 role_code=str(item.get("role_code", "HR_ADMIN")),
                 temporary_password=str(item.get("temporary_password", "")),
+                notification_email=_optional_email(item.get("email")),
             )
             for item in _as_sequence(payload.get("invites"))
         ]
@@ -289,7 +294,50 @@ class ApplicationContext:
                 invites=invites,
             )
             session.commit()
-        _log.info("FIRST_RUN_SETUP_COMPLETED", extra={"store_count": len(stores)})
+        _log.info(
+            "FIRST_RUN_SETUP_COMPLETED",
+            extra={"store_count": len(stores), "invite_count": len(invites)},
+        )
+
+        # 1C server addımı QƏSDƏN quraşdırma tranzaksiyasından KƏNARDADIR:
+        # sihirbazın 3-cü addımı keçilə bilər (bölmə 7) və serverin qeydi
+        # uğursuz olarsa artıq yaradılmış Root hesabı geri qaytarılmamalıdır —
+        # əks halda istifadəçi yanlış server ünvanına görə bütün quraşdırmanı
+        # itirərdi. Uğursuzluq yalnız jurnala düşür, sonradan «ERP / 1C
+        # Serverləri» ekranından əlavə edilə bilər.
+        server_raw = _as_mapping(payload.get("server"))
+        if str(server_raw.get("host", "")).strip():
+            self._register_first_server(server_raw)
+
+    def _register_first_server(self, raw: dict[str, object]) -> None:
+        """Sihirbazdakı istəyə görə 1C serverini qeyd edir (bölmə 7).
+
+        Server DEAKTİV yaradılır (`activate=False`): spesifikasiya (sətir 216)
+        "yeni ayar yalnız test uğurlu olduqdan sonra aktivləşir" deyir, sihirbaz
+        isə bağlantını sınamır. Aktivləşdirmə «ERP / 1C Serverləri» ekranındakı
+        `[Bağlantını Test Et]` addımından sonra baş verir.
+        """
+        from src.domain.value_objects.erp import ErpServerDraft  # noqa: PLC0415
+        from src.infrastructure.erp.servers import ErpServerRepository  # noqa: PLC0415
+        from src.infrastructure.security.encryption import EncryptionService  # noqa: PLC0415
+
+        host, port = _split_host_port(str(raw.get("host", "")).strip())
+        try:
+            repository = ErpServerRepository(self._database, self._tenant_id, EncryptionService())
+            repository.create(
+                ErpServerDraft(
+                    server_name=str(raw.get("name", "")).strip() or "1C Server",
+                    host=host,
+                    port=port,
+                    username=str(raw.get("username", "")).strip(),
+                    password=str(raw.get("password", "")),
+                    infobase=str(raw.get("infobase", "")).strip(),
+                ),
+                activate=False,
+            )
+            _log.info("FIRST_RUN_SERVER_REGISTERED", extra={"host": host, "port": port})
+        except Exception:
+            _error_log.exception("FIRST_RUN_SERVER_FAILED")
 
     # --------------------------- sübut yükləməsi ----------------------------- #
     #
@@ -445,6 +493,9 @@ class ApplicationContext:
         from src.application.use_cases.daily_attendance import (  # noqa: PLC0415
             DailyAttendanceSheetUseCase,
         )
+        from src.application.use_cases.dual_control_guard import (  # noqa: PLC0415
+            DualControlDeadlockGuardUseCase,
+        )
         from src.application.use_cases.fine_management import (  # noqa: PLC0415
             FineAppealUseCase,
             ManualFineUseCase,
@@ -457,6 +508,9 @@ class ApplicationContext:
         )
         from src.application.use_cases.morning_check_in import (  # noqa: PLC0415
             MorningCheckInUseCase,
+        )
+        from src.application.use_cases.permission_guards import (  # noqa: PLC0415
+            PermissionHierarchyGuardUseCase,
         )
         from src.application.use_cases.position_management import (  # noqa: PLC0415
             PositionManagementUseCase,
@@ -586,7 +640,14 @@ class ApplicationContext:
                 audit=audit,
                 clock=clock,
                 camera_assignments=repo("camera_assignments"),
+                # Rol dəyişikliyində anti-fraud override-larını süzmək üçün.
+                flags=repo("permission_flags"),
+                # PIN/şifrə sıfırlaması sahibinə bildiriş göndərir (bölmə 2).
+                notifier=notifier,
+                # Son Dual-Control təsdiqçisi itiriləndə xəbərdarlıq (bölmə 3).
+                deadlock_guard=DualControlDeadlockGuardUseCase(uow.employees, notifier),
             ),
+            permission_guard=PermissionHierarchyGuardUseCase(audit=audit, clock=clock),
             positions=PositionManagementUseCase(
                 positions=uow.positions,
                 flags=repo("permission_flags"),
@@ -686,6 +747,42 @@ def _as_sequence(raw: object) -> list[dict[str, Any]]:
     if not isinstance(raw, (list, tuple)):
         return []
     return [dict(item) for item in raw if isinstance(item, dict)]
+
+
+def _optional_email(raw: object) -> Any:
+    """Boş/yararsız e-poçt `None` olur — dəvətdə e-poçt MƏCBURİ deyil.
+
+    Yararsız formatda istisna atmaq bütün quraşdırmanı dayandırardı, halbuki
+    e-poçt yalnız BİLDİRİŞ kanalıdır (giriş identifikatoru istifadəçi adıdır,
+    SEC-016). Səhv ünvan sonradan profil ekranından düzəldilir.
+    """
+    from src.domain.value_objects.credentials import EmailAddress  # noqa: PLC0415
+
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return EmailAddress.parse(text)
+    except Exception:
+        _log.warning("SETUP_INVITE_EMAIL_IGNORED")
+        return None
+
+
+def _split_host_port(raw: str, *, default_port: int = 1541) -> tuple[str, int]:
+    """«192.168.1.10:1541» → («192.168.1.10», 1541).
+
+    Sihirbaz TƏK sahə soruşur (maketdə belədir), `ErpServerDraft` isə ayrı
+    `host`/`port` gözləyir. Port göstərilməyibsə 1C-nin standart portu
+    işlədilir; yararsız port da defolta düşür, çünki bu addım istəyə görədir
+    və server onsuz da DEAKTİV yaradılır.
+    """
+    host, separator, port_text = raw.rpartition(":")
+    if not separator:
+        return (raw, default_port)
+    try:
+        return (host, int(port_text))
+    except ValueError:
+        return (raw, default_port)
 
 
 __all__ = ["ApplicationContext", "Session", "StartupError", "build_context"]

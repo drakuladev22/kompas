@@ -481,8 +481,9 @@ class PluginScreen(Screen):
 
         if not plugins:
             self.show_empty(
+                icon_name="grid",
                 title="Plugin quraşdırılmayıb",
-                body=(
+                message=(
                     "Plugin-lər ayrıca prosesdə, məhdud API səthi ilə işləyir və "
                     "yalnız imzalanmış paketlər qəbul edilir."
                 ),

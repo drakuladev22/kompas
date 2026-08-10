@@ -61,6 +61,34 @@ SPLASH_DURATION_MS: Final = 1200
 #: kvota problemi həll olunanda gözləyən elementləri götürmək üçündür.
 UPLOAD_POLL_INTERVAL_MS: Final = 120_000
 
+#: Brend ikonu — pəncərə başlığı, Windows Taskbar və Alt-Tab (bölmə 9, 296).
+ICON_RELATIVE_PATH: Final = "assets/kompasos.ico"
+
+
+def _apply_window_icon(app: QApplication) -> None:
+    """Tətbiq ikonunu təyin edir — paketlənmiş və mənbə rejimində.
+
+    Əvvəl `setWindowIcon` HEÇ ÇAĞIRILMIRDI: `.ico` yalnız PyInstaller-ə
+    verilirdi (`--icon`), yəni `.exe` faylının ÖZÜ düzgün görünürdü, lakin
+    işləyən pəncərə, Taskbar və Alt-Tab defolt Qt ikonunu göstərirdi. Bölmə 9
+    hər dörd yeri açıq şəkildə sadalayır.
+
+    Fayl tapılmasa səssiz keçilir — ikonun olmaması tətbiqi dayandırmamalıdır.
+    """
+    from PySide6.QtGui import QIcon  # noqa: PLC0415
+
+    from src.shared.runtime import bundle_root, deployment_root  # noqa: PLC0415
+
+    # İki kök: paketlənmiş rejimdə fayl arxivin İÇİNDƏDİR (`--add-data`),
+    # mənbədən işləyəndə isə layihə qovluğundadır.
+    roots = [root for root in (bundle_root(), deployment_root()) if root is not None]
+    for root in roots:
+        path = root / ICON_RELATIVE_PATH
+        if path.exists():
+            app.setWindowIcon(QIcon(str(path)))
+            return
+    _log.warning("WINDOW_ICON_MISSING", extra={"roots": [str(root) for root in roots]})
+
 
 class KompasApplication:
     """Tətbiqin pəncərə və ekran qrafını qurur.
@@ -80,6 +108,7 @@ class KompasApplication:
     ) -> None:
         self._app = app
         self._preview = preview
+        _apply_window_icon(app)
         #: Canlı obyekt qrafı (Faza 5/6). `None` -> önizləmə/dizayn rejimi.
         self._context = context
         self._theme = ThemeManager(preference=theme_preference)
@@ -376,6 +405,25 @@ class KompasApplication:
             return
         CameraQueueController(self._context, self._current_employee).attach(screen)
 
+    def _may_contact_support(self) -> bool:
+        """`can_contact_support` — defolt CEO/Root/HR_Admin (bölmə 8).
+
+        Önizləmə rejimində HƏMİŞƏ `True`: maket ekranlarının hamısı
+        göstərilməlidir və orada real istifadəçi konteksti yoxdur.
+        """
+        if self._preview:
+            return True
+        employee = self._current_employee
+        if employee is None:
+            return False
+        from datetime import UTC, datetime  # noqa: PLC0415
+
+        from src.application.use_cases.support_chat import (  # noqa: PLC0415
+            CONTACT_SUPPORT_FLAG,
+        )
+
+        return bool(employee.has_permission(CONTACT_SUPPORT_FLAG, now=datetime.now(UTC)))
+
     def _attach_drive_connection(self, screen: QWidget) -> None:
         """Google razılıq axınını ekrana bağlayır (miqrasiya 002).
 
@@ -560,18 +608,30 @@ class KompasApplication:
     # ------------------------------ üst qatlar -------------------------------- #
 
     def _install_overlays(self, shell: AdminShell) -> None:
-        """Dəstək widget-i və bildiriş panelini örtüyün üstünə qoyur."""
+        """Dəstək widget-i və bildiriş panelini örtüyün üstünə qoyur.
+
+        DƏSTƏK İKONU İCAZƏYƏ BAĞLIDIR (bölmə 8, sətir 279): «Digər rollar üçün
+        bu ikon UI-dan ümumiyyətlə render olunmur». Əvvəl widget ŞƏRTSİZ
+        qurulurdu — `can_contact_support` yalnız backend-də (`support_chat.py`)
+        yoxlanılırdı, yəni `Satıcı` da hazırlayıcıya yazma imkanını GÖRÜRDÜ.
+        Bu, "GÖRMƏK = SƏLAHİYYƏTİN OLMASI" prinsipinin birbaşa pozulmasıdır.
+
+        Widget `setVisible(False)` ilə gizlədilmir — ÜMUMİYYƏTLƏ yaradılmır.
+        """
         from src.presentation.screens.group_e import SupportChatWidget  # noqa: PLC0415
         from src.presentation.screens.group_g import NotificationPanel  # noqa: PLC0415
 
-        support = SupportChatWidget(self._theme, parent=shell)
+        support = (
+            SupportChatWidget(self._theme, parent=shell) if self._may_contact_support() else None
+        )
         panel = NotificationPanel(self._theme, parent=shell)
         panel.setVisible(False)
 
         if self._preview:
             from src.presentation import preview_screens  # noqa: PLC0415
 
-            preview_screens.populate("support", support)
+            if support is not None:
+                preview_screens.populate("support", support)
             preview_screens.populate("notifications", panel)
             shell.header().set_unread(preview_screens.unread_notification_count())
 

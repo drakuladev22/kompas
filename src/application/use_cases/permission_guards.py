@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from src.domain.entities.employee import Employee, PermissionOverride
 from src.domain.value_objects.authorization import (
@@ -30,12 +31,23 @@ from src.domain.value_objects.authorization import (
     PermissionFlag,
     SystemRole,
 )
+from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+
+if TYPE_CHECKING:
+    from src.domain.interfaces.ports import AuditTrail, Clock
+    from src.domain.value_objects.identifiers import TenantId
 
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 
 #: Fərdi override tətbiq etmək üçün lazım olan flag (bölmə 3).
 CONTROL_PERMISSIONS_FLAG = "can_control_user_permissions"
+
+
+class PermissionAuditUnavailableError(KompasOSError):
+    """İcazə dəyişikliyi audit mənbəyi olmadan tətbiq edilə bilməz."""
+
+    user_message = "Sistem konfiqurasiyası natamamdır — dəyişiklik yazıla bilmədi."
 
 
 @dataclass(frozen=True)
@@ -56,11 +68,35 @@ class PermissionHierarchyGuardUseCase:
 
     İstifadə::
 
-        guard = PermissionHierarchyGuardUseCase()
+        guard = PermissionHierarchyGuardUseCase(audit=audit, clock=clock)
         guard.assert_allowed(request)      # istisna atır
         # və ya
         if guard.is_allowed(request): ...  # UI-da elementi gizlətmək üçün
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `AuditTrail` MƏCBURİDİR
+    ──────────────────────────────────────────────────────────────────────────
+    Bölmə 3 (sətir 86): «Bütün rol/icazə yaratma, dəyişdirmə, silmə
+    əməliyyatları `audit_logs`-da tam detallı qeyd olunur (kim, hansı flag,
+    kimə, əvvəl/sonra)». Əvvəl bu sinif YALNIZ `security.log`-a yazırdı —
+    o isə fayl-əsaslıdır və `audit_logs`-un DB-səviyyəli append-only
+    zəmanətini (`schema.sql` §26) DAŞIMIR. Yəni sistemin ən həssas
+    əməliyyatı — kimin nəyi kimə verməsi — auditdən kənarda qalırdı.
+
+    `audit` istəyə görədir (`None`) yalnız ona görə ki, `is_allowed()` UI-da
+    element gizlətmək üçün çağırılır və orada yazı olmamalıdır. `apply()` isə
+    audit olmadan çağırılarsa istisna atır — məcburi olan bir şeyin sükutla
+    buraxılması onu məcburi olmaqdan çıxarır (bölmə 5).
     """
+
+    def __init__(
+        self,
+        *,
+        audit: AuditTrail | None = None,
+        clock: Clock | None = None,
+    ) -> None:
+        self._audit = audit
+        self._clock = clock
 
     def assert_allowed(self, request: PermissionChangeRequest) -> None:
         """Bütün qoruyucuları sıra ilə tətbiq edir."""
@@ -87,9 +123,23 @@ class PermissionHierarchyGuardUseCase:
             return False
         return True
 
-    def apply(self, request: PermissionChangeRequest) -> PermissionOverride:
-        """Yoxlayır və override-ı tətbiq edir."""
+    def apply(
+        self, request: PermissionChangeRequest, *, tenant_id: TenantId | None = None
+    ) -> PermissionOverride:
+        """Yoxlayır, override-ı tətbiq edir və AUDİT-ə yazır.
+
+        Raises:
+            PermissionAuditUnavailableError: `audit` verilməyibsə. Səssiz
+                davam etmək bölmə 3-ün audit tələbini sükutla pozardı.
+        """
         self.assert_allowed(request)
+        if self._audit is None or self._clock is None:
+            raise PermissionAuditUnavailableError(
+                "İcazə dəyişikliyi audit mənbəyi olmadan tətbiq edilə bilməz",
+                context={"flag": request.flag.code},
+            )
+
+        before = request.subject.has_permission(request.flag.code, now=request.now)
         override = PermissionOverride(
             flag_code=request.flag.code,
             effect=request.effect,
@@ -97,6 +147,22 @@ class PermissionHierarchyGuardUseCase:
             expires_at=request.expires_at,
         )
         request.subject.apply_override(override)
+
+        self._audit.record(
+            tenant_id=tenant_id if tenant_id is not None else request.subject.tenant_id,
+            actor_id=request.actor.id,
+            action="PERMISSION_OVERRIDE_APPLIED",
+            entity_type="user_permission_overrides",
+            entity_id=request.subject.id,
+            before_state={"flag": request.flag.code, "effective": before},
+            after_state={
+                "flag": request.flag.code,
+                "effect": request.effect.value,
+                "effective": request.subject.has_permission(request.flag.code, now=request.now),
+                "expires_at": (request.expires_at.isoformat() if request.expires_at else None),
+            },
+            reason=request.reason,
+        )
         return override
 
     # ------------------------------ qaydalar -------------------------------- #

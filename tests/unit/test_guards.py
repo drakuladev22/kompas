@@ -40,6 +40,7 @@ from src.presentation.navigation import (
     NavigationConfigError,
     NavigationRegistry,
 )
+from tests.fixtures.fakes import FakeClock, RecordingAudit
 
 pytestmark = pytest.mark.unit
 
@@ -97,7 +98,14 @@ def request_for(
 
 @pytest.fixture
 def guard() -> PermissionHierarchyGuardUseCase:
-    return PermissionHierarchyGuardUseCase()
+    """Audit ilə qurulmuş qoruyucu.
+
+    `apply()` artıq audit mənbəyi TƏLƏB EDİR (bölmə 3, sətir 86: hər icazə
+    dəyişikliyi `audit_logs`-a düşməlidir). Audit-siz qurulmuş qoruyucu
+    `assert_allowed()` üçün hələ də yararlıdır — o, UI-da element gizlətmək
+    üçün çağırılır və yazı yaratmamalıdır.
+    """
+    return PermissionHierarchyGuardUseCase(audit=RecordingAudit(), clock=FakeClock(NOW))
 
 
 # --------------------------------------------------------------------------- #
@@ -481,7 +489,7 @@ def test_override_grants_menu_visibility(registry: NavigationRegistry) -> None:
     Subyekt `Admin`-dir: `can_control_user_permissions` hardlock səviyyə 3-dür
     və yalnız priority <= ADMIN olan rollara həvalə edilə bilər (bölmə 3).
     """
-    guard = PermissionHierarchyGuardUseCase()
+    guard = PermissionHierarchyGuardUseCase(audit=RecordingAudit(), clock=FakeClock(NOW))
     root = make_employee(SystemRole.ROOT)
     admin = make_employee(SystemRole.ADMIN)
 

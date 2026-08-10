@@ -42,6 +42,18 @@ _error_log = get_logger(__name__, channel=LogChannel.ERROR)
 #: Növbə/təqvim görünüşlərində göstərilən dövr.
 MATRIX_WINDOW_DAYS = 14
 
+#: Növbə dəyişmə statusu → ekran mətni.
+_SWAP_STATUS_TEXT: Final[dict[str, str]] = {
+    "PENDING_APPROVAL": "Gözləyir",
+    "APPROVED": "Təsdiqlənib",
+    "REJECTED": "Rədd edilib",
+}
+
+#: Növbə matrisinin sütun başlıqları. `strftime("%a")` sistem lokalından
+#: asılıdır və Windows-da ingiliscə qaytarır — interfeys dili isə yalnız
+#: Azərbaycan dilidir (bölmə 9).
+_WEEKDAYS_AZ: Final = ("B.e", "Ç.a", "Çər", "C.a", "Cüm", "Şən", "Baz")
+
 #: Bu qədər dəqiqədən sonra növbə sətri xəbərdarlıq rəngində göstərilir.
 #: 45 dəqiqəlik timeout-un (bölmə 4) YARISI seçilib — operator eskalasiya
 #: baş verməmişdən əvvəl reaksiya verə bilsin.
@@ -154,22 +166,42 @@ class ScreenDataBinder:
             start=today,
             end=end,
         )
-        rows: dict[str, dict[int, str]] = {}
+        # `set_matrix(days, rows)` İKİ arqument gözləyir: sütun başlıqları və
+        # sətirlər. Əvvəl bura tək `dict` ötürülürdü — `TypeError` `populate()`
+        # tərəfindən udulurdu və matris canlı rejimdə HƏMİŞƏ boş qalırdı.
+        window = [today + timedelta(days=offset) for offset in range(MATRIX_WINDOW_DAYS)]
+        days = [(day.day, _WEEKDAYS_AZ[day.weekday()]) for day in window]
+
+        by_employee: dict[str, dict[date, str]] = {}
         for item in assignments:
             name = _employee_name(session, item.employee_id)
-            rows.setdefault(name, {})[item.shift_date.day] = "off" if item.is_off_day else "work"
-        screen.set_matrix(rows)
+            by_employee.setdefault(name, {})[item.shift_date] = "off" if item.is_off_day else "work"
+
+        rows = [
+            (name, [marks.get(day, "") for day in window])
+            for name, marks in sorted(by_employee.items())
+        ]
+        screen.set_matrix(days, rows)
 
     def _shift_swaps(self, session: Session, screen: Any) -> None:
         requests = session.shift_swaps.pending_inbox(tenant_id=session.tenant_id, actor=self._actor)
         screen.set_counts({"pending": len(requests)})
+        # Açarlar ekranın FAKTİKİ gözlədikləridir: `id`, `from_name`, `to_name`,
+        # `shift`, `store`, `status`, `note`. Əvvəl `employee`/`date` göndərilirdi
+        # və kart `KeyError` ilə çökürdü — `populate()` isə istisnanı udurdu,
+        # ona görə Növbə Dəyişmə inbox-u canlı rejimdə HƏMİŞƏ boş idi.
         screen.set_requests(
             [
                 {
-                    "employee": _employee_name(session, item.employee_id),
-                    "date": item.target_date.isoformat(),
-                    "reason": item.reason,
-                    "status": item.status.value,
+                    "id": str(item.id),
+                    "from_name": _employee_name(session, item.employee_id),
+                    # Sorğuda hədəf işçi YOXDUR — spesifikasiya (sətir 106)
+                    # yalnız "istədiyi tarix + səbəb" deyir; qərarı HR verir.
+                    "to_name": item.target_date.strftime("%d.%m.%Y"),
+                    "shift": item.target_date.strftime("%d.%m.%Y"),
+                    "store": _store_name(session, item.store_id) if item.store_id else "—",
+                    "status": _SWAP_STATUS_TEXT.get(item.status.value, item.status.value),
+                    "note": item.reason,
                 }
                 for item in requests
             ]
@@ -203,7 +235,7 @@ class ScreenDataBinder:
     def _users(self, session: Session, screen: Any) -> None:
         rows = session.uow.connection.execute(
             """
-            SELECT e.first_name, e.last_name, e.is_active,
+            SELECT e.first_name, e.last_name, e.username, e.is_active,
                    COALESCE(p.name_az, '—') AS role_name,
                    COALESCE(s.name, '—')    AS store_name
             FROM employees e
@@ -218,7 +250,11 @@ class ScreenDataBinder:
         screen.set_users(
             [
                 {
-                    "name": f"{row['first_name']} {row['last_name']}".strip(),
+                    # Açarlar ekranın FAKTİKİ gözlədikləridir (`user["full_name"]`,
+                    # `user["username"]`) — əvvəl `name` göndərilirdi və sətir
+                    # `KeyError` ilə çökürdü, istisna isə udulurdu.
+                    "full_name": f"{row['first_name']} {row['last_name']}".strip(),
+                    "username": row["username"],
                     "role": row["role_name"],
                     "store": row["store_name"],
                     "status": "Aktiv" if row["is_active"] else "Deaktiv",
@@ -283,15 +319,27 @@ class ScreenDataBinder:
         # 72 yazmaq Root-un dəyişdirdiyi dəyəri sükutla yan keçərdi.
         key = SystemLimitKey.FINE_APPEAL_WINDOW_HOURS
         sla_hours = session.limits.get_int(session.tenant_id, key.value, int(DEFAULT_LIMITS[key]))
+        # Açarlar `FineAppealInboxScreen`-in FAKTİKİ oxuduqlarıdır: `id`,
+        # `employee`, `fine_type`, `amount`, `meta`, `explanation`. Əvvəl
+        # `reason`/`age`/`overdue` göndərilirdi — kartlar boş sahələrlə
+        # qurulurdu və `[Qəbul Et]` düyməsi BOŞ `id` yayırdı, yəni qərar
+        # heç bir etiraza aid olmurdu.
         screen.set_appeals(
             [
                 {
+                    "id": str(appeal.id),
                     "employee": _employee_name(session, appeal.employee_id),
-                    "reason": appeal.reason,
-                    "age": f"{appeal.age_hours(now=now):.0f} saat",
-                    "overdue": (
-                        "Bəli" if appeal.is_overdue(now=now, sla_hours=sla_hours) else "Xeyr"
+                    "fine_type": _fine_type_name(session, appeal.fine_id),
+                    "amount": _fine_amount(session, appeal.fine_id),
+                    "meta": (
+                        f"{appeal.age_hours(now=now):.0f} saatdır gözləyir"
+                        + (
+                            " · SLA aşılıb"
+                            if appeal.is_overdue(now=now, sla_hours=sla_hours)
+                            else ""
+                        )
                     ),
+                    "explanation": appeal.reason,
                 }
                 for appeal in appeals
             ]
@@ -310,8 +358,12 @@ class ScreenDataBinder:
                 for task in awaiting
             ],
         )
+        # Sütun açarları `TasksScreen._COLUMNS`-dandır: `open`/`review`/`done`.
+        # Əvvəl "overdue" göndərilirdi — belə sütun YOXDUR və `KeyError`
+        # udulurdu. Gecikmiş tapşırıq hələ AÇIQ tapşırıqdır; neçəsinin
+        # gecikdiyi yuxarıdakı xülasə sətrindədir.
         screen.set_tasks(
-            "overdue",
+            "open",
             [
                 {"title": task.title, "assignee": _employee_name(session, task.assignee_id)}
                 for task in overdue
@@ -323,6 +375,8 @@ class ScreenDataBinder:
     def _audit(self, session: Session, screen: Any) -> None:
         page = session.audit_query.search(tenant_id=session.tenant_id, actor=self._actor)
         session.commit()  # baxış faktı da audit-lənir (bax `audit_query`)
+        # `result_text` MƏCBURİ açar-arqumentdir — onsuz `TypeError` atılırdı
+        # və audit ekranı canlı rejimdə boş qalırdı (istisna udulurdu).
         screen.set_entries(
             [
                 {
@@ -333,7 +387,8 @@ class ScreenDataBinder:
                     "reason": entry.reason or "",
                 }
                 for entry in page.entries
-            ]
+            ],
+            result_text=f"{len(page.entries)} nəticə",
         )
 
     def _reports(self, session: Session, screen: Any) -> None:
@@ -408,6 +463,25 @@ _FINE_STATUS_TEXT: Final[dict[str, str]] = {
 def _month_text() -> str:
     today = datetime.now(UTC).date()
     return f"{_MONTHS_AZ[today.month - 1]} {today.year}"
+
+
+def _fine_type_name(session: Session, fine_id: Any) -> str:
+    """Etiraz kartındakı cərimə növü — tapılmasa "—"."""
+    row = session.uow.connection.execute(
+        """SELECT COALESCE(ft.name_az, '—') AS name
+             FROM fines f LEFT JOIN fine_types ft ON ft.id = f.fine_type_id
+            WHERE f.id = %s AND f.tenant_id = %s""",
+        (fine_id, session.tenant_id),
+    ).fetchone()
+    return str(row["name"]) if row else "—"
+
+
+def _fine_amount(session: Session, fine_id: Any) -> str:
+    row = session.uow.connection.execute(
+        "SELECT amount FROM fines WHERE id = %s AND tenant_id = %s",
+        (fine_id, session.tenant_id),
+    ).fetchone()
+    return f"{row['amount']} ₼" if row else "—"
 
 
 def _full_name(row: Any) -> str:

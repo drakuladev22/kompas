@@ -1,5 +1,13 @@
+# -*- coding: utf-8 -*-
 # KompasOS — istehsalat asılılıqları
 # Quraşdırma:  pip install -r requirements.txt
+#
+# BİRİNCİ SƏTİR NİYƏ KODLAŞDIRMA ELANIDIR
+# `pip-audit`-in istifadə etdiyi `pip_requirements_parser` faylı BOM və PEP-263
+# elanı olmadıqda `locale.getpreferredencoding()` ilə oxuyur. Linux-da bu,
+# UTF-8-dir və qapı keçir; Windows-da isə cp1252-dir və buradakı Azərbaycan
+# hərfləri `UnicodeDecodeError` verir — yəni asılılıq skanı yalnız CI-da
+# işləyir, hazırlayıcının maşınında çökürdü. Elan hər iki mühiti bərabərləşdirir.
 #
 # QEYD: Dəqiq versiya pinləri (hash-larla) `requirements.lock` faylında
 # saxlanılır — o fayl Faza 3-də `pip-compile` ilə yaradılır. pip-audit hər

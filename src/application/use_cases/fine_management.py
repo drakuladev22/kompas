@@ -431,6 +431,7 @@ class FineAppealUseCase:
         now = self._clock.now()
         appeal = self._require_appeal(appeal_id)
         fine = self._require_fine(appeal.fine_id)
+        self._assert_not_issuer(actor, fine)
 
         appeal.approve(
             decided_by=actor.id,
@@ -493,6 +494,7 @@ class FineAppealUseCase:
         now = self._clock.now()
         appeal = self._require_appeal(appeal_id)
         fine = self._require_fine(appeal.fine_id)
+        self._assert_not_issuer(actor, fine)
 
         appeal.reject(decided_by=actor.id, decided_at=now, note=note)
         self._save(appeal)
@@ -565,6 +567,36 @@ class FineAppealUseCase:
         if fine is None:
             raise FineNotFoundError("Cərimə tapılmadı", context={"fine_id": str(fine_id)})
         return fine
+
+    @staticmethod
+    def _assert_not_issuer(actor: Employee, fine: Fine) -> None:
+        """Cəriməni YAZAN onu ləğv/azalda BİLMƏZ (vəzifə ayrılığı).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ FLAG YOXLAMASI KİFAYƏT DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Modul başlığı bu qaydanı iddia edirdi, lakin kodda YOXLAMA YOX İDİ.
+        `can_approve_leave_appeal` anti-fraud flag DEYİL (`schema.sql` §22),
+        yəni DB trigger-i də ona toxunmur və o, fərdi override ilə Kamera
+        Operatoruna verilə bilər. Belə olduqda operator öz yazdığı cəriməni
+        özü `REVERSED` edərdi — cərimə sistemi öz-özünü ləğv edən qapalı
+        dövrəyə çevrilərdi.
+
+        Yoxlama məhz BURADADIR, çünki qadağa flag-in KİMDƏ olmasından deyil,
+        HƏMİN CƏRİMƏ ilə münasibətdən asılıdır — statik icazə modeli bunu
+        ifadə edə bilmir.
+        """
+        if fine.issued_by is None or fine.issued_by != actor.id:
+            return
+        _security_log.warning(
+            "SELF_ISSUED_FINE_DECISION_BLOCKED",
+            extra={"actor_id": str(actor.id), "fine_id": str(fine.id)},
+        )
+        raise FinePermissionError(
+            "Cəriməni yazan şəxs onun etirazına qərar verə bilməz (vəzifə ayrılığı)",
+            user_message="Öz yazdığınız cəriməyə qərar verə bilməzsiniz.",
+            context={"fine_id": str(fine.id)},
+        )
 
     def _require_approver(self, actor: Employee) -> None:
         if not actor.has_permission(APPROVE_APPEAL_FLAG, now=self._clock.now()):

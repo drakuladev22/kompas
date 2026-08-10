@@ -49,6 +49,133 @@ class CameraQueueController:
 
     def attach(self, screen: OperatorQueueScreen) -> None:
         screen.adjust_requested.connect(lambda request_id: self._on_adjust(screen, request_id))
+        screen.approve_requested.connect(lambda request_id: self._on_approve(screen, request_id))
+        screen.reject_requested.connect(lambda request_id: self._on_reject(screen, request_id))
+
+    # ------------------------------- təsdiq ---------------------------------- #
+
+    def _on_approve(self, screen: OperatorQueueScreen, request_id: str) -> None:
+        """`[Təsdiqlə]` — STEP 3 (qayıdış) və ya STEP C (giriş).
+
+        Növbə BİRLƏŞMİŞDİR (bölmə 4), ona görə açarın hansı mənbəyə aid
+        olduğu ƏVVƏLCƏ müəyyən edilir: icazə sorğusu tapılmasa davamiyyət
+        qeydi yoxlanılır. Səhv mənbəyə müraciət `KeyError` yox, aydın mesaj
+        verməlidir.
+        """
+        self._run(
+            screen,
+            request_id=request_id,
+            leave_action=self._verify_return,
+            attendance_action=lambda session, record: session.morning_check_in.verify(
+                tenant_id=session.tenant_id,
+                operator_id=self._actor.id,
+                employee_id=record.employee_id,
+                work_date=record.work_date,
+            ),
+            failure_title="Təsdiq yazılmadı",
+        )
+
+    def _on_reject(self, screen: OperatorQueueScreen, request_id: str) -> None:
+        """`[Rədd Et]` — səbəb MƏCBURİDİR (bölmə 4, STEP C düzəlişi).
+
+        Rədd YALNIZ giriş təsdiqinə (Morning Check-in) aiddir: qayıdış
+        təsdiqində "rədd" anlayışı yoxdur — orada operator ya təsdiqləyir,
+        ya vaxtı əllə düzəldir (`[Vaxtı Əllə Təyin Et]`).
+        """
+        reason = self._ask_reason(screen)
+        if reason is None:
+            return
+
+        self._run(
+            screen,
+            request_id=request_id,
+            leave_action=None,
+            attendance_action=lambda session, record: session.morning_check_in.reject(
+                tenant_id=session.tenant_id,
+                operator_id=self._actor.id,
+                employee_id=record.employee_id,
+                work_date=record.work_date,
+                reason=reason,
+            ),
+            failure_title="Rədd yazılmadı",
+        )
+
+    @staticmethod
+    def _ask_reason(screen: OperatorQueueScreen) -> str | None:
+        from PySide6.QtWidgets import QInputDialog  # noqa: PLC0415
+
+        text, accepted = QInputDialog.getMultiLineText(
+            screen,
+            "Girişi rədd et",
+            "Səbəb (məcburi, minimum 10 simvol) — audit jurnalına düşür və\n"
+            "HR_Admin ilə Mağaza Menecerinə bildiriş gedir:",
+        )
+        cleaned = text.strip()
+        return cleaned if accepted and cleaned else None
+
+    def _verify_return(self, session: Session, request: Any) -> None:
+        """STEP 3 Saga-sı `async`-dir — GUI-də sinxron icra edilir.
+
+        `asyncio.run` burada təhlükəsizdir, çünki Qt hadisə dövrəsində fəal
+        `asyncio` dövrəsi yoxdur; use case isə Saga orkestratoruna görə
+        `async` olaraq qalır (kompensasiya addımları belə tələb edir).
+        """
+        import asyncio  # noqa: PLC0415
+
+        asyncio.run(
+            session.leave_verification.verify_return(
+                tenant_id=session.tenant_id,
+                operator_id=self._actor.id,
+                request_id=request.id,
+            )
+        )
+
+    def _run(
+        self,
+        screen: OperatorQueueScreen,
+        *,
+        request_id: str,
+        leave_action: Any,
+        attendance_action: Any,
+        failure_title: str,
+    ) -> None:
+        """Açarı düzgün mənbəyə yönləndirib əməliyyatı icra edir."""
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                request = session.uow.leave_requests.get(_leave_id(request_id))
+                if request is not None:
+                    if leave_action is None:
+                        screen.show_error(
+                            title="Bu sətir rədd edilə bilməz",
+                            message=(
+                                "Qayıdış təsdiqində rədd yoxdur — təsdiqləyin "
+                                "və ya vaxtı əllə düzəldin."
+                            ),
+                        )
+                        return
+                    leave_action(session, request)
+                else:
+                    record = session.uow.attendance.get(_attendance_id(request_id))
+                    if record is None:
+                        screen.show_error(
+                            title="Sorğu tapılmadı",
+                            message="Bu sətir artıq emal edilib. Növbəni yeniləyin.",
+                        )
+                        return
+                    attendance_action(session, record)
+                session.commit()
+        except KompasOSError as error:
+            screen.show_error(title=failure_title, message=error.user_message)
+            return
+        except Exception:
+            _error_log.exception("QUEUE_ACTION_FAILED", extra={"request_id": request_id})
+            screen.show_error(
+                title=failure_title,
+                message="Əməliyyat tamamlanmadı. Yenidən cəhd edin.",
+            )
+            return
+
+        self._refresh(screen)
 
     # ------------------------------ düzəliş ---------------------------------- #
 
@@ -170,6 +297,12 @@ def _leave_id(raw: str) -> Any:
     from src.domain.value_objects.identifiers import LeaveRequestId  # noqa: PLC0415
 
     return LeaveRequestId(uuid.UUID(raw))
+
+
+def _attendance_id(raw: str) -> Any:
+    from src.domain.value_objects.identifiers import AttendanceRecordId  # noqa: PLC0415
+
+    return AttendanceRecordId(uuid.UUID(raw))
 
 
 def _combine(reference: datetime, time_text: str) -> datetime | None:

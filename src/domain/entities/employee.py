@@ -20,17 +20,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from src.domain.entities.base import AggregateRoot, DomainRuleError
 from src.domain.entities.position import Position
 from src.domain.value_objects.authorization import (
+    AuthorizationError,
     PermissionEffect,
+    PermissionFlag,
     RolePriority,
     SystemRole,
 )
 from src.domain.value_objects.credentials import EmailAddress, Username
 from src.domain.value_objects.identifiers import EmployeeId, StoreId, TenantId
 from src.domain.value_objects.scheduling import require_aware
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 #: Kiosk PIN-i olmayan, YALNIZ admin-tier ilə girən rollar (bölmə 2 düzəlişi).
 ADMIN_TIER_ROLES = frozenset(
@@ -200,6 +206,48 @@ class Employee(AggregateRoot):
 
     def remove_override(self, flag_code: str) -> None:
         self._overrides.pop(flag_code, None)
+
+    def change_position(
+        self, position: Position, *, catalog: Mapping[str, PermissionFlag]
+    ) -> list[str]:
+        """Rolu dəyişir və YENİ rolda QADAĞAN olan override-ları silir.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ SADƏ `employee.position = ...` KİFAYƏT DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Anti-fraud qadağası (bölmə 3, sətir 76) yalnız flag VERİLDİYİ anda
+        yoxlanılırdı. Nəticədə belə bir yol qalırdı:
+
+            1. CEO `can_approve_dual_control_override`-ı HR_Admin-ə verir
+               (qanuni — HR_Admin qadağan rollardan deyil);
+            2. həmin işçinin rolu sonradan `Mağaza_Meneceri`-yə dəyişdirilir;
+            3. override QALIR, `has_permission` isə override-a rol-defoltdan
+               ƏVVƏL baxır — yəni mağaza meneceri öz filialının Kamera
+               Operatorunun override-larını ÖZÜ təsdiqləyir.
+
+        Bu, məhz həmin flag-in hardlock siyahısına salınma səbəbidir: bütün
+        Dual-Control mexanizmi mənasız olurdu. Qayda ENTİTY-dədir, çünki bu,
+        aqreqatın invariantıdır — hansı use case rolu dəyişməsindən asılı
+        olmamalıdır.
+
+        Returns:
+            Silinən flag kodları — çağıran onları audit-ə yazır.
+        """
+        self.position = position
+        removed: list[str] = []
+        for flag_code in list(self._overrides):
+            flag = catalog.get(flag_code)
+            if flag is None:
+                # Kataloqda olmayan flag (köhnə sətir) toxunulmur — silmək
+                # məlumat itkisi olardı, saxlamaq isə risk yaratmır, çünki
+                # `has_permission` onu yalnız override kimi görür.
+                continue
+            try:
+                flag.assert_grantable_to(position.effective_system_role)
+            except AuthorizationError:
+                del self._overrides[flag_code]
+                removed.append(flag_code)
+        return removed
 
     @property
     def overrides(self) -> tuple[PermissionOverride, ...]:

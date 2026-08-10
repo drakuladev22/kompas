@@ -211,6 +211,31 @@ jobs:
                -v ON_ERROR_STOP=1 -v kompasos_env=DEV \
                -f database/schema.sql
 
+      # Miqrasiyalar sxemin ÜSTÜNƏ qatlanır (CLAUDE.md §7): `schema.sql`
+      # miqrasiya sütunlarını EHTİVA ETMİR. Bu addım olmadan `001`–`013`
+      # HEÇ VAXT icra olunmurdu — yəni sintaksis səhvi, sıra problemi və ya
+      # mövcud olmayan sütuna istinad yalnız MÜŞTƏRİ bazasında üzə çıxardı.
+      - name: Miqrasiyaları ardıcıl tətbiq et
+        env:
+          PGPASSWORD: ci_test_password
+        run: |
+          set -e
+          for file in $(ls database/migrations/*.sql | sort); do
+            echo "::group::$file"
+            psql -h localhost -U postgres -d kompasos_ci                  -v ON_ERROR_STOP=1 -f "$file"
+            echo "::endgroup::"
+          done
+
+      # İdempotentlik: hər miqrasiya təkrar icra oluna bilməlidir (CLAUDE.md §7)
+      - name: Miqrasiyaları TƏKRAR tətbiq et
+        env:
+          PGPASSWORD: ci_test_password
+        run: |
+          set -e
+          for file in $(ls database/migrations/*.sql | sort); do
+            psql -h localhost -U postgres -d kompasos_ci                  -v ON_ERROR_STOP=1 -f "$file"
+          done
+
       # Hardcoded təhlükəsizlik zəmanətlərinin DB-səviyyəli yoxlanması (bölmə 3)
       - name: Anti-fraud və hardlock trigger-lərini yoxla
         env:
@@ -338,16 +363,26 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
+      # PyInstaller PİNSİZ quraşdırılmır: major buraxılış bootloader-i və hook
+      # dəstini dəyişir, yəni build lokalda sınanmış alətdən FƏRQLİ alətlə
+      # aparılardı. Hədd `requirements-dev.txt`-dədir — `grep` onu tək mənbə
+      # saxlayır (lint job-undakı `ruff` naxışı ilə eyni).
       - name: Asılılıqları quraşdır
+        shell: bash
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller
+          pip install -r requirements.txt
+          pip install "$(grep -E '^pyinstaller' requirements-dev.txt)"
 
+      # QEYD: `src/KompasOS.spec` BU ƏMRDƏ İŞTİRAK ETMİR — build bayraqlarla
+      # aparılır. Spec faylı lokal diaqnostika üçündür və eyni nəticəni
+      # verəcək şəkildə saxlanılır; birində dəyişiklik digərinə də yazılmalıdır.
       - name: PyInstaller ilə .exe yığ (imzasız)
         run: |
           pyinstaller --noconfirm --clean --onefile --windowed `
             --name KompasOS `
             --icon assets/kompasos.ico `
+            --add-data "assets/kompasos.ico;assets" `
             src/main.py
 
       - name: Staging artefaktını yüklə
@@ -376,16 +411,22 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
+      # Pinləmə səbəbi staging job-undakı ilə eynidir — burada daha da vacibdir,
+      # çünki bu artefakt İMZALANIR və auto-update kanalına düşür.
       - name: Asılılıqları quraşdır
+        shell: bash
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller
+          pip install -r requirements.txt
+          pip install "$(grep -E '^pyinstaller' requirements-dev.txt)"
 
+      # QEYD: `src/KompasOS.spec` BU ƏMRDƏ İŞTİRAK ETMİR (bax staging job-u).
       - name: PyInstaller ilə .exe yığ
         run: |
           pyinstaller --noconfirm --clean --onefile --windowed `
             --name KompasOS `
             --icon assets/kompasos.ico `
+            --add-data "assets/kompasos.ico;assets" `
             src/main.py
 
       # -------------------------------------------------------------------

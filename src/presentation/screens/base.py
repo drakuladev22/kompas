@@ -104,11 +104,58 @@ class Screen(QWidget):
     def show_loading(self, *, rows: int = 4, show_filters: bool = True) -> None:
         self._switcher.show_loading(rows=rows, show_filters=show_filters)
 
-    def show_empty(self, **kwargs: object) -> EmptyState:
-        return self._switcher.show_empty(**kwargs)  # type: ignore[arg-type]
+    # NİYƏ İMZA TAM YAZILIR, `**kwargs` DEYİL
+    # ─────────────────────────────────────────────────────────────────────────
+    # Əvvəl bunlar `**kwargs: object` + `# type: ignore[arg-type]` idi. Nəticədə
+    # mypy çağırış yerini YOXLAMIRDI və üç ekran `message=` əvəzinə `body=`
+    # göndərirdi — kataloqlar, Yardım Mərkəzi və Plugin ekranı BOŞ siyahı ilə
+    # `TypeError` atırdı. Boş siyahı isə məhz ilk quraşdırmada normal haldır,
+    # yəni qüsur ən pis anda üzə çıxırdı.
+    #
+    # İmza `ContentSwitcher`-inkini təkrarlayır; ikisi ayrılsa mypy dərhal
+    # göstərir, halbuki `**kwargs` onları sükutla ayrı buraxırdı.
 
-    def show_error(self, **kwargs: object) -> ErrorState:
-        return self._switcher.show_error(**kwargs)  # type: ignore[arg-type]
+    def show_empty(
+        self,
+        *,
+        icon_name: str = "list",
+        title: str,
+        message: str,
+        primary_text: str = "",
+        primary_icon: str | None = None,
+        secondary_text: str = "",
+        footnote: str = "",
+    ) -> EmptyState:
+        return self._switcher.show_empty(
+            icon_name=icon_name,
+            title=title,
+            message=message,
+            primary_text=primary_text,
+            primary_icon=primary_icon,
+            secondary_text=secondary_text,
+            footnote=footnote,
+        )
+
+    def show_error(
+        self,
+        *,
+        title: str,
+        message: str,
+        icon_name: str = "server_off",
+        primary_text: str = "Yenidən Cəhd Et",
+        secondary_text: str = "",
+        details: list[tuple[str, str]] | None = None,
+        footnote: str = "",
+    ) -> ErrorState:
+        return self._switcher.show_error(
+            title=title,
+            message=message,
+            icon_name=icon_name,
+            primary_text=primary_text,
+            secondary_text=secondary_text,
+            details=details,
+            footnote=footnote,
+        )
 
     def show_content(self) -> None:
         self._switcher.show_content()

@@ -32,6 +32,7 @@ from src.shared.logger import (
     get_logger,
     install_global_exception_hook,
 )
+from src.shared.runtime import deployment_root, is_frozen, relaunch_command
 from src.shared.saga_orchestrator import (
     InMemorySagaStateRepository,
     SagaOrchestrator,
@@ -190,9 +191,21 @@ def _check_pepper(container: DIContainer, *, is_production: bool) -> CheckResult
 
 
 def _check_migrations() -> CheckResult:
-    """Miqrasiya faylları mövcuddurmu (schema.sql tək başına kifayət etmir)."""
-    folder = Path(__file__).resolve().parents[1] / "database" / "migrations"
+    """Miqrasiya faylları mövcuddurmu (schema.sql tək başına kifayət etmir).
+
+    Paketlənmiş `.exe`-də yoxluq NASAZLIQ DEYİL — səbəb `_check_schema_file`
+    docstring-indədir.
+    """
+    folder = deployment_root() / "database" / "migrations"
     files = sorted(folder.glob("*.sql")) if folder.exists() else []
+    if not files and is_frozen():
+        return CheckResult(
+            "migrations",
+            True,
+            "INFO",
+            f"Miqrasiya qovluğu paketin yanında yoxdur ({folder}) — "
+            "bu, yerləşdirmə artefaktıdır, klient tətbiqi onu oxumur",
+        )
     return CheckResult(
         "migrations",
         bool(files),
@@ -202,18 +215,38 @@ def _check_migrations() -> CheckResult:
 
 
 def _check_schema_file() -> CheckResult:
-    schema = Path(__file__).resolve().parents[1] / "database" / "schema.sql"
-    return CheckResult(
-        "schema_file",
-        schema.exists(),
-        "INFO" if schema.exists() else "ERROR",
-        str(schema),
-    )
+    """Bazis sxem faylı əlçatandırmı.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ SƏRTLİK REJİMDƏN ASILIDIR
+    ──────────────────────────────────────────────────────────────────────────
+    Mənbədən işə salındıqda faylın olmaması repozitoriyanın natamam olması
+    deməkdir — `ERROR`. Paketlənmiş `.exe`-də isə fayl QƏSDƏN yoxdur: sxem
+    Supabase-i quran şəxs tərəfindən BİR DƏFƏ tətbiq olunur, klient tətbiqi
+    onu işləmə zamanı oxumur (`src/`-də `schema.sql`-a heç bir müraciət yoxdur
+    — yalnız şərhlərdə istinad edilir). Müştəri maşınında olmayan faylı "xəta"
+    saymaq özünü-yoxlamanı yanlış qırmızıya boyayardı.
+    """
+    schema = deployment_root() / "database" / "schema.sql"
+    exists = schema.exists()
+    if not exists and is_frozen():
+        return CheckResult(
+            "schema_file",
+            True,
+            "INFO",
+            f"Sxem faylı paketin yanında yoxdur ({schema}) — "
+            "bazanı quran tərəf tətbiq edir, klient onu oxumur",
+        )
+    return CheckResult("schema_file", exists, "INFO" if exists else "ERROR", str(schema))
 
 
 def _check_dotenv(*, is_production: bool) -> CheckResult | None:
-    """İstehsalatda `.env` faylı olmamalıdır — sirlər DPAPI/Secrets-dən gəlir."""
-    dotenv = Path(__file__).resolve().parents[1] / ".env"
+    """İstehsalatda `.env` faylı olmamalıdır — sirlər DPAPI/Secrets-dən gəlir.
+
+    Paketlənmiş rejimdə fayl `.exe`-nin YANINDA axtarılır: `.env` heç vaxt
+    paketə salınmır (bölmə 2), ona görə arxivin içinə baxmaq mənasızdır.
+    """
+    dotenv = deployment_root() / ".env"
     if not (dotenv.exists() and is_production):
         return None
     return CheckResult(
@@ -408,7 +441,9 @@ def _run_watchdog(args: argparse.Namespace) -> int:
     """
     from src.infrastructure.kiosk.watchdog import KioskWatchdog  # noqa: PLC0415
 
-    command = [sys.executable, "-m", "src.main", "--gui"]
+    # Əmr prefiksi rejimdən asılıdır — səbəb `shared/runtime.py`-dadır:
+    # paketlənmiş `.exe`-yə `-m src.main` ötürmək `argparse` xətası verir.
+    command = [*relaunch_command(), "--gui"]
     if args.kiosk:
         command.append("--kiosk")
     if args.theme != "system":
@@ -606,7 +641,22 @@ def main(argv: list[str] | None = None) -> int:
         # bu proses interfeysi ÖZÜ açmamalıdır, alt-prosesi idarə etməlidir.
         if args.watchdog:
             return _run_watchdog(args)
-        if args.gui:
+        # ------------------------------------------------------------------
+        # NİYƏ PAKETLƏNMİŞ REJİMDƏ DEFOLT GUI-DİR
+        # ------------------------------------------------------------------
+        # `.exe` iki dəfə kliklənəndə arqument ÖTÜRÜLMÜR. Defolt yol
+        # özünü-yoxlama olduğu üçün paket istifadəçidə belə davranırdı:
+        # pəncərə açılmır, `--windowed` rejimində konsol da yoxdur, proses
+        # 1 kodu ilə səssizcə çıxır — yəni tətbiq "işə düşmür" görünür.
+        # Yoxlanılıb: `dist/KompasOS.exe` → `SELF_CHECK_FAILED`, çıxış kodu 1,
+        # heç bir pəncərə yoxdur.
+        #
+        # Mənbədən icra üçün defolt DƏYİŞMİR (`python -m src.main` →
+        # yoxlama): CI məhz bu davranışa arxalanır və modul başlığında
+        # sənədləşdirilib. `--check`/`--strict` isə paketdə də açıq şəkildə
+        # yoxlama yolunu seçir — diaqnostika üçün lazımdır.
+        # ------------------------------------------------------------------
+        if args.gui or (is_frozen() and not (args.check or args.strict)):
             return _run_gui(args)
         bus = get_event_bus()
         _register_audit_listener(bus)
