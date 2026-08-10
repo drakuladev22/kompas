@@ -346,7 +346,10 @@ Tam əsaslandırma: [`docs/security_decisions.md`](docs/security_decisions.md).
 ## Sənədlər
 
 - [`kompasos.md`](kompasos.md) — tam texniki spesifikasiya (mənbə həqiqət)
-- [`docs/security_decisions.md`](docs/security_decisions.md) — SEC-001…SEC-014 qərarları
+- [`docs/security_decisions.md`](docs/security_decisions.md) — SEC-001…SEC-017 qərarları
+- [`docs/open_questions.md`](docs/open_questions.md) — açıq/bağlanmış biznes sualları (BR-NNN)
+- [`docs/risk_register.md`](docs/risk_register.md) — risk reyestri (cari)
+- [`docs/dependency_policy.md`](docs/dependency_policy.md) — versiya hədləri və yeniləmə proseduru
 - [`docs/key_rotation.md`](docs/key_rotation.md) — şifrələmə açarının rotasiyası
 - [`docs/scheduler_setup.md`](docs/scheduler_setup.md) — pg_cron / xarici scheduler
 - [`docs/phase1_risks.md`](docs/phase1_risks.md) — risk vəziyyəti və 96 test ssenarisi

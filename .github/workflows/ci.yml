@@ -61,10 +61,13 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
+      # Ruff PİNSİZ quraşdırılmır: hər minor buraxılış yeni qayda gətirir və
+      # CI lokaldan FƏRQLİ nəticə verərdi ("məndə keçir" halı). Hədd
+      # `requirements-dev.txt`-dədir; `grep` onu tək mənbə saxlayır.
       - name: Asılılıqları quraşdır
         run: |
           python -m pip install --upgrade pip
-          pip install ruff
+          pip install "$(grep -E '^ruff' requirements-dev.txt)"
 
       - name: Ruff — lint
         run: ruff check src tests scripts --output-format=github
@@ -230,7 +233,7 @@ jobs:
       - name: Asılılıqları quraşdır
         run: |
           python -m pip install --upgrade pip
-          pip install pip-audit
+          pip install "$(grep -E '^pip-audit' requirements-dev.txt)"
 
       # Spesifikasiya bölmə 1: hər PR-da MƏCBURİ asılılıq zəiflik skanı
       - name: pip-audit
@@ -257,7 +260,7 @@ jobs:
       # SBOM — asılılıq mənşəyinin izlənməsi (supply-chain şəffaflığı)
       - name: SBOM yarat (CycloneDX)
         run: |
-          pip install cyclonedx-bom
+          pip install "$(grep -E '^cyclonedx-bom' requirements-dev.txt)"
           cyclonedx-py requirements requirements.txt -o sbom.json --output-format json
 
       - name: SBOM-u artefakt kimi yüklə
