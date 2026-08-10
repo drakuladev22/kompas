@@ -93,14 +93,18 @@ def mono_label(text: str, *, muted: bool = False, size: int = metrics.FONT_CAPTI
 
 
 def section_label(text: str) -> QLabel:
-    """Böyük hərfli bölmə etiketi ("NAVİQASİYA").
+    """Böyük hərfli bölmə etiketi ("NAVİQASİYA", "ŞƏXSİ MƏLUMAT").
 
-    Maketdə `text-transform: uppercase` və `letter-spacing: 0.12em` var —
+    Maketdə `text-transform: uppercase` və `letter-spacing: 0.1–0.12em` var —
     Qt Style Sheet hər ikisini dəstəkləmir, ona görə burada `QFont` ilə
-    verilir və mətn Python tərəfdə böyüdülür.
+    verilir və mətn Python tərəfdə böyüdülür. Şrift ailəsi QSS-dədir (mono).
+
+    Rol sol panelə BAĞLI DEYİL: maket eyni etiketi kartların içində də
+    işlədir ("Bu ayın xülasəsi", "Son giriş tarixçəsi"). Ona görə obyekt adı
+    yerə görə deyil, ROLA görə verilir.
     """
     label = QLabel(az_upper(text))
-    label.setObjectName("SidebarSectionLabel")
+    label.setObjectName("SectionLabel")
     font = label.font()
     font.setPixelSize(metrics.FONT_SECTION_LABEL)
     font.setWeight(QFont.Weight.DemiBold)
@@ -125,10 +129,18 @@ def body_label(text: str, *, size: int = 14, wrap: bool = True) -> QLabel:
 
 
 class Card(QFrame):
-    """Ağ (tünddə `#0F1B30`) səth, 1px sərhəd, 12px künc — maketin əsas qabı.
+    """Ağ (tünddə `#0F1B30`) səth, 1px sərhəd — maketin əsas qabı.
+
+    Maket üç səth pilləsi işlədir və onlar YALNIZ künc radiusu ilə fərqlənir:
+
+        `card`   12px — səhifədəki adi kart (ən çox işlənən)
+        `panel`  11px — KARTIN İÇİNDƏKİ alt-qutu
+        `modal`  14px — üzən və ya mərkəzi iri səth (dəstək, lisenziya)
 
     Args:
         padding: Daxili boşluq. Maketdə siyahı sətri 16/20, adi kart 18-dir.
+        spacing: Uşaq widget-lər arası məsafə.
+        surface: Yuxarıdakı üç pillədən biri.
         shadow: Üzən elementlər (bildiriş paneli, modal) üçün kölgə.
     """
 
@@ -137,11 +149,12 @@ class Card(QFrame):
         *,
         padding: int = metrics.CARD_PADDING,
         spacing: int = 12,
+        surface: Literal["card", "panel", "modal"] = "card",
         shadow: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setProperty("variant", "card")
+        self.setProperty("variant", surface)
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(padding, padding, padding, padding)

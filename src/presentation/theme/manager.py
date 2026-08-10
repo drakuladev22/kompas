@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
 
 from src.presentation.theme.qss import build_stylesheet
 from src.presentation.theme.tokens import ThemeMode, theme_tokens
@@ -177,7 +178,24 @@ class ThemeManager:
         return build_stylesheet(self.tokens)
 
     def apply(self, app: QApplication) -> None:
-        """QSS-i tətbiqə yazır."""
+        """Baza şriftini və QSS-i tətbiqə yazır.
+
+        Baza ölçüsü QSS-də DEYİL, burada verilir. Səbəb Qt-nin prioritet
+        qaydasıdır: `QWidget { font-size: … }` kimi bir QSS qaydası widget-in
+        `setFont()` ilə verilmiş ölçüsünü ƏZİR. Ölçü QSS-də qalsaydı, maketin
+        13–34px arasında dəyişən başlıq şkalası bir dəyərə yastılanardı və
+        `title_label(size=…)` parametri heç bir təsir göstərməzdi.
+
+        Tətbiq şrifti isə sadəcə BAŞLANĞIC dəyərdir — `setFont()` onu sərbəst
+        üstələyir, konkret rolu olan QSS qaydaları (naviqasiya, nişan, PIN)
+        isə öz sabit ölçüsünü saxlayır.
+        """
+        tokens = self.tokens
+        base = QFont()
+        base.setFamilies([name.strip() for name in tokens["--font-family"].split(",")])
+        base.setPixelSize(int(tokens["--font-size-md"]))
+        app.setFont(base)
+
         app.setStyleSheet(self.stylesheet())
         _log.info(
             "THEME_APPLIED",

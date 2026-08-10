@@ -102,6 +102,7 @@ CATALOG_AZ: Final[dict[str, str]] = {
     "nav.backups": "Backup və Bərpa",
     "nav.health": "Sistem Sağlamlığı",
     "nav.audit": "Audit Jurnalı",
+    "nav.drive_connection": "Drive Bağlantısı",
     "nav.root_control": "ROOT Mərkəzi",
     "nav.settings": "Ayarlar",
     "nav.profile": "Profil",

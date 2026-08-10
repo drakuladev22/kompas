@@ -98,11 +98,24 @@ _BODIES: Final[dict[str, str]] = {
     "plus": '<path d="M8 3v10M3 8h10"/>',
     "check": '<path d="M3 8.4 6.3 11.7 13 5"/>',
     "check_circle": '<circle cx="8" cy="8" r="6"/><path d="M5.8 8.2 7.4 9.8l3-3.2"/>',
+    # Yardım Mərkəzi nişanı. Sual işarəsi hərf kimi deyil, ŞTRIX kimi
+    # çəkilir — `<text>` istifadə edilsəydi, nişan şrift mövcudluğundan
+    # asılı olardı və qalın/nazik variantlarda digər ikonlarla uyğun gəlməzdi.
+    "help": (
+        '<circle cx="8" cy="8" r="6"/>'
+        '<path d="M6.3 6.2a1.75 1.75 0 1 1 2.3 1.9c-.4.2-.6.6-.6 1v.3"/>'
+        '<path d="M8 11.6h.01"/>'
+    ),
     "close": '<path d="M4 4l8 8M12 4l-8 8"/>',
     "refresh": '<path d="M13.4 7.2a5.4 5.4 0 1 0-.6 3.4"/><path d="M13.6 3.6v3.6h-3.4"/>',
     "search": '<circle cx="7" cy="7" r="4.6"/><path d="M10.4 10.4 14 14"/>',
     "edit": '<path d="M2.6 10.4 7.4 5.6l4.6 4.6-2.4 2.4H4.6z"/><path d="M2.6 13.4h10.8"/>',
     "download": '<path d="M8 2.6v7.4M5.2 7.4 8 10.2l2.8-2.8M2.8 13.2h10.4"/>',
+    # Sıralama düymələri. Unicode "↑"/"↓" istifadə EDİLMİR: interfeys şrifti
+    # (Inter) həmin işarələri həmişə daşımır və düymə BOŞ görünürdü — SVG isə
+    # şriftdən asılı deyil.
+    "arrow_up": '<path d="M8 12.6V3.6M4.4 7.2 8 3.6l3.6 3.6"/>',
+    "arrow_down": '<path d="M8 3.4v9M4.4 8.8 8 12.4l3.6-3.6"/>',
     "send": '<path d="M14 2 7.2 8.8M14 2 9.8 14l-2.6-5.2L2 6.2z"/>',
     "logout": '<path d="M9.4 5.2 12.6 8l-3.2 2.8M12.6 8H6.6"/><path d="M6.2 2.5H3.2v11h3"/>',
     "login": '<path d="M6.6 8H2.2M4 6l-1.8 2L4 10"/><path d="M9.4 2.6h4.4v10.8H9.4"/>',

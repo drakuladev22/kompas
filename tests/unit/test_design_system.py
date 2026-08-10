@@ -188,3 +188,75 @@ def test_icon_document_embeds_colour() -> None:
     document = _document("bell", "#F5A623", 1.5).decode()
     assert 'stroke="#F5A623"' in document
     assert 'viewBox="0 0 16 16"' in document
+
+
+# --------------------------------------------------------------------------- #
+# Tipoqrafiya — QSS-in `setFont()`-u əzməsinə qarşı qoruma
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("size", [13, 15, 17, 22, 26, 34])
+def test_heading_size_is_not_overridden_by_qss(qt_app, size: int) -> None:  # type: ignore[no-untyped-def]
+    """Maketin başlıq şkalası (13–34px) QSS tərəfindən yastılanmamalıdır.
+
+    Qt-də QSS xüsusiyyəti proqram vasitəsilə verilmiş `QFont`-u ÜSTƏLƏYİR.
+    Ona görə ümumi `QWidget { font-size }` və ya `#PageTitle { font-size }`
+    qaydası bütün başlıqları bir ölçüyə salırdı — 73 çağırış nöqtəsi maketdən
+    fərqli görünürdü və `size` parametri səssizcə təsirsiz qalırdı.
+    """
+    from src.presentation.theme.manager import ThemeManager
+    from src.presentation.widgets.primitives import title_label
+
+    ThemeManager(preference=ThemeMode.LIGHT).apply(qt_app)
+    label = title_label("Nümunə", size=size)
+    label.ensurePolished()
+
+    assert label.font().pixelSize() == size
+
+
+def test_mono_role_resolves_to_a_fixed_pitch_font(qt_app) -> None:  # type: ignore[no-untyped-def]
+    """`mono` rolu ƏSLİNDƏ sabit enli şriftlə render olunmalıdır.
+
+    Ad `tokens.py`-dakı `--font-family-mono`-dan gəlir; siyahının ilk üzvü
+    (IBM Plex Mono) quraşdırılmaya bilər, ona görə burada konkret ad DEYİL,
+    şriftin sabit enli olması yoxlanılır — maketin rəqəm sütunlarını şaquli
+    düzən xassə məhz budur.
+    """
+    from PySide6.QtGui import QFontInfo
+
+    from src.presentation.theme.manager import ThemeManager
+    from src.presentation.widgets.primitives import mono_label
+
+    ThemeManager(preference=ThemeMode.LIGHT).apply(qt_app)
+    label = mono_label("12.08 09:58")
+    label.ensurePolished()
+
+    assert QFontInfo(label.font()).fixedPitch()
+
+
+def test_table_footnote_wraps_instead_of_widening_the_screen(qt_app) -> None:  # type: ignore[no-untyped-def]
+    """Uzun qeyd sətri sarılmalıdır, ekranı genişləndirməməlidir.
+
+    Ekranlar bir `QStackedWidget`-i paylaşır və yığın uşaqlarının ƏN GENİŞİNİ
+    götürür. Sarılmayan qeyd sətri ona görə YALNIZ öz ekranını deyil, BÜTÜN
+    ekranları kəsir — üfüqi sürüşdürmə zolağı hər yerdə peyda olur.
+    """
+    from src.presentation.theme.manager import ThemeManager
+    from src.presentation.widgets.data_table import Column, DataTable
+
+    theme = ThemeManager(preference=ThemeMode.LIGHT)
+    theme.apply(qt_app)
+
+    long_note = (
+        "ANTİ-FRAUD: operator sərbəst məbləğ təyin edə bilmir — yalnız burada "
+        "təsdiqlənmiş növü və onun standart qiymətini seçir. Deaktiv edilən növ "
+        "tarixi qeydlərdə OLDUĞU KİMİ qalır."
+    )
+    table = DataTable([Column("Ad"), Column("Dəyər", 120)], theme, footnote=long_note)
+    table.ensurePolished()
+
+    from PySide6.QtWidgets import QLabel
+
+    notes = [child for child in table.findChildren(QLabel) if child.text().startswith("ANTİ-FRAUD")]
+    assert notes, "qeyd sətri tapılmadı"
+    assert notes[0].wordWrap(), "qeyd sətri sarılmır — ekran genişlənəcək"

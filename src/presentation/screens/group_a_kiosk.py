@@ -268,6 +268,18 @@ class PinPadScreen(QWidget):
         self._dots.set_error(True)
         self.reset()
 
+    def show_message(self, text: str) -> None:
+        """Sərbəst xəbərdarlıq mətni (PIN yanlışdır, konfiqurasiya yoxdur, ...).
+
+        `show_attempt_error`-dan fərqi: orada qalan cəhd sayı GÖSTƏRİLİR və
+        bu, yalnız PIN səhvində mənalıdır. Sistem xətası halında "3 cəhd
+        qaldı" yazmaq işçini yanıldardı — problem onun PIN-ində deyil.
+        """
+        self._message.setText(text)
+        self._message.setStyleSheet(f"color: {self._theme.color('--color-danger')};")
+        self._dots.set_error(True)
+        self.reset()
+
     def show_lockout(self, minutes: int = LOCKOUT_MINUTES) -> None:
         """Terminal bloklandı — klaviatura söndürülür."""
         self._locked = True

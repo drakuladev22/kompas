@@ -73,6 +73,31 @@ qərarı ilə üst-üstə düşür: rəngi kalibrləmək dizaynı qorumağın yo
 
 İkon rəngi (`--color-nav-item-icon`) maketdəki kimi qalır — o, mətn deyil,
 "iri qrafik element"dir və 3:1 həddindən keçir (`#7B8AA3` / ağ = 3.53:1).
+
+──────────────────────────────────────────────────────────────────────────────
+NİYƏ RADIUS ŞKALASI 4/8/12 DEYİL
+──────────────────────────────────────────────────────────────────────────────
+Maketlərdə ən çox işlənən künc dəyəri `9px`-dir (Qrup A–G boyu 764 dəfə) —
+naviqasiya maddəsi, düymə, giriş sahəsi, yəni İDARƏETMƏ elementləri. Kart isə
+`12px`, daxili panel `11px`, iri modal `14px`, kiçik nişan/loqo `5px`-dir.
+
+Yalnız 4/8/12 şkalası saxlanılsaydı, hər idarəetmə elementi maketdən 1px
+fərqli (8px) çıxardı. Bu, təkbaşına gözə dəymir, lakin ekranda YÜZLƏRLƏ
+element var və hamısı eyni istiqamətdə sürüşdüyü üçün nəticə maketdən
+sistematik olaraq fərqlənir. Ona görə maketin öz pilləsi ayrıca tokenlərlə
+verilir; ümumi şkala (`--radius-sm/md/lg`) isə maketdə qarşılığı olmayan
+daxili detallar üçün qalır.
+
+──────────────────────────────────────────────────────────────────────────────
+MONO ŞRİFT NİYƏ AYRICA TOKENDİR
+──────────────────────────────────────────────────────────────────────────────
+Maket ID, versiya, tarix/saat, ölçülən rəqəm və fayl adlarını IBM Plex Mono
+ilə yazır. Bu, bəzək deyil: sabit enli şrift rəqəmləri sütun-sütun düzür, ona
+görə cədvəldə iki versiyanı və ya iki məbləği gözlə tutuşdurmaq mümkün olur.
+Dəyişkən enli şriftdə `1` ilə `8` fərqli en tutur və sütun "titrəyir".
+
+Ad `qss.py`-da HARDCODE edilməməlidir — modul başlığındakı qayda (tokens.py
+yeganə mənbədir) rəngə olduğu qədər şriftə də aiddir.
 """
 
 from __future__ import annotations
@@ -263,6 +288,11 @@ METRICS: Final[dict[str, str]] = {
     "--radius-sm": "4",
     "--radius-md": "8",
     "--radius-lg": "12",
+    # --- maketin öz radius pilləsi (bax modul başlığındakı izah) ---
+    "--radius-badge": "5",
+    "--radius-control": "9",
+    "--radius-panel": "11",
+    "--radius-modal": "14",
     "--border-width": "1",
     "--focus-ring-width": "2",
     # Kassa PC-lərində toxunma ekranı ola bilər — minimum hədəf ölçüsü.
@@ -271,6 +301,10 @@ METRICS: Final[dict[str, str]] = {
 
 TYPOGRAPHY: Final[dict[str, str]] = {
     "--font-family": "Segoe UI, Inter, Arial, sans-serif",
+    # Maket rəqəm/ID/tarix sütunlarını IBM Plex Mono ilə yazır (bax başlıq).
+    # İlk ad quraşdırılıbsa işlədilir; qalanları Windows-un ÖZ şriftləridir,
+    # ona görə heç nə paketlənmədən də sətir dəyişməz enli qalır.
+    "--font-family-mono": '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace',
     "--font-size-xs": "11",
     "--font-size-sm": "13",
     "--font-size-md": "15",

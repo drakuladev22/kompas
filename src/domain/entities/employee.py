@@ -19,7 +19,7 @@ EFFEKTİV İCAZƏ = rol-defolt + fərdi override (override ÜSTÜNDÜR).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from src.domain.entities.base import AggregateRoot, DomainRuleError
 from src.domain.entities.position import Position
@@ -87,6 +87,9 @@ class Employee(AggregateRoot):
         has_pin: bool = False,
         must_change_password: bool = False,
         is_active: bool = True,
+        profile_photo_url: str | None = None,
+        hire_date: date | None = None,
+        date_of_birth: date | None = None,
     ) -> None:
         super().__init__()
         self.id = employee_id
@@ -103,6 +106,12 @@ class Employee(AggregateRoot):
         self.has_pin = has_pin
         self.must_change_password = must_change_password
         self.is_active = is_active
+        self.profile_photo_url = profile_photo_url
+        self.hire_date = hire_date
+        #: HƏSSAS SAHƏ (İşçi Detal Paneli): yalnız öz profilində və ya
+        #: `can_view_employee_reports` ilə göstərilir — bax
+        #: `EmployeeProfileAccessUseCase`.
+        self.date_of_birth = date_of_birth
 
         self.pin_security = PinSecurityState()
         self._overrides: dict[str, PermissionOverride] = {}

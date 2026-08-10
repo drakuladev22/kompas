@@ -40,11 +40,26 @@ if TYPE_CHECKING:
     from PySide6.QtGui import QResizeEvent
 
     from src.domain.entities.employee import Employee
+    from src.domain.value_objects.credentials import Username
+    from src.domain.value_objects.identifiers import EmployeeId, TenantId
+    from src.infrastructure.persistence.mappers import Credentials
+    from src.presentation.composition import ApplicationContext
+    from src.presentation.controllers.auth import AuthController
+    from src.presentation.controllers.fine_entry import FineEntryController
+    from src.presentation.controllers.kiosk import KioskController, KioskOutcome
+    from src.presentation.controllers.screen_data import ScreenDataBinder
+    from src.presentation.widgets.worker_status import WorkerStatus
 
 _log = get_logger(__name__)
 
 #: Splash ekranının minimum görünmə müddəti.
 SPLASH_DURATION_MS: Final = 1200
+
+#: Sübut şəkli növbəsinin yoxlanma tezliyi (2 dəqiqə).
+#: Cərimə yaradılan anda növbə ONSUZ DA bir dəfə boşaldılır (bax
+#: `FineEntryController._issue`) — bu taymer yalnız şəbəkə qayıdanda və ya
+#: kvota problemi həll olunanda gözləyən elementləri götürmək üçündür.
+UPLOAD_POLL_INTERVAL_MS: Final = 120_000
 
 
 class KompasApplication:
@@ -61,9 +76,12 @@ class KompasApplication:
         *,
         preview: bool = False,
         theme_preference: ThemeMode = ThemeMode.SYSTEM,
+        context: ApplicationContext | None = None,
     ) -> None:
         self._app = app
         self._preview = preview
+        #: Canlı obyekt qrafı (Faza 5/6). `None` -> önizləmə/dizayn rejimi.
+        self._context = context
         self._theme = ThemeManager(preference=theme_preference)
         self._theme.apply(app)
 
@@ -72,6 +90,18 @@ class KompasApplication:
         self._shell: AdminShell | None = None
         self._support: QWidget | None = None
         self._notifications: QWidget | None = None
+        #: Daxil olmuş istifadəçi — tema saxlanması və ekran doldurulması üçün.
+        self._current_employee: Employee | None = None
+        #: Real autentifikasiya (Faza 5). `None` → önizləmə/izah rejimi.
+        self._auth: AuthController | None = None
+        #: Kiosk PIN körpüsü (Faza 5). `None` → önizləmə rejimi.
+        self._kiosk_controller: KioskController | None = None
+        #: Ekranları canlı məlumatla dolduran körpü — login-dən sonra qurulur.
+        self._binder: ScreenDataBinder | None = None
+        #: Cərimə formasının yazı yolu — dropdown-ları da bu verir.
+        self._fine_entry: FineEntryController | None = None
+        #: Sübut şəkillərini arxa planda Drive-a köçürən taymer.
+        self._upload_timer: QTimer | None = None
 
     # ------------------------------- pəncərə --------------------------------- #
 
@@ -82,14 +112,90 @@ class KompasApplication:
         return self._theme
 
     def start(self) -> None:
-        """Splash ilə başlayır və girişə keçir."""
+        """Splash ilə başlayır və girişə keçir.
+
+        Splash arxasında lisenziya vəziyyəti yoxlanılır (bölmə 8): tenant
+        deaktiv edilibsə tətbiq TAM bağlanır və yalnız izahlı
+        `LICENSE_INACTIVE` ekranı göstərilir — heç bir modul, o cümlədən PIN
+        handshake, işləmir.
+        """
         from src.presentation.screens.group_a_entry import SplashScreen  # noqa: PLC0415
 
         splash = SplashScreen(self._theme, version=__version__)
-        splash.finished.connect(self.show_login)
+        splash.finished.connect(self._after_splash)
         self._window.set_content(splash)
         self._window.show()
         splash.finish_after(SPLASH_DURATION_MS)
+
+    def _after_splash(self) -> None:
+        """Splash bitdi — lisenziya qapısı, sonra quraşdırma və ya giriş."""
+        if self._context is not None and self._context.license_blocked():
+            self.show_license_blocked()
+            return
+        if self._setup_required():
+            self.show_setup_wizard()
+            return
+        self.show_login()
+
+    def _setup_required(self) -> bool:
+        """Tenant-da admin hesabı yoxdursa İlk Quraşdırma Sihirbazı açılır.
+
+        Xəta halında `False`: sihirbazı SƏHVƏN açmaq mövcud quraşdırmanı
+        "boş" göstərərdi; giriş ekranını açmaq isə ən pis halda "giriş
+        alınmadı" mesajı verir və geri qaytarıla bilən vəziyyətdir.
+        """
+        if self._context is None:
+            return False
+        try:
+            with self._context.session() as session:
+                return bool(session.setup.is_required(self._context.tenant_id))
+        except Exception:
+            _log.exception("SETUP_CHECK_FAILED")
+            return False
+
+    def show_license_blocked(self) -> None:
+        """Bölmə 8: səbəb + borc tarixi + əlaqə vasitəsi AÇIQ göstərilir."""
+        from src.presentation.screens.group_e import LicenseInactiveScreen  # noqa: PLC0415
+
+        assert self._context is not None
+        headline, detail, contact = self._context.license_screen_text()
+        screen = LicenseInactiveScreen(
+            self._theme,
+            # `headline` səbəbi bir cümlə ilə deyir ("Aylıq ödəniş edilməyib"),
+            # `detail` isə tarix/borc kontekstini verir — bölmə 8 hər ikisini
+            # AÇIQ tələb edir, ümumi xəta mesajı qadağandır.
+            reason=headline or "Lisenziya deaktiv edilib",
+            deactivated_at=detail or "—",
+            installation_id=str(self._context.tenant_id),
+            support_contact=contact or "dəstək@kompas.az",
+        )
+        self._window.set_content(screen)
+
+    def show_setup_wizard(self) -> None:
+        """İlk Quraşdırma Sihirbazı (bölmə 7) — tamamlandıqda girişə keçir."""
+        from src.presentation.screens.group_a_entry import FirstRunWizard  # noqa: PLC0415
+
+        wizard = FirstRunWizard(self._theme)
+        wizard.completed.connect(self._on_setup_completed)
+        self._window.set_content(wizard)
+
+    def _on_setup_completed(self, payload: dict[str, object]) -> None:
+        """Sihirbaz formu doldurdu — hesab/mağaza yaradılır, sonra giriş.
+
+        Sihirbaz EKRANI özü heç nə yazmır (o, yalnız formadır); yazma
+        `FirstRunSetupUseCase`-dədir və o, "tenant boşdurmu?" qapısını
+        yenidən yoxlayır — ekranın vəziyyətinə güvənilmir.
+        """
+        if self._context is None:
+            self.show_login()
+            return
+        try:
+            self._context.complete_setup(payload)
+        except Exception as exc:
+            _log.exception("FIRST_RUN_SETUP_FAILED")
+            self.show_fatal_error(getattr(exc, "user_message", "Quraşdırma tamamlana bilmədi."))
+            return
+        self.show_login()
 
     # -------------------------------- giriş ---------------------------------- #
 
@@ -101,17 +207,27 @@ class KompasApplication:
         self._window.set_content(login)
         self._login = login
 
-    def _on_login_submitted(self, username: str, password: str) -> None:
-        """Giriş cəhdi.
+    def set_kiosk_controller(self, controller: KioskController) -> None:
+        """Kiosk PIN körpüsünü qoşur (Faza 5)."""
+        self._kiosk_controller = controller
 
-        Faza 5-də burada `AuthenticationUseCase` çağırılacaq. Önizləmə
-        rejimində istənilən dəyər qəbul olunur — məqsəd ekranları göstərməkdir.
+    def set_auth_controller(self, controller: AuthController) -> None:
+        """Real autentifikasiyanı qoşur (Faza 5).
+
+        Qoşulmayıbsa `--preview` rejimi istənilən dəyəri qəbul edir, adi
+        rejim isə səbəbi izah edən mesaj göstərir — səssiz uğursuzluq yox.
         """
-        del password  # Faza 5-də istifadə olunacaq.
+        self._auth = controller
+
+    def _on_login_submitted(self, username: str, password: str) -> None:
+        """Giriş cəhdi — kontrollerə ötürülür (bax `controllers/auth.py`)."""
+        if self._auth is not None:
+            self._authenticate(username, password)
+            return
 
         if not self._preview:
             self._login.set_error(
-                "Autentifikasiya qatı hələ qoşulmayıb (Faza 5). "
+                "Baza bağlantısı qurulmayıb — giriş yoxlanıla bilmir. "
                 "Ekranlara baxmaq üçün `--preview` bayrağı ilə açın."
             )
             return
@@ -121,15 +237,61 @@ class KompasApplication:
 
         self.show_admin(preview_data.build_admin(), now=preview_data.PREVIEW_NOW)
 
+    def _authenticate(self, username: str, password: str) -> None:
+        """Real giriş axını.
+
+        Kontroller istisna ATMIR — nəticə həmişə `AuthOutcome`-dur, ona görə
+        burada `try/except` yoxdur (bax `controllers/auth.py` başlığı).
+        """
+        from datetime import UTC, datetime  # noqa: PLC0415
+
+        from src.domain.value_objects.credentials import Username  # noqa: PLC0415
+
+        assert self._auth is not None
+
+        self._login.set_busy(True)
+        try:
+            outcome = self._auth.authenticate(Username(username), password)
+        finally:
+            # Düymə HƏR halda açılır — xəta olsa da istifadəçi yenidən
+            # cəhd edə bilməlidir.
+            self._login.set_busy(False)
+
+        if not outcome.succeeded:
+            self._login.set_error(outcome.message)
+            return
+
+        if outcome.must_change_password:
+            # Bölmə 2: şifrə dəyişdirilməmiş sessiya açılmır.
+            self._login.set_error("Şifrəniz dəyişdirilməlidir. Admininizlə əlaqə saxlayın.")
+            return
+
+        self._login.clear()
+        self.show_admin(outcome.employee, now=datetime.now(UTC))  # type: ignore[arg-type]
+
     # ------------------------------- örtük ----------------------------------- #
 
     def show_admin(self, employee: Employee, *, now: datetime) -> None:
         """Admin örtüyünü qurur və bütün ekranları qeydiyyata alır."""
+        self._current_employee = employee
+        self._apply_stored_theme(employee)
+        if self._context is not None:
+            from src.presentation.controllers.fine_entry import (  # noqa: PLC0415
+                FineEntryController,
+            )
+            from src.presentation.controllers.screen_data import (  # noqa: PLC0415
+                ScreenDataBinder,
+            )
+
+            self._binder = ScreenDataBinder(self._context, employee)
+            self._fine_entry = FineEntryController(self._context, employee)
+            self._start_upload_timer()
         shell = AdminShell(
             theme=self._theme,
             registry=self._registry,
             employee=employee,
             now=now,
+            enabled_modules=self._enabled_modules(),
         )
         shell.theme_toggle_requested.connect(self.toggle_theme)
         self._shell = shell
@@ -144,6 +306,126 @@ class KompasApplication:
         if visible:
             shell.show_screen(visible[0])
 
+    def _enabled_modules(self) -> frozenset[str] | None:
+        """Root tərəfindən AÇIQ saxlanılan modulların açarları (bölmə 3).
+
+        DYNAMIC UI INTEGRATION: söndürülmüş modulun menyu maddəsi boz DEYİL,
+        tamamilə render-dən kəsilir (`NavigationRegistry._is_visible`).
+
+        `None` qaytarmaq "süzgəc tətbiq etmə" deməkdir və QƏSDƏN fail-open-dur:
+        toggle mənbəyinə çatmamaq bütün naviqasiyanı boşaltmamalıdır — modulu
+        söndürmək AÇIQ əməliyyat olmalıdır, şəbəkə nasazlığının yan təsiri yox
+        (eyni istiqamət `PostgresFeatureToggles.is_enabled`-də də seçilib).
+        """
+        if self._context is None:
+            return None
+        try:
+            with self._context.session() as session:
+                return frozenset(session.toggles.enabled_modules(self._context.tenant_id))
+        except Exception:
+            _log.exception("FEATURE_TOGGLES_LOAD_FAILED")
+            return None
+
+    def _start_upload_timer(self) -> None:
+        """Sübut növbəsini dövri boşaldır (Faza 3.9).
+
+        `EvidenceUploadWorker` özü sap YARATMIR — planlaşdırma çağıranın
+        işidir. Burada Qt taymeri seçilib, ayrıca `threading.Thread` yox:
+        yükləmə bitdikdən sonra `fines` sətri yenilənir və o iş bazaya
+        toxunur; Qt hadisə dövrəsində qalmaq bu yazının interfeyslə eyni
+        sırada getməsini təmin edir.
+
+        Interval yükləmə HƏDDİ deyil, sadəcə fon dövrəsidir — ona görə
+        `system_limits`-də açarı yoxdur (bölmə 3 onu sadalamır).
+        """
+        if self._context is None or self._upload_timer is not None:
+            return
+        timer = QTimer(self._window)
+        timer.setInterval(UPLOAD_POLL_INTERVAL_MS)
+        timer.timeout.connect(self._drain_upload_queue)
+        timer.start()
+        self._upload_timer = timer
+
+    def _drain_upload_queue(self) -> None:
+        if self._context is None:
+            return
+        # `run_evidence_uploads` özü istisna udur və 0 qaytarır — fon işi
+        # interfeysi çökdürməməlidir (bax `composition.py`).
+        uploaded = self._context.run_evidence_uploads()
+        if uploaded:
+            _log.info("EVIDENCE_UPLOADED", extra={"count": uploaded})
+
+    def _attach_fine_entry(self, screen: QWidget) -> None:
+        """Cərimə formasını use case-ə və sübut növbəsinə bağlayır (bölmə 4)."""
+        from src.presentation.screens.group_b import FineEntryScreen  # noqa: PLC0415
+
+        if self._fine_entry is None or not isinstance(screen, FineEntryScreen):
+            return
+        self._fine_entry.attach(screen)
+
+    def _attach_camera_queue(self, screen: QWidget) -> None:
+        """`[Vaxtı Əllə Təyin Et]` — dual-control həddi ROOT limitindən."""
+        from src.presentation.controllers.camera_queue import (  # noqa: PLC0415
+            CameraQueueController,
+        )
+        from src.presentation.screens.group_b import OperatorQueueScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, OperatorQueueScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        CameraQueueController(self._context, self._current_employee).attach(screen)
+
+    def _attach_drive_connection(self, screen: QWidget) -> None:
+        """Google razılıq axınını ekrana bağlayır (miqrasiya 002).
+
+        Kontrollerə burada istinad SAXLANMIR — o, siqnallara bağladığı
+        `lambda`-ların bağlamasında yaşayır və ekranla birlikdə ölür (eyni
+        naxış `_attach_root_control`-dadır). Gözləmə taymeri də `screen`-in
+        övladıdır, ona görə ekran bağlananda o da dayanır.
+        """
+        from src.presentation.controllers.drive_connection import (  # noqa: PLC0415
+            DriveConnectionController,
+        )
+        from src.presentation.screens.group_d import (  # noqa: PLC0415
+            DriveConnectionScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, DriveConnectionScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        DriveConnectionController(self._context, self._current_employee).attach(screen)
+
+    def _attach_root_control(self, screen: QWidget) -> None:
+        """ROOT panelini `RootControlUseCase`-ə bağlayır (bölmə 3, bənd 1-4).
+
+        Önizləmə rejimində kontekst yoxdur — maket məzmunu qalır və heç bir
+        yazı yolu qoşulmur (`preview_screens` onsuz da nümunə dəyər verib).
+        """
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        from src.presentation.controllers.root_control import (  # noqa: PLC0415
+            RootControlController,
+        )
+        from src.presentation.screens.group_d import RootControlScreen  # noqa: PLC0415
+
+        if not isinstance(screen, RootControlScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        RootControlController(self._context, self._current_employee).attach(screen)
+
+    def _apply_stored_theme(self, employee: Employee) -> None:
+        """Login-də saxlanmış tema tətbiq olunur (bölmə 9)."""
+        if self._context is None:
+            return
+        try:
+            with self._context.session() as session:
+                stored = session.preferences.theme_for(employee.id)
+        except Exception:
+            _log.exception("THEME_LOAD_FAILED")
+            return
+        self.set_theme(ThemeMode(str(stored).lower()))
+
     def _register_screens(self, shell: AdminShell) -> None:
         """Bütün modul ekranlarını `açar → fabrika` şəklində bağlayır.
 
@@ -156,6 +438,8 @@ class KompasApplication:
             group_d,
             group_f,
             group_g,
+            group_h,
+            group_i,
         )
 
         theme = self._theme
@@ -169,33 +453,53 @@ class KompasApplication:
                     from src.presentation import preview_screens  # noqa: PLC0415
 
                     preview_screens.populate(key, screen)
+                elif self._binder is not None:
+                    # İstehsalat: eyni imza, canlı məlumat (bax `screen_data`).
+                    self._binder.populate(key, screen)
                 # Ayarlar ekranı tema seçimini örtüyə bağlayır — bu, önizləmə
                 # məzmunu deyil, real davranışdır və hər iki rejimdə lazımdır.
                 if isinstance(screen, group_d.SettingsScreen):
                     screen.select_theme(self._theme.preference.value)
                     screen.theme_selected.connect(self._on_theme_selected)
+                # ROOT paneli TƏK ekrandır ki, həm oxuyur, həm yazır (limit,
+                # modul açarı, yeni flag) — ona görə `_binder` yerinə öz
+                # kontrolleri var (bax `controllers/root_control.py`).
+                elif isinstance(screen, group_d.RootControlScreen):
+                    self._attach_root_control(screen)
+                elif isinstance(screen, group_d.DriveConnectionScreen):
+                    self._attach_drive_connection(screen)
+                # Cərimə formasının və növbənin YAZI yolları (sübut yükləməsi,
+                # manual vaxt düzəlişi) — hər ikisi ROOT limitlərini işlədir.
+                elif isinstance(screen, group_b.FineEntryScreen):
+                    self._attach_fine_entry(screen)
+                elif isinstance(screen, group_b.OperatorQueueScreen):
+                    self._attach_camera_queue(screen)
                 return screen
 
             return build
 
         # Bəzi ekranlar açılış siyahılarını KONSTRUKTORDA gözləyir (combo-box
         # dəyərləri), ona görə onlar `populate()`-dan əvvəl lazımdır.
-        # İstehsalatda bunlar use-case nəticələri olacaq.
         names: list[str] = []
         stores: list[str] = []
         fine_types: list[str] = []
+        queue_stores: list[str] = []
         if self._preview:
             from src.presentation import preview_data  # noqa: PLC0415
 
             names = list(preview_data.EMPLOYEE_NAMES)
             stores = list(preview_data.STORES)
             fine_types = list(preview_data.FINE_TYPES)
+            queue_stores = list(preview_data.STORES[:2])
+        elif self._fine_entry is not None:
+            # Canlı rejim: dropdown-lar operatorun ÖZ filiallarından qurulur
+            # (bax `FineEntryController.options` — fail-safe boş siyahı).
+            fine_types, stores, names = self._fine_entry.options()
+            queue_stores = stores
 
         factories: dict[str, Callable[[], QWidget]] = {
             "dashboard": lambda: group_c.DashboardScreen(theme),
-            "live_queue": lambda: group_b.OperatorQueueScreen(
-                theme, assigned_stores=["Bellona 28 May", "Yataş Xətai"]
-            ),
+            "live_queue": lambda: group_b.OperatorQueueScreen(theme, assigned_stores=queue_stores),
             "daily_roster": lambda: group_c.DailyRosterScreen(theme),
             "shift_planning": lambda: group_c.ShiftPlanningScreen(theme),
             "shift_swaps": lambda: group_c.ShiftSwapScreen(theme),
@@ -215,7 +519,16 @@ class KompasApplication:
                 theme,
                 modules=["Davamiyyət", "Cərimələr", "İcazələr", "Tabel", "ROOT"],
             ),
+            "drive_connection": lambda: group_d.DriveConnectionScreen(theme),
             "root_control": lambda: group_d.RootControlScreen(theme),
+            "reports": lambda: group_h.ReportExportScreen(theme),
+            "work_modes": lambda: group_h.work_modes_screen(theme),
+            "fine_types": lambda: group_h.fine_types_screen(theme),
+            "leave_types": lambda: group_h.leave_types_screen(theme),
+            "help": lambda: group_h.HelpCenterScreen(theme),
+            "infrastructure": lambda: group_i.InfrastructureScreen(theme),
+            "plugins": lambda: group_i.PluginScreen(theme),
+            "dashboard_builder": lambda: group_i.DashboardBuilderScreen(theme),
             "settings": lambda: group_d.SettingsScreen(theme),
             "profile": lambda: group_g.ProfileScreen(
                 theme,
@@ -233,6 +546,12 @@ class KompasApplication:
             "daily_roster": "Bellona 28 May · 12 Avqust 2026",
             "fines": "Avqust 2026 · Bellona 28 May",
             "users": "235 nəfər · 21 filial",
+            "reports": "Avqust 2026 · iki ayrı fayl",
+            "work_modes": "Növbə şablonları",
+            "fine_types": "Standart məbləğlər · anti-fraud",
+            "leave_types": "Fasilə kateqoriyaları",
+            "infrastructure": "Baza keçidi · texniki fasilə",
+            "plugins": "Sandbox-da işləyən genişləndirmələr",
         }
 
         for key, factory in factories.items():
@@ -293,11 +612,45 @@ class KompasApplication:
         if visible:
             self._reposition_overlays(self._shell)
 
+    # ---------------------------- fatal başlanğıc ----------------------------- #
+
+    def show_fatal_error(self, message: str) -> None:
+        """Tətbiq işə düşə bilmədi — EHTİYAT ƏLAQƏ VASİTƏSİ ilə (bölmə 8).
+
+        Bölmə 8: "hər fatal başlanğıc-xətası ekranında statik e-poçt ünvanı
+        göstərilir" — tətbiq açılmırsa müştəri daxili dəstək chat-inə çata
+        bilmir və başqa heç bir yolu qalmır.
+        """
+        from src.presentation.screens.group_a_entry import (  # noqa: PLC0415
+            FatalStartupScreen,
+        )
+
+        screen = FatalStartupScreen(self._theme, message=message)
+        self._window.set_content(screen)
+        self._window.show()
+
     # -------------------------------- tema ------------------------------------ #
 
     def _on_theme_selected(self, key: str) -> None:
-        """Ayarlar ekranındakı seçim."""
+        """Ayarlar ekranındakı seçim — `user_preferences`-ə YAZILIR (bölmə 9).
+
+        Bölmə 9: "seçim `user_preferences` cədvəlində saxlanılır və növbəti
+        login-də tətbiq olunur". Yalnız yaddaşda saxlamaq tətbiq bağlananda
+        seçimi itirərdi.
+        """
         self.set_theme(ThemeMode(key))
+        self._persist_theme(key)
+
+    def _persist_theme(self, key: str) -> None:
+        """Tema seçimini yazır — uğursuzluq interfeysi DAYANDIRMIR."""
+        if self._context is None or self._current_employee is None:
+            return
+        try:
+            with self._context.session() as session:
+                session.preferences.set_theme(self._current_employee.id, key.upper())
+                session.commit()
+        except Exception:
+            _log.exception("THEME_PERSIST_FAILED")
 
     def toggle_theme(self) -> None:
         """Header-dəki düymə — işıqlı ↔ tünd."""
@@ -317,6 +670,56 @@ class KompasApplication:
 
     # -------------------------------- kiosk ----------------------------------- #
 
+    def _build_employee_home(
+        self,
+        outcome: KioskOutcome,
+        *,
+        kiosk: KioskWindow,
+        pin_pad: QWidget,
+    ) -> QWidget:
+        """İşçi Ana Ekranını REAL məlumatla qurur (bölmə 3).
+
+        Statusa uyğun TƏK bir aktiv düymə göstərilir; `🟡` vəziyyətlərində
+        düymə YOXDUR, yalnız "Kamera Operatorunun təsdiqini gözləyin" mesajı.
+        """
+        from src.presentation.screens.group_a_kiosk import (  # noqa: PLC0415
+            EmployeeHomeScreen,
+        )
+
+        assert outcome.employee is not None
+        assert self._kiosk_controller is not None
+        employee = outcome.employee
+        controller = self._kiosk_controller
+
+        home = EmployeeHomeScreen(
+            self._theme,
+            full_name=employee.full_name,
+            position_name=employee.position.name_az,
+            store_name="",
+        )
+
+        def refresh(status_outcome: KioskOutcome) -> None:
+            if status_outcome.status is not None:
+                home.set_status(status_outcome.status)
+
+        def on_action(status: WorkerStatus) -> None:
+            """Statusa uyğun TƏK əməliyyat (bölmə 3).
+
+            Hansı düymənin basıldığını EKRAN deyil, STATUS həll edir — ekranda
+            eyni düymə mətni dəyişir və status hər dəfə serverdən oxunur.
+            """
+            if status is WorkerStatus.NOT_STARTED:
+                refresh(controller.start_day(employee))
+            elif status is WorkerStatus.VERIFIED:
+                refresh(controller.request_leave(employee))
+            elif status is WorkerStatus.OUTSIDE:
+                refresh(controller.claim_return(employee))
+
+        home.action_requested.connect(on_action)
+        home.logout_requested.connect(lambda: kiosk.set_content(pin_pad))
+        refresh(outcome)
+        return home
+
     def start_kiosk(self) -> KioskWindow:
         """Kiosk axını — PIN klaviaturası ilə başlayır."""
         from src.presentation.screens.group_a_kiosk import (  # noqa: PLC0415
@@ -332,10 +735,8 @@ class KompasApplication:
         )
         pin_pad.set_clock("09:42 · 12 Avqust 2026")
 
-        def on_pin(_code: str) -> None:
-            if not self._preview:
-                pin_pad.show_attempt_error(2)
-                return
+        def show_preview_home() -> None:
+            """Dizayn yoxlaması üçün nümunə İşçi Ana Ekranı."""
             home = EmployeeHomeScreen(
                 self._theme,
                 full_name="Aysel Quliyeva",
@@ -359,6 +760,28 @@ class KompasApplication:
             home.logout_requested.connect(lambda: kiosk.set_content(pin_pad))
             kiosk.set_content(home)
 
+        def on_pin(code: str) -> None:
+            """PIN daxil edildi — önizləmədə nümunə, əks halda REAL yoxlama."""
+            if self._preview:
+                show_preview_home()
+                return
+            if self._kiosk_controller is None:
+                # Kontroller yoxdursa PIN yoxlanıla bilməz. Səssiz keçmək
+                # işçiyə "sistem məni tanımır" hissi verərdi; açıq mesaj isə
+                # onu dərhal menecerə yönləndirir.
+                pin_pad.show_message(
+                    "Sistem konfiqurasiya edilməyib — administratorla əlaqə saxlayın."
+                )
+                return
+
+            outcome = self._kiosk_controller.authenticate(code)
+            if outcome.failed or outcome.employee is None:
+                pin_pad.show_message(outcome.message)
+                return
+
+            home = self._build_employee_home(outcome, kiosk=kiosk, pin_pad=pin_pad)
+            kiosk.set_content(home)
+
         pin_pad.submitted.connect(on_pin)
         kiosk.set_content(pin_pad)
 
@@ -377,8 +800,16 @@ def run(
     preview: bool = False,
     kiosk: bool = False,
     theme: ThemeMode = ThemeMode.SYSTEM,
+    context: ApplicationContext | None = None,
+    startup_error: str = "",
 ) -> int:
-    """GUI-ni işə salır və çıxış kodunu qaytarır."""
+    """GUI-ni işə salır və çıxış kodunu qaytarır.
+
+    Args:
+        context: Canlı obyekt qrafı (`main.py` qurur). `None` → önizləmə.
+        startup_error: Kontekst qurula bilmədisə istifadəçiyə göstəriləcək
+            izah. Boş DEYİLSƏ fatal başlanğıc ekranı açılır (bölmə 8).
+    """
     existing = QApplication.instance()
     # `instance()` bazis tip qaytarır; GUI üçün məhz `QApplication` lazımdır.
     app = existing if isinstance(existing, QApplication) else QApplication(sys.argv)
@@ -388,15 +819,146 @@ def run(
     # kəskinliyi üçün vacibdir.
     app.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
 
-    application = KompasApplication(app, preview=preview, theme_preference=theme)
+    application = KompasApplication(app, preview=preview, theme_preference=theme, context=context)
 
-    if kiosk:
+    if startup_error:
+        # Kiosk rejimində belə fatal ekran göstərilir: mağaza işçisi "proqram
+        # açılmır" deyib zəng etməkdənsə ekranda əlaqə ünvanını görməlidir.
+        application.show_fatal_error(startup_error)
+    elif kiosk:
+        if context is not None:
+            controller = _build_kiosk_controller(context)
+            if controller is not None:
+                application.set_kiosk_controller(controller)
         application.start_kiosk()
     else:
+        if context is not None:
+            application.set_auth_controller(_build_auth_controller(context))
         application.start()
 
     _log.info("GUI_STARTED", extra={"preview": preview, "kiosk": kiosk})
     return app.exec()
+
+
+def _build_kiosk_controller(context: ApplicationContext) -> KioskController | None:
+    """Kiosk körpüsünü qurur — mağaza identifikatoru mühitdən gəlir.
+
+    Hər kiosk PC-si BİR mağazaya bağlıdır və PIN handshake yalnız həmin
+    mağazanın işçiləri arasında axtarış aparır (bax `PinHandshakeUseCase`).
+    Mağaza təyin edilməyibsə kontroller QURULMUR: "bütün mağazalarda axtar"
+    variantı 235 işçi üçün Argon2 hesablaması demək olardı və üstəlik başqa
+    filialın işçisinin bu terminalda giriş etməsinə imkan verərdi.
+    """
+    import os  # noqa: PLC0415
+    import uuid  # noqa: PLC0415
+
+    from src.domain.value_objects.identifiers import StoreId  # noqa: PLC0415
+    from src.presentation.controllers.kiosk import KioskController  # noqa: PLC0415
+
+    raw_store = os.environ.get("KOMPASOS_STORE_ID", "").strip()
+    if not raw_store:
+        _log.error("KIOSK_STORE_NOT_CONFIGURED", extra={"env": "KOMPASOS_STORE_ID"})
+        return None
+    try:
+        store_id = StoreId(uuid.UUID(raw_store))
+    except ValueError:
+        _log.error("KIOSK_STORE_ID_INVALID", extra={"value": raw_store})
+        return None
+
+    return KioskController(context, store_id=store_id)
+
+
+def _build_auth_controller(context: ApplicationContext) -> AuthController:
+    """Giriş kontrollerini canlı obyekt qrafı üzərində qurur.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ USE CASE HƏR CƏHDDƏ YENİDƏN QURULUR
+    ──────────────────────────────────────────────────────────────────────────
+    `AdminLoginUseCase` üç sessiya-bağlı asılılıq alır: `employees` repo-su,
+    `audit` yazıcısı və onların bağlantısı. Kontrolleri bir dəfə qurub
+    saxlasaydıq, o, artıq bağlanmış tranzaksiyaya istinad edərdi — giriş
+    ekranı isə tətbiqin ən uzun ömürlü ekranıdır (istifadəçi orada dəqiqələrlə
+    qala bilər).
+
+    Ona görə `_SessionScopedLogin` hər cəhddə yeni sessiya açır, use case-i
+    onun içində qurur və nəticəni qaytarır. Uğursuz cəhdlərin sayğacı
+    (`pin_failed_attempts`) da həmin sessiyada yazılır və commit olunur —
+    əks halda lockout heç vaxt işləməzdi.
+    """
+    from src.presentation.controllers.auth import AuthController  # noqa: PLC0415
+
+    bridge = _SessionScopedLogin(context)
+    return AuthController(
+        login_use_case=bridge,  # type: ignore[arg-type]
+        credentials=bridge,
+        employees=bridge,
+        tenant_id=context.tenant_id,
+    )
+
+
+class _SessionScopedLogin:
+    """`AdminLoginUseCase` + `EmployeeLookup` + `CredentialSource` körpüsü.
+
+    Üçü BİR sinifdədir, çünki hər üçü eyni sətri oxuyur; ayrı-ayrı olsaydılar
+    bir giriş cəhdi üç ardıcıl tranzaksiya açardı.
+    """
+
+    def __init__(self, context: ApplicationContext) -> None:
+        self._context = context
+
+    # --- EmployeeLookup ---------------------------------------------------- #
+
+    def get_by_username(self, tenant_id: TenantId, username: Username) -> Employee | None:
+        with self._context.session() as session:
+            employee: Employee | None = session.uow.employees.get_by_username(tenant_id, username)
+            return employee
+
+    # --- CredentialSource -------------------------------------------------- #
+
+    def credentials_for(self, employee_id: EmployeeId) -> Credentials | None:
+        with self._context.session() as session:
+            credentials: Credentials | None = session.uow.employees.credentials_for(employee_id)
+            return credentials
+
+    # --- AdminLoginUseCase.login ------------------------------------------- #
+
+    def login(
+        self,
+        *,
+        tenant_id: TenantId,
+        username: Username,
+        password: str,
+        stored_hash: str | None,
+        pepper_version: int = 1,
+    ) -> object:
+        from src.application.use_cases.authentication import (  # noqa: PLC0415
+            AdminLoginUseCase,
+        )
+        from src.infrastructure.security.hashing import HashingService  # noqa: PLC0415
+        from src.infrastructure.timekeeping.clock import SystemClock  # noqa: PLC0415
+
+        with self._context.session() as session:
+            use_case = AdminLoginUseCase(
+                employees=session.uow.employees,
+                hashing=HashingService(),
+                clock=SystemClock(),
+                audit=session.uow.audit,
+            )
+            try:
+                result = use_case.login(
+                    tenant_id=tenant_id,
+                    username=username,
+                    password=password,
+                    stored_hash=stored_hash,
+                    pepper_version=pepper_version,
+                )
+            except Exception:
+                # Uğursuz cəhdin sayğacı da YAZILMALIDIR — onsuz lockout
+                # (5 səhv → 15 dəqiqə, bölmə 2) heç vaxt işə düşməzdi.
+                session.commit()
+                raise
+            session.commit()
+            return result
 
 
 __all__ = ["SPLASH_DURATION_MS", "KompasApplication", "run"]

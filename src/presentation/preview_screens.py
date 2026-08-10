@@ -345,29 +345,56 @@ def _audit(screen: group_d.AuditScreen) -> None:
     screen.set_pagination(1, 18)
 
 
-def _root_control(screen: group_d.RootControlScreen) -> None:
-    screen.set_limits(
+def _drive_connection(screen: group_d.DriveConnectionScreen) -> None:
+    screen.set_active(
+        account="kompas.sube@gmail.com",
+        status_text="Aktiv",
+        tone="success",
+        quota_text="4.20 GB / 15.00 GB istifadə olunub (28%)",
+    )
+    screen.set_history(
         [
-            ("approval_wait", "Təsdiq gözləmə vaxtı", 10, 1, 120, "dəq"),
-            ("pin_attempts", "PIN üçün maksimum cəhd", 3, 1, 10, "cəhd"),
-            ("dual_control", "Dual-Control həddi", 30, 5, 240, "dəq"),
-            ("appeal_days", "Etiraz müddəti", 3, 1, 30, "gün"),
+            ("kompas.sube@gmail.com", "Aktiv", "12.08.2026 09:14"),
+            ("kompas.kohne@gmail.com", "Arxivlənib", "02.03.2026 11:40"),
         ]
     )
+
+
+def _root_control(screen: group_d.RootControlScreen) -> None:
+    """Maket məzmunu — açarlar İSTEHSALATDAKI ilə eynidir.
+
+    Əvvəl burada ayrı adlar vardı ("fines", "sales"), halbuki canlı panel
+    `SystemLimitKey`/`FeatureModule` dəyərlərini işlədir. Fərqli ad məkanı
+    maketdə görünməyən uyğunsuzluq yaradırdı — indi hər ikisi eyni mənbədir
+    (bax `controllers/root_control.py`).
+    """
+    from src.domain.policies import DEFAULT_LIMITS, FeatureModule, SystemLimitKey  # noqa: PLC0415
+    from src.presentation.controllers.root_control import (  # noqa: PLC0415
+        MODULE_LABELS,
+        limit_row,
+    )
+
+    preview_keys = (
+        SystemLimitKey.MONTHLY_LEAVE_MINUTES_LIMIT,
+        SystemLimitKey.FINE_APPEAL_WINDOW_HOURS,
+        SystemLimitKey.LATE_TOLERANCE_MINUTES,
+        SystemLimitKey.VERIFICATION_TIMEOUT_MINUTES,
+        SystemLimitKey.DUAL_CONTROL_THRESHOLD_MINUTES,
+        SystemLimitKey.LEAVE_ALLOWANCE_SOURCE,
+    )
+    screen.set_limits([limit_row(key.value, DEFAULT_LIMITS[key]) for key in preview_keys])
     screen.set_modules(
         [
-            ("sales", "Satış xalları və mükafatlar", True, False),
-            ("tasks", "Tapşırıq idarəetməsi", True, False),
-            ("fines", "Cərimə sistemi", True, True),
-            ("scheduling", "Növbə dəyişmə sorğuları", True, False),
+            (module.value, MODULE_LABELS[module], True, module.is_structural)
+            for module in FeatureModule
         ]
     )
     screen.set_registry(
         [
-            ("attendance.override_time", True),
-            ("fines.delete", True),
-            ("roster.approve", False),
-            ("erp.server_manage", False),
+            ("can_override_return_time", True),
+            ("can_delete_fines", True),
+            ("can_approve_roster", False),
+            ("can_manage_erp_servers", False),
         ]
     )
 
@@ -414,6 +441,44 @@ def _notifications(widget: group_g.NotificationPanel) -> None:
     widget.set_notifications(list(data.NOTIFICATIONS))
 
 
+def _reports(screen: Any) -> None:
+    screen.set_period("Avqust 2026")
+    # Etiraz pəncərəsi hələ açıq olan cərimələr — bölmə 6 LOCK mexanizmi.
+    screen.set_lock_summary(4)
+
+
+def _work_modes(screen: Any) -> None:
+    screen.set_entries(list(data.WORK_MODES))
+
+
+def _fine_types(screen: Any) -> None:
+    screen.set_entries(list(data.FINE_TYPE_ROWS))
+
+
+def _leave_types(screen: Any) -> None:
+    screen.set_entries(list(data.LEAVE_TYPE_ROWS))
+
+
+def _infrastructure(screen: Any) -> None:
+    from src.domain.value_objects.infrastructure import DatabaseTarget  # noqa: PLC0415
+
+    screen.set_active_target(DatabaseTarget.CLOUD)
+    screen.set_warnings(list(data.DB_SWITCH_WARNINGS))
+    screen.set_history(list(data.DB_SWITCH_HISTORY))
+
+
+def _plugins(screen: Any) -> None:
+    screen.set_plugins(list(data.PLUGINS))
+
+
+def _dashboard_builder(screen: Any) -> None:
+    screen.set_widgets(
+        dict(data.DASHBOARD_WIDGETS),
+        order=list(data.DASHBOARD_ORDER),
+        visible=set(data.DASHBOARD_VISIBLE),
+    )
+
+
 #: Ekran açarı → doldurucu.
 #:
 #: Dəyərlərin tipi `Callable[[Any], None]`-dur, çünki hər doldurucu FƏRQLİ
@@ -436,11 +501,21 @@ _POPULATORS: dict[str, Callable[[Any], None]] = {
     "backups": _backups,
     "health": _health,
     "audit": _audit,
+    "drive_connection": _drive_connection,
     "root_control": _root_control,
     "settings": _settings,
     "profile": _profile,
     "support": _support,
     "notifications": _notifications,
+    # Qrup H və I ekranları — əvvəllər önizləmə məzmunu YOX idi, ona görə
+    # boş render olunur və vizual yoxlamadan kənarda qalırdılar.
+    "reports": _reports,
+    "work_modes": _work_modes,
+    "fine_types": _fine_types,
+    "leave_types": _leave_types,
+    "infrastructure": _infrastructure,
+    "plugins": _plugins,
+    "dashboard_builder": _dashboard_builder,
 }
 
 

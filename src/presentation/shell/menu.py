@@ -30,19 +30,38 @@ from __future__ import annotations
 
 from typing import Final
 
+from src.domain.policies import FeatureModule
 from src.presentation.navigation import MenuEntry, NavigationRegistry
 
-#: Feature Toggle açarları (ROOT Control Center-dən idarə olunur).
-MODULE_ATTENDANCE: Final = "attendance"
-MODULE_LEAVE: Final = "leave"
-MODULE_FINES: Final = "fines"
-MODULE_SCHEDULING: Final = "scheduling"
-MODULE_TASKS: Final = "tasks"
-MODULE_SALES: Final = "sales"
-MODULE_ERP: Final = "erp"
-MODULE_BACKUP: Final = "backup"
-MODULE_DIAGNOSTICS: Final = "diagnostics"
-MODULE_AUDIT: Final = "audit"
+# ──────────────────────────────────────────────────────────────────────────────
+# FEATURE TOGGLE AÇARLARI HARDAN GƏLİR
+# ──────────────────────────────────────────────────────────────────────────────
+# Dəyərlər `FeatureModule` enum-undan GÖTÜRÜLÜR, əl ilə YAZILMIR. Əvvəllər
+# burada ayrıca ad məkanı vardı (`"fines"`, `"tasks"`, `"sales"`), halbuki
+# `feature_toggles` cədvəli və `AdminShell`-ə ötürülən `enabled_modules`
+# dəsti `FeatureModule` dəyərlərini (`"FINE_MODULE"`, ...) saxlayır.
+#
+# Nəticədə `entry.feature_module not in modules` şərti HƏMİŞƏ doğru olurdu:
+# Root modulu söndürsə belə menyu maddəsi görünməyə davam edirdi, yəni
+# bölmə 3-dəki DYNAMIC UI INTEGRATION qaydası sükutla işləmirdi. İndi tək
+# mənbə var; `test_menu_registry.py` uyğunluğu qoruyur.
+MODULE_CAMERA: Final = FeatureModule.CAMERA_VERIFICATION.value
+MODULE_SHIFT_SWAP: Final = FeatureModule.SHIFT_SWAP.value
+MODULE_FINES: Final = FeatureModule.FINE_MODULE.value
+MODULE_TASKS: Final = FeatureModule.TASK_ENGINE.value
+MODULE_SALES: Final = FeatureModule.SALES_POINTS.value
+MODULE_DASHBOARD_BUILDER: Final = FeatureModule.DASHBOARD_BUILDER.value
+
+# NİYƏ BƏZİ MADDƏLƏR TOGGLE-SIZDIR (`feature_module=None`)
+# ──────────────────────────────────────────────────────────────────────────────
+# Bölmə 3 Feature Toggle-ı **İŞ-PROSESİ modulları** üçün təyin edir (Kamera
+# Təsdiqi, Shift Swap, Cərimə Modulu, Dual-Control, ...). ERP paneli, backup,
+# sistem sağlamlığı, audit jurnalı və kataloq ekranları iş prosesi DEYİL —
+# onlar infrastruktur/konfiqurasiya səthidir və `feature_toggles` cədvəlində
+# sətirləri yoxdur. Onlara uydurma açar vermək iki nəticə verərdi: ya maddə
+# həmişə gizli qalardı (açar dəstdə yoxdur), ya da Root paneldə mövcud
+# olmayan modul görünərdi. Hər ikisi səhvdir — ona görə qapı yalnız
+# `required_flag`-dədir.
 
 
 #: Maddələr — `order` maketdəki sol panel sırasını təkrarlayır.
@@ -58,7 +77,7 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         key="live_queue",
         title_az="Canlı Növbə",
         required_flag="can_verify_returns",
-        feature_module=MODULE_LEAVE,
+        feature_module=MODULE_CAMERA,
         order=20,
         icon="queue",
     ),
@@ -66,7 +85,7 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         key="daily_roster",
         title_az="Gündəlik Tabel",
         required_flag="can_fill_daily_attendance",
-        feature_module=MODULE_ATTENDANCE,
+        feature_module=MODULE_CAMERA,
         order=30,
         icon="roster",
     ),
@@ -74,7 +93,6 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         key="shift_planning",
         title_az="Növbə Planlama",
         required_flag="can_manage_shifts",
-        feature_module=MODULE_SCHEDULING,
         order=40,
         icon="calendar",
     ),
@@ -82,7 +100,7 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         key="shift_swaps",
         title_az="Növbə Dəyişmə",
         required_flag="can_approve_shift_swap",
-        feature_module=MODULE_SCHEDULING,
+        feature_module=MODULE_SHIFT_SWAP,
         order=50,
         icon="refresh",
     ),
@@ -127,6 +145,13 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         icon="tag",
     ),
     MenuEntry(
+        key="reports",
+        title_az="Hesabatlar",
+        required_flag="can_export_reports",
+        order=105,
+        icon="download",
+    ),
+    MenuEntry(
         key="users",
         title_az="İstifadəçilər",
         required_flag="can_manage_employees",
@@ -136,7 +161,13 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
     MenuEntry(
         key="permissions",
         title_az="İcazə Matrisi",
-        required_flag="can_manage_permissions",
+        # `can_manage_permissions` DEYİL — o, YALNIZ `Root`-a hardlock-dur
+        # (bölmə 3) və yeni FLAG YARATMAQ üçündür, Permission Registry-də
+        # yaşayır. Matris ekranı isə mövcud flag-ləri istifadəçilərə paylayır;
+        # bölmə 3 açıq deyir ki, `Admin` onu `can_control_user_permissions`
+        # çərçivəsində GÖRÜR. Əvvəlki qapı ilə nə `Admin`, nə də `CEO` ekranı
+        # heç vaxt görə bilmirdi — səlahiyyətin həvalə edilməsi mümkünsüz idi.
+        required_flag="can_control_user_permissions",
         order=120,
         icon="lock",
     ),
@@ -144,7 +175,6 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         key="erp_servers",
         title_az="ERP / 1C Serverləri",
         required_flag="can_manage_erp_servers",
-        feature_module=MODULE_ERP,
         order=130,
         icon="server",
     ),
@@ -152,7 +182,6 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         key="backups",
         title_az="Backup və Bərpa",
         required_flag="can_manage_backups",
-        feature_module=MODULE_BACKUP,
         order=140,
         icon="database",
     ),
@@ -160,7 +189,6 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         key="health",
         title_az="Sistem Sağlamlığı",
         required_flag="can_view_system_health",
-        feature_module=MODULE_DIAGNOSTICS,
         order=150,
         icon="activity",
     ),
@@ -168,9 +196,18 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         key="audit",
         title_az="Audit Jurnalı",
         required_flag="can_view_audit_logs",
-        feature_module=MODULE_AUDIT,
         order=160,
         icon="file",
+    ),
+    MenuEntry(
+        key="drive_connection",
+        title_az="Drive Bağlantısı",
+        # Miqrasiya 002: cərimə sübut şəkilləri Supabase Storage-da deyil,
+        # müştərinin ÖZ Google Drive hesabındadır — hesabı qoşmaq ayrıca
+        # səlahiyyətdir və defolt yalnız ROOT/CEO-dadır.
+        required_flag="can_manage_drive_connection",
+        order=165,
+        icon="image",
     ),
     MenuEntry(
         key="root_control",
@@ -178,6 +215,65 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         required_flag="can_manage_system_limits",
         order=170,
         icon="shield",
+    ),
+    # --- Kataloqlar (bölmə 4) ------------------------------------------------
+    # Üçü ardıcıl yerləşir və hamısı 180-lərdədir: onlar konfiqurasiya
+    # ekranlarıdır, gündəlik iş axını deyil — sol panelin aşağı hissəsində
+    # qruplaşdırılması istifadəçinin gündəlik gözü ilə uyğun gəlir.
+    MenuEntry(
+        key="work_modes",
+        title_az="İş Rejimləri",
+        required_flag="can_manage_work_modes",
+        order=180,
+        icon="clock",
+    ),
+    MenuEntry(
+        key="fine_types",
+        title_az="Cərimə Növləri",
+        required_flag="can_manage_fine_types",
+        feature_module=MODULE_FINES,
+        order=182,
+        icon="tag",
+    ),
+    MenuEntry(
+        key="leave_types",
+        title_az="İcazə Növləri",
+        required_flag="can_manage_leave_types",
+        feature_module=MODULE_CAMERA,
+        order=184,
+        icon="checklist",
+    ),
+    MenuEntry(
+        key="infrastructure",
+        title_az="İnfrastruktur",
+        required_flag="can_switch_db",
+        order=172,
+        icon="database",
+    ),
+    MenuEntry(
+        key="plugins",
+        title_az="Plugin-lər",
+        required_flag="can_manage_plugins",
+        order=174,
+        icon="grid",
+    ),
+    MenuEntry(
+        key="dashboard_builder",
+        title_az="Dashboard Qurucusu",
+        # Bölmə 6: "Yalnız bu modula icazəsi olan rollara görünür".
+        # Bayraqsız qaldıqda maddə HƏR istifadəçiyə render olunurdu və bu,
+        # "GÖRMƏK = SƏLAHİYYƏTİN OLMASI" prinsipini birbaşa pozurdu.
+        required_flag="can_view_dashboard_builder",
+        feature_module=MODULE_DASHBOARD_BUILDER,
+        order=176,
+        icon="dashboard",
+    ),
+    MenuEntry(
+        key="help",
+        title_az="Yardım Mərkəzi",
+        required_flag=None,
+        order=190,
+        icon="help",
     ),
     MenuEntry(
         key="settings",
@@ -210,15 +306,11 @@ def build_default_registry() -> NavigationRegistry:
 
 __all__ = [
     "DEFAULT_ENTRIES",
-    "MODULE_ATTENDANCE",
-    "MODULE_AUDIT",
-    "MODULE_BACKUP",
-    "MODULE_DIAGNOSTICS",
-    "MODULE_ERP",
+    "MODULE_CAMERA",
+    "MODULE_DASHBOARD_BUILDER",
     "MODULE_FINES",
-    "MODULE_LEAVE",
     "MODULE_SALES",
-    "MODULE_SCHEDULING",
+    "MODULE_SHIFT_SWAP",
     "MODULE_TASKS",
     "build_default_registry",
 ]

@@ -120,6 +120,11 @@ PIN_DOT_SIZE: Final = 18
 KEYPAD_BUTTON_SIZE: Final = 88
 #: Mətn düymələri ('Təmizlə', 'Sil') — etiket kvadrata sığmır.
 KEYPAD_TEXT_BUTTON_WIDTH: Final = 124
+
+#: Kataloq cədvəllərində əməliyyat sütunu ('Redaktə' + 'Aktivləşdir').
+#: Ölçü ƏN UZUN kombinasiyaya görə seçilib: dar sütunda ikinci düymənin
+#: etiketi kəsilir və istifadəçi nəyə basdığını görmür.
+CATALOG_ACTION_COLUMN_WIDTH: Final = 250
 KEYPAD_SPACING: Final = 16
 
 # --------------------------------------------------------------------------- #

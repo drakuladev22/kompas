@@ -120,6 +120,9 @@ def employee_from_row(row: Row, position: Position) -> Employee:
         has_pin=bool(row.get("pin_hash")),
         must_change_password=row.get("must_change_password", False),
         is_active=row.get("is_active", True),
+        profile_photo_url=row.get("profile_photo_url"),
+        hire_date=row.get("hire_date"),
+        date_of_birth=row.get("date_of_birth"),
     )
     employee.pin_security.failed_attempts = row.get("pin_failed_attempts", 0)
     employee.pin_security.locked_until = row.get("pin_locked_until")
@@ -309,8 +312,11 @@ def fine_from_row(row: Row) -> Fine:
         photo_evidence_url=row.get("photo_evidence_url"),
     )
     # DB-dəki faktiki pəncərə saxlanılır (konstruktor yenidən hesablayır).
-    fine.appeal_window_closes_at = row["appeal_window_closes_at"]
+    fine.appeal_window_closes_at = row.get("appeal_window_closes_at")
     fine.status = FineStatus(row["status"])
+    fine.published_at = row.get("published_at")
+    fine.reviewed_by = EmployeeId(row["reviewed_by"]) if row.get("reviewed_by") else None
+    fine.review_decision_reason = row.get("review_decision_reason")
     fine.reversed_by = EmployeeId(row["reversed_by"]) if row.get("reversed_by") else None
     fine.reversed_at = row.get("reversed_at")
     fine.reversal_reason = row.get("reversal_reason")
@@ -337,6 +343,9 @@ def fine_to_params(fine: Fine) -> dict[str, Any]:
         "reversed_at": fine.reversed_at,
         "reversal_reason": fine.reversal_reason,
         "appeal_window_closes_at": fine.appeal_window_closes_at,
+        "published_at": fine.published_at,
+        "reviewed_by": fine.reviewed_by,
+        "review_decision_reason": fine.review_decision_reason,
         "exported_period": fine.exported_period,
     }
 

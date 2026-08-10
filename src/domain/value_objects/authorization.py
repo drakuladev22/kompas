@@ -145,6 +145,11 @@ class PermissionFlag:
         hardlock: Kimə verilə biləcəyini məhdudlaşdırır.
         is_anti_fraud: `Mağaza_Meneceri`/`Satıcı`-ya HEÇ VAXT verilmir.
         is_camera_only: ƏLAVƏ OLARAQ yalnız kamera-tipli rollarda ola bilər.
+        excludes_camera_role: `is_camera_only`-nin ƏKSİ — kamera-tipli rola
+            HEÇ VAXT verilmir. `can_publish_fines` üçün lazımdır: cəriməni
+            YARADAN (`can_issue_fines`, kamera-xüsusi) ilə onu TƏSDİQ EDƏN
+            eyni şəxs ola bilməz. "Defolt verilmir" kifayət deyildi —
+            fərdi override ilə səhvən verilə bilərdi.
     """
 
     code: str
@@ -152,6 +157,7 @@ class PermissionFlag:
     hardlock: HardlockLevel = HardlockLevel.NONE
     is_anti_fraud: bool = False
     is_camera_only: bool = False
+    excludes_camera_role: bool = False
 
     def __post_init__(self) -> None:
         if not self.code or not self.code.startswith("can_"):
@@ -159,6 +165,17 @@ class PermissionFlag:
         if self.is_camera_only and not self.is_anti_fraud:
             raise ValueError(
                 f"{self.code}: `is_camera_only` yalnız anti-fraud flag-lərdə mənalıdır (SEC-001)"
+            )
+        if self.excludes_camera_role and not self.is_anti_fraud:
+            raise ValueError(
+                f"{self.code}: `excludes_camera_role` yalnız anti-fraud flag-lərdə mənalıdır"
+            )
+        if self.is_camera_only and self.excludes_camera_role:
+            # Bu kombinasiya flag-i HEÇ BİR rola verilə bilməz edərdi —
+            # yəni sükutla ölü flag yaradardı.
+            raise ValueError(
+                f"{self.code}: `is_camera_only` və `excludes_camera_role` "
+                f"eyni anda ola bilməz — flag heç bir rola verilə bilməzdi"
             )
 
     # --------------------------- qoruyucu qaydalar -------------------------- #
@@ -177,6 +194,14 @@ class PermissionFlag:
             raise AuthorizationError(
                 f"ANTI-FRAUD: '{self.code}' flag-i '{role.value}' rolunda ola bilməz "
                 f"— vəzifə ayrılığı (bölmə 3)",
+                context={"flag": self.code, "role": role.value},
+            )
+
+        if self.excludes_camera_role and camera_capable:
+            raise AuthorizationError(
+                f"VƏZİFƏ AYRILIĞI: '{self.code}' flag-i kamera-tipli rola "
+                f"('{role.value}') verilə bilməz — cərimə YARADAN ilə cərimə "
+                f"TƏSDİQ EDƏN eyni şəxs ola bilməz (bölmə 3)",
                 context={"flag": self.code, "role": role.value},
             )
 

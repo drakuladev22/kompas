@@ -50,3 +50,17 @@ git-ə salınmır (bax `.gitignore`).
   `styles.css`-in tranzitiv `@import` bağlaması çatır).
 - **Rənglər WCAG AA qapısından keçib** — `scripts/check_contrast.py` 50 cütü
   yoxlayır. Tokenləri dəyişdirən hər kəs həmin skripti işlətməlidir.
+  DİQQƏT: 50 rəqəmi `--include-high-contrast` İLƏ alınır; bayraqsız 48 çıxır.
+
+## Növbəti sinxron üçün risklər
+
+- **`conventions.md` avtomatik yenilənMİR.** `icons.py`-a yeni ikon əlavə
+  edildikdə oradakı SAY (`NN xətt-ikon`) və `Dəst:` siyahısı köhnəlir, lakin
+  nə qurma, nə də test bunu tutur — dizayn agenti isə həmin siyahını
+  həqiqət kimi oxuyur. Sinxrondan əvvəl HƏMİŞƏ yoxlayın:
+  `guidelines/icons.md`-dəki `### \`ad\`` başlıqlarını `conventions.md`-in
+  `Dəst:` bloku ilə tutuşdurun. 2026-08-09 sinxronunda məhz bu fərq tapıldı
+  (41 sənədləşmiş / 44 qurulmuş — `arrow_up`, `arrow_down`, `help`).
+- **Yüklənəcək fayl dəsti sabitdir** (7 fayl + `_ds_needs_recompile`).
+  Uzaqdakı siyahı bununla üst-üstə düşürsə silinəcək fayl yoxdur —
+  `finalize_plan`-da `deletes: []` düzgündür.

@@ -78,6 +78,40 @@ class OperationNotPermittedError(KompasOSError):
 
 
 @dataclass(frozen=True)
+class MonthlyLeaveUsage:
+    """İşçinin cari aydakı icazə istifadəsi (bölmə 3 limiti).
+
+    ──────────────────────────────────────────────────────────────────────
+    NİYƏ BLOKLAMIR, YALNIZ XƏBƏRDARLIQ EDİR
+    ──────────────────────────────────────────────────────────────────────
+    Bölmə 3 "Aylıq İcazə Müddəti Limiti (defolt 240 dəq.)"-ni ROOT Control
+    Center-dən idarə olunan PARAMETR kimi sadalayır, lakin aşıldıqda nə baş
+    verdiyini HEÇ YERDƏ təyin etmir — nə STEP 1-in bloklanmasını, nə cərimə
+    yaranmasını.
+
+    Ona görə burada spesifikasiyanın YAZDIĞI qədəri edilir: limit oxunur,
+    istifadə hesablanır, aşılma audit-ə düşür və HR-a bildiriş gedir. İşçini
+    mağazadan çıxmağa qoymamaq spesifikasiyada olmayan bir qadağa yaratmaq
+    olardı; susmaq isə Root-un dəyişdirdiyi limiti mənasız edərdi.
+
+    Eyni istiqamət layihədə artıq var: `ScheduleConflict` xəbərdarlıq edir,
+    bloklamır; `LatenessAssessment.creates_fine` həmişə `False`-dur.
+    """
+
+    used_minutes: int
+    limit_minutes: int
+
+    @property
+    def is_exceeded(self) -> bool:
+        return self.limit_minutes > 0 and self.used_minutes > self.limit_minutes
+
+    @property
+    def remaining_minutes(self) -> int:
+        """Qalan büdcə — mənfi olmur (aşılma `is_exceeded` ilə bildirilir)."""
+        return max(0, self.limit_minutes - self.used_minutes)
+
+
+@dataclass(frozen=True)
 class VerificationOutcome:
     """STEP 3-ün nəticəsi."""
 
@@ -161,6 +195,8 @@ class LeaveVerificationUseCase:
             employee_is_in_store=employee_is_in_store,
         )
         self._leave_requests.save(request)
+
+        monthly = self._monthly_usage(employee_id, at=requested_time, tenant_id=tenant_id)
         self._audit.record(
             tenant_id=tenant_id,
             actor_id=employee_id,
@@ -171,8 +207,23 @@ class LeaveVerificationUseCase:
                 "requested_time": requested_time.isoformat(),
                 "allowance_minutes": allowance,
                 "ntp_verified": ntp_ok,
+                "monthly_used_minutes": monthly.used_minutes,
+                "monthly_limit_minutes": monthly.limit_minutes,
             },
         )
+        if monthly.is_exceeded:
+            self._notifier.notify(
+                tenant_id=tenant_id,
+                recipient_id=None,  # HR_Admin + Store Manager
+                category="MONTHLY_LEAVE_LIMIT_EXCEEDED",
+                title_az="Aylıq icazə limiti aşılıb",
+                body_az=(
+                    f"İşçinin bu ayda istifadə etdiyi icazə vaxtı "
+                    f"{monthly.used_minutes} dəqiqədir və "
+                    f"{monthly.limit_minutes} dəqiqəlik aylıq limiti aşır."
+                ),
+                is_critical=False,
+            )
         return request
 
     # ------------------------------ STEP 2 ---------------------------------- #
@@ -210,6 +261,13 @@ class LeaveVerificationUseCase:
         `PENDING_RECONCILIATION` statusuna keçir (bölmə 1).
         """
         request = self._require_request(request_id)
+        # Bölmə 3: `can_verify_returns` — YALNIZ kamera-tipli rollarda ola bilər.
+        # Timeout keçibsə HR_Admin/CEO operator əvəzinə təsdiq edə bilər (bölmə 4).
+        self._require_camera_permission(
+            operator_id,
+            "can_verify_returns",
+            allow_timeout_override=request.status is LeaveStatus.TIMEOUT_ESCALATED,
+        )
         self._require_operator_scope(operator_id, request.store_id)
         verified_at, _ = self._verified_now(tenant_id, operation="STEP_3")
 
@@ -328,6 +386,11 @@ class LeaveVerificationUseCase:
     ) -> LeaveRequest:
         """`[Vaxtı Əllə Təyin Et]` — 30+ dəqiqə dual-control-a düşür."""
         request = self._require_request(request_id)
+        self._require_camera_permission(
+            operator_id,
+            "can_override_return_time",
+            allow_timeout_override=request.status is LeaveStatus.TIMEOUT_ESCALATED,
+        )
         self._require_operator_scope(operator_id, request.store_id)
         system_time, _ = self._verified_now(tenant_id, operation="OVERRIDE")
 
@@ -495,6 +558,47 @@ class LeaveVerificationUseCase:
             )
         return request
 
+    def _require_camera_permission(
+        self, operator_id: EmployeeId, flag: str, *, allow_timeout_override: bool = False
+    ) -> None:
+        """Kamera əməliyyat flag-ini yoxlayır (bölmə 3).
+
+        Mağaza scope-u ilə BİRLİKDƏ işləyir, onu ƏVƏZ ETMİR: təyinat "hansı
+        filialları görürsən" sualına cavab verir, flag isə "bu əməliyyatı edə
+        bilərsənmi" sualına. İkisini bir yoxlamaya yığmaq olmazdı — Root/CEO
+        heç bir mağazaya təyin edilmir, amma timeout sonrası müdaxilə edə bilir.
+
+        Args:
+            allow_timeout_override: Bölmə 4 TIMEOUT QAYDASI — 45 dəqiqədən sonra
+                `HR_Admin`/`CEO` Kamera Operatoru ƏVƏZİNƏ təsdiq/override edə
+                bilər (Store Manager YOX). Həmin hal üçün kamera flag-i deyil,
+                `can_approve_dual_control_override` kifayətdir: o flag anti-fraud
+                qaydasına görə onsuz da Mağaza_Meneceri/Satıcı-ya verilə bilmir,
+                yəni dual-control tiering-i qorunur.
+        """
+        operator = self._employees.get(operator_id)
+        if operator is None:
+            raise OperationNotPermittedError(
+                "Əməliyyatı aparan istifadəçi tapılmadı",
+                context={"operator_id": str(operator_id)},
+            )
+
+        now = self._clock.now()
+        if operator.has_permission(flag, now=now):
+            return
+        if allow_timeout_override and operator.has_permission(DUAL_CONTROL_APPROVAL_FLAG, now=now):
+            _log.info(
+                "TIMEOUT_ESCALATION_ACTOR",
+                extra={"actor_id": str(operator_id), "instead_of_flag": flag},
+            )
+            return
+
+        raise OperationNotPermittedError(
+            f"'{flag}' səlahiyyəti olmadan bu əməliyyat mümkün deyil",
+            user_message="Bu əməliyyat üçün səlahiyyətiniz yoxdur.",
+            context={"operator_id": str(operator_id), "flag": flag},
+        )
+
     def _require_operator_scope(self, operator_id: EmployeeId, store_id: StoreId) -> None:
         """FAIL-SAFE (bölmə 4): təyinat yoxdursa operator heç nə görmür/edə bilmir."""
         allowed = self._camera_assignments.stores_for_operator(operator_id)
@@ -521,6 +625,20 @@ class LeaveVerificationUseCase:
     def _delay_fine_policy(self, tenant_id: TenantId) -> DelayFinePolicy:
         return DelayFinePolicy.from_limits(self._limits.all_for(tenant_id))
 
+    def monthly_usage(
+        self, *, tenant_id: TenantId, employee_id: EmployeeId, at: datetime
+    ) -> MonthlyLeaveUsage:
+        """Aylıq icazə istifadəsi vs ROOT limiti — ekranlar üçün açıq metod."""
+        return self._monthly_usage(employee_id, at=at, tenant_id=tenant_id)
+
+    def _monthly_usage(
+        self, employee_id: EmployeeId, *, at: datetime, tenant_id: TenantId
+    ) -> MonthlyLeaveUsage:
+        """Limit `system_limits`-dən, istifadə isə repo aqreqasiyasından gəlir."""
+        limit = self._limit_int(tenant_id, SystemLimitKey.MONTHLY_LEAVE_MINUTES_LIMIT)
+        used = self._leave_requests.monthly_used_minutes(employee_id, year=at.year, month=at.month)
+        return MonthlyLeaveUsage(used_minutes=used, limit_minutes=limit)
+
     def _appeal_window_hours(self, tenant_id: TenantId) -> int:
         return self._limit_int(tenant_id, SystemLimitKey.FINE_APPEAL_WINDOW_HOURS)
 
@@ -531,6 +649,7 @@ class LeaveVerificationUseCase:
 __all__ = [
     "LeaveVerificationUseCase",
     "ModuleDisabledError",
+    "MonthlyLeaveUsage",
     "OperationNotPermittedError",
     "TimeDriftError",
     "VerificationOutcome",

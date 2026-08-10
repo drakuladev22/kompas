@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from src.domain.entities.attendance_record import AttendanceRecord, CheckInStatus
 from src.domain.entities.employee import Employee
@@ -180,7 +181,7 @@ class PostgresEmployeeRepository(_BaseRepository):
         SELECT id, tenant_id, store_id, position_id, first_name, last_name,
                username, notification_email, password_hash, must_change_password,
                pin_hash, pin_failed_attempts, pin_locked_until, pepper_version,
-               profile_photo_url, is_active
+               profile_photo_url, hire_date, date_of_birth, is_active
         FROM employees
     """
 
@@ -514,6 +515,28 @@ class PostgresLeaveRequestRepository(_BaseRepository):
         )
         return [self._hydrate(row) for row in rows]
 
+    def monthly_used_minutes(self, employee_id: EmployeeId, *, year: int, month: int) -> int:
+        """Aylıq istifadə olunmuş icazə dəqiqələri (bölmə 3 limiti üçün).
+
+        `total_minutes` sütunu cərimə düsturunun nəticəsidir (`allowance +
+        2 × delay`) — yəni işçinin AYLIQ BÜDCƏDƏN faktiki yediyi vaxt.
+        Aqreqasiya SQL-də edilir: bir ayın sorğularını yaddaşa gətirib
+        Python-da toplamaq 21 filial üçün mənasız yük olardı.
+        """
+        row = self._fetch_one(
+            """
+            SELECT COALESCE(sum(total_minutes), 0) AS used
+            FROM leave_requests
+            WHERE employee_id = %s
+              AND tenant_id = %s
+              AND status = 'VERIFIED'
+              AND date_part('year', requested_time) = %s
+              AND date_part('month', requested_time) = %s
+            """,
+            (employee_id, self._tenant, year, month),
+        )
+        return int(row["used"]) if row else 0
+
     def save(self, request: LeaveRequest) -> None:
         params = leave_request_to_params(request)
         self._execute(
@@ -744,6 +767,42 @@ class PostgresFineRepository(_BaseRepository):
             (tenant_id, now),
         )
         return [fine_from_row(row) for row in rows]
+
+    # -------------------------- Drive sübut sütunları ------------------------ #
+    #
+    # NİYƏ BUNLAR `save()`-dan KEÇMİR
+    # ────────────────────────────────────────────────────────────────────────
+    # `evidence_drive_*` sütunları (miqrasiya 002) cərimə YARADILAN anda hələ
+    # məlum deyil — şəkil arxa planda yüklənir. Onları `Fine` entity-sinə
+    # əlavə etmək domenə "yüklənmə vəziyyəti" anlayışı gətirərdi, halbuki bu,
+    # tamamilə infrastruktur detalıdır: domen üçün sübut VAR, harada
+    # saxlandığı isə onun qərarı deyil. Ona görə iki hədəfli UPDATE.
+
+    def mark_evidence_pending(self, fine_id: FineId) -> None:
+        """Şəkil növbəyə düşdü — `idx_fines_evidence_pending` bunu görür."""
+        self._execute(
+            """UPDATE fines SET evidence_upload_status = 'PENDING'
+                WHERE id = %s AND tenant_id = %s""",
+            (fine_id, self._tenant),
+        )
+
+    def attach_drive_evidence(
+        self, fine_id: FineId, *, file_id: str, connection_id: UUID | None
+    ) -> None:
+        """Yükləmə bitdi — istinad sətrə yazılır.
+
+        `photo_evidence_url` ÜZƏRİNDƏN YAZILMIR: orada növbə açarı qalır və
+        o, hansı lokal yükləmənin bu sətri doldurduğunu göstərən yeganə izdir
+        (miqrasiya 002 başlığı: sütun məhz buna görə silinmir).
+        """
+        self._execute(
+            """UPDATE fines
+                  SET evidence_drive_file_id = %s,
+                      evidence_drive_connection_id = %s,
+                      evidence_upload_status = 'SYNCED'
+                WHERE id = %s AND tenant_id = %s""",
+            (file_id, connection_id, fine_id, self._tenant),
+        )
 
     def save(self, fine: Fine) -> None:
         params = fine_to_params(fine)

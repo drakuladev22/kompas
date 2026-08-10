@@ -50,13 +50,19 @@ class Column:
         title: Başlıq mətni (böyük hərflərə çevrilir).
         width: Sabit en. `None` → qalan yeri tutur (yalnız BİR sütun belə
             ola bilər, əks halda enlər qeyri-müəyyən olur).
+        mono: Xana dəyəri monoaralıqlı yazılsın. Maketdə versiya, ID, tarix,
+            saat, məbləğ və ölçü sütunları belədir — sabit enli rəqəm sütunu
+            şaquli düzür, ona görə iki sətri gözlə tutuşdurmaq mümkün olur.
+            Dəyişkən enli şriftdə `1` ilə `8` fərqli en tutur və sütun
+            "titrəyir". AD sütunları bu bayrağı ALMIR — ad rəqəm deyil.
     """
 
-    __slots__ = ("title", "width")
+    __slots__ = ("mono", "title", "width")
 
-    def __init__(self, title: str, width: int | None = None) -> None:
+    def __init__(self, title: str, width: int | None = None, *, mono: bool = False) -> None:
         self.title = title
         self.width = width
+        self.mono = mono
 
 
 class TableRow(QWidget):
@@ -91,7 +97,7 @@ class TableRow(QWidget):
         layout.setSpacing(0)
 
         for column, cell in zip(columns, cells, strict=True):
-            widget = self._to_widget(cell)
+            widget = self._to_widget(cell, mono=column.mono)
             if column.width is not None:
                 widget.setFixedWidth(column.width)
                 layout.addWidget(widget)
@@ -100,10 +106,15 @@ class TableRow(QWidget):
 
         self._apply_background()
 
-    def _to_widget(self, cell: QWidget | str) -> QWidget:
+    def _to_widget(self, cell: QWidget | str, *, mono: bool = False) -> QWidget:
+        # Hazır widget OLDUĞU KİMİ qalır: onu göndərən çağırış nöqtəsi öz
+        # rolunu (nişan, status nöqtəsi, düymə) artıq seçib — burada üstündən
+        # yazmaq həmin qərarı sükutla ləğv edərdi.
         if isinstance(cell, QWidget):
             return cell
         label = QLabel(cell)
+        if mono:
+            label.setProperty("variant", "mono")
         font = label.font()
         font.setPixelSize(13)
         label.setFont(font)
@@ -163,7 +174,14 @@ class DataTable(QWidget):
         if footnote:
             from src.presentation.widgets.primitives import muted_label  # noqa: PLC0415
 
-            layout.addWidget(muted_label(footnote))
+            note = muted_label(footnote)
+            # SÖZƏ GÖRƏ SARILMA MƏCBURİDİR. Sarılmayan uzun qeyd sətri öz
+            # eninə görə bütün cədvəli — deməli ekranı — genişləndirir.
+            # Ekranlar bir `QStackedWidget`-i paylaşdığı üçün nəticə YALNIZ
+            # o ekranda qalmır: yığın uşaqlarının ƏN GENİŞİNİ götürür və
+            # üfüqi sürüşdürmə zolağı BÜTÜN ekranlarda peyda olur.
+            note.setWordWrap(True)
+            layout.addWidget(note)
 
         layout.addStretch(1)
 

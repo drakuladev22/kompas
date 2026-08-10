@@ -13,7 +13,7 @@ from typing import Any
 from src.domain.entities.attendance_record import AttendanceRecord, CheckInStatus
 from src.domain.entities.employee import Employee
 from src.domain.entities.fine import Fine
-from src.domain.entities.leave_request import LeaveRequest
+from src.domain.entities.leave_request import LeaveRequest, LeaveStatus
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.identifiers import (
     AttendanceRecordId,
@@ -146,6 +146,23 @@ class InMemoryLeaveRequests:
             for r in self.items.values()
             if r.tenant_id == tenant_id and r.status.value == "PENDING_RETURN_VERIFICATION"
         ]
+
+    def monthly_used_minutes(self, employee_id: EmployeeId, *, year: int, month: int) -> int:
+        """Aylıq icazə cəmi — YALNIZ təsdiqlənmiş sorğular (bölmə 3 limiti).
+
+        Dəyər `penalty.total_minutes`-dən oxunur: `leave_requests.total_minutes`
+        SÜTUNU məhz təsdiq anında bu hesablamadan yazılır (bax `verify()`).
+        Təsdiqlənib, lakin penalty-si olmayan sətir mümkün deyil, yenə də
+        `or 0` qoyulub ki, fake real repo-dan DAHA SƏRT olmasın.
+        """
+        return sum(
+            (request.penalty.total_minutes if request.penalty is not None else 0)
+            for request in self.items.values()
+            if request.employee_id == employee_id
+            and request.status is LeaveStatus.VERIFIED
+            and request.requested_time.year == year
+            and request.requested_time.month == month
+        )
 
     def save(self, request: LeaveRequest) -> None:
         if self.save_failure is not None:
@@ -297,3 +314,142 @@ __all__ = [
     "RecordingAudit",
     "RecordingNotifier",
 ]
+
+
+# --------------------------------------------------------------------------- #
+# Faza 5/6 qatları — növbə, tabel, etiraz, dəstək
+# --------------------------------------------------------------------------- #
+
+
+class InMemoryShiftMatrix(FakeShifts):
+    """`ShiftRepository`-nin YAZMA tərəfi də daxil olmaqla tam sahtəsi.
+
+    `FakeShifts`-dən miras alır ki, mövcud testlər (`is_off_day`,
+    `scheduled_start`) toxunulmaz qalsın — yeni metodlar yalnız əlavədir.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.assignments: dict[tuple[EmployeeId, date], Any] = {}
+
+    def get_assignment(self, employee_id: EmployeeId, work_date: date) -> Any:
+        return self.assignments.get((employee_id, work_date))
+
+    def list_range(
+        self,
+        tenant_id: TenantId,
+        *,
+        start: date,
+        end: date,
+        store_id: StoreId | None = None,
+        employee_ids: list[EmployeeId] | None = None,
+    ) -> list[Any]:
+        rows = [
+            item
+            for (employee_id, day), item in self.assignments.items()
+            if start <= day <= end and (employee_ids is None or employee_id in employee_ids)
+        ]
+        return sorted(rows, key=lambda item: item.shift_date)
+
+    def save_assignment(self, assignment: Any) -> None:
+        self.assignments[(assignment.employee_id, assignment.shift_date)] = assignment
+        # `is_off_day()` mövcud testlərlə eyni mənbədən oxunmalıdır.
+        key = (assignment.employee_id, assignment.shift_date)
+        if assignment.is_off_day:
+            self.off_days.add(key)
+        else:
+            self.off_days.discard(key)
+
+    def clear_assignment(self, employee_id: EmployeeId, work_date: date) -> None:
+        self.assignments.pop((employee_id, work_date), None)
+        self.off_days.discard((employee_id, work_date))
+
+
+class InMemorySwaps:
+    def __init__(self) -> None:
+        self.items: dict[Any, Any] = {}
+
+    def get(self, request_id: Any) -> Any:
+        return self.items.get(request_id)
+
+    def list_pending(self, tenant_id: TenantId, *, store_id: StoreId | None = None) -> list[Any]:
+        return [item for item in self.items.values() if item.status.value == "PENDING_APPROVAL"]
+
+    def list_for_employee(self, employee_id: EmployeeId, *, limit: int = 50) -> list[Any]:
+        return [item for item in self.items.values() if item.employee_id == employee_id][:limit]
+
+    def find_open_for_date(self, employee_id: EmployeeId, target_date: date) -> Any:
+        for item in self.items.values():
+            if (
+                item.employee_id == employee_id
+                and item.target_date == target_date
+                and item.status.value == "PENDING_APPROVAL"
+            ):
+                return item
+        return None
+
+    def save(self, request: Any) -> None:
+        self.items[request.id] = request
+
+
+class InMemorySheets:
+    def __init__(self) -> None:
+        self.items: dict[tuple[StoreId, date], Any] = {}
+
+    def get_for_day(self, store_id: StoreId, sheet_date: date) -> Any:
+        return self.items.get((store_id, sheet_date))
+
+    def list_unconfirmed(self, tenant_id: TenantId, *, up_to: date) -> list[Any]:
+        return [
+            sheet
+            for (_, day), sheet in self.items.items()
+            if day <= up_to and not sheet.is_confirmed
+        ]
+
+    def save(self, sheet: Any) -> None:
+        self.items[(sheet.store_id, sheet.sheet_date)] = sheet
+
+
+class FakeAttendanceFacts:
+    def __init__(self, facts: list[Any] | None = None) -> None:
+        self.facts = facts or []
+
+    def facts_for(self, store_id: StoreId, work_date: date) -> list[Any]:
+        return list(self.facts)
+
+
+class InMemoryAppeals:
+    def __init__(self) -> None:
+        self.items: dict[Any, Any] = {}
+
+    def get(self, appeal_id: Any) -> Any:
+        return self.items.get(appeal_id)
+
+    def get_for_fine(self, fine_id: Any) -> Any:
+        return next((item for item in self.items.values() if item.fine_id == fine_id), None)
+
+    def list_pending(self, tenant_id: TenantId) -> list[Any]:
+        return [item for item in self.items.values() if item.status.value == "PENDING"]
+
+    def list_for_employee(self, employee_id: EmployeeId, *, limit: int = 50) -> list[Any]:
+        return [item for item in self.items.values() if item.employee_id == employee_id][:limit]
+
+    def save(self, appeal: Any) -> None:
+        self.items[appeal.id] = appeal
+
+
+class FakeFineTypes:
+    def __init__(self, entries: dict[Any, Any] | None = None) -> None:
+        self.entries = entries or {}
+
+    def get(self, fine_type_id: Any) -> Any:
+        return self.entries.get(fine_type_id)
+
+    def list_all(self, tenant_id: TenantId, *, include_inactive: bool = False) -> list[Any]:
+        return [entry for entry in self.entries.values() if include_inactive or entry.is_active]
+
+    def save(self, tenant_id: TenantId, entry: Any, *, changed_by: EmployeeId) -> None:
+        self.entries[entry.fine_type_id] = entry
+
+    def deactivate(self, tenant_id: TenantId, fine_type_id: Any, *, changed_by: EmployeeId) -> None:
+        self.entries.pop(fine_type_id, None)

@@ -66,7 +66,13 @@ if TYPE_CHECKING:
     from src.presentation.theme.manager import ThemeManager
 
 #: Bu fərqdən BÖYÜK düzəliş ikinci təsdiq (Dual-Control) tələb edir.
-#: Maketdəki mətnlə eynidir: "Fərq 37 dəqiqədir (30 dəqiqədən çox)".
+#:
+#: Bu, `system_limits.DUAL_CONTROL_THRESHOLD_MINUTES`-in FALLBACK-ıdır, tək
+#: həqiqət mənbəyi DEYİL. Həddi tətbiq edən yer `leave_verification.py`-dır və
+#: o, dəyəri Root panelindən oxuyur; dialoq isə yalnız XƏBƏRDARLIQ göstərir.
+#: İkisi ayrılsaydı (Root 45 yazır, dialoq 30 deyir) operator ekranda gördüyü
+#: ilə sistemin tətbiq etdiyi arasında uyğunsuzluq yaşayardı — ona görə
+#: `threshold_minutes` konstruktorda ötürülür.
 DUAL_CONTROL_THRESHOLD_MINUTES: Final = 30
 
 
@@ -381,11 +387,17 @@ class ManualTimeOverrideDialog(QDialog):
         store_name: str,
         kind: str,
         system_time: str,
+        threshold_minutes: int = DUAL_CONTROL_THRESHOLD_MINUTES,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._theme = theme
         self._system_time = system_time
+        # 0/mənfi dəyər "hər düzəliş ikinci təsdiq tələb edir" demək olardı;
+        # səhv konfiqurasiya iş axınını dayandırmamalıdır (fail-open).
+        self._threshold_minutes = (
+            threshold_minutes if threshold_minutes > 0 else DUAL_CONTROL_THRESHOLD_MINUTES
+        )
         self.setWindowTitle("Vaxtı Manual Düzəlt")
         self.setModal(True)
         self.setMinimumWidth(560)
@@ -505,12 +517,12 @@ class ManualTimeOverrideDialog(QDialog):
 
     def _on_time_changed(self) -> None:
         difference = self.difference_minutes()
-        requires = difference > DUAL_CONTROL_THRESHOLD_MINUTES
+        requires = difference > self._threshold_minutes
         self._dual_control.setVisible(requires)
         if requires:
             self._dual_control_detail.setText(
                 f"Fərq {difference} dəqiqədir "
-                f"({DUAL_CONTROL_THRESHOLD_MINUTES} dəqiqədən çox). Düzəliş "
+                f"({self._threshold_minutes} dəqiqədən çox). Düzəliş "
                 "ikinci səlahiyyətli şəxs təsdiqləyənə qədər gözləmədə qalacaq."
             )
 
@@ -529,7 +541,7 @@ class ManualTimeOverrideDialog(QDialog):
 
     @property
     def requires_dual_control(self) -> bool:
-        return self.difference_minutes() > DUAL_CONTROL_THRESHOLD_MINUTES
+        return self.difference_minutes() > self._threshold_minutes
 
 
 # --------------------------------------------------------------------------- #
@@ -641,7 +653,7 @@ class FineEntryScreen(Screen):
         columns = [
             Column("İşçi", 220),
             Column("Növ", 180),
-            Column("Tarix", 110),
+            Column("Tarix", 110, mono=True),
             Column("Məbləğ", 110),
             Column("Status"),
         ]

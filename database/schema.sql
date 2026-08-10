@@ -84,7 +84,7 @@ BEGIN
 
     -- Cərimə statusu — orijinal qeyd HEÇ VAXT silinmir (bölmə 4)
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'fine_status') THEN
-        CREATE TYPE fine_status AS ENUM ('ACTIVE', 'REVERSED', 'REDUCED');
+        CREATE TYPE fine_status AS ENUM ('PENDING_REVIEW', 'PUBLISHED', 'REVERSED', 'REDUCED');
     END IF;
 
     -- Etiraz statusu (cərimə və xal etirazları üçün ortaq)
@@ -298,6 +298,9 @@ CREATE TABLE IF NOT EXISTS permission_flags (
     hardlock_level  SMALLINT NOT NULL DEFAULT 0 CHECK (hardlock_level BETWEEN 0 AND 3),
     -- ANTI-FRAUD: bu flag heç vaxt Mağaza_Meneceri/Satıcı-ya verilə bilməz
     is_anti_fraud   BOOLEAN NOT NULL DEFAULT FALSE,
+    -- `is_camera_only`-nin ƏKSİ: flag kamera-tipli rola HEÇ VAXT verilmir
+    -- (cərimə YARADAN ilə cərimə TƏSDİQ EDƏN ayrılmalıdır — migration 003).
+    excludes_camera_role BOOLEAN NOT NULL DEFAULT FALSE,
     -- ANTI-FRAUD-un DAR alt-çoxluğu: yalnız Kamera_Nəzarətçisi və ya açıq
     -- şəkildə "kamera-tipli" işarələnmiş custom rollarda ola bilər.
     -- SPESİFİKASİYA ZİDDİYYƏTİNİN HƏLLİ: bölmə 3 dörd flag-i eyni cümlədə
@@ -384,6 +387,9 @@ CREATE TABLE IF NOT EXISTS employees (
     pin_last_reset_at     TIMESTAMPTZ,
 
     profile_photo_url     TEXT,                       -- Supabase Storage (bölmə 6)
+    -- HƏSSAS: yalnız `can_view_employee_reports` sahibi (öz profilindən
+    -- başqa) görür — yoxlama sorğu qatında da aparılır (migration 003).
+    date_of_birth         DATE,
     hire_date             DATE,
     is_active             BOOLEAN NOT NULL DEFAULT TRUE,
     deactivated_at        TIMESTAMPTZ,
@@ -854,13 +860,23 @@ CREATE TABLE IF NOT EXISTS fines (
     issued_by                UUID REFERENCES employees(id),
     photo_evidence_url       TEXT,       -- MANUAL_CAMERA üçün MƏCBURİ
 
-    status                   fine_status NOT NULL DEFAULT 'ACTIVE',
+    -- AYLIQ İCMAL (migration 003): cərimə GÖRÜNMƏYƏN vəziyyətdə doğulur.
+    status                   fine_status NOT NULL DEFAULT 'PENDING_REVIEW',
+    -- "[Bütün Filiallara Göndər]" anı. 72-saatlıq etiraz pəncərəsi BUNDAN
+    -- hesablanır, `created_at`-dan DEYİL — işçi cəriməni görmədən etiraz
+    -- hüququnu itirməsin.
+    published_at             TIMESTAMPTZ,
+    reviewed_by              UUID REFERENCES employees(id),
+    review_decision_reason   TEXT,
+    review_batch_id          UUID,
     reversed_by              UUID REFERENCES employees(id),
     reversed_at              TIMESTAMPTZ,
     reversal_reason          TEXT,
 
     -- LOCK MEXANİZMİ (bölmə 6): export yalnız pəncərə bağlandıqdan sonra
-    appeal_window_closes_at  TIMESTAMPTZ NOT NULL,
+    -- Nəşrdən ƏVVƏL NULL-dur; `chk_fine_published` PUBLISHED sətirdə
+    -- onun dolu olmasını tələb edir.
+    appeal_window_closes_at  TIMESTAMPTZ,
     exported_period          TEXT,       -- 'YYYY-MM' — təkrar export qorunması
     exported_at              TIMESTAMPTZ,
 
@@ -876,6 +892,10 @@ CREATE TABLE IF NOT EXISTS fines (
                 AND issued_by IS NOT NULL)),
     CONSTRAINT chk_fine_auto_requires_leave
         CHECK (source <> 'AUTO_DELAY' OR leave_request_id IS NOT NULL),
+    -- Nəşr olunmuş cərimənin HƏM anı, HƏM etiraz son tarixi olmalıdır.
+    CONSTRAINT chk_fine_published
+        CHECK (status = 'PENDING_REVIEW'
+            OR (published_at IS NOT NULL AND appeal_window_closes_at IS NOT NULL)),
     CONSTRAINT chk_fine_reversal
         CHECK (status <> 'REVERSED' OR (reversed_by IS NOT NULL AND reversal_reason IS NOT NULL))
 );
@@ -887,8 +907,10 @@ CREATE TRIGGER trg_fines_updated BEFORE UPDATE ON fines
 CREATE INDEX IF NOT EXISTS idx_fines_employee ON fines (employee_id, fine_date DESC);
 CREATE INDEX IF NOT EXISTS idx_fines_store_month ON fines (store_id, fine_date);
 CREATE INDEX IF NOT EXISTS idx_fines_export_ready
-    ON fines (tenant_id, appeal_window_closes_at)
-    WHERE status = 'ACTIVE' AND exported_period IS NULL;
+    ON fines (tenant_id, published_at)
+    WHERE status IN ('PUBLISHED', 'REDUCED') AND exported_period IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fines_pending_review
+    ON fines (tenant_id, fine_date) WHERE status = 'PENDING_REVIEW';
 
 -- Mövcud bazalarda köhnə `RESTRICT` qaydasını `NO ACTION`-a keçirir
 -- (yuxarıdakı inline tərif yalnız YENİ quraşdırmalara təsir edir).
@@ -1279,6 +1301,22 @@ CREATE INDEX IF NOT EXISTS idx_security_events_employee
     ON security_events (employee_id, occurred_at DESC);
 
 
+-- Aylıq Cərimə İcmalının push əməliyyatının auditi (migration 003)
+CREATE TABLE IF NOT EXISTS monthly_fine_review_batches (
+    id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id              UUID NOT NULL REFERENCES license_tenants(tenant_id) ON DELETE CASCADE,
+    reviewed_by            UUID NOT NULL REFERENCES employees(id),
+    review_month           TEXT NOT NULL,      -- 'YYYY-MM'
+    pushed_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    total_kept_count       INTEGER NOT NULL DEFAULT 0 CHECK (total_kept_count >= 0),
+    total_reversed_count   INTEGER NOT NULL DEFAULT 0 CHECK (total_reversed_count >= 0),
+    CONSTRAINT chk_batch_month CHECK (review_month ~ '^\d{4}-(0[1-9]|1[0-2])$')
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_batches_tenant
+    ON monthly_fine_review_batches (tenant_id, review_month DESC);
+
+
 -- Offline sync konfliktləri (bölmə 5) — last-write-wins QADAĞANDIR
 CREATE TABLE IF NOT EXISTS sync_conflicts (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1471,10 +1509,12 @@ CREATE OR REPLACE FUNCTION enforce_anti_fraud_segregation() RETURNS TRIGGER AS $
 DECLARE
     v_is_anti_fraud  BOOLEAN;
     v_is_camera_only BOOLEAN;
+    v_excl_camera    BOOLEAN;
     v_position_code  TEXT;
     v_is_camera_type BOOLEAN;
 BEGIN
-    SELECT is_anti_fraud, is_camera_only INTO v_is_anti_fraud, v_is_camera_only
+    SELECT is_anti_fraud, is_camera_only, excludes_camera_role
+      INTO v_is_anti_fraud, v_is_camera_only, v_excl_camera
     FROM permission_flags WHERE code = NEW.flag_code;
 
     IF NOT COALESCE(v_is_anti_fraud, FALSE) THEN
@@ -1500,6 +1540,14 @@ BEGIN
         RAISE EXCEPTION
             'ANTI-FRAUD POZUNTUSU: "%" flag-i "%" rolundakı istifadəçiyə verilə bilməz '
             '(bölmə 3, vəzifə ayrılığı hardlock-u)', NEW.flag_code, v_position_code;
+    END IF;
+
+    IF COALESCE(v_excl_camera, FALSE)
+       AND (v_position_code = 'KAMERA_NEZARETCISI' OR COALESCE(v_is_camera_type, FALSE)) THEN
+        RAISE EXCEPTION
+            'VƏZİFƏ AYRILIĞI POZUNTUSU: "%" flag-i kamera-tipli rola verilə bilməz — '
+            'cərimə YARADAN ilə cərimə TƏSDİQ EDƏN eyni şəxs ola bilməz (bölmə 3)',
+            NEW.flag_code;
     END IF;
 
     IF COALESCE(v_is_camera_only, FALSE)
@@ -1757,11 +1805,23 @@ COMMENT ON VIEW v_camera_verification_queue IS
 
 
 -- Export-a hazır cərimələr (LOCK MEXANİZMİ, bölmə 6)
+-- LOCK MEXANİZMİ — ÜÇ ŞƏRT (bölmə 6, migration 003 ilə genişləndirilib):
+--   (a) PUBLISHED olmalıdır — PENDING_REVIEW HEÇ VAXT export-a düşmür;
+--   (b) `published_at` + pəncərə keçmiş olmalıdır (`created_at`-dan DEYİL);
+--   (c) artıq export olunmamış olmalıdır.
 CREATE OR REPLACE VIEW v_exportable_fines AS
 SELECT f.*
 FROM fines f
-WHERE f.status = 'ACTIVE'
-  AND f.appeal_window_closes_at <= now()
+-- `REDUCED` DAXİLDİR: qismən qəbul olunmuş etirazdan sonra işçi
+-- azaldılmış məbləği yenə ödəyir (bax `Fine.is_exportable`).
+WHERE f.status IN ('PUBLISHED', 'REDUCED')
+  AND f.published_at IS NOT NULL
+  AND f.published_at + make_interval(hours => (
+          SELECT COALESCE(MAX(sl.limit_value::INTEGER), 72)
+            FROM system_limits sl
+           WHERE sl.tenant_id = f.tenant_id
+             AND sl.limit_key = 'FINE_APPEAL_WINDOW_HOURS'
+      )) <= now()
   AND f.exported_period IS NULL;
 
 
@@ -2063,8 +2123,13 @@ VALUES
     ('can_view_dashboard_builder',  'TASK_DASHBOARD', 'Dashboard Builder-ə bax',    'Dashboard Builder ekranı', 0, FALSE, FALSE),
     ('can_edit_dashboard_widgets',  'TASK_DASHBOARD', 'Widget-ləri redaktə et',     'Dashboard widget konfiqurasiyası', 0, FALSE, FALSE),
 
+    ('can_publish_fines',           'KAMERA_CERIME', 'Cərimələri filiallara göndər',
+        'Aylıq Cərimə İcmalından təsdiqlənmiş cərimələri işçilərə açır', 0, TRUE, FALSE),
+
     -- ERP & İnfrastruktur
     ('can_manage_erp_connections',  'ERP_INFRA', 'ERP bağlantılarını idarə et', 'Bağlantı Sihirbazı', 0, FALSE, FALSE),
+    ('can_manage_drive_connection', 'ERP_INFRA', 'Drive bağlantısını idarə et',
+        'Cərimə sübut şəkilləri üçün Google Drive hesabı', 0, FALSE, FALSE),
     ('can_manage_erp_servers',      'ERP_INFRA', 'ERP serverlərini idarə et',   'Çoxsaylı 1C server siyahısı', 0, FALSE, FALSE),
     ('can_switch_db',               'ERP_INFRA', 'Baza keçidi (DB switcher)',   'Cloud ↔ Private Server keçidi', 1, FALSE, FALSE),
     ('can_manage_plugins',          'ERP_INFRA', 'Plugin-ləri idarə et',        'İmzalanmış plugin təsdiqi/yüklənməsi', 1, FALSE, FALSE),
@@ -2100,6 +2165,8 @@ ON CONFLICT (code) DO UPDATE
 -- ---------------------------------------------------------------------------
 -- 23. SEED: ROL → FLAG DEFOLT TƏYİNATI (bölmə 3)
 -- ---------------------------------------------------------------------------
+UPDATE permission_flags SET excludes_camera_role = TRUE WHERE code = 'can_publish_fines';
+
 -- Root: bütün flag-lər, MİNUS kamera-əməliyyat flag-ləri.
 -- (Root konfiqurasiya edir, gündəlik kamera əməliyyatı aparmır — vəzifə ayrılığı.)
 INSERT INTO position_permissions (position_id, flag_code, granted)
@@ -2129,7 +2196,7 @@ CROSS JOIN unnest(ARRAY[
         'can_view_employee_reports', 'can_assign_tasks', 'can_approve_task_evidence',
         'can_view_dashboard_builder', 'can_edit_dashboard_widgets',
         'can_view_system_health', 'can_view_audit_logs', 'can_export_reports',
-        'can_control_user_permissions', 'can_contact_support'
+        'can_control_user_permissions', 'can_contact_support', 'can_publish_fines'
      ]) AS f(flag_code)
 WHERE p.code = 'ADMIN' AND p.tenant_id IS NULL
 ON CONFLICT DO NOTHING;
@@ -2144,7 +2211,8 @@ CROSS JOIN unnest(ARRAY[
         'can_view_employee_reports', 'can_manage_leave_types',
         'can_approve_dual_control_override',
         'can_assign_tasks', 'can_approve_task_evidence',
-        'can_export_reports', 'can_view_audit_logs', 'can_contact_support'
+        'can_export_reports', 'can_view_audit_logs', 'can_contact_support',
+        'can_publish_fines'
      ]) AS f(flag_code)
 WHERE p.code = 'HR_ADMIN' AND p.tenant_id IS NULL
 ON CONFLICT DO NOTHING;
@@ -2370,7 +2438,12 @@ DECLARE
         'rewards', 'reward_redemptions', 'system_limits', 'feature_toggles',
         'notifications', 'support_tickets', 'plugins', 'backup_records',
         'sync_conflicts', 'saga_instances', 'db_migration_events',
-        'security_events', 'audit_logs', 'auth_sessions'
+        'security_events', 'audit_logs', 'auth_sessions',
+        -- `drive_connections` / `drive_folder_cache` BURADA YOXDUR: onlar
+        -- yalnız `migrations/002`-də yaradılır və RLS-ini orada alır.
+        -- Bu siyahı yalnız BU faylda təyin olunan cədvəlləri əhatə etməlidir,
+        -- əks halda təmiz quraşdırma "relation does not exist" ilə dayanardı.
+        'monthly_fine_review_batches'
     ];
 BEGIN
     FOREACH t IN ARRAY tenant_scoped LOOP

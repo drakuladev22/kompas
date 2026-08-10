@@ -257,3 +257,51 @@ def test_fine_cannot_be_recorded_without_photo_evidence(qtbot, theme) -> None:  
     screen._on_submit()
     assert len(submitted) == 1
     assert submitted[0]["photo_path"].endswith("subut.png")
+
+
+@requires_qt
+def test_dual_control_warning_follows_the_root_threshold(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """Dialoq həddi ROOT limitindən almalıdır, öz 30-undan yox (bölmə 3).
+
+    Root həddi 10 dəqiqəyə endirsə, 15 dəqiqəlik düzəliş ekranda da
+    xəbərdarlıq göstərməlidir — əks halda operator "ikinci təsdiq lazım
+    deyil" görər, sistem isə sorğunu gözlətməyə salar.
+    """
+    from src.presentation.screens.group_b import ManualTimeOverrideDialog
+
+    dialog = ManualTimeOverrideDialog(
+        theme,
+        employee_name="Aysel Quliyeva",
+        store_name="Bellona 28 May",
+        kind="Qayıdış",
+        system_time="09:00",
+        threshold_minutes=10,
+    )
+    qtbot.addWidget(dialog)
+
+    from PySide6.QtCore import QTime
+
+    dialog._time_edit.setTime(QTime(9, 15))
+    assert dialog.difference_minutes() == 15
+    assert dialog.requires_dual_control is True, "10 dəqiqəlik hədd aşılıb"
+
+
+@requires_qt
+def test_dual_control_threshold_falls_back_when_misconfigured(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """0 dəyəri "hər düzəliş dual-control" mənasına gəlməməlidir."""
+    from src.presentation.screens.group_b import ManualTimeOverrideDialog
+
+    dialog = ManualTimeOverrideDialog(
+        theme,
+        employee_name="Aysel Quliyeva",
+        store_name="Bellona 28 May",
+        kind="Qayıdış",
+        system_time="09:00",
+        threshold_minutes=0,
+    )
+    qtbot.addWidget(dialog)
+
+    from PySide6.QtCore import QTime
+
+    dialog._time_edit.setTime(QTime(9, 5))
+    assert dialog.requires_dual_control is False, "Defolt 30 dəqiqəyə qayıtmalıdır"

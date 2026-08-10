@@ -41,6 +41,7 @@ from src.presentation.widgets.primitives import (
     body_label,
     mono_label,
     muted_label,
+    section_label,
     stretch,
     title_label,
 )
@@ -376,7 +377,9 @@ class ProfileScreen(Screen):
 
     def _build_personal(self, full_name: str) -> Card:
         card = Card(padding=20, spacing=16)
-        card.add(title_label("Şəxsi məlumat", size=15))
+        # Maketdə kart bölmə başlığı 15px başlıq DEYİL — 12px böyük hərfli
+        # mono etiketdir (`letter-spacing: 0.1em`, solğun rəng).
+        card.add(section_label("Şəxsi məlumat"))
         card.add(Divider())
 
         self._full_name = FormField("Ad, Soyad")
@@ -410,7 +413,7 @@ class ProfileScreen(Screen):
 
     def _build_sessions_card(self) -> Card:
         card = Card(padding=20, spacing=12)
-        card.add(title_label("Son giriş tarixçəsi", size=15))
+        card.add(section_label("Son giriş tarixçəsi"))
         card.add(Divider())
         self._session_rows = QVBoxLayout()
         self._session_rows.setSpacing(10)

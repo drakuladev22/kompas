@@ -346,26 +346,86 @@ def _run_developer_panel(args: argparse.Namespace) -> int:
         publish_version=args.publish_version,
         publish_notes=args.publish_notes,
         publish_mandatory=args.publish_mandatory,
+        database=database,
+        recover_access=args.recover_access,
+        recovery_reference=args.recovery_reference,
+        recovery_contact=args.recovery_contact,
     )
     sys.stdout.write(output + "\n")
     return code
 
 
 def _run_gui(args: argparse.Namespace) -> int:
-    """Əsas interfeysi açır (Faza 4).
+    """Əsas interfeysi açır (Faza 4/5).
 
     İdxal funksiya daxilindədir: `--check` yolunda PySide6 yüklənməməlidir —
     CI-ın başsız (headless) mühitində Qt-ni idxal etmək lazımsız asılılıq və
     əlavə saniyələr deməkdir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    KONTEKST NİYƏ "OLA BİLƏR / OLMAYA BİLƏR"
+    ──────────────────────────────────────────────────────────────────────────
+    İki rejim var və hər ikisi legitimdir:
+
+        `--preview`  → baza LAZIM DEYİL. Dizayn yoxlaması, maket müqayisəsi,
+                       CI-dakı Qt testləri bu yolla işləyir.
+        adi rejim    → baza MƏCBURİDİR. Qurulmazsa fatal başlanğıc ekranı
+                       göstərilir (bölmə 8) — səssiz boş pəncərə YOX.
     """
     from src.presentation.app import run  # noqa: PLC0415
+    from src.presentation.composition import StartupError, build_context  # noqa: PLC0415
     from src.presentation.theme.tokens import ThemeMode  # noqa: PLC0415
+
+    context = None
+    startup_error = ""
+    if not args.preview:
+        try:
+            context = build_context()
+        except StartupError as exc:
+            # Proses BURADA dayanmır: istifadəçi izahlı ekran görməlidir,
+            # konsola yazılmış bir sətir deyil (mağaza PC-sində konsol yoxdur).
+            startup_error = exc.user_message
+            get_logger(__name__, channel=LogChannel.ERROR).critical(
+                "GUI_STARTUP_ERROR", extra=exc.to_dict()
+            )
 
     return run(
         preview=args.preview,
         kiosk=args.kiosk,
         theme=ThemeMode(args.theme),
+        context=context,
+        startup_error=startup_error,
     )
+
+
+def _run_watchdog(args: argparse.Namespace) -> int:
+    """Kiosk nəzarətçisini işə salır (bölmə 5).
+
+    Bu proses interfeysi AÇMIR — o, `--gui --kiosk` ilə alt-proses yaradır və
+    çökmə halında onu yenidən başladır. Ayrı proses olması qəsdəndir: eyni
+    prosesdə "özünü yenidən başlatmaq" mümkün deyil, çünki çökən proses artıq
+    kod icra etmir.
+    """
+    from src.infrastructure.kiosk.watchdog import KioskWatchdog  # noqa: PLC0415
+
+    command = [sys.executable, "-m", "src.main", "--gui"]
+    if args.kiosk:
+        command.append("--kiosk")
+    if args.theme != "system":
+        command.extend(["--theme", args.theme])
+
+    outcome = KioskWatchdog(command=command).run()
+    get_logger(__name__).info(
+        "KIOSK_WATCHDOG_FINISHED",
+        extra={
+            "reason": outcome.stopped_because,
+            "restarts": outcome.restart_count,
+            "last_exit_code": outcome.last_exit_code,
+        },
+    )
+    # Yenidən başlatma fırtınası — çıxış kodu qeyri-sıfır olmalıdır ki,
+    # Windows Task Scheduler / servis meneceri bunu nasazlıq kimi görsün.
+    return 3 if outcome.hit_restart_limit else 0
 
 
 def _build_release_publisher(database: Database) -> ReleasePublisher | None:
@@ -423,6 +483,14 @@ def main(argv: list[str] | None = None) -> int:
         help="kiosk rejimi: tam ekran PIN klaviaturası",
     )
     parser.add_argument(
+        "--watchdog",
+        action="store_true",
+        help=(
+            "kiosk nəzarətçisi: tətbiq çökərsə avtomatik yenidən başladır "
+            "(mağaza PC-lərində bu rejimlə işə salınır, bölmə 5)"
+        ),
+    )
+    parser.add_argument(
         "--preview",
         action="store_true",
         help="ekranları maketdəki nümunə məzmunla doldur (dizayn yoxlaması)",
@@ -452,6 +520,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--search", default="", help="Developer Paneli: ad/e-poçt üzrə süzgəc")
     parser.add_argument(
+        "--crashes",
+        action="store_true",
+        help="Developer Paneli: anonim çökmə hesabatları, tezliyə görə qruplaşdırılmış",
+    )
+    parser.add_argument(
+        "--tickets",
+        action="store_true",
+        help="Developer Paneli: dəstək müraciətləri inbox-u (SLA vəziyyəti ilə)",
+    )
+    parser.add_argument(
         "--extend", default="", metavar="TENANT_ID", help="Developer Paneli: 1 ay uzat"
     )
     parser.add_argument(
@@ -459,6 +537,27 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         metavar="TENANT_ID=X.Y.Z",
         help="Developer Paneli: tenant üçün məcburi versiya (boş dəyər ləğv edir)",
+    )
+    # Təcili giriş bərpası (bölmə 2) — QƏSDƏN yalnız konsolda, GUI düyməsi
+    # deyil: prosedur tenant-ın `employees` cədvəlinə yazır və gündəlik
+    # istifadə üçün nəzərdə tutulmayıb (bax `console._recover_access`).
+    parser.add_argument(
+        "--recover-access",
+        default="",
+        metavar="TENANT_ID=username",
+        help="Developer Paneli: təcili giriş bərpası (bütün admin hesabları itibsə)",
+    )
+    parser.add_argument(
+        "--recovery-reference",
+        default="",
+        metavar="İSTİNAD",
+        help="`--recover-access` üçün MƏCBURİ kimlik təsdiqi izi (ticket/qeyd nömrəsi)",
+    )
+    parser.add_argument(
+        "--recovery-contact",
+        default="",
+        metavar="ƏLAQƏ",
+        help="`--recover-access` üçün MƏCBURİ təsdiqlənmiş şirkət e-poçtu/telefonu",
     )
     parser.add_argument(
         "--publish",
@@ -503,6 +602,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.developer_mode:
             return _run_developer_panel(args)
+        # Nəzarətçi GUI-dən ƏVVƏL yoxlanılır: `--watchdog --kiosk` çağırışında
+        # bu proses interfeysi ÖZÜ açmamalıdır, alt-prosesi idarə etməlidir.
+        if args.watchdog:
+            return _run_watchdog(args)
         if args.gui:
             return _run_gui(args)
         bus = get_event_bus()

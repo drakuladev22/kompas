@@ -168,7 +168,8 @@ class SupportChatWidget(QWidget):
         self._layout_children()
 
     def _build_panel(self) -> Card:
-        panel = Card(padding=0, spacing=0, shadow=True)
+        # Maketdə üzən dəstək paneli `border-radius: 14px` — iri səth pilləsi.
+        panel = Card(padding=0, spacing=0, surface="modal", shadow=True)
         panel.setFixedSize(metrics.SUPPORT_PANEL_WIDTH, metrics.SUPPORT_PANEL_HEIGHT)
 
         # ------------------------------ başlıq ------------------------------ #
@@ -400,7 +401,7 @@ class DeveloperPanelScreen(Screen):
         self._table = DataTable(
             [
                 Column("Tenant", 230),
-                Column("Versiya", 110),
+                Column("Versiya", 110, mono=True),
                 Column("İstifadəçi", 110),
                 Column("Son aktivlik", 150),
                 Column("Status"),
@@ -455,7 +456,8 @@ class DeveloperPanelScreen(Screen):
         return panel
 
     def _build_metric_card(self, title: str) -> Card:
-        card = Card(padding=16, spacing=10)
+        # Detal panelinin İÇİNDƏ oturur — maketdə `border-radius: 11px`.
+        card = Card(padding=16, spacing=10, surface="panel")
         card.add(title_label(title, size=13))
         rows = QVBoxLayout()
         rows.setSpacing(10)
@@ -595,7 +597,8 @@ class LicenseInactiveScreen(QWidget):
         outer = QVBoxLayout(self)
         outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        card = Card(padding=44, spacing=24, shadow=True)
+        # Lisenziya bloklaması — maketdə mərkəzi `620px` kart, `14px` künc.
+        card = Card(padding=44, spacing=24, surface="modal", shadow=True)
         card.setFixedWidth(620)
         card.body().setAlignment(Qt.AlignmentFlag.AlignHCenter)
 

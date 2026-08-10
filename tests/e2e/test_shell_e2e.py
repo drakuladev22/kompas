@@ -11,6 +11,8 @@ davranışları təsdiqlənir:
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from tests.conftest import requires_qt
@@ -100,7 +102,12 @@ def test_deep_link_to_hidden_screen_is_denied(qtbot, theme) -> None:  # type: ig
 
 @requires_qt
 def test_feature_toggle_hides_module(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
-    """ROOT Control Center modulu söndürdükdə bölmə itməlidir."""
+    """ROOT Control Center modulu söndürdükdə bölmə itməlidir.
+
+    Açarlar `FeatureModule` dəyərləridir — `feature_toggles` cədvəli və
+    `menu.py` EYNİ ad məkanını işlədir (bax `menu.py` başlığı).
+    """
+    from src.domain.policies import FeatureModule
     from src.presentation import preview_data
     from src.presentation.shell.admin_shell import AdminShell
     from src.presentation.shell.menu import build_default_registry
@@ -110,7 +117,8 @@ def test_feature_toggle_hides_module(qtbot, theme) -> None:  # type: ignore[no-u
         registry=build_default_registry(),
         employee=preview_data.build_admin(),
         now=preview_data.PREVIEW_NOW,
-        enabled_modules=frozenset({"leave"}),
+        # Yalnız Kamera Təsdiqi açıqdır — Tapşırıq modulu söndürülüb.
+        enabled_modules=frozenset({FeatureModule.CAMERA_VERIFICATION.value}),
     )
     qtbot.addWidget(shell)
 
@@ -295,3 +303,243 @@ def test_sidebar_collapses(qtbot, theme) -> None:  # type: ignore[no-untyped-def
     sidebar.set_collapsed(True)
     assert sidebar.is_collapsed
     assert sidebar.width() == metrics.SIDEBAR_COLLAPSED_WIDTH
+
+
+# --------------------------------------------------------------------------- #
+# ROOT Control Center — üç bölmə (bölmə 3)
+# --------------------------------------------------------------------------- #
+
+
+@requires_qt
+def test_root_control_has_all_three_sections(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """Limitlər, Feature Toggles və Permission Registry — hamısı olmalıdır."""
+    from src.presentation import preview_screens
+    from src.presentation.screens.group_d import RootControlScreen
+
+    screen = RootControlScreen(theme)
+    qtbot.addWidget(screen)
+    preview_screens.populate("root_control", screen)
+
+    collected = screen.collected()
+    assert collected["limits"], "Dinamik limitlər bölməsi boşdur"
+    assert collected["modules"], "Modul açarları bölməsi boşdur"
+    assert screen._registry_rows.count() > 0, "İcazə registri bölməsi boşdur"
+
+
+@requires_qt
+def test_root_control_uses_the_shared_key_namespace(qtbot, theme) -> None:
+    """Ekrandakı açarlar `SystemLimitKey`/`FeatureModule` dəyərləridir.
+
+    Maket öz adlarını işlədəndə ("fines", "appeal_days") panel canlı bazaya
+    bağlananda sükutla yanlış açarlara yazardı.
+    """
+    from src.domain.policies import FeatureModule, SystemLimitKey
+    from src.presentation import preview_screens
+    from src.presentation.screens.group_d import RootControlScreen
+
+    screen = RootControlScreen(theme)
+    qtbot.addWidget(screen)
+    preview_screens.populate("root_control", screen)
+
+    collected = screen.collected()
+    known_limits = {key.value for key in SystemLimitKey}
+    known_modules = {module.value for module in FeatureModule}
+
+    assert set(collected["limits"]) <= known_limits  # type: ignore[arg-type]
+    assert set(collected["modules"]) <= known_modules  # type: ignore[arg-type]
+
+
+@requires_qt
+def test_non_numeric_limit_gets_a_text_field(qtbot, theme) -> None:
+    """`LEAVE_ALLOWANCE_SOURCE` ədəd deyil — ekrandan ÇIXARILMAMALIDIR."""
+    from src.domain.policies import SystemLimitKey
+    from src.presentation.controllers.root_control import limit_row
+    from src.presentation.screens.group_d import RootControlScreen
+
+    screen = RootControlScreen(theme)
+    qtbot.addWidget(screen)
+    screen.set_limits([limit_row(SystemLimitKey.LEAVE_ALLOWANCE_SOURCE.value, "LEAVE_TYPE")])
+
+    collected = screen.collected()
+    assert collected["limits"] == {  # type: ignore[comparison-overlap]
+        SystemLimitKey.LEAVE_ALLOWANCE_SOURCE.value: "LEAVE_TYPE"
+    }
+
+
+@requires_qt
+def test_simple_module_toggle_needs_no_confirmation(qtbot, theme) -> None:
+    """Shift Swap / Cərimə Modulu üçün sadə toggle kifayətdir (bölmə 3)."""
+    from src.domain.policies import FeatureModule
+    from src.presentation.screens.group_d import RootControlScreen
+
+    screen = RootControlScreen(theme)
+    qtbot.addWidget(screen)
+    screen.set_modules([(FeatureModule.FINE_MODULE.value, "Cərimə modulu", True, False)])
+
+    seen: list[tuple[str, bool, str]] = []
+    screen.module_toggled.connect(lambda *args: seen.append(args))  # type: ignore[arg-type]
+    screen._module_toggles[FeatureModule.FINE_MODULE.value].setChecked(False)
+
+    assert seen == [(FeatureModule.FINE_MODULE.value, False, "")]
+
+
+@requires_qt
+def test_structural_module_disable_requires_written_confirmation(qtbot, theme, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Kamera Təsdiqi bir kliklə söndürülə BİLMƏZ (bölmə 3).
+
+    Modal ləğv edilsə heç bir siqnal yayılmır və açar geri qayıdır; yazılı
+    təsdiq verilsə mətn siqnalla birlikdə use case-ə çatır.
+    """
+    from PySide6.QtWidgets import QInputDialog
+
+    from src.domain.policies import FeatureModule
+    from src.presentation.screens.group_d import RootControlScreen
+
+    key = FeatureModule.CAMERA_VERIFICATION.value
+    screen = RootControlScreen(theme)
+    qtbot.addWidget(screen)
+    screen.set_modules([(key, "Kamera Təsdiqi", True, True)])
+
+    seen: list[tuple[str, bool, str]] = []
+    screen.module_toggled.connect(lambda *args: seen.append(args))  # type: ignore[arg-type]
+
+    # 1) Ləğv → siqnal yoxdur, açar açıq qalır.
+    monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(lambda *a, **k: ("", False)))
+    screen._module_toggles[key].setChecked(False)
+    assert seen == []
+    assert screen._module_toggles[key].isChecked() is True
+
+    # 2) Yazılı təsdiq → mətn siqnalla gedir.
+    monkeypatch.setattr(
+        QInputDialog,
+        "getMultiLineText",
+        staticmethod(lambda *a, **k: ("Filial bağlanır, kamera axını dayandırılır", True)),
+    )
+    screen._module_toggles[key].setChecked(False)
+    assert len(seen) == 1
+    assert seen[0][0] == key
+    assert seen[0][1] is False
+    assert "Filial bağlanır" in seen[0][2]
+
+
+# --------------------------------------------------------------------------- #
+# Drive razılıq ekranı (miqrasiya 002)
+# --------------------------------------------------------------------------- #
+
+
+@requires_qt
+def test_drive_screen_states_switch_between_idle_and_pending(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """Razılıq gedərkən düymə bloklanır və ünvan mətn kimi görünür.
+
+    Ünvanın mətn kimi qalması qəsdəndir: kiosk/terminal quraşdırmasında
+    `webbrowser.open()` heç nə etməyə bilər və administrator ünvanı başqa
+    cihazda açmalıdır (bax ekran docstring-i).
+    """
+    from src.presentation.screens.group_d import DriveConnectionScreen
+
+    screen = DriveConnectionScreen(theme)
+    qtbot.addWidget(screen)
+    screen.set_active(
+        account=None, status_text="Qoşulmayıb", tone="neutral", quota_text="Kvota yoxdur"
+    )
+
+    assert screen._connect.isEnabled()
+    assert not screen._pending.isVisible()
+
+    screen.show_pending("https://accounts.google.com/o/oauth2/v2/auth?x=1")
+    assert not screen._connect.isEnabled()
+    assert screen._auth_url.text().startswith("https://accounts.google.com")
+
+    screen.clear_pending()
+    assert screen._connect.isEnabled()
+    assert screen._auth_url.text() == ""
+
+
+@requires_qt
+def test_drive_screen_button_label_reflects_an_existing_account(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """Hesab varsa düymə "Dəyiş" deyir — "Qoş" onu təsadüfən əvəz etməyə çağırardı."""
+    from src.presentation.screens.group_d import DriveConnectionScreen
+
+    screen = DriveConnectionScreen(theme)
+    qtbot.addWidget(screen)
+
+    screen.set_active(account=None, status_text="Qoşulmayıb", tone="neutral", quota_text="")
+    assert screen._connect.text() == "Google Hesabı Qoş"
+
+    screen.set_active(account="a@b.c", status_text="Aktiv", tone="success", quota_text="")
+    assert screen._connect.text() == "Hesabı Dəyiş"
+
+
+class _StubActor:
+    """`has_permission` və `id` — kontrollerin toxunduğu yeganə sahələr."""
+
+    def __init__(self, *, allowed: bool) -> None:
+        self.id = uuid.uuid4()
+        self._allowed = allowed
+
+    def has_permission(self, flag: str, *, now) -> bool:  # type: ignore[no-untyped-def]
+        return self._allowed
+
+
+@requires_qt
+def test_drive_consent_is_blocked_without_the_permission(qtbot, theme, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Menyunun gizlədilməsi kifayət deyil — əməliyyatın özü də bağlanmalıdır."""
+    from src.presentation.controllers.drive_connection import DriveConnectionController
+    from src.presentation.screens.group_d import DriveConnectionScreen
+
+    monkeypatch.setenv("KOMPASOS_GOOGLE_CLIENT_ID", "id")
+    monkeypatch.setenv("KOMPASOS_GOOGLE_CLIENT_SECRET", "secret")
+
+    screen = DriveConnectionScreen(theme)
+    qtbot.addWidget(screen)
+    controller = DriveConnectionController(object(), _StubActor(allowed=False))  # type: ignore[arg-type]
+    controller._on_connect(screen)
+
+    assert screen.switcher().current_state() == "error"
+    assert controller._flow is None, "Səlahiyyətsiz istifadəçi üçün port AÇILMAMALIDIR"
+
+
+@requires_qt
+def test_drive_consent_reports_missing_google_config(qtbot, theme, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """OAuth açarları yoxdursa səbəb AÇIQ deyilməlidir, düymə sükutla ölməməlidir."""
+    from src.presentation.controllers.drive_connection import DriveConnectionController
+    from src.presentation.screens.group_d import DriveConnectionScreen
+
+    monkeypatch.delenv("KOMPASOS_GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("KOMPASOS_GOOGLE_CLIENT_SECRET", raising=False)
+
+    screen = DriveConnectionScreen(theme)
+    qtbot.addWidget(screen)
+    controller = DriveConnectionController(object(), _StubActor(allowed=True))  # type: ignore[arg-type]
+    controller._on_connect(screen)
+
+    assert screen.switcher().current_state() == "error"
+    assert controller._flow is None
+
+
+@requires_qt
+def test_drive_consent_starts_a_flow_and_cancel_releases_it(qtbot, theme, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Ləğv həm taymeri dayandırır, həm portu buraxır."""
+    from src.presentation.controllers.drive_connection import DriveConnectionController
+    from src.presentation.screens.group_d import DriveConnectionScreen
+
+    monkeypatch.setenv("KOMPASOS_GOOGLE_CLIENT_ID", "id")
+    monkeypatch.setenv("KOMPASOS_GOOGLE_CLIENT_SECRET", "secret")
+    # Test brauzer AÇMAMALIDIR.
+    monkeypatch.setattr(
+        "src.infrastructure.storage.oauth_flow.webbrowser.open", lambda *_a, **_k: True
+    )
+
+    screen = DriveConnectionScreen(theme)
+    qtbot.addWidget(screen)
+    controller = DriveConnectionController(object(), _StubActor(allowed=True))  # type: ignore[arg-type]
+    controller._on_connect(screen)
+
+    assert controller._flow is not None
+    assert screen._auth_url.text().startswith("https://accounts.google.com")
+    assert not screen._connect.isEnabled()
+
+    controller._on_cancel(screen)
+    assert controller._flow is None
+    assert controller._timer is None
+    assert screen._connect.isEnabled()

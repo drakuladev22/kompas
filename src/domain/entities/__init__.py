@@ -40,6 +40,8 @@ from src.domain.entities.leave_request import (
     ManualOverride,
 )
 from src.domain.entities.position import Position
+from src.domain.entities.sales_points import PointsEntry, RewardRedemption
+from src.domain.entities.task import Task, TaskPriority, TaskStatus
 
 __all__ = [
     "ADMIN_TIER_ROLES",
@@ -60,7 +62,12 @@ __all__ = [
     "ManualOverride",
     "PermissionOverride",
     "PinSecurityState",
+    "PointsEntry",
     "Position",
     "RejectionDetails",
+    "RewardRedemption",
+    "Task",
+    "TaskPriority",
+    "TaskStatus",
     "utc_now",
 ]

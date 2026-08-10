@@ -1,0 +1,235 @@
+"""Cərimə etirazı aqreqatı (spesifikasiya bölmə 4 — ETİRAZ MEXANİZMİ).
+
+    "İşçi hər cərimə/override-a qarşı 72 saat ərzində etiraz göndərə bilər.
+     Etiraz HR_Admin-ə düşür, qərar audit-lənir, cərimə ləğv/azaldıla bilər
+     amma orijinal qeyd heç vaxt silinmir (yalnız «REVERSED» statusu əlavə
+     olunur)."
+
+──────────────────────────────────────────────────────────────────────────────
+ETİRAZ NİYƏ AYRI AQREQATDIR
+──────────────────────────────────────────────────────────────────────────────
+`Fine`-ın öz sahəsi kimi saxlamaq cəlbedici olardı, amma iki şey buna manedir:
+
+    1. Etirazın ÖZ həyat dövrü var (`PENDING` → `APPROVED`/`REJECTED`/`EXPIRED`)
+       və o, cərimənin dövrü ilə üst-üstə düşmür — cərimə `PUBLISHED` qalır,
+       etiraz isə qərar alır.
+    2. Qərar VERƏN (`can_approve_leave_appeal` sahibi HR_Admin) cəriməni
+       YARADANDAN (`can_issue_fines`, kamera) fərqlidir. İki aktoru bir
+       aqreqatda saxlamaq "kim nə etdi" izini bulandırardı.
+
+DB tərəfi də belədir: `fine_appeals` ayrıca cədvəldir, `UNIQUE (fine_id)` ilə
+— bir cəriməyə BİR etiraz.
+
+──────────────────────────────────────────────────────────────────────────────
+`EXPIRED` NİYƏ VAR
+──────────────────────────────────────────────────────────────────────────────
+Pəncərə bağlananda cavabsız qalmış etiraz sükutla itmir: `cron_close_expired_appeals`
+onu `EXPIRED` edir. Bu, "HR cavab vermədi" halını "işçi etiraz etmədi" halından
+ayırır — birincisi proses problemidir və hesabatda görünməlidir.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+from enum import Enum
+from typing import Final
+
+from src.domain.entities.base import AggregateRoot, DomainRuleError
+from src.domain.events import FineAppealSubmittedEvent
+from src.domain.value_objects.identifiers import (
+    AppealId,
+    EmployeeId,
+    FineId,
+    TenantId,
+)
+from src.domain.value_objects.money import Money
+from src.domain.value_objects.scheduling import require_aware
+
+#: `fine_appeals.reason` — DB `CHECK (char_length(trim(reason)) >= 10)`.
+MIN_APPEAL_REASON_LENGTH: Final[int] = 10
+#: Qərar izahı — cərimə ləğvi ilə eyni minimum.
+MIN_DECISION_NOTE_LENGTH: Final[int] = 10
+
+#: `is_overdue()` üçün fallback SLA. `DEFAULT_APPEAL_WINDOW_HOURS` ilə eyni
+#: dəyər, lakin ONDAN İDXAL EDİLMİR: `appeal.py` `fine.py`-dan asılı deyil və
+#: bu asılılığı bir sabit üçün yaratmaq iki aqreqatı bir-birinə bağlayardı.
+MIN_APPEAL_SLA_HOURS: Final[int] = 72
+
+
+class AppealStatus(str, Enum):
+    """`fine_appeals.status` — DB `appeal_status` enum-u ilə EYNİ."""
+
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+
+    @property
+    def is_open(self) -> bool:
+        return self is AppealStatus.PENDING
+
+
+class FineAppeal(AggregateRoot):
+    """İşçinin bir cəriməyə qarşı etirazı.
+
+    PENDING ──approve(yeni məbləğ?)──> APPROVED  (cərimə REVERSED/REDUCED)
+       │
+       ├────reject(izah)────────────> REJECTED  (cərimə toxunulmaz qalır)
+       │
+       └────expire()────────────────> EXPIRED   (cron, cavabsız qaldı)
+    """
+
+    def __init__(
+        self,
+        *,
+        appeal_id: AppealId,
+        tenant_id: TenantId,
+        fine_id: FineId,
+        employee_id: EmployeeId,
+        reason: str,
+        created_at: datetime,
+        status: AppealStatus = AppealStatus.PENDING,
+        decided_by: EmployeeId | None = None,
+        decision_note: str | None = None,
+        decided_at: datetime | None = None,
+        new_amount: Money | None = None,
+        emit_created_event: bool = True,
+    ) -> None:
+        super().__init__()
+        cleaned = " ".join(reason.split())
+        if len(cleaned) < MIN_APPEAL_REASON_LENGTH:
+            raise DomainRuleError(
+                f"Etiraz səbəbi minimum {MIN_APPEAL_REASON_LENGTH} simvol olmalıdır",
+                user_message="Etirazınızı bir az ətraflı yazın.",
+                context={"length": len(cleaned)},
+            )
+
+        self.id = appeal_id
+        self.tenant_id = tenant_id
+        self.fine_id = fine_id
+        self.employee_id = employee_id
+        self.reason = cleaned
+        self.status = status
+        self.decided_by = decided_by
+        self.decision_note = decision_note
+        self.decided_at = decided_at
+        self.new_amount = new_amount
+        self.created_at = require_aware(created_at, field="created_at")
+
+        if emit_created_event and status is AppealStatus.PENDING:
+            self.record_event(
+                FineAppealSubmittedEvent(
+                    tenant_id=tenant_id,
+                    actor_id=employee_id,
+                    appeal_id=appeal_id,
+                    fine_id=fine_id,
+                    employee_id=employee_id,
+                    reason=cleaned,
+                )
+            )
+
+    # -------------------------------- qərar ---------------------------------- #
+
+    def approve(
+        self,
+        *,
+        decided_by: EmployeeId,
+        decided_at: datetime,
+        note: str,
+        new_amount: Money | None = None,
+    ) -> None:
+        """Etiraz qəbul edildi — cərimə ləğv və ya azaldılır.
+
+        `new_amount` `None` və ya sıfırdırsa cərimə TAM ləğv edilir; müsbətdirsə
+        azaldılır (`REDUCED`). Cəriməyə faktiki toxunuş use case-dədir — etiraz
+        aqreqatı `Fine`-ı birbaşa dəyişmir, çünki ikisi ayrı tranzaksiya
+        obyektləridir və birinin digərini mutasiya etməsi asılılığı tərsinə
+        çevirərdi.
+        """
+        self._require_open()
+        self._require_note(note)
+        if decided_by == self.employee_id:
+            raise DomainRuleError(
+                "İşçi öz etirazına özü qərar verə bilməz",
+                user_message="Öz etirazınıza qərar verə bilməzsiniz.",
+                context={"employee_id": str(self.employee_id)},
+            )
+
+        self.status = AppealStatus.APPROVED
+        self.decided_by = decided_by
+        self.decided_at = require_aware(decided_at, field="decided_at")
+        self.decision_note = " ".join(note.split())
+        self.new_amount = new_amount
+
+    def reject(self, *, decided_by: EmployeeId, decided_at: datetime, note: str) -> None:
+        """Etiraz rədd edildi — cərimə olduğu kimi qalır."""
+        self._require_open()
+        self._require_note(note)
+        if decided_by == self.employee_id:
+            raise DomainRuleError(
+                "İşçi öz etirazına özü qərar verə bilməz",
+                user_message="Öz etirazınıza qərar verə bilməzsiniz.",
+                context={"employee_id": str(self.employee_id)},
+            )
+
+        self.status = AppealStatus.REJECTED
+        self.decided_by = decided_by
+        self.decided_at = require_aware(decided_at, field="decided_at")
+        self.decision_note = " ".join(note.split())
+
+    def expire(self, *, now: datetime) -> bool:
+        """Cavabsız qalmış etirazı bağlayır (planlaşdırılmış iş).
+
+        Returns:
+            Vəziyyət dəyişdisə `True` — çağıran yalnız o zaman yazır.
+        """
+        if not self.status.is_open:
+            return False
+        self.status = AppealStatus.EXPIRED
+        self.decided_at = require_aware(now, field="now")
+        return True
+
+    # ------------------------------ göstəricilər ------------------------------ #
+
+    def age_hours(self, *, now: datetime) -> float:
+        """Neçə saatdır cavab gözləyir — SLA göstəricisi."""
+        require_aware(now, field="now")
+        return (now - self.created_at).total_seconds() / 3600
+
+    def is_overdue(self, *, now: datetime, sla_hours: int = MIN_APPEAL_SLA_HOURS) -> bool:
+        """SLA aşılıbmı — HR inbox-unda vurğulanır.
+
+        `sla_hours` DEFOLTU FALLBACK-dır, tək həqiqət mənbəyi DEYİL: pəncərə
+        `system_limits.FINE_APPEAL_WINDOW_HOURS`-dan gəlir və Root onu dəyişə
+        bilər (bölmə 3). Çağıran tərəf limiti AÇIQ ötürməlidir — defolt yalnız
+        tenant konteksti olmayan yollar üçündür.
+        """
+        return self.status.is_open and self.created_at + timedelta(hours=sla_hours) < now
+
+    def _require_open(self) -> None:
+        if not self.status.is_open:
+            raise DomainRuleError(
+                "Bu etiraz artıq qərar alıb",
+                user_message="Bu etiraz artıq emal edilib.",
+                context={"status": self.status.value},
+            )
+
+    @staticmethod
+    def _require_note(note: str) -> None:
+        if len(" ".join(note.split())) < MIN_DECISION_NOTE_LENGTH:
+            raise DomainRuleError(
+                f"Qərar izahı minimum {MIN_DECISION_NOTE_LENGTH} simvol olmalıdır",
+                user_message="Qərarınızın səbəbini ətraflı yazın.",
+            )
+
+    def __repr__(self) -> str:
+        return f"FineAppeal(id={self.id}, fine={self.fine_id}, status={self.status.value})"
+
+
+__all__ = [
+    "MIN_APPEAL_REASON_LENGTH",
+    "MIN_APPEAL_SLA_HOURS",
+    "MIN_DECISION_NOTE_LENGTH",
+    "AppealStatus",
+    "FineAppeal",
+]

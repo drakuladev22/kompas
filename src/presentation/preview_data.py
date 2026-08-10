@@ -52,11 +52,28 @@ _ADMIN_FLAGS: Final = (
     "can_manage_sales_points",
     "can_manage_employees",
     "can_manage_permissions",
+    # Sxemdəki `ADMIN` rolu bu üçünə də sahibdir (bax `schema.sql` —
+    # "Admin: operativ idarəetmə + həvalə edilmiş icazə kontrolu"), lakin
+    # önizləmə siyahısına düşməmişdi: nəticədə İcazə Matrisi, Dashboard
+    # Qurucusu və Hesabatlar ekranları önizləmədə ÜMUMİYYƏTLƏ render
+    # olunmurdu — halbuki real Admin onları görür.
+    "can_control_user_permissions",
+    "can_view_dashboard_builder",
+    "can_export_reports",
     "can_manage_erp_servers",
     "can_manage_backups",
     "can_view_system_health",
     "can_view_audit_logs",
     "can_manage_system_limits",
+    # Root-səviyyəli bölmələr. Bunlar real `ADMIN` rolunda YOXDUR (bölmə 3
+    # hardlock qaydası) — burada yalnız ONA GÖRƏ verilir ki, önizləmə
+    # pəncərəsi bütün ekranları göstərə bilsin və hər biri maketlə
+    # tutuşdurula bilsin. Fikstür istehsalat axınında işləmir (modul başlığı).
+    "can_manage_work_modes",
+    "can_manage_fine_types",
+    "can_manage_leave_types",
+    "can_switch_db",
+    "can_manage_plugins",
 )
 
 
@@ -750,3 +767,96 @@ __all__ = [
     "build_admin",
     "build_camera_operator",
 ]
+
+
+# --------------------------------------------------------------------------- #
+# Qrup H — kataloqlar və hesabatlar
+# --------------------------------------------------------------------------- #
+# `CatalogScreen.set_entries` formatı: `key`, `cells` (`|` ilə ayrılmış),
+# `is_active` (`"1"`/`"0"`). Hər kataloqda ən azı bir DEAKTIV sətir var —
+# soft delete-in ekranda necə göründüyü də yoxlanılsın deyə (bölmə 4).
+
+WORK_MODES: Final = [
+    {"key": "wm-1", "cells": "Səhər növbəsi|09:00 – 18:00", "is_active": "1"},
+    {"key": "wm-2", "cells": "Axşam növbəsi|13:00 – 22:00", "is_active": "1"},
+    {"key": "wm-3", "cells": "Növbəli 2/2|08:00 – 20:00", "is_active": "1"},
+    {"key": "wm-4", "cells": "Qısaldılmış gün|09:00 – 14:00", "is_active": "0"},
+]
+
+FINE_TYPE_ROWS: Final = [
+    {"key": "ft-1", "cells": "Formaya uyğun geyinməmək|25 ₼", "is_active": "1"},
+    {"key": "ft-2", "cells": "Kassa qaydalarına əməl etməmək|50 ₼", "is_active": "1"},
+    {"key": "ft-3", "cells": "İcazəsiz çıxış|40 ₼", "is_active": "1"},
+    {"key": "ft-4", "cells": "Telefonla danışmaq|15 ₼", "is_active": "0"},
+]
+
+LEAVE_TYPE_ROWS: Final = [
+    {"key": "lt-1", "cells": "Nahar fasiləsi|60 dəq", "is_active": "1"},
+    {"key": "lt-2", "cells": "Siqaret fasiləsi|10 dəq", "is_active": "1"},
+    {"key": "lt-3", "cells": "Şəxsi iş|45 dəq", "is_active": "1"},
+    {"key": "lt-4", "cells": "Bank işi|90 dəq", "is_active": "0"},
+]
+
+# --------------------------------------------------------------------------- #
+# Qrup I — infrastruktur, plugin, dashboard qurucusu
+# --------------------------------------------------------------------------- #
+
+DB_SWITCH_WARNINGS: Final = [
+    "Sinxronlaşmamış 12 offline yazı var — keçiddən əvvəl göndərilməlidir.",
+    "Sumqayıt serveri 3 saatdır cavab vermir.",
+]
+
+DB_SWITCH_HISTORY: Final = [
+    {
+        "date": "02.06.2026 02:00",
+        "direction": "Cloud → Özəl server",
+        "checksum": "a3f9c1…d84b",
+        "result": "Geri qaytarıldı",
+    },
+    {
+        "date": "14.03.2026 03:00",
+        "direction": "Özəl server → Cloud",
+        "checksum": "7e21b8…04ca",
+        "result": "Uğurlu",
+    },
+]
+
+PLUGINS: Final = [
+    {
+        "id": "pl-1",
+        "name": "Anbar Hesabatı",
+        "version": "1.2.0",
+        "publisher": "Kompas Studio",
+        "enabled": "1",
+        "signature": "valid",
+    },
+    {
+        "id": "pl-2",
+        "name": "SMS Bildiriş Körpüsü",
+        "version": "0.9.4",
+        "publisher": "Kompas Studio",
+        "enabled": "0",
+        "signature": "valid",
+    },
+    {
+        "id": "pl-3",
+        "name": "Köhnə 1C Adapteri",
+        "version": "0.3.1",
+        "publisher": "Naməlum",
+        "enabled": "0",
+        "signature": "unsigned",
+    },
+]
+
+DASHBOARD_WIDGETS: Final = {
+    "attendance": ("Davamiyyət xülasəsi", "Bu gün mağazada olan işçilərin sayı"),
+    "fines": ("Cərimələr — filial üzrə", "Ayın cərimələri sütun qrafiki"),
+    "leave_gauge": ("İcazə istifadəsi", "Aylıq limitə nisbətdə istifadə"),
+    "points": ("Xal liderləri", "Ən çox satış xalı toplayan işçilər"),
+    "health": ("Server sağlamlığı", "1C serverlərinin gecikməsi"),
+    "tasks": ("Açıq tapşırıqlar", "Gecikən və gözləyən tapşırıqlar"),
+}
+
+DASHBOARD_ORDER: Final = ["attendance", "fines", "leave_gauge", "points", "health", "tasks"]
+#: `tasks` QƏSDƏN gizlidir — gizli widget-in ekranda necə göründüyü yoxlanılsın.
+DASHBOARD_VISIBLE: Final = {"attendance", "fines", "leave_gauge", "points", "health"}

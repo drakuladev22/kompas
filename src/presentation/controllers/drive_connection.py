@@ -1,0 +1,322 @@
+"""Drive razılıq ekranının kontrolleri — `can_manage_drive_connection`.
+
+──────────────────────────────────────────────────────────────────────────────
+SƏLAHİYYƏT QAPISI BURADADIR, EKRANDA DEYİL
+──────────────────────────────────────────────────────────────────────────────
+Menyu maddəsi `can_manage_drive_connection` tələb edir və icazəsiz istifadəçi
+bölməni GÖRMÜR (bölmə 3). Lakin görünmə yeganə qapı ola bilməz: ekran birbaşa
+açılsa (`show_screen` çağırışı, gələcək dərin keçid) yenə də qoşulma
+başlamamalıdır. Ona görə hər əməliyyatın əvvəlində flag yoxlanılır.
+
+──────────────────────────────────────────────────────────────────────────────
+NİYƏ TAYMER, SAP DEYİL
+──────────────────────────────────────────────────────────────────────────────
+`DriveOAuthFlow.poll()` bloklamır (bax həmin modulun başlığı) — ona görə
+gözləmə adi `QTimer` ilə aparılır və bütün iş Qt hadisə dövrəsində qalır.
+Ayrıca sap qursaydıq, brauzerdən qayıdan kod GUI sapına köçürülməli olardı.
+
+──────────────────────────────────────────────────────────────────────────────
+TOKEN EKRANDAN KEÇMİR
+──────────────────────────────────────────────────────────────────────────────
+`refresh_token` yalnız bu kontrollerin yaddaşında bir an mövcud olur və
+dərhal `DriveConnectionRepository.connect()`-ə verilir; orada AES-256-GCM ilə
+şifrələnib yazılır (SEC-002 modeli). Ekran onu HEÇ VAXT görmür, jurnalda isə
+yalnız hesabın e-poçtu qalır.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from PySide6.QtCore import QTimer
+
+from src.domain.value_objects.storage import StorageError
+from src.shared.exceptions import KompasOSError
+from src.shared.logger import LogChannel, get_logger
+
+if TYPE_CHECKING:
+    from src.domain.entities.employee import Employee
+    from src.presentation.composition import ApplicationContext
+    from src.presentation.screens.group_d import DriveConnectionScreen
+
+_error_log = get_logger(__name__, channel=LogChannel.ERROR)
+_audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
+
+MANAGE_DRIVE_FLAG = "can_manage_drive_connection"
+
+#: Razılıq nəticəsinin yoxlanma tezliyi. 200 ms insan üçün ani görünür və
+#: hər tıqqıltıda ən çoxu 50 ms soket gözləməsi olur (bax `oauth_flow`).
+POLL_INTERVAL_MS = 200
+
+#: Status → (mətn, nişan tonu). Açarlar `DriveConnectionStatus` dəyərləridir.
+STATUS_TEXT: dict[str, tuple[str, str]] = {
+    "ACTIVE": ("Aktiv", "success"),
+    "QUOTA_EXCEEDED": ("Yer qalmayıb", "warning"),
+    "ARCHIVED": ("Arxivlənib", "neutral"),
+    "REVOKED": ("İcazə ləğv edilib", "danger"),
+}
+
+
+class DriveConnectionController:
+    """Razılıq axınını başladır, gözləyir və bağlantını yazır."""
+
+    def __init__(self, context: ApplicationContext, actor: Employee) -> None:
+        self._context = context
+        self._actor = actor
+        self._flow: Any = None
+        self._timer: QTimer | None = None
+        self._elapsed_ms = 0
+
+    # ------------------------------- qoşulma --------------------------------- #
+
+    def attach(self, screen: DriveConnectionScreen) -> None:
+        screen.connect_requested.connect(lambda: self._on_connect(screen))
+        screen.cancel_requested.connect(lambda: self._on_cancel(screen))
+        self.refresh(screen)
+
+    def refresh(self, screen: DriveConnectionScreen) -> None:
+        """Aktiv hesabı və tarixçəni bazadan oxuyur."""
+        try:
+            connections = self._repository().list_all()
+        except Exception:
+            _error_log.exception("DRIVE_CONNECTIONS_LOAD_FAILED")
+            screen.show_error(
+                title="Bağlantılar oxunmadı",
+                message="Drive bağlantı siyahısı alınmadı. Yenidən cəhd edin.",
+            )
+            return
+
+        active = next((item for item in connections if item.status.value == "ACTIVE"), None)
+        if active is None:
+            screen.set_active(
+                account=None,
+                status_text="Qoşulmayıb",
+                tone="neutral",
+                quota_text=(
+                    "Hesab qoşulana qədər cərimə şəkilləri bu kompüterdə növbədə "
+                    "gözləyir — cərimələr normal yaradılır."
+                ),
+            )
+        else:
+            text, tone = STATUS_TEXT.get(active.status.value, (active.status.value, "neutral"))
+            screen.set_active(
+                account=active.google_account_email,
+                status_text=text,
+                tone=tone,
+                quota_text=_quota_text(active),
+            )
+
+        screen.set_history(
+            [
+                (
+                    item.google_account_email,
+                    STATUS_TEXT.get(item.status.value, (item.status.value, ""))[0],
+                    _date_text(item),
+                )
+                for item in connections
+            ]
+        )
+
+    # ------------------------------- razılıq --------------------------------- #
+
+    def _on_connect(self, screen: DriveConnectionScreen) -> None:
+        if not self._permitted():
+            screen.show_error(
+                title="Səlahiyyət yoxdur",
+                message="Drive bağlantısını yalnız Root və CEO idarə edə bilər.",
+            )
+            return
+        if self._flow is not None:
+            return
+
+        oauth = self._oauth_client()
+        if oauth is None:
+            screen.show_error(
+                title="Google konfiqurasiyası yoxdur",
+                message=(
+                    "KOMPASOS_GOOGLE_CLIENT_ID və KOMPASOS_GOOGLE_CLIENT_SECRET "
+                    "təyin edilməyib. Quraşdırma sənədinə baxın."
+                ),
+            )
+            return
+
+        from src.infrastructure.storage.oauth_flow import DriveOAuthFlow  # noqa: PLC0415
+
+        flow = DriveOAuthFlow(oauth)
+        try:
+            request = flow.start()
+        except Exception:
+            flow.close()
+            _error_log.exception("DRIVE_OAUTH_START_FAILED")
+            screen.show_error(
+                title="Razılıq başlamadı",
+                message="Lokal port açıla bilmədi. Antivirus/firewall ayarlarını yoxlayın.",
+            )
+            return
+
+        self._flow = flow
+        self._elapsed_ms = 0
+        # Brauzer açılmasa da ünvan ekranda qalır (bax ekran docstring-i).
+        flow.open_browser(request)
+        screen.show_pending(request.url)
+
+        timer = QTimer(screen)
+        timer.setInterval(POLL_INTERVAL_MS)
+        timer.timeout.connect(lambda: self._poll(screen))
+        timer.start()
+        self._timer = timer
+
+    def _poll(self, screen: DriveConnectionScreen) -> None:
+        from src.infrastructure.storage.oauth_flow import (  # noqa: PLC0415
+            FLOW_TIMEOUT_SECONDS,
+        )
+
+        if self._flow is None:
+            self._stop_timer()
+            return
+
+        self._elapsed_ms += POLL_INTERVAL_MS
+        if self._elapsed_ms > FLOW_TIMEOUT_SECONDS * 1000:
+            self._finish(screen)
+            screen.show_error(
+                title="Razılıq vaxtı bitdi",
+                message="Google səhifəsində icazə verilmədi. Yenidən cəhd edin.",
+            )
+            return
+
+        try:
+            code = self._flow.poll()
+        except StorageError as error:
+            self._finish(screen)
+            screen.show_error(title="Razılıq alınmadı", message=error.user_message)
+            return
+        except Exception:
+            self._finish(screen)
+            _error_log.exception("DRIVE_OAUTH_POLL_FAILED")
+            screen.show_error(
+                title="Razılıq alınmadı",
+                message="Gözlənilməz xəta baş verdi. Yenidən cəhd edin.",
+            )
+            return
+
+        if code is None:
+            return
+        self._complete(screen, code)
+
+    def _complete(self, screen: DriveConnectionScreen, code: str) -> None:
+        flow = self._flow
+        assert flow is not None
+        try:
+            credentials = flow.exchange(code)
+            self._repository().connect(
+                google_account_email=credentials.account_email or "(naməlum hesab)",
+                refresh_token=credentials.refresh_token,
+                encryption=self._encryption(),
+                connected_by=self._actor.id,
+            )
+        except KompasOSError as error:
+            self._finish(screen)
+            screen.show_error(title="Hesab qoşulmadı", message=error.user_message)
+            return
+        except Exception:
+            self._finish(screen)
+            _error_log.exception("DRIVE_CONNECT_FAILED")
+            screen.show_error(
+                title="Hesab qoşulmadı",
+                message="Bağlantı yazıla bilmədi. Yenidən cəhd edin.",
+            )
+            return
+
+        _audit_log.warning(
+            "DRIVE_CONNECTION_ESTABLISHED",
+            extra={"actor_id": str(self._actor.id), "account": credentials.account_email},
+        )
+        self._finish(screen)
+        # Yeni hesab = yeni provider. Keşlənmiş fabrik köhnə bağlantını
+        # saxlayır, ona görə atılır; növbəti dövrə onu ROOT limiti ilə
+        # yenidən qurur (bax `ApplicationContext.drive_providers`).
+        self._context.invalidate_drive_providers()
+        self.refresh(screen)
+        # Gözləyən şəkillər dərhal yüklənməyə başlasın — administrator
+        # bağlantının işlədiyini elə burada görməlidir.
+        self._context.run_evidence_uploads()
+
+    def _on_cancel(self, screen: DriveConnectionScreen) -> None:
+        self._finish(screen)
+
+    def _finish(self, screen: DriveConnectionScreen) -> None:
+        self._stop_timer()
+        if self._flow is not None:
+            self._flow.close()
+            self._flow = None
+        screen.clear_pending()
+
+    def _stop_timer(self) -> None:
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+
+    # ------------------------------ köməkçilər ------------------------------- #
+
+    def _permitted(self) -> bool:
+        from datetime import UTC, datetime  # noqa: PLC0415
+
+        return bool(self._actor.has_permission(MANAGE_DRIVE_FLAG, now=datetime.now(UTC)))
+
+    def _repository(self) -> Any:
+        from src.infrastructure.storage.connections import (  # noqa: PLC0415
+            DriveConnectionRepository,
+        )
+
+        return DriveConnectionRepository(self._context.database, self._context.tenant_id)
+
+    @staticmethod
+    def _encryption() -> Any:
+        from src.infrastructure.security.encryption import EncryptionService  # noqa: PLC0415
+
+        return EncryptionService()
+
+    @staticmethod
+    def _oauth_client() -> Any:
+        import os  # noqa: PLC0415
+
+        from src.infrastructure.storage.drive_api import OAuthClient  # noqa: PLC0415
+
+        client_id = os.environ.get("KOMPASOS_GOOGLE_CLIENT_ID", "").strip()
+        client_secret = os.environ.get("KOMPASOS_GOOGLE_CLIENT_SECRET", "").strip()
+        if not client_id or not client_secret:
+            return None
+        return OAuthClient(client_id=client_id, client_secret=client_secret)
+
+
+# --------------------------------------------------------------------------- #
+# Mətnlər
+# --------------------------------------------------------------------------- #
+
+
+def _quota_text(connection: Any) -> str:
+    """Kvota sətri — ölçülməyibsə bunu AÇIQ deyir.
+
+    "0 GB istifadə olunub" yazmaq ölçülməmiş kvotanı boş kvota kimi
+    göstərərdi; administrator isə yerin bitməkdə olduğunu vaxtında görməlidir.
+    """
+    used = connection.quota_used_bytes
+    total = connection.quota_total_bytes
+    if used is None:
+        return "Kvota hələ ölçülməyib"
+    if total is None:
+        return f"{_gigabytes(used)} istifadə olunub (limit göstərilməyib)"
+    percent = (used / total * 100) if total else 0
+    return f"{_gigabytes(used)} / {_gigabytes(total)} istifadə olunub ({percent:.0f}%)"
+
+
+def _gigabytes(value: int) -> str:
+    return f"{value / (1024**3):.2f} GB"
+
+
+def _date_text(connection: Any) -> str:
+    moment = connection.archived_at or connection.connected_at
+    return moment.astimezone().strftime("%d.%m.%Y %H:%M") if moment else "—"
+
+
+__all__ = ["MANAGE_DRIVE_FLAG", "STATUS_TEXT", "DriveConnectionController"]

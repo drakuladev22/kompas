@@ -309,6 +309,32 @@ class PostgresUnitOfWork:
 
     def _build_repositories(self) -> None:
         # Dövri idxaldan qaçmaq üçün yerli idxal (repo-lar bu modulu tanıyır).
+        from src.infrastructure.persistence.audit import (  # noqa: PLC0415
+            PostgresAuditReader,
+            PostgresAuditTrail,
+        )
+        from src.infrastructure.persistence.catalog_repositories import (  # noqa: PLC0415
+            PostgresFineTypeRepository,
+            PostgresRewardRepository,
+            PostgresSalesPointsRepository,
+            PostgresTaskRepository,
+            PostgresWorkModeRepository,
+        )
+        from src.infrastructure.persistence.config_repositories import (  # noqa: PLC0415
+            PostgresCameraAssignmentRepository,
+            PostgresFeatureToggles,
+            PostgresLeaveTypeRepository,
+            PostgresPermissionFlagRepository,
+            PostgresShiftRepository,
+            PostgresStoreWriter,
+            PostgresSystemLimits,
+        )
+        from src.infrastructure.persistence.preferences import (  # noqa: PLC0415
+            PostgresUserPreferences,
+        )
+        from src.infrastructure.persistence.report_repositories import (  # noqa: PLC0415
+            PostgresReportFactProvider,
+        )
         from src.infrastructure.persistence.repositories import (  # noqa: PLC0415
             PostgresAttendanceRepository,
             PostgresEmployeeRepository,
@@ -316,16 +342,57 @@ class PostgresUnitOfWork:
             PostgresLeaveRequestRepository,
             PostgresPositionRepository,
         )
+        from src.infrastructure.persistence.support_repositories import (  # noqa: PLC0415
+            PostgresSupportTicketRepository,
+        )
+        from src.infrastructure.persistence.sync_conflict_repository import (  # noqa: PLC0415
+            PostgresSyncConflictRepository,
+        )
+        from src.infrastructure.persistence.workflow_repositories import (  # noqa: PLC0415
+            PostgresAttendanceFactProvider,
+            PostgresDailyAttendanceSheetRepository,
+            PostgresFineAppealRepository,
+            PostgresShiftSwapRepository,
+        )
 
         if self._conn is None:  # pragma: no cover - invariant
             raise TenantContextError("Bağlantı yoxdur")
         conn = self._conn
+        # HAMISI EYNİ BAĞLANTIDADIR — bu, təsadüf deyil: bir use case bir neçə
+        # repo-ya toxunur (məs. icazə təsdiqi status + cərimə + audit yazır) və
+        # onlar EYNİ tranzaksiyada olmalıdır. Ayrı bağlantı işlətsəydik,
+        # `commit()` yalnız birini yazar, digəri asılı qalardı.
         self._repositories = {
             "employees": PostgresEmployeeRepository(conn, self._context),
             "positions": PostgresPositionRepository(conn, self._context),
             "leave_requests": PostgresLeaveRequestRepository(conn, self._context),
             "attendance": PostgresAttendanceRepository(conn, self._context),
             "fines": PostgresFineRepository(conn, self._context),
+            # Audit iş vahidinin İÇİNDƏDİR: yazı onu doğuran əməliyyatla eyni
+            # tranzaksiyada olmalıdır (bax `audit.py` başlığı).
+            "audit": PostgresAuditTrail(conn),
+            "audit_reader": PostgresAuditReader(conn),
+            # --- Faza 5/6 qatları --------------------------------------------
+            "shifts": PostgresShiftRepository(conn, self._context),
+            "shift_swaps": PostgresShiftSwapRepository(conn, self._context),
+            "sheets": PostgresDailyAttendanceSheetRepository(conn, self._context),
+            "attendance_facts": PostgresAttendanceFactProvider(conn, self._context),
+            "appeals": PostgresFineAppealRepository(conn, self._context),
+            "tasks": PostgresTaskRepository(conn, self._context),
+            "sales_points": PostgresSalesPointsRepository(conn, self._context),
+            "rewards": PostgresRewardRepository(conn, self._context),
+            "work_modes": PostgresWorkModeRepository(conn, self._context),
+            "fine_types": PostgresFineTypeRepository(conn, self._context),
+            "leave_types": PostgresLeaveTypeRepository(conn, self._context),
+            "limits": PostgresSystemLimits(conn, self._context),
+            "toggles": PostgresFeatureToggles(conn, self._context),
+            "permission_flags": PostgresPermissionFlagRepository(conn, self._context),
+            "camera_assignments": PostgresCameraAssignmentRepository(conn, self._context),
+            "stores": PostgresStoreWriter(conn, self._context),
+            "preferences": PostgresUserPreferences(conn, self._context),
+            "report_facts": PostgresReportFactProvider(conn, self._context),
+            "support": PostgresSupportTicketRepository(conn, self._context),
+            "sync_conflicts": PostgresSyncConflictRepository(conn, self._context),
         }
 
     def _release(self, *, rollback: bool) -> None:
@@ -382,6 +449,21 @@ class PostgresUnitOfWork:
     @property
     def fines(self) -> Any:
         return self._repository("fines")
+
+    @property
+    def audit(self) -> Any:
+        """`AuditTrail` — bölmə 3/4/7-nin tələb etdiyi `audit_logs` yazıcısı."""
+        return self._repository("audit")
+
+    def repository(self, name: str) -> Any:
+        """Ad ilə repo — Faza 5/6 qatlarının 20+ repo-su üçün.
+
+        Hər biri üçün ayrıca `@property` yazmaq bu sinfi 100 sətir uzadardı
+        və heç bir əlavə tip təhlükəsizliyi verməzdi (property-lər onsuz da
+        `Any` qaytarır — repo-lar Protocol-lara uyğunlaşır, miras almır).
+        Kompozisiya kökü adları bir yerdə saxlayır.
+        """
+        return self._repository(name)
 
     @property
     def connection(self) -> Connection[dict[str, Any]]:

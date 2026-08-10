@@ -15,10 +15,20 @@ from src.application.use_cases import (
     TimeDriftError,
 )
 from src.domain.entities import CheckInStatus, FineSource, LeaveStatus
+from src.domain.entities.employee import Employee
+from src.domain.entities.position import Position
 from src.domain.policies import FeatureModule, SystemLimitKey
+from src.domain.value_objects.authorization import (
+    HardlockLevel,
+    PermissionFlag,
+    SystemRole,
+)
+from src.domain.value_objects.credentials import Username
 from src.domain.value_objects.identifiers import (
     EmployeeId,
+    LeaveRequestId,
     LeaveTypeId,
+    PositionId,
     StoreId,
     TenantId,
 )
@@ -49,9 +59,62 @@ OPERATOR = EmployeeId(uuid.uuid4())
 LUNCH = LeaveTypeId(uuid.uuid4())
 DAY = date(2026, 8, 8)
 
+#: Kamera əməliyyat flag-ləri (bölmə 3) — `is_camera_only`, yəni yalnız
+#: kamera-tipli rollarda ola bilər.
+VERIFY_FLAG = PermissionFlag(
+    code="can_verify_returns",
+    category="KAMERA_CERIME",
+    is_anti_fraud=True,
+    is_camera_only=True,
+)
+OVERRIDE_FLAG = PermissionFlag(
+    code="can_override_return_time",
+    category="KAMERA_CERIME",
+    is_anti_fraud=True,
+    is_camera_only=True,
+)
+#: İkinci təsdiq — kamera roluna VERİLMİR (SEC-001), HR_Admin/CEO daşıyır.
+DUAL_FLAG = PermissionFlag(
+    code="can_approve_dual_control_override",
+    category="KAMERA_CERIME",
+    is_anti_fraud=True,
+    hardlock=HardlockLevel.NONE,
+)
+
 
 def at(hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 8, 8, hour, minute, tzinfo=UTC)
+
+
+def make_employee(
+    employee_id: EmployeeId,
+    role: SystemRole,
+    *,
+    flags: list[PermissionFlag] | None = None,
+    store_id: StoreId | None = STORE,
+) -> Employee:
+    """Testlərdə istifadə olunan minimal işçi qurucusu."""
+    position = Position(
+        position_id=PositionId(uuid.uuid4()),
+        code=role.value,
+        name_az=role.value,
+        priority=role.default_priority,
+        is_system=True,
+        is_camera_type=role.is_camera_type,
+    )
+    for flag in flags or []:
+        position.grant(flag)
+
+    return Employee(
+        employee_id=employee_id,
+        tenant_id=TENANT,
+        position=position,
+        first_name="T",
+        last_name=role.value,
+        store_id=store_id,
+        username=Username.parse(f"u{uuid.uuid4().hex[:8]}"),
+        has_password=True,
+    )
 
 
 class Ctx:
@@ -73,6 +136,17 @@ class Ctx:
         self.cameras = FakeCameraAssignments({OPERATOR: [STORE]})
         self.saga = SagaOrchestrator()
 
+        # Bölmə 3: kamera əməliyyatları `can_verify_returns` /
+        # `can_override_return_time` TƏLƏB EDİR — operator repo-da mövcud
+        # olmalıdır, əks halda use case onu tanımır.
+        self.employees.save(
+            make_employee(
+                OPERATOR,
+                SystemRole.CAMERA_OPERATOR,
+                flags=[VERIFY_FLAG, OVERRIDE_FLAG],
+            )
+        )
+
     def leave_uc(self) -> LeaveVerificationUseCase:
         return LeaveVerificationUseCase(
             leave_requests=self.leave_requests,  # type: ignore[arg-type]
@@ -93,6 +167,7 @@ class Ctx:
         return MorningCheckInUseCase(
             attendance=self.attendance,  # type: ignore[arg-type]
             shifts=self.shifts,  # type: ignore[arg-type]
+            employees=self.employees,  # type: ignore[arg-type]
             camera_assignments=self.cameras,  # type: ignore[arg-type]
             clock=self.clock,  # type: ignore[arg-type]
             ntp=self.ntp,  # type: ignore[arg-type]
@@ -258,7 +333,12 @@ async def test_operator_outside_scope_blocked(ctx: Ctx) -> None:
     ctx.clock.set(at(13, 0))
     ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
 
-    stranger = EmployeeId(uuid.uuid4())  # heç bir mağazaya təyin edilməyib
+    # Səlahiyyəti VAR, amma başqa mağazaya təyin edilib — bloklayan məhz
+    # mağaza scope-udur, flag deyil.
+    stranger = EmployeeId(uuid.uuid4())
+    ctx.employees.save(make_employee(stranger, SystemRole.CAMERA_OPERATOR, flags=[VERIFY_FLAG]))
+    ctx.cameras.mapping[stranger] = [OTHER_STORE]
+
     with pytest.raises(OperationNotPermittedError, match="təyin edilməyib"):
         await ctx.leave_uc().verify_return(
             tenant_id=TENANT,
@@ -512,3 +592,84 @@ def test_clock_advance_helper() -> None:
     clock.advance(minutes=30)
     assert clock.now() == at(9, 30)
     assert timedelta(minutes=30) == at(9, 30) - at(9, 0)
+
+
+# --------------------------------------------------------------------------- #
+# Aylıq icazə limiti — ROOT Control Center parametri (bölmə 3, bənd 1)
+# --------------------------------------------------------------------------- #
+
+
+def _verified_minutes(ctx: Ctx, minutes: int) -> None:
+    """Cari ayda TƏSDİQLƏNMİŞ icazə kimi sayılan süni istifadə yaradır.
+
+    Sorğu use case-dən KEÇMİR: STEP 1→3 axını qurmaq bu testin mövzusu deyil
+    və eyni anda yalnız bir açıq icazə qaydası ilə toqquşardı. Repo-ya birbaşa
+    yazmaq aqreqasiyanın girişini dəqiq idarə etməyə imkan verir.
+    """
+    from src.domain.entities.leave_request import LeaveRequest, LeaveStatus
+    from src.domain.value_objects.penalty import LeavePenalty
+
+    request = LeaveRequest(
+        request_id=LeaveRequestId(uuid.uuid4()),
+        tenant_id=TENANT,
+        employee_id=WORKER,
+        store_id=STORE,
+        requested_time=ctx.clock.now(),
+        status=LeaveStatus.VERIFIED,
+    )
+    request.penalty = LeavePenalty(
+        elapsed_minutes=minutes,
+        allowance_minutes=0,
+        delay_minutes=0,
+        total_minutes=minutes,
+    )
+    ctx.leave_requests.items[request.id] = request
+
+
+def test_monthly_usage_reads_the_limit_from_system_limits(ctx: Ctx) -> None:
+    """Limit KODDA deyil, `system_limits`-dədir — Root onu dəyişə bilir."""
+    usage = ctx.leave_uc().monthly_usage(tenant_id=TENANT, employee_id=WORKER, at=ctx.clock.now())
+    assert usage.limit_minutes == 240, "Defolt `DEFAULT_LIMITS`-dən gəlməlidir"
+
+    ctx.limits.set(SystemLimitKey.MONTHLY_LEAVE_MINUTES_LIMIT, "90")
+    changed = ctx.leave_uc().monthly_usage(tenant_id=TENANT, employee_id=WORKER, at=ctx.clock.now())
+    assert changed.limit_minutes == 90, "Root-un yazdığı dəyər dərhal qüvvəyə minməlidir"
+
+
+def test_monthly_usage_counts_only_verified_requests(ctx: Ctx) -> None:
+    """Açıq (təsdiqlənməmiş) sorğu büdcəni yeməməlidir."""
+    open_leave(ctx)
+    assert (
+        ctx.leave_uc()
+        .monthly_usage(tenant_id=TENANT, employee_id=WORKER, at=ctx.clock.now())
+        .used_minutes
+        == 0
+    )
+
+
+def test_exceeding_the_monthly_limit_warns_but_never_blocks(ctx: Ctx) -> None:
+    """Bölmə 3 limiti sadalayır, lakin AŞILDIQDA QADAĞA təyin etmir.
+
+    Ona görə sorğu qəbul olunur; aşılma audit-ə və bildirişə düşür. Bloklamaq
+    spesifikasiyada olmayan qadağa yaratmaq, susmaq isə Root-un dəyişdirdiyi
+    limiti mənasız etmək olardı (bax `MonthlyLeaveUsage` docstring).
+    """
+    ctx.limits.set(SystemLimitKey.MONTHLY_LEAVE_MINUTES_LIMIT, "30")
+    _verified_minutes(ctx, 100)
+
+    request = open_leave(ctx)
+
+    assert request is not None, "Limit aşılsa da STEP 1 bloklanmır"
+    assert "MONTHLY_LEAVE_LIMIT_EXCEEDED" in ctx.notifier.categories()
+    last = [e for e in ctx.audit.entries if e["action"] == "LEAVE_REQUESTED"][-1]
+    assert last["after_state"]["monthly_limit_minutes"] == 30
+    assert last["after_state"]["monthly_used_minutes"] == 100
+
+
+def test_zero_limit_disables_the_warning(ctx: Ctx) -> None:
+    """0 = "limit qoyulmayıb" — hər sorğuda yalançı xəbərdarlıq olmamalıdır."""
+    ctx.limits.set(SystemLimitKey.MONTHLY_LEAVE_MINUTES_LIMIT, "0")
+    _verified_minutes(ctx, 100)
+
+    open_leave(ctx)
+    assert "MONTHLY_LEAVE_LIMIT_EXCEEDED" not in ctx.notifier.categories()

@@ -123,10 +123,12 @@ QSS_TEMPLATE: Final = """
    İşıqlı temada bu nəzərə çarpmır (hər ikisi ağa yaxındır), tünd temada isə
    bütün kontent yanlış tonda qalır. Ona görə fon YALNIZ konkret səthlərə
    verilir (aşağıda), qablar isə şəffaf qalır və altındakı fonu göstərir. */
+/* Şrift AİLƏSİ və ÖLÇÜSÜ burada verilmir — hər ikisi tətbiq səviyyəsindədir
+   (`ThemeManager.apply`). Ümumi `QWidget` qaydası onları versəydi, hər
+   widget-in `setFont()` ilə istədiyi ölçü əzilərdi və maketin başlıq şkalası
+   (13–34px) bir dəyərə yastılanardı — bax həmin metodun izahı. */
 QWidget {
     color: {{--color-text-primary}};
-    font-family: {{--font-family}};
-    font-size: {{--font-size-md}};
 }
 
 /* Kök səthlər — pəncərə, dialoq və kiosk. */
@@ -169,6 +171,22 @@ QFrame[variant="card"] {
     border-radius: {{--radius-lg}};
 }
 
+/* Kartın İÇİNDƏKİ alt-qutu — maketdə `11px` (developer panelindəki
+   telemetriya/ticket/crash blokları). Kartdan 1px kiçik künc təsadüfi deyil:
+   eyni radius iç-içə iki səthi bir-birinə "yapışdırır" və iyerarxiya itir. */
+QFrame[variant="panel"] {
+    background-color: {{--color-card-bg}};
+    border: {{--border-width}} solid {{--color-card-border}};
+    border-radius: {{--radius-panel}};
+}
+
+/* Üzən və ya mərkəzi İRİ səth — dəstək paneli, lisenziya kartı (`14px`). */
+QFrame[variant="modal"] {
+    background-color: {{--color-card-bg}};
+    border: {{--border-width}} solid {{--color-card-border}};
+    border-radius: {{--radius-modal}};
+}
+
 /* QEYD: Əvvəllər burada "kartdakı bütün QLabel-lər şəffaf olsun" qaydası var
    idi — ümumi `QWidget { background-color: … }` qaydasını neytrallaşdırmaq
    üçün. Həmin ümumi qayda ARADAN QALDIRILDIQDAN sonra (bax yuxarıdakı izah)
@@ -197,7 +215,7 @@ QPushButton {
     background-color: {{--color-bg-surface}};
     color: {{--color-text-primary}};
     border: {{--border-width}} solid {{--color-border}};
-    border-radius: {{--radius-sm}};
+    border-radius: {{--radius-control}};
     padding: {{--space-sm}} {{--space-md}};
     min-height: {{--touch-target-min}};
     font-weight: {{--font-weight-medium}};
@@ -266,7 +284,7 @@ QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QDateEdit, QTimeEdit 
     background-color: {{--color-bg-primary}};
     color: {{--color-text-primary}};
     border: {{--border-width}} solid {{--color-border}};
-    border-radius: {{--radius-sm}};
+    border-radius: {{--radius-control}};
     padding: {{--space-sm}};
     selection-background-color: {{--color-accent}};
     selection-color: {{--color-text-on-accent}};
@@ -308,12 +326,17 @@ QTableWidget::item:selected, QListWidget::item:selected, QTreeView::item:selecte
     color: {{--color-text-on-accent}};
 }
 
+/* Sütun başlığı maketdə böyük hərfli MONO mətndir (`DataTable` özü də belə
+   qurur) — Qt-nin öz cədvəl başlığı da eyni görünməlidir, əks halda iki
+   cədvəl tipi yan-yana fərqli oxunur. */
 QHeaderView::section {
     background-color: {{--color-bg-sunken}};
     color: {{--color-text-secondary}};
     border: none;
     border-bottom: {{--border-width}} solid {{--color-border}};
     padding: {{--space-sm}};
+    font-family: {{--font-family-mono}};
+    font-size: {{--font-size-xs}};
     font-weight: {{--font-weight-medium}};
 }
 
@@ -332,9 +355,10 @@ QWidget#TitleBar QLabel {
     font-weight: {{--font-weight-medium}};
 }
 
+/* Maketdə `width/height: 16px; border-radius: 5px`. */
 QWidget#TitleBarLogo {
     background-color: {{--color-brand-amber}};
-    border-radius: {{--radius-sm}};
+    border-radius: {{--radius-badge}};
 }
 
 /* Pəncərə düymələri: `min-height` sıfırlanır, çünki ümumi QPushButton qaydası
@@ -367,11 +391,15 @@ QWidget#NavigationSidebar {
     border-right: {{--border-width}} solid {{--color-sidebar-border}};
 }
 
-/* Bölmə başlığı ("NAVİQASİYA") — böyük hərflər və hərf aralığı QSS-də YOXDUR,
-   onlar `widgets/sidebar.py`-da QFont ilə verilir. */
-QLabel#SidebarSectionLabel {
+/* Böyük hərfli bölmə etiketi — həm sol paneldə ("NAVİQASİYA", "SİSTEM"),
+   həm də kartların içində ("ŞƏXSİ MƏLUMAT", "BU AYIN XÜLASƏSİ").
+   Böyük hərflər və hərf aralığı QSS-də YOXDUR — onlar `primitives.py`-da
+   QFont ilə verilir. Şrift ailəsi mono-dur: maketdə bu etiket `IBM Plex
+   Mono` ilə yazılır və onu adi mətndən məhz şrift fərqi ayırır. */
+QLabel#SectionLabel {
     background-color: transparent;
     color: {{--color-text-muted}};
+    font-family: {{--font-family-mono}};
     font-size: {{--font-size-xs}};
     font-weight: {{--font-weight-medium}};
 }
@@ -379,7 +407,7 @@ QLabel#SidebarSectionLabel {
 QPushButton[variant="nav"] {
     background-color: transparent;
     border: none;
-    border-radius: {{--radius-md}};
+    border-radius: {{--radius-control}};
     color: {{--color-nav-item-text}};
     text-align: left;
     padding: 0 {{--space-md}};
@@ -413,9 +441,16 @@ QWidget#PageHeader {
 
 QWidget#PageHeader QLabel { background-color: transparent; }
 
+/* ÖLÇÜ BURADA VERİLMİR — QƏSDƏN.
+   Maket başlıqları bir ölçüdə deyil: səhifə başlığı 17px, kart başlığı 14–15,
+   panel başlığı 16, işçi adı 22, kiosk 28, lisenziya 26. `title_label(size=…)`
+   həmin dəyəri `QFont` ilə verir, QSS-dəki `font-size` isə onu ƏZİRDİ və
+   bütün başlıqlar 19px çıxırdı (73 çağırış nöqtəsi, 13–34px aralığı).
+   Qt-də QSS xüsusiyyəti proqram vasitəsilə verilmiş `QFont`-u üstələyir, ona
+   görə ölçünün YEGANƏ mənbəyi çağırış nöqtəsidir. Rəng və çəki isə burada
+   qalır: onlar bütün başlıqlar üçün eynidir. */
 QLabel#PageTitle {
     color: {{--color-text-primary}};
-    font-size: {{--font-size-lg}};
     font-weight: {{--font-weight-medium}};
 }
 
@@ -470,7 +505,7 @@ QPushButton[variant="action"] {
     background-color: {{--color-action-bg}};
     color: {{--color-action-text}};
     border: {{--border-width}} solid {{--color-action-bg}};
-    border-radius: {{--radius-md}};
+    border-radius: {{--radius-control}};
     padding: 0 {{--space-lg}};
     min-height: 42px;
     max-height: 42px;
@@ -498,7 +533,7 @@ QPushButton[variant="secondary"] {
     background-color: {{--color-card-bg}};
     color: {{--color-nav-item-text}};
     border: {{--border-width}} solid {{--color-border}};
-    border-radius: {{--radius-md}};
+    border-radius: {{--radius-control}};
     padding: 0 {{--space-lg}};
     min-height: 42px;
     max-height: 42px;
@@ -506,6 +541,14 @@ QPushButton[variant="secondary"] {
 }
 
 QPushButton[variant="secondary"]:hover { background-color: {{--color-neutral-bg}}; }
+
+/* DAR düymə (səhifələmə nömrələri, ‹ ›). Adi `secondary` doldurması yan-yana
+   24+24px-dir; sabit 46px enli düymədə bu, məzmun sahəsini MƏNFİ edir və Qt
+   mətni tamamilə kəsir — səhifə nömrələri boş kvadrat kimi görünürdü.
+   Ona görə dar düymə doldurmanı sıfırlayır və eni özü təyin edir. */
+QPushButton[variant="secondary"][compact="true"] {
+    padding: 0;
+}
 
 /* Seçilmiş segment (Ayarlar → Görünüş) DOLU fon alır — əks halda üç
    düymə eyni görünür və istifadəçi cari temanı təyin edən idarəetmədən
@@ -547,7 +590,7 @@ QTimeEdit[variant="form"] {
     background-color: {{--color-card-bg}};
     color: {{--color-text-primary}};
     border: {{--border-width}} solid {{--color-border}};
-    border-radius: {{--radius-md}};
+    border-radius: {{--radius-control}};
     padding: 0 14px;
     font-size: {{--font-size-md}};
 }
@@ -578,10 +621,12 @@ QLabel[variant="muted"] {
     font-size: {{--font-size-sm}};
 }
 
-/* Rəqəm/kod sahələri (saat, xəta kodu, tenant_id) — maketdə IBM Plex Mono. */
+/* Rəqəm/kod sahələri (saat, xəta kodu, tenant_id) — maketdə IBM Plex Mono.
+   Şrift adı burada YAZILMIR: mənbə `tokens.py`-dakı `--font-family-mono`-dur
+   (bax həmin faylın "MONO ŞRİFT NİYƏ AYRICA TOKENDİR" bölməsi). */
 QLabel[variant="mono"], QLabel[variant="mono-muted"] {
     background-color: transparent;
-    font-family: "Consolas", "Cascadia Mono", monospace;
+    font-family: {{--font-family-mono}};
     font-size: {{--font-size-sm}};
 }
 
@@ -617,7 +662,7 @@ QFrame[variant="divider-v"] {
 
 /* ===================== NİŞANLAR (BADGE) ===================== */
 QLabel[badge="success"], QLabel[badge="warning"], QLabel[badge="danger"], QLabel[badge="info"] {
-    border-radius: {{--radius-sm}};
+    border-radius: {{--radius-badge}};
     padding: {{--space-xs}} {{--space-sm}};
     font-size: {{--font-size-xs}};
     font-weight: {{--font-weight-medium}};

@@ -127,9 +127,9 @@ class ErpServersScreen(Screen):
         self._table = DataTable(
             [
                 Column("Server", 200),
-                Column("Ünvan", 200),
+                Column("Ünvan", 200, mono=True),
                 Column("Mağaza", 140),
-                Column("Sinxron", 120),
+                Column("Sinxron", 120, mono=True),
                 Column("Status"),
             ],
             theme,
@@ -339,7 +339,7 @@ class BackupScreen(Screen):
 
         self._table = DataTable(
             [
-                Column("Tarix", 200),
+                Column("Tarix", 200, mono=True),
                 Column("Ölçü", 120),
                 Column("Növ", 180),
                 Column("Status", 240),
@@ -697,7 +697,7 @@ class AuditScreen(Screen):
 
         self._table = DataTable(
             [
-                Column("Vaxt", 140),
+                Column("Vaxt", 140, mono=True),
                 Column("İstifadəçi", 180),
                 Column("Əməliyyat", 240),
                 Column("Modul", 150),
@@ -758,6 +758,8 @@ class AuditScreen(Screen):
 
         def add_button(text: str, page: int, *, enabled: bool = True) -> None:
             button = secondary_button(text)
+            # Dar düymə: geniş yan doldurma 46px-lik enə sığmır (bax QSS).
+            button.setProperty("compact", "true")
             button.setFixedWidth(46)
             button.setEnabled(enabled)
             button.clicked.connect(lambda _=False, p=page: self.page_changed.emit(p))
@@ -1000,31 +1002,181 @@ class SettingsScreen(Screen):
 # --------------------------------------------------------------------------- #
 
 
+class DriveConnectionScreen(Screen):
+    """Cərimə sübut şəkilləri üçün Google Drive hesabı (miqrasiya 002).
+
+    Signals:
+        connect_requested: `[Google hesabı qoşun]`.
+        cancel_requested: Gözləyən razılıq axını ləğv edilir.
+
+    ──────────────────────────────────────────────────────────────────────
+    NİYƏ ÜNVAN MƏTN KİMİ DƏ GÖSTƏRİLİR
+    ──────────────────────────────────────────────────────────────────────
+    Razılıq ünvanı sistem brauzerində açılır, lakin kiosk/terminal
+    quraşdırmalarında `webbrowser.open()` heç nə etməyə bilər. Ünvan ekranda
+    seçilə bilən mətn kimi qalırsa, administrator onu başqa cihazda aça bilər
+    — brauzerin açılmaması bağlantını qeyri-mümkün etməməlidir.
+
+    ──────────────────────────────────────────────────────────────────────
+    NİYƏ HESAB DƏYİŞMƏK XƏBƏRDARLIQ TƏLƏB EDİR
+    ──────────────────────────────────────────────────────────────────────
+    Yeni hesab qoşulduqda köhnəsi ARXİVLƏNİR, silinmir: köhnə şəkillər hələ
+    də köhnə hesabdadır və oradan oxunur. Administrator bunu qoşmazdan ƏVVƏL
+    bilməlidir, çünki köhnə hesabı bağlamaq keçmiş sübutları itirər.
+    """
+
+    connect_requested = Signal()
+    cancel_requested = Signal()
+
+    def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
+        super().__init__(theme, parent=parent)
+
+        self._status_card = Card(padding=20, spacing=12)
+        self._status_card.add(title_label("Aktiv hesab", size=15))
+
+        status_row = QWidget()
+        status_layout = QHBoxLayout(status_row)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setSpacing(10)
+        self._status_dot = StatusDot(theme.color("--color-text-muted"))
+        status_layout.addWidget(self._status_dot)
+        self._account = body_label("Hesab qoşulmayıb", size=14, wrap=False)
+        status_layout.addWidget(self._account)
+        status_layout.addWidget(stretch())
+        self._status_chip = Chip("Qoşulmayıb", "neutral")
+        status_layout.addWidget(self._status_chip)
+        self._status_card.add(status_row)
+
+        self._quota = muted_label("Kvota məlumatı yoxdur")
+        self._status_card.add(self._quota)
+        self._status_card.add(Divider())
+        self._status_card.add(
+            muted_label(
+                "Yeni hesab qoşulduqda köhnəsi arxivlənir. Keçmiş cərimə şəkilləri "
+                "köhnə hesabda qalır və oradan göstərilməyə davam edir — köhnə "
+                "hesabı silməyin."
+            )
+        )
+
+        actions = QWidget()
+        actions_layout = QHBoxLayout(actions)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(10)
+        actions_layout.addWidget(stretch())
+        self._cancel = secondary_button("Ləğv Et")
+        self._cancel.clicked.connect(self.cancel_requested)
+        self._cancel.setVisible(False)
+        actions_layout.addWidget(self._cancel)
+        self._connect = action_button("Google Hesabı Qoş")
+        self._connect.clicked.connect(self.connect_requested)
+        actions_layout.addWidget(self._connect)
+        self._status_card.add(actions)
+        self.add(self._status_card)
+
+        # Razılıq gedərkən görünən kart — ünvan + gözləmə mətni.
+        self._pending = Card(padding=20, spacing=10)
+        self._pending.add(title_label("Brauzerdə razılıq gözlənilir", size=15))
+        self._pending.add(
+            muted_label(
+                "Açılan səhifədə Google hesabınızı seçin və KompasOS-a icazə verin. "
+                "Səhifə açılmadısa aşağıdakı ünvanı brauzerə köçürün."
+            )
+        )
+        self._auth_url = QLineEdit()
+        self._auth_url.setReadOnly(True)
+        self._auth_url.setProperty("variant", "form")
+        self._pending.add(self._auth_url)
+        self._pending.setVisible(False)
+        self.add(self._pending)
+
+        self._history = Card(padding=20, spacing=12)
+        self._history.add(title_label("Bağlantı tarixçəsi", size=15))
+        self._history_rows = QVBoxLayout()
+        self._history_rows.setSpacing(8)
+        holder = QWidget()
+        holder.setLayout(self._history_rows)
+        self._history.add(holder)
+        self.add(self._history)
+        self.body().addStretch(1)
+
+    # ------------------------------- doldurma -------------------------------- #
+
+    def set_active(
+        self,
+        *,
+        account: str | None,
+        status_text: str,
+        tone: ChipTone,
+        quota_text: str,
+    ) -> None:
+        """Aktiv bağlantı. `account=None` → "qoşulmayıb" vəziyyəti."""
+        self._account.setText(account or "Hesab qoşulmayıb")
+        self._status_chip.setText(status_text)
+        self._status_chip.set_tone(tone)
+        self._quota.setText(quota_text)
+        self._connect.setText("Hesabı Dəyiş" if account else "Google Hesabı Qoş")
+        self.show_content()
+
+    def set_history(self, rows: list[tuple[str, str, str]]) -> None:
+        """`rows`: (hesab, status, tarix)."""
+        clear_layout(self._history_rows)
+        for account, status, when in rows:
+            row = QWidget()
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(10)
+            layout.addWidget(body_label(account, size=13, wrap=False))
+            layout.addWidget(stretch())
+            layout.addWidget(mono_label(when))
+            layout.addWidget(Chip(status, "success" if status == "Aktiv" else "neutral"))
+            self._history_rows.addWidget(row)
+
+    def show_pending(self, auth_url: str) -> None:
+        """Razılıq gözləmə vəziyyəti — düymə bloklanır, ünvan göstərilir."""
+        self._auth_url.setText(auth_url)
+        self._pending.setVisible(True)
+        self._connect.setEnabled(False)
+        self._cancel.setVisible(True)
+
+    def clear_pending(self) -> None:
+        self._pending.setVisible(False)
+        self._auth_url.clear()
+        self._connect.setEnabled(True)
+        self._cancel.setVisible(False)
+
+
 class RootControlScreen(Screen):
     """Dinamik limitlər, modul açarları və icazə registri.
 
     Signals:
         applied: Bütün dəyişikliklər.
-        module_toggled: (modul açarı, aktiv).
-        flag_created: (flag adı, hardlock).
+        module_toggled: (modul açarı, aktiv, yazılı təsdiq mətni).
+        flag_created: (flag kodu, kateqoriya, hardlock).
 
     ──────────────────────────────────────────────────────────────────────
     STRUKTUR-KRİTİK MODULLAR
     ──────────────────────────────────────────────────────────────────────
     Bəzi modulları söndürmək məlumat itkisinə səbəb olmur, lakin iş axınını
-    dayandırır (məs. cərimə sistemi söndürülərsə, gözləyən etirazlar
-    cavabsız qalır). Maket bunun üçün əlavə təsdiq tələb edir; burada
-    `structural` bayrağı ilə işarələnir və `module_toggled` yayılmazdan
-    əvvəl təsdiq soruşulur.
+    dayandırır (məs. Kamera Təsdiqi söndürülərsə STEP1-3 və Morning
+    Check-in axınları yeni instansiya yarada bilmir). Bölmə 3 belə modul
+    üçün "sadə bir-kliklik toggle" QADAĞAN edir: əlavə xəbərdarlıq modalı
+    VƏ yazılı təsdiq sahəsi tələb olunur.
+
+    Ona görə `module_toggled` üçüncü arqument kimi TƏSDİQ MƏTNİNİ daşıyır
+    (struktur olmayan modullarda boş sətir). Mətnin UZUNLUĞU burada
+    yoxlanılmır — o qayda `RootControlUseCase.set_module_enabled`-dədir və
+    ekranı yan keçən hər yol üçün də işləyir. Burada yalnız "boş mətnlə
+    davam etmə" yoxlanılır ki, istifadəçi səhvən Enter basmasın.
     """
 
     applied = Signal(dict)
-    module_toggled = Signal(str, bool)
-    flag_created = Signal(str, bool)
+    module_toggled = Signal(str, bool, str)
+    flag_created = Signal(str, str, bool)
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(theme, parent=parent)
         self._limit_inputs: dict[str, QSpinBox] = {}
+        self._limit_texts: dict[str, QLineEdit] = {}
         self._module_toggles: dict[str, ToggleSwitch] = {}
         self._structural: set[str] = set()
 
@@ -1082,10 +1234,21 @@ class RootControlScreen(Screen):
         create_layout.setContentsMargins(0, 0, 0, 0)
         create_layout.setSpacing(10)
 
+        # Yer tutucu `can_` ilə başlayır, çünki `PermissionFlag` bu prefiksi
+        # TƏLƏB EDİR (bax `authorization.PermissionFlag.__post_init__`).
+        # Əvvəlki "module.action_name" nümunəsi yaradılan kimi rədd edilirdi.
         self._new_flag = QLineEdit()
-        self._new_flag.setPlaceholderText("module.action_name")
+        self._new_flag.setPlaceholderText("can_module_action")
         self._new_flag.setProperty("variant", "form")
         create_layout.addWidget(self._new_flag, 1)
+
+        # Kateqoriya `PermissionFlag`-in məcburi sahəsidir və icazə matrisində
+        # qruplaşdırma açarıdır — onsuz yeni flag matrisdə yersiz qalardı.
+        self._new_flag_category = QLineEdit()
+        self._new_flag_category.setPlaceholderText("Kateqoriya")
+        self._new_flag_category.setProperty("variant", "form")
+        self._new_flag_category.setFixedWidth(170)
+        create_layout.addWidget(self._new_flag_category)
 
         self._new_flag_kind = QComboBox()
         self._new_flag_kind.setProperty("variant", "form")
@@ -1103,15 +1266,26 @@ class RootControlScreen(Screen):
         name = self._new_flag.text().strip()
         if not name:
             return
-        self.flag_created.emit(name, self._new_flag_kind.currentText() == "Hardlock")
+        category = self._new_flag_category.text().strip() or "Ümumi"
+        self.flag_created.emit(name, category, self._new_flag_kind.currentText() == "Hardlock")
         self._new_flag.clear()
+        self._new_flag_category.clear()
 
     # ------------------------------- doldurma -------------------------------- #
 
-    def set_limits(self, limits: list[tuple[str, str, int, int, int, str]]) -> None:
-        """`limits`: (açar, etiket, dəyər, min, max, şəkilçi)."""
+    def set_limits(self, limits: list[tuple[str, str, int | str, int, int, str]]) -> None:
+        """`limits`: (açar, etiket, dəyər, min, max, şəkilçi).
+
+        Dəyər ƏDƏD deyilsə (`LEAVE_ALLOWANCE_SOURCE` = "LEAVE_TYPE",
+        `DELAY_FINE_RATE_PER_MINUTE` = "0.00") sətir sahəsi qurulur. Səbəb:
+        bölmə 3 "hər şey Root-dan idarə olunmalıdır" deyir, ona görə ədədə
+        sığmayan limiti ekrandan ÇIXARMAQ olmaz — çıxarsaydıq, o limit yalnız
+        birbaşa SQL ilə dəyişdirilə bilərdi, yəni faktiki olaraq hardcode
+        sayılardı. `min`/`max`/`şəkilçi` mətn sahəsində nəzərə alınmır.
+        """
         clear_layout(self._limits_rows)
         self._limit_inputs.clear()
+        self._limit_texts.clear()
 
         for key, label, value, minimum, maximum, suffix in limits:
             row = QWidget()
@@ -1121,14 +1295,21 @@ class RootControlScreen(Screen):
             layout.addWidget(body_label(label, size=13, wrap=False))
             layout.addWidget(stretch())
 
-            spin = QSpinBox()
-            spin.setProperty("variant", "form")
-            spin.setRange(minimum, maximum)
-            spin.setValue(value)
-            spin.setSuffix(f" {suffix}")
-            spin.setFixedWidth(160)
-            self._limit_inputs[key] = spin
-            layout.addWidget(spin)
+            if isinstance(value, int):
+                spin = QSpinBox()
+                spin.setProperty("variant", "form")
+                spin.setRange(minimum, maximum)
+                spin.setValue(value)
+                spin.setSuffix(f" {suffix}")
+                spin.setFixedWidth(160)
+                self._limit_inputs[key] = spin
+                layout.addWidget(spin)
+            else:
+                field = QLineEdit(value)
+                field.setProperty("variant", "form")
+                field.setFixedWidth(160)
+                self._limit_texts[key] = field
+                layout.addWidget(field)
             self._limits_rows.addWidget(row)
         self.show_content()
 
@@ -1158,26 +1339,43 @@ class RootControlScreen(Screen):
             self._modules_rows.addWidget(row)
 
     def _on_module_toggled(self, key: str, enabled: bool) -> None:
+        confirmation = ""
         if not enabled and key in self._structural:
-            from PySide6.QtWidgets import QMessageBox  # noqa: PLC0415
+            # Bölmə 3: struktur-kritik modul üçün bir-kliklik toggle KİFAYƏT
+            # DEYİL. `getMultiLineText` bir modalda hər ikisini verir —
+            # xəbərdarlıq mətni və yazılı təsdiq sahəsi.
+            from PySide6.QtWidgets import QInputDialog  # noqa: PLC0415
 
-            answer = QMessageBox.warning(
+            confirmation, accepted = QInputDialog.getMultiLineText(
                 self,
-                "Struktur-kritik modul",
-                f"«{key}» modulu söndürülür. Bu modulun gözləyən əməliyyatları "
-                "cavabsız qalacaq. Davam edilsin?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+                "Struktur-kritik modul söndürülür",
+                f"«{key}» modulu STEP1-3 və Morning Check-in axınlarının struktur\n"
+                "əsasıdır. Söndürüldükdən sonra YENİ instansiya yaradıla bilməyəcək;\n"
+                "mövcud və tarixi qeydlər toxunulmaz qalır.\n\n"
+                "Davam etmək üçün səbəbi yazın (audit jurnalına düşür):",
             )
-            if answer is not QMessageBox.StandardButton.Yes:
-                # Açarı geri qaytarırıq — siqnal təkrar işə düşməsin deyə
-                # bloklanır.
-                toggle = self._module_toggles[key]
-                toggle.blockSignals(True)
-                toggle.setChecked(True)
-                toggle.blockSignals(False)
+            if not accepted or not confirmation.strip():
+                self._restore_toggle(key)
                 return
-        self.module_toggled.emit(key, enabled)
+            confirmation = confirmation.strip()
+        self.module_toggled.emit(key, enabled, confirmation)
+
+    def _restore_toggle(self, key: str) -> None:
+        """Açarı əvvəlki vəziyyətinə qaytarır — siqnal təkrar işə düşmədən.
+
+        `reject_module_change()` ilə eyni kod: təsdiq verilmədikdə də,
+        use case əməliyyatı rədd etdikdə də ekran YALAN göstərməməlidir.
+        """
+        toggle = self._module_toggles.get(key)
+        if toggle is None:
+            return
+        toggle.blockSignals(True)
+        toggle.setChecked(True)
+        toggle.blockSignals(False)
+
+    def reject_module_change(self, key: str) -> None:
+        """Use case dəyişikliyi rədd etdi — açar geri qaytarılır."""
+        self._restore_toggle(key)
 
     def set_registry(self, flags: list[tuple[str, bool]]) -> None:
         clear_layout(self._registry_rows)
@@ -1195,8 +1393,12 @@ class RootControlScreen(Screen):
             self._registry_rows.addWidget(row)
 
     def collected(self) -> dict[str, object]:
+        limits: dict[str, int | str] = {
+            key: spin.value() for key, spin in self._limit_inputs.items()
+        }
+        limits.update({key: field.text().strip() for key, field in self._limit_texts.items()})
         return {
-            "limits": {key: spin.value() for key, spin in self._limit_inputs.items()},
+            "limits": limits,
             "modules": {key: toggle.isChecked() for key, toggle in self._module_toggles.items()},
         }
 
@@ -1204,6 +1406,7 @@ class RootControlScreen(Screen):
 __all__ = [
     "AuditScreen",
     "BackupScreen",
+    "DriveConnectionScreen",
     "ErpServersScreen",
     "HealthScreen",
     "RestoreConfirmDialog",

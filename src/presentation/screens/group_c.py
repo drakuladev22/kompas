@@ -240,10 +240,18 @@ class PermissionMatrixScreen(Screen):
 
     def _build_role_panel(self) -> QWidget:
         panel = QWidget()
+        panel.setObjectName("RolePanel")
         panel.setFixedWidth(280)
+        # SELEKTOR MƏCBURİDİR. Selektorsuz widget stylesheet-i Qt-də yalnız
+        # widget-in ÖZÜNƏ yox, bütün ÖVLADLARINA da şamil olunur və tətbiq
+        # səviyyəli QSS-i əzir. Burada nəticə görünməz sətir idi: aktiv rol
+        # düyməsi fonunu bu qaydadan (ağ), mətn rəngini isə tətbiq QSS-indən
+        # (ağ) alırdı — yəni seçilmiş rol ekranda ÜMUMİYYƏTLƏ görünmürdü.
         panel.setStyleSheet(
+            f"QWidget#RolePanel {{"
             f"background-color: {self.theme.color('--color-sidebar-bg')};"
             f"border-right: 1px solid {self.theme.color('--color-sidebar-border')};"
+            f"}}"
         )
 
         layout = QVBoxLayout(panel)
@@ -804,8 +812,8 @@ class DailyRosterScreen(Screen):
         self._table = DataTable(
             [
                 Column("İşçi", 220),
-                Column("Plan", 110),
-                Column("Giriş", 110),
+                Column("Plan", 110, mono=True),
+                Column("Giriş", 110, mono=True),
                 Column("Status", 220),
                 Column("Qeyd"),
             ],

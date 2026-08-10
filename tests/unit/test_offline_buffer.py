@@ -153,9 +153,15 @@ def test_repr_does_not_leak_payload(buffer: OfflineBuffer) -> None:
     write = buffer.pending(now=T0)[0]
 
     text = repr(write)
-    assert "1234" not in text
-    assert "3000" not in text
-    assert "REDACTED" in text
+    # Identifikatorlar ÇIXARILIR: onlar UUID-dir və təsadüfən "1234" kimi
+    # onaltılıq ardıcıllıq ehtiva edə bilər. Onları saxlasaydıq, test bəzən
+    # sızma OLMADAN da uğursuz olardı (təxminən hər bir neçə yüz icrada bir)
+    # və əsl sızmanı gizlədən "bəzən qırmızı" testə çevrilərdi.
+    scanned = text.replace(str(write.id), "").replace(str(write.record_id), "")
+
+    assert "1234" not in scanned
+    assert "3000" not in scanned
+    assert "REDACTED" in scanned
 
 
 # --------------------------------------------------------------------------- #

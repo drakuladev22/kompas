@@ -82,7 +82,7 @@ Maketdəki konkret ölçülər `--layout-*` kimi verilib:
 
 ## İkonlar
 
-41 xətt-ikon `guidelines/icons.md`-dədir — SVG mənbəyi kopyalana bilir.
+44 xətt-ikon `guidelines/icons.md`-dədir — SVG mənbəyi kopyalana bilir.
 Hamısı `viewBox="0 0 16 16"`, `fill="none"`, `stroke="currentColor"`, yəni
 rəngi valideynin `color`-undan alır:
 
@@ -98,8 +98,12 @@ rəngi valideynin `color`-undan alır:
 Dəst: `dashboard` `queue` `roster` `fine` `users` `user` `settings` `calendar`
 `shield` `star` `tag` `chat` `server` `server_off` `database` `activity`
 `wifi_off` `power` `plus` `check` `check_circle` `close` `refresh` `search`
-`edit` `download` `send` `login` `logout` `slash` `clock` `bell` `lock` `file`
-`folder` `image` `moon` `sun` `grid` `list` `checklist`.
+`arrow_up` `arrow_down` `edit` `download` `send` `login` `logout` `slash`
+`clock` `bell` `help` `lock` `file` `folder` `image` `moon` `sun` `grid`
+`list` `checklist`.
+
+`arrow_up`/`arrow_down` sıralama düymələri üçündür: interfeys şrifti `↑`/`↓`
+Unicode işarələrini daşımır, ona görə mətn yox, İKON işlədin.
 
 ## Nümunə
 

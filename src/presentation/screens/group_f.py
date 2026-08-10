@@ -295,7 +295,7 @@ class SalesPointsScreen(Screen):
 
         self._history = DataTable(
             [
-                Column("Tarix", 110),
+                Column("Tarix", 110, mono=True),
                 Column("Səbəb"),
                 Column("Status", 160),
                 Column("Xal", 100),
@@ -738,8 +738,8 @@ class UnassignedSalesScreen(Screen):
 
         self._table = DataTable(
             [
-                Column("Çek", 100),
-                Column("Tarix", 150),
+                Column("Çek", 100, mono=True),
+                Column("Tarix", 150, mono=True),
                 Column("Məbləğ", 120),
                 Column("1C təklifi", 180),
                 Column("Uyğunluq", 120),

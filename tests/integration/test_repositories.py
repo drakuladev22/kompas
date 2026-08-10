@@ -656,3 +656,66 @@ def test_position_flags_roundtrip(database: Database, tenant: TenantId) -> None:
 @requires_db
 def test_health_check(database: Database) -> None:
     assert database.health_check() is True
+
+
+# --------------------------------------------------------------------------- #
+# Drive sübut sütunları (miqrasiya 002)
+# --------------------------------------------------------------------------- #
+
+
+@requires_db
+def test_drive_evidence_columns_roundtrip(
+    database: Database, tenant: TenantId, store_id: StoreId
+) -> None:
+    """Yükləmə bitdikdən sonra sətir SYNCED olur, növbə açarı isə QALIR.
+
+    `photo_evidence_url` üzərindən yazılmır — o, hansı lokal yükləmənin bu
+    sətri doldurduğunu göstərən yeganə izdir (bax `migrations/002` başlığı).
+    """
+    worker_id = make_employee_row(database, tenant, store_id, SystemRole.SELLER, with_pin=True)
+    operator_id = make_employee_row(database, tenant, store_id, SystemRole.CAMERA_OPERATOR)
+
+    with database.system_scope() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id FROM fine_types WHERE tenant_id = %s LIMIT 1", (tenant,))
+        fine_type = cur.fetchone()
+    assert fine_type is not None
+
+    fine = Fine(
+        fine_id=new_fine_id(),
+        tenant_id=tenant,
+        employee_id=worker_id,
+        store_id=store_id,
+        source=FineSource.MANUAL_CAMERA,
+        amount=Money(Decimal("15.00")),
+        issued_at=datetime.now(tz=UTC),
+        fine_type_id=fine_type["id"],
+        issued_by=operator_id,
+        photo_evidence_url="queue-entry-42",
+    )
+
+    with database.unit_of_work(tenant, user_id=operator_id) as uow:
+        uow.fines.save(fine)
+        uow.fines.mark_evidence_pending(fine.id)
+        uow.commit()
+
+    with database.system_scope() as conn, conn.cursor() as cur:
+        cur.execute("SELECT evidence_upload_status FROM fines WHERE id = %s", (fine.id,))
+        row = cur.fetchone()
+    assert row is not None
+    assert row["evidence_upload_status"] == "PENDING"
+
+    with database.unit_of_work(tenant, user_id=operator_id) as uow:
+        uow.fines.attach_drive_evidence(fine.id, file_id="drive-file-1", connection_id=None)
+        uow.commit()
+
+    with database.system_scope() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT evidence_drive_file_id, evidence_upload_status, photo_evidence_url
+                 FROM fines WHERE id = %s""",
+            (fine.id,),
+        )
+        row = cur.fetchone()
+    assert row is not None
+    assert row["evidence_drive_file_id"] == "drive-file-1"
+    assert row["evidence_upload_status"] == "SYNCED"
+    assert row["photo_evidence_url"] == "queue-entry-42", "Növbə izi silinməməlidir"

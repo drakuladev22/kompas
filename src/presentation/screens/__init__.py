@@ -1,4 +1,4 @@
-"""Modul ekranları (maket Qrup A–G, 27 ekran) — Faza 4.2.
+"""Modul ekranları (maket Qrup A–G + spesifikasiya Qrup H) — Faza 4.2/5/6.
 
 base           — ekran bazası və vəziyyət keçidi (boş/yüklənir/xəta)
 group_a_entry  — 01 Splash · 02 İlk Quraşdırma · 03 Admin Girişi
@@ -13,6 +13,9 @@ group_f        — 24 Tapşırıqlar · 25 Satış Xalları · 26 Etirazlar ·
                  27 Şübhəli Satışlar
 group_g        — 29 Bildiriş Mərkəzi · 30 Profil
                  (28 — vəziyyətlər — `base.ContentSwitcher`-dədir)
+group_h        — 31 İş Rejimləri · 32 Cərimə Növləri · 33 İcazə Növləri ·
+                 34 Aylıq Hesabat İxracı · 35 Yardım Mərkəzi
+                 (maketdə yoxdur — spesifikasiya bölmə 4/6-dan gəlir)
 """
 
 from src.presentation.screens.base import ContentSwitcher, Screen

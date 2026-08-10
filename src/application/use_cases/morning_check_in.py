@@ -25,6 +25,7 @@ from src.domain.interfaces.ports import (
     AuditTrail,
     CameraAssignmentRepository,
     Clock,
+    EmployeeRepository,
     FeatureToggles,
     Notifier,
     NtpVerifier,
@@ -32,6 +33,7 @@ from src.domain.interfaces.ports import (
     SystemLimits,
 )
 from src.domain.policies import DEFAULT_LIMITS, FeatureModule, SystemLimitKey
+from src.domain.value_objects.authorization import DUAL_CONTROL_APPROVAL_FLAG
 from src.domain.value_objects.identifiers import (
     EmployeeId,
     StoreId,
@@ -61,6 +63,7 @@ class MorningCheckInUseCase:
         *,
         attendance: AttendanceRepository,
         shifts: ShiftRepository,
+        employees: EmployeeRepository,
         camera_assignments: CameraAssignmentRepository,
         clock: Clock,
         ntp: NtpVerifier,
@@ -71,6 +74,7 @@ class MorningCheckInUseCase:
     ) -> None:
         self._attendance = attendance
         self._shifts = shifts
+        self._employees = employees
         self._camera_assignments = camera_assignments
         self._clock = clock
         self._ntp = ntp
@@ -151,6 +155,7 @@ class MorningCheckInUseCase:
         verified_at, _ = self._verified_now(tenant_id, operation="STEP_C_VERIFY")
         day = work_date or verified_at.date()
         record = self._require_record(employee_id, day)
+        self._require_camera_permission(operator_id, record)
         self._require_operator_scope(operator_id, record.store_id)
 
         lateness = record.verify(
@@ -192,6 +197,7 @@ class MorningCheckInUseCase:
         rejected_at, _ = self._verified_now(tenant_id, operation="STEP_C_REJECT")
         day = work_date or rejected_at.date()
         record = self._require_record(employee_id, day)
+        self._require_camera_permission(operator_id, record)
         self._require_operator_scope(operator_id, record.store_id)
 
         record.reject(operator_id=operator_id, reason=reason, rejected_at=rejected_at)
@@ -307,6 +313,43 @@ class MorningCheckInUseCase:
                 context={"status": record.status.value},
             )
         return record
+
+    def _require_camera_permission(self, operator_id: EmployeeId, record: AttendanceRecord) -> None:
+        """`can_verify_returns` yoxlaması (bölmə 3).
+
+        STEP B/C giriş-təsdiqi eyni flag-lə idarə olunur — bölmə 4 onu açıq
+        deyir: flag-in təsviri "STEP 3 və Morning Check-in təsdiqi"dir.
+
+        Timeout keçibsə (`escalated_at` doludur) HR_Admin/CEO operator əvəzinə
+        təsdiq/rədd edə bilər — bölmə 4: "işçi günü boyu limbo-da qalmasın".
+        Store Manager bu yola DÜŞMÜR, çünki qapı olaraq
+        `can_approve_dual_control_override` yoxlanılır və həmin flag anti-fraud
+        qaydasına görə ona heç vaxt verilə bilməz.
+        """
+        operator = self._employees.get(operator_id)
+        if operator is None:
+            raise OperationNotPermittedError(
+                "Əməliyyatı aparan istifadəçi tapılmadı",
+                context={"operator_id": str(operator_id)},
+            )
+
+        now = self._clock.now()
+        if operator.has_permission("can_verify_returns", now=now):
+            return
+        if record.escalated_at is not None and operator.has_permission(
+            DUAL_CONTROL_APPROVAL_FLAG, now=now
+        ):
+            _log.info(
+                "CHECK_IN_TIMEOUT_ACTOR",
+                extra={"actor_id": str(operator_id), "record_id": str(record.id)},
+            )
+            return
+
+        raise OperationNotPermittedError(
+            "'can_verify_returns' səlahiyyəti olmadan giriş təsdiqi mümkün deyil",
+            user_message="Bu əməliyyat üçün səlahiyyətiniz yoxdur.",
+            context={"operator_id": str(operator_id)},
+        )
 
     def _require_operator_scope(self, operator_id: EmployeeId, store_id: StoreId) -> None:
         allowed = self._camera_assignments.stores_for_operator(operator_id)

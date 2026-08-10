@@ -6,6 +6,21 @@ açılan kimi `SET LOCAL app.tenant_id` icra edir. Kontekstsiz sorğu YAZMAQ
 struktur olaraq mümkün deyil.
 """
 
+from src.infrastructure.persistence.catalog_repositories import (
+    PostgresFineTypeRepository,
+    PostgresRewardRepository,
+    PostgresSalesPointsRepository,
+    PostgresTaskRepository,
+    PostgresWorkModeRepository,
+)
+from src.infrastructure.persistence.config_repositories import (
+    PostgresCameraAssignmentRepository,
+    PostgresFeatureToggles,
+    PostgresLeaveTypeRepository,
+    PostgresPermissionFlagRepository,
+    PostgresShiftRepository,
+    PostgresSystemLimits,
+)
 from src.infrastructure.persistence.connection import (
     Database,
     DatabaseError,
@@ -28,11 +43,22 @@ __all__ = [
     "Database",
     "DatabaseError",
     "PostgresAttendanceRepository",
+    "PostgresCameraAssignmentRepository",
     "PostgresEmployeeRepository",
+    "PostgresFeatureToggles",
     "PostgresFineRepository",
+    "PostgresFineTypeRepository",
     "PostgresLeaveRequestRepository",
+    "PostgresLeaveTypeRepository",
+    "PostgresPermissionFlagRepository",
     "PostgresPositionRepository",
+    "PostgresRewardRepository",
+    "PostgresSalesPointsRepository",
+    "PostgresShiftRepository",
+    "PostgresSystemLimits",
+    "PostgresTaskRepository",
     "PostgresUnitOfWork",
+    "PostgresWorkModeRepository",
     "TenantContext",
     "TenantContextError",
     "build_dsn_from_env",

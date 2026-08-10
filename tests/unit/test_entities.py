@@ -668,19 +668,30 @@ def test_store_assignment_only_for_camera_operator() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def make_manual_fine(*, issued_at: datetime | None = None) -> Fine:
-    return Fine(
+def make_manual_fine(*, issued_at: datetime | None = None, published: bool = True) -> Fine:
+    """Cərimə yaradır.
+
+    `published=True` DEFOLTDUR: bu köməkçidən istifadə edən testlərin
+    əksəriyyəti etiraz/export davranışını yoxlayır və o davranış yalnız
+    NƏŞRDƏN SONRA mövcuddur (migration 003). Nəşrdən əvvəlki mərhələni
+    yoxlayan testlər `published=False` verir.
+    """
+    moment = issued_at or at(10, 0)
+    fine = Fine(
         fine_id=FineId(uuid.uuid4()),
         tenant_id=TENANT,
         employee_id=WORKER,
         store_id=STORE,
         source=FineSource.MANUAL_CAMERA,
         amount=Money.parse("10.00"),
-        issued_at=issued_at or at(10, 0),
+        issued_at=moment,
         fine_type_id=FineTypeId(uuid.uuid4()),
         issued_by=OPERATOR,
         photo_evidence_url="https://storage/evidence.jpg",
     )
+    if published:
+        fine.publish(reviewed_by=APPROVER, published_at=moment)
+    return fine
 
 
 def test_manual_fine_requires_photo_evidence() -> None:
@@ -799,7 +810,7 @@ def test_reduced_amount_must_be_lower() -> None:
 def test_fine_cannot_be_reversed_twice() -> None:
     fine = make_manual_fine()
     fine.reverse(decided_by=APPROVER, decided_at=at(11, 0), reason="Etiraz təsdiqləndi tam")
-    with pytest.raises(DomainRuleError, match="aktiv cərimə"):
+    with pytest.raises(DomainRuleError, match="nəşr olunmuş cərimə"):
         fine.reverse(decided_by=APPROVER, decided_at=at(12, 0), reason="İkinci cəhd edilir")
 
 

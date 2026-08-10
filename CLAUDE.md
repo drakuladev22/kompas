@@ -1,0 +1,240 @@
+# KompasOS — Claude Code Execution Rules
+
+Enterprise Leave / Fine / Break / Shift / ERP-1C / Task / Dashboard sistemi.
+Tam spesifikasiya: [`kompasos.md`](kompasos.md). Bu fayl kodun necə yazıldığını
+izah edir — NƏ yazılacağını spesifikasiya deyir.
+
+---
+
+## 1. Vəziyyət
+
+**Altı fazanın hamısının qatları yazılıb.** Faza qapıları artıq YOXDUR — hər
+dəyişiklik istənilən qatı toxuna bilər, şərti yalnız aşağıdakı keyfiyyət
+qapıları qalır.
+
+| Faza | Əhatə |
+|---|---|
+| 1 | DDD strukturu, Event Bus, DI, Saga, logger, şifrələmə, `schema.sql`, CI/CD |
+| 2 | Domen entity-ləri, use case-lər, Guard-lar, Plugin API, NavigationRegistry |
+| 3 | Supabase repo-ları, 1C konnektorları, offline buffer, lisenziya, auto-update |
+| 4 | PySide6 örtük, Kiosk, Camera Dashboard, dizayn sistemi, kompozisiya kökü |
+| 5 | Root/CEO panelləri, növbə/tabel/cərimə modulları, özünə-xidmət alətləri |
+| 6 | Satış xalları, şübhəli satış növbəsi, hesabatlar, Developer Paneli |
+
+Faza siyahısının bənd-bənd vəziyyəti: [`README.md`](README.md).
+
+---
+
+## 2. Keçilməli qapılar
+
+Hər dəyişiklikdən sonra HAMISI keçməlidir:
+
+```bash
+.venv/Scripts/python.exe -m ruff check src/ tests/ scripts/
+.venv/Scripts/python.exe -m ruff format src/ tests/ scripts/
+.venv/Scripts/python.exe -m mypy src            # strict, 100% type hints
+.venv/Scripts/python.exe -m pytest tests/ -q    # 1300+ test
+.venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast
+```
+
+Domen coverage qapısı **85%** (hazırda ~92%):
+
+```bash
+.venv/Scripts/python.exe -m pytest tests/unit \
+  --cov=src/domain --cov=src/shared --cov=src/infrastructure/security \
+  --cov-fail-under=85
+```
+
+**Qeyd:** `.venv/Scripts/python.exe` işlədin — sistem Python-unda `pytest`
+yoxdur. Windows konsolunda Azərbaycan hərfləri üçün `PYTHONIOENCODING=utf-8`.
+
+`test_mono_role_resolves_to_a_fixed_pitch_font` yalnız `QT_QPA_PLATFORM=offscreen`
+ilə bu maşında uğursuz olur (monospace şrift həll olunmur) — mühit xüsusiyyətidir,
+reqressiya deyil.
+
+---
+
+## 3. Arxitektura qaydaları
+
+### Qat sırası pozulmur
+
+```
+domain  ←  application  ←  infrastructure
+   ↑            ↑                ↑
+   └────────────┴──── presentation
+```
+
+* `domain/` heç vaxt `psycopg`, `supabase`, `httpx`, `PySide6` idxal etmir.
+* Portlar `domain/interfaces/ports.py`-da `Protocol` kimi TƏYİN OLUNUR,
+  `infrastructure/`-da İMPLEMENTASİYA olunur (miras YOX, structural typing).
+* Port yalnız domen tipləri qaytarırsa `ports.py`-a gedir. Tətbiq qatının
+  strukturunu qaytarırsa (məs. `ReportFactProvider`) **use case faylının
+  yanında** təyin olunur — əks halda domen → application asılılığı yaranar.
+
+### Modullar bir-birinə birbaşa müraciət etmir
+
+Domen hadisələri `shared/event_bus.py` üzərindən keçir. Entity-lər hadisəni
+DƏRHAL yaymır — `AggregateRoot.record_event()` ilə toplayır, use case commit-dən
+SONRA `collect_events()` ilə götürür. Rollback halında hadisə heç vaxt yayılmır.
+
+Repository-dən BƏRPA edilən aqreqat hadisə YAYMAMALIDIR — konstruktorlarda
+`emit_created_event=False` ötürülür.
+
+### Çox-aqreqatlı əməliyyat = Saga
+
+`LeaveVerificationUseCase.verify_return` naxışdır: status + cərimə + audit bir
+Saga altındadır, uğursuzluqda kompensasiya işə düşür və əməliyyat
+`PENDING_RECONCILIATION`-a keçir. Tək aqreqata toxunan əməliyyat Saga TƏLƏB
+ETMİR (bax `morning_check_in.py` başlığı).
+
+---
+
+## 4. Kod yazma qaydaları
+
+### Placeholder QADAĞANDIR
+
+`# TODO`, `pass  # sonra`, `raise NotImplementedError` (Protocol imzasından
+başqa) yazılmır. Hər fayl istehsalata hazır və tam yazılmış olmalıdır.
+
+### Şərhlər NİYƏ-ni izah edir, NƏ-ni yox
+
+Bu layihənin əsas üslub xüsusiyyəti budur. Hər modul başlığında və qeyri-aşkar
+qərarların yanında **niyə belə seçildiyi və alternativin niyə rədd edildiyi**
+yazılır. Nümunə (`catalogs.py`):
+
+> SOFT DELETE NİYƏ MƏCBURİDİR — Fiziki `DELETE` keçmiş cərimənin növünü
+> "naməlum"a çevirərdi; həmin cərimə isə real pul kəsintisidir və mübahisə
+> halında nəyə görə verildiyi SÜBUT edilə bilməlidir. Ona görə `deactivate()`
+> var, `delete()` yoxdur.
+
+Yeni kod yazarkən mövcud fayllardakı şərh sıxlığını və tonunu təkrarlayın.
+
+### Dil
+
+Bütün şərhlər, docstring-lər, istifadəçi mesajları və log açarları **Azərbaycan
+dilindədir** (bölmə 9: yeganə interfeys dili). Ruff-un `RUF001/002/003`
+qaydaları məhz buna görə söndürülüb. Sinif/metod adları ingiliscədir.
+
+### `str, Enum` qəsdəndir
+
+`StrEnum`-a keçid `str(X.A)` nəticəsini dəyişir və audit/log çıxışına təsir edə
+bilər. Açıq `.value` istifadə edilir.
+
+### Vaxt
+
+Bütün `datetime` **tz-aware** olmalıdır. Domen kodu `datetime.now()` ÇAĞIRMIR —
+`Clock` portu istifadə olunur ki, vaxt-həssas qaydalar (timeout, lockout, etiraz
+pəncərəsi) determinstik test oluna bilsin. `require_aware()` sərhəddə yoxlayır.
+
+### SQL
+
+100% parameterləşdirilmiş (`%s`). Dinamik `WHERE` şərtləri yalnız SABİT sətir
+siyahısından qurulur və `# noqa: S608 — şərtlər sabit siyahıdandır` şərhi ilə
+işarələnir.
+
+---
+
+## 5. Təhlükəsizlik zəmanətləri (HARDCODED — dəyişdirilmir)
+
+Bunlar "modul" DEYİL, struktur zəmanətlərdir və Feature Toggle ilə söndürülə
+bilməz (`docs/security_decisions.md`):
+
+* **Anti-fraud vəzifə ayrılığı** — `can_verify_returns`, `can_override_return_time`,
+  `can_issue_fines`, `can_approve_dual_control_override` heç vaxt
+  `Mağaza_Meneceri`/`Satıcı`-ya verilmir.
+* **SEC-001** — kamera-tipli rol dual-control təsdiqini daşıya bilməz.
+* **Strict Hierarchy Guard** — yalnız CİDDİ ŞƏKİLDƏ aşağı pilləyə toxunmaq olar.
+* **Self-Escalation Guard** — aktor yalnız ÖZÜNDƏ olan flag-i verə bilər.
+* **Dörd-səviyyəli hardlock** — `HardlockLevel` (`authorization.py`).
+
+Hər qayda İKİ yerdə var: domendə (`value_objects/authorization.py`) və DB
+trigger-ində (`schema.sql` §18). Birini dəyişəndə DİGƏRİ də dəyişməlidir.
+
+**Audit yazısı istisna udmur.** `AuditTrail.record()` uğursuz olarsa bütün
+əməliyyat geri qaytarılır — məcburi olan bir şeyin sükutla buraxılması onu
+məcburi olmaqdan çıxarır.
+
+---
+
+## 6. Naxışlar (mövcud kodu təkrarlayın)
+
+### Use case
+
+```python
+class XUseCase:
+    def __init__(self, *, repository: XRepository, audit: AuditTrail,
+                 clock: Clock, notifier: Notifier) -> None: ...
+
+    def do_something(self, *, tenant_id: TenantId, actor: Employee, ...) -> Result:
+        self._require(actor, FLAG)          # 1. səlahiyyət
+        entity.mutate(...)                   # 2. domen qaydası entity-də
+        self._repository.save(entity)        # 3. yazma
+        self._audit.record(...)              # 4. audit
+        self._notifier.notify(...)           # 5. bildiriş (lazımsa)
+```
+
+Səlahiyyət yoxlaması sükutla "heç nə etmə" DEYİL — açıq istisna atır, çünki
+istifadəçi düyməni basıb və nəticə gözləyir.
+
+### Repository
+
+`_BaseRepository`-dən miras alır, `self._tenant` ilə açıq `tenant_id` şərti
+qoyur (RLS-ə ƏLAVƏ ikinci qat), `ON CONFLICT` ilə UPSERT edir.
+
+### GUI sessiyası
+
+Use case-lər bir dəfə qurulub SAXLANMIR — repo-lar bağlantıya bağlıdır:
+
+```python
+with context.session(user_id=actor.id) as session:
+    session.leave_verification.claim_return(...)
+    session.commit()          # commit UNUDULARSA rollback olur
+```
+
+Yeni repo əlavə edərkən `PostgresUnitOfWork._build_repositories()`-ə yazın və
+`composition.py`-da use case-ə bağlayın.
+
+### Ekran
+
+Ekranlar yalnız `theme` alır və setter API-si təqdim edir. Məlumat İKİ yoldan
+gəlir: `preview_screens.populate()` (maket) və `controllers/screen_data.py`
+(canlı). İkisi eyni imzalıdır — `app.py` yalnız hansını çağıracağını seçir.
+
+---
+
+## 7. Baza
+
+* `database/schema.sql` — bazis sxem (tək başına tam quraşdırma).
+* `database/migrations/NNN_*.sql` — üstünə qatlanan dəyişikliklər. **Schema.sql
+  miqrasiya sütunlarını EHTİVA ETMİR** — hər ikisi ardıcıl tətbiq olunur.
+* Hər miqrasiya idempotentdir və sonunda şərhlə DOWN blokunu saxlayır.
+* Yeni sütun əlavə edərkən: miqrasiya faylı + `COMMENT ON COLUMN` + niyə-izahı.
+
+---
+
+## 8. Tez-tez lazım olan yerlər
+
+| Nə | Harada |
+|---|---|
+| İcazə flag kataloqu (36 flag: 34 spesifikasiyadan + `can_publish_fines`, `can_manage_drive_connection`) | `database/schema.sql` §22 |
+| Hardlock/anti-fraud qaydaları | `src/domain/value_objects/authorization.py` |
+| Menyu maddələri + flag bağlantısı | `src/presentation/shell/menu.py` |
+| Sistem limitləri & Feature Toggle açarları | `src/domain/policies.py` |
+| GUI obyekt qrafı | `src/presentation/composition.py` |
+| Test sahtələri (fakes) | `tests/fixtures/fakes.py` |
+| Qərar jurnalı (SEC-NNN, BR-NNN) | `docs/security_decisions.md`, `docs/open_questions.md` |
+| Risk reyestri | `docs/risk_register.md` |
+
+---
+
+## 9. Spesifikasiyadan qəsdli deviasiyalar
+
+Bunlar səhv deyil — sənədləşdirilmiş qərarlardır. Dəyişdirməzdən əvvəl səbəbini
+oxuyun:
+
+| Deviasiya | Sənəd |
+|---|---|
+| Cərimə sübut şəkilləri **Google Drive**-da (Supabase Storage əvəzinə) | `migrations/002` başlığı |
+| Cərimələr `PENDING_REVIEW` → aylıq icmal → `PUBLISHED` (spesifikasiya "dərhal görünür" deyir) | `use_cases/fine_review.py` başlığı |
+| Master Panel `mTLS` əvəzinə `service_role` + RLS | `docs/security_decisions.md` |
+| SEC-016: TOTP/2FA çıxarılıb, giriş = istifadəçi adı + şifrə | `migrations/001`, bölmə 2 |

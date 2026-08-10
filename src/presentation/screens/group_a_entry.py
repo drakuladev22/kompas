@@ -39,6 +39,7 @@ from src.presentation.widgets.primitives import (
     Card,
     Divider,
     body_label,
+    mono_label,
     muted_label,
     stretch,
 )
@@ -116,7 +117,8 @@ class SplashScreen(QWidget):
         self._status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._status)
 
-        version_label = muted_label(f"v{version}")
+        # Maketdə splash-dakı versiya mono-dur (`v2.4.0`).
+        version_label = mono_label(f"v{version}", muted=True)
         version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(version_label)
 
@@ -591,9 +593,82 @@ class FirstRunWizard(QWidget):
         return self._index
 
 
+# --------------------------------------------------------------------------- #
+# 04 — Fatal başlanğıc xətası (bölmə 8, EHTİYAT DƏSTƏK KANALI)
+# --------------------------------------------------------------------------- #
+
+
+class FatalStartupScreen(QWidget):
+    """Tətbiq ümumiyyətlə işə düşə bilmədi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AYRICA EKRAN, MODAL DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Modal arxasında işlək bir pəncərə olmalıdır; burada isə heç nə yoxdur —
+    baza bağlantısı və ya konfiqurasiya yoxdur, yəni menyu, örtük, ekranlar
+    qurula bilmir. Boş pəncərə üzərində modal göstərmək istifadəçini "arxada
+    nəsə var" gözləntisinə salardı.
+
+    ──────────────────────────────────────────────────────────────────────────
+    ƏLAQƏ ÜNVANI NİYƏ STATİKDİR
+    ──────────────────────────────────────────────────────────────────────────
+    Bölmə 8: "hər fatal başlanğıc-xətası ekranında STATİK e-poçt ünvanı
+    göstərilir". Ünvanı bazadan oxumaq mənasız olardı — məhz baza əlçatmaz
+    olduğu üçün bu ekran görünür. Ona görə mətn koddadır.
+    """
+
+    #: Tətbiq açılmadıqda müştərinin yeganə çıxış yolu (bölmə 8).
+    FALLBACK_CONTACT: Final = "dəstək@kompas.az · +994 12 000 00 00"
+
+    def __init__(
+        self,
+        theme: ThemeManager,
+        *,
+        message: str,
+        contact: str = FALLBACK_CONTACT,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setStyleSheet(f"background-color: {theme.color('--color-content-bg')};")
+
+        outer = QVBoxLayout(self)
+        outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        card = Card(padding=44, spacing=20, surface="modal", shadow=True)
+        card.setFixedWidth(560)
+        card.body().setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        heading = QLabel("KompasOS işə düşə bilmədi")
+        heading_font = heading.font()
+        heading_font.setPixelSize(24)
+        heading_font.setWeight(QFont.Weight.DemiBold)
+        heading.setFont(heading_font)
+        heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card.add(heading)
+
+        detail = body_label(message, size=14)
+        detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        detail.setMaximumWidth(440)
+        detail.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
+        card.body().addWidget(detail, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        card.add(Divider())
+
+        hint = muted_label("Problem davam edərsə bu ünvanla əlaqə saxlayın:")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card.body().addWidget(hint, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        contact_label = mono_label(contact, size=14)
+        contact_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card.body().addWidget(contact_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        outer.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
+
+
 __all__ = [
     "LOGIN_CARD_WIDTH",
     "AdminLoginScreen",
+    "FatalStartupScreen",
     "FirstRunWizard",
     "SplashScreen",
 ]
