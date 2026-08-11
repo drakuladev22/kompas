@@ -270,6 +270,7 @@ BEGIN
     -- =====================================================================
     DECLARE
         v_fine_type UUID;
+        v_fine_id   UUID;
         v_closes    TIMESTAMPTZ;
     BEGIN
         INSERT INTO fine_types (tenant_id, name_az, standard_amount)
@@ -280,17 +281,40 @@ BEGIN
                            amount, issued_by, photo_evidence_url)
         VALUES (v_tenant, v_seller, v_store, 'MANUAL_CAMERA', v_fine_type,
                 15.00, v_root, 'https://storage.test/evidence.jpg')
-        RETURNING appeal_window_closes_at INTO v_closes;
+        RETURNING id, appeal_window_closes_at INTO v_fine_id, v_closes;
+
+        -- (a) YARADILAN anda sayğac HƏLƏ BAŞLAMIR.
+        --
+        -- Bu şərt miqrasiya 016-da DƏYİŞDİRİLDİ. Əvvəl trigger pəncərəni
+        -- INSERT anında doldururdu; nəticədə icmalda bir həftə gözləyən
+        -- cərimənin 72 saatı işçi onu GÖRMƏMİŞ bitirdi. Qayda isə müddətin
+        -- NƏŞRDƏN sayılmasını tələb edir, ona görə nəşr olunmamış sətirdə
+        -- sütun NULL qalır (fail-safe: `v_exportable_fines` onu buraxmır).
+        IF v_closes IS NOT NULL THEN
+            RAISE EXCEPTION
+                'TEST 12 UĞURSUZ: nəşr olunmamış cərimədə etiraz pəncərəsi '
+                'açıldı (%) — sayğac yaradılışdan sayılır!', v_closes;
+        END IF;
+
+        -- (b) NƏŞRDƏN sonra pəncərə `system_limits`-dəki 72 saatdan qurulur.
+        UPDATE fines
+           SET status       = 'PUBLISHED',
+               published_at = now(),
+               reviewed_by  = v_root
+         WHERE id = v_fine_id;
+
+        SELECT appeal_window_closes_at INTO v_closes FROM fines WHERE id = v_fine_id;
 
         IF v_closes IS NULL
            OR v_closes < now() + INTERVAL '71 hours'
            OR v_closes > now() + INTERVAL '73 hours' THEN
             RAISE EXCEPTION
-                'TEST 12 UĞURSUZ: etiraz pəncərəsi 72 saata təyin olunmadı (%)', v_closes;
+                'TEST 12 UĞURSUZ: nəşrdən sonra etiraz pəncərəsi 72 saata '
+                'təyin olunmadı (%)', v_closes;
         END IF;
     END;
     v_passed := v_passed + 1;
-    RAISE NOTICE 'TEST 12 ✓ etiraz pəncərəsi system_limits-dən 72 saat kimi təyin olundu';
+    RAISE NOTICE 'TEST 12 ✓ etiraz pəncərəsi nəşrdən sayılır (yaradılışda NULL, nəşrdə 72 saat)';
 
     -- =====================================================================
     -- TEST 13: CEO ↔ CEO — bərabər pillə müdaxiləsi bloklanır (SEC-006)
