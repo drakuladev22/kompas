@@ -32,6 +32,11 @@
 -- mümkündür; prioritet 2 tamamilə qadağan edilə bilməz, çünki `HR_Admin` və
 -- `Kamera_Nəzarətçisi` də həmin pillədədir.
 
+-- Bütün cədvəllər `kompasos` sxemindədir; bu sətir olmadan psql defolt
+-- `search_path` ilə işləyir və HƏR cədvəl "does not exist" xətası verir.
+-- (Bu miqrasiyada sətir UNUDULMUŞDU — CI-da 010 məhz buna görə çökürdü.)
+SET search_path TO kompasos, public;
+
 CREATE OR REPLACE FUNCTION enforce_anti_fraud_segregation()
 RETURNS TRIGGER AS $$
 DECLARE

@@ -29,6 +29,11 @@
 -- sonra indeks yenə də qurulmağa çalışır — susmaqdansa yüksək səslə dayanmaq
 -- yaxşıdır, çünki əks halda qoruma "quraşdırıldı" sayılıb əslində olmazdı.
 
+-- Bütün cədvəllər `kompasos` sxemindədir; bu sətir olmadan psql defolt
+-- `search_path` ilə işləyir və HƏR cədvəl "does not exist" xətası verir.
+-- (Bu miqrasiyada sətir UNUDULMUŞDU — CI-da 010 məhz buna görə çökürdü.)
+SET search_path TO kompasos, public;
+
 DO $$
 DECLARE
     v_dupes INTEGER;

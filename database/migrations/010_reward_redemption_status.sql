@@ -36,6 +36,12 @@
 
 BEGIN;
 
+-- Bütün cədvəllər `kompasos` sxemindədir; bu sətir olmadan psql defolt
+-- `search_path` ilə işləyir və HƏR cədvəl "does not exist" xətası verir.
+-- (Bu miqrasiyada sətir UNUDULMUŞDU — CI-da 010 məhz buna görə çökürdü.)
+SET search_path TO kompasos, public;
+
+
 -- ---------------------------------------------------------------------------
 -- 1. Enum
 -- ---------------------------------------------------------------------------

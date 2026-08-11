@@ -45,6 +45,11 @@
 -- UPDATE-dir. Əks halda SQL ilə (ekranı yan keçərək) nəşr edilən cərimənin
 -- pəncərəsi heç vaxt açılmazdı.
 
+-- Bütün cədvəllər `kompasos` sxemindədir; bu sətir olmadan psql defolt
+-- `search_path` ilə işləyir və HƏR cədvəl "does not exist" xətası verir.
+-- (Bu miqrasiyada sətir UNUDULMUŞDU — CI-da 010 məhz buna görə çökürdü.)
+SET search_path TO kompasos, public;
+
 CREATE OR REPLACE FUNCTION set_fine_appeal_window() RETURNS TRIGGER AS $$
 DECLARE
     v_hours INTEGER;

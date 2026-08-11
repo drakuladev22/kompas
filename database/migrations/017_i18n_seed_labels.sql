@@ -62,6 +62,11 @@
 -- «override» burada MANUAL VAXT DÜZƏLİŞİ mənasındadır (icazə istisnası YOX).
 -- Faza 8 terminologiya cədvəli bu iki mənanı ayırır, çünki eyni İngiliscə söz
 -- domendə İKİ fərqli anlayışdır: `ManualOverride` ↔ `PermissionOverride`.
+-- Bütün cədvəllər `kompasos` sxemindədir; bu sətir olmadan psql defolt
+-- `search_path` ilə işləyir və HƏR cədvəl "does not exist" xətası verir.
+-- (Bu miqrasiyada sətir UNUDULMUŞDU — CI-da 010 məhz buna görə çökürdü.)
+SET search_path TO kompasos, public;
+
 UPDATE positions
    SET description = 'iVMS-də görüntünü yoxlayıb təsdiq/vaxt düzəlişi/cərimə verir'
  WHERE description = 'iVMS-də görüntünü yoxlayıb təsdiq/override/cərimə verir';
