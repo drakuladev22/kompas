@@ -69,7 +69,7 @@ CATALOG_AZ: Final[dict[str, str]] = {
     "kiosk.pin.wrong": "PIN yanlışdır — {remaining} cəhd qaldı",
     "kiosk.pin.locked": "Terminal {minutes} dəqiqə bloklandı. Mağaza rəhbərinizə müraciət edin.",
     "kiosk.home.greeting": "Salam, {name}",
-    "kiosk.home.status": "Cari status",
+    "kiosk.home.status": "Cari vəziyyət",
     "kiosk.home.change_photo": "Şəkli Dəyiş",
     "kiosk.home.logout": "Çıxış",
     "kiosk.home.tasks": "Açıq Tapşırıqlarım",
@@ -86,7 +86,7 @@ CATALOG_AZ: Final[dict[str, str]] = {
     "status.action.returned": "Mən Qayıtdım",
     # ---------------------------- naviqasiya -------------------------------- #
     "nav.section": "Naviqasiya",
-    "nav.dashboard": "Dashboard",
+    "nav.dashboard": "İdarə Paneli",
     "nav.live_queue": "Canlı Növbə",
     "nav.daily_roster": "Gündəlik Tabel",
     "nav.shift_planning": "Növbə Planlama",
@@ -99,11 +99,11 @@ CATALOG_AZ: Final[dict[str, str]] = {
     "nav.users": "İstifadəçilər",
     "nav.permissions": "İcazə Matrisi",
     "nav.erp_servers": "ERP / 1C Serverləri",
-    "nav.backups": "Backup və Bərpa",
+    "nav.backups": "Ehtiyat Nüsxə və Bərpa",
     "nav.health": "Sistem Sağlamlığı",
     "nav.audit": "Audit Jurnalı",
     "nav.drive_connection": "Drive Bağlantısı",
-    "nav.root_control": "ROOT Mərkəzi",
+    "nav.root_control": "ROOT İdarə Mərkəzi",
     "nav.settings": "Ayarlar",
     "nav.profile": "Profil",
     # ------------------------------ növbə ----------------------------------- #
@@ -121,7 +121,7 @@ CATALOG_AZ: Final[dict[str, str]] = {
     "override.reason": "Səbəb *",
     "override.reason_required": "Səbəb məcburidir",
     "override.audit_note": "Səbəb audit jurnalına yazılır və silinmir.",
-    "override.dual_control": "Dual-Control tələb olunacaq",
+    "override.dual_control": "Cüt Nəzarətli Təsdiq Tələb Olunacaq",
     "override.submit": "Təsdiqə Göndər",
     # ----------------------------- cərimələr -------------------------------- #
     "fine.new": "Yeni Cərimə",
@@ -165,8 +165,8 @@ CATALOG_AZ: Final[dict[str, str]] = {
     "permissions.new_role": "+ Yeni Vəzifə",
     "permissions.active_count": "{active} / {total} aktiv",
     "permissions.hardlock_note": "Qıfıllı icazələr hardlock-dur — yalnız ROOT "
-    "Control Center-dən dəyişdirilir.",
-    "permissions.override": "Fərdi Override",
+    "İdarə Mərkəzindən dəyişdirilir.",
+    "permissions.override": "Fərdi İstisna",
     # -------------------------------- ERP ----------------------------------- #
     "erp.new_server": "Yeni Server",
     "erp.test_all": "Hamısını Yoxla",
@@ -175,10 +175,10 @@ CATALOG_AZ: Final[dict[str, str]] = {
     "erp.status.slow": "Gecikmə yüksəkdir",
     "erp.status.offline": "Bağlantı yoxdur",
     # ------------------------------ backup ---------------------------------- #
-    "backup.now": "İndi Backup Al",
+    "backup.now": "İndi Ehtiyat Nüsxə Al",
     "backup.restore": "Bu Nöqtəyə Bərpa Et",
     "backup.restore.confirm_title": "Bu nöqtəyə bərpa edilsin?",
-    "backup.retention": "Son 30 günün backup-ları saxlanılır, sonra avtomatik silinir.",
+    "backup.retention": "Son 30 günün ehtiyat nüsxələri saxlanılır, sonra avtomatik silinir.",
     # ------------------------------- audit ---------------------------------- #
     "audit.immutable": "Audit yazıları dəyişdirilə və silinə bilməz.",
     # ------------------------------ ayarlar --------------------------------- #
@@ -192,7 +192,7 @@ CATALOG_AZ: Final[dict[str, str]] = {
     "settings.change_password": "Şifrəni Dəyiş",
     "settings.close_sessions": "Hamısını Bağla",
     # ------------------------------- ROOT ----------------------------------- #
-    "root.title": "ROOT Control Center",
+    "root.title": "ROOT İdarə Mərkəzi",
     "root.mode": "ROOT rejimi",
     "root.apply": "Tətbiq Et",
     "root.limits": "Dinamik limitlər",

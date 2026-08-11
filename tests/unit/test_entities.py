@@ -749,6 +749,63 @@ def test_appeal_window_is_72_hours() -> None:
     assert fine.is_appeal_window_open(now=at(10, 0) + timedelta(hours=73)) is False
 
 
+def test_appeal_window_closes_exactly_at_72_hours() -> None:
+    """TAM SƏRHƏD: 72:00:00 anında pəncərə BAĞLIDIR.
+
+    ──────────────────────────────────────────────────────────────────────────
+    OPERATOR SEÇİMİ VƏ ONUN ƏSASI
+    ──────────────────────────────────────────────────────────────────────────
+    `is_appeal_window_open` `now < closes_at` yazır, yəni `<` — sərhəd anının
+    ÖZÜ artıq "bağlı" tərəfdədir. Spesifikasiya (bölmə 4) belə deyir:
+    *"İşçi hər cərimə/override-a qarşı 72 saat ƏRZİNDƏ etiraz göndərə bilər."*
+    "72 saat ərzində" 72-ci saatın TAMAMLANMASINA qədər olan intervaldır —
+    yəni `[published_at, published_at + 72h)`. Saniyələr fərqi burada nəzəri
+    deyil: export kilidi (bölmə 6) eyni sərhədə söykənir, ona görə "açıq" və
+    "export edilə bilər" arasında BOŞLUQ da, ÖRTÜŞMƏ də olmamalıdır.
+
+    Aşağıdakı üç yoxlama məhz sərhədin hansı tərəfə düşdüyünü təsbit edir:
+    bir mikrosaniyə əvvəl AÇIQ, tam sərhəddə BAĞLI, bir mikrosaniyə sonra da
+    BAĞLI.
+    """
+    published_at = at(10, 0)
+    fine = make_manual_fine(issued_at=published_at)
+    boundary = published_at + timedelta(hours=72)
+
+    assert fine.appeal_window_closes_at == boundary
+    assert fine.is_appeal_window_open(now=boundary - timedelta(microseconds=1)) is True
+    assert fine.is_appeal_window_open(now=boundary) is False
+    assert fine.is_appeal_window_open(now=boundary + timedelta(microseconds=1)) is False
+
+    # Eyni sərhəd export kilidində də: tam 72:00:00-da export AÇILIR.
+    assert fine.is_exportable(now=boundary - timedelta(microseconds=1)) is False
+    assert fine.is_exportable(now=boundary) is True
+
+
+def test_unpublished_fine_never_becomes_exportable() -> None:
+    """`PENDING_REVIEW` cərimə NƏ QƏDƏR vaxt keçsə də export-a düşmür.
+
+    Domen mənbəyi budur; DB tərəfi (`list_exportable` sorğusu və
+    `v_exportable_fines`) məhz buna uyğunlaşdırılıb. Sorğu əvvəl yalnız
+    `status <> 'REVERSED'` yoxlayırdı və nəşr olunmamış cərimə maaş export
+    siyahısına sıza bilirdi — işçi onu nə görüb, nə də etiraz hüququ alıb.
+    """
+    fine = make_manual_fine(issued_at=at(10, 0), published=False)
+
+    assert fine.status is FineStatus.PENDING_REVIEW
+    # Sayğac HƏLƏ BAŞLAMAYIB — pəncərə "açıq" sayılır (fail-safe).
+    assert fine.appeal_window_closes_at is None
+    assert fine.is_appeal_window_open(now=at(10, 0) + timedelta(days=365)) is True
+    assert fine.is_exportable(now=at(10, 0) + timedelta(days=365)) is False
+
+    # Nəşrdən SONRA sayğac nəşr anından başlayır — yaradılışdan YOX.
+    published_at = at(10, 0) + timedelta(days=30)
+    fine.publish(reviewed_by=APPROVER, published_at=published_at)
+
+    assert fine.appeal_window_closes_at == published_at + timedelta(hours=72)
+    assert fine.is_exportable(now=published_at + timedelta(hours=71)) is False
+    assert fine.is_exportable(now=published_at + timedelta(hours=72)) is True
+
+
 def test_export_lock_while_appeal_window_open() -> None:
     """Bölmə 6, HÜQUQİ RİSK: pəncərə açıqdırsa export QADAĞANDIR."""
     fine = make_manual_fine(issued_at=at(10, 0))

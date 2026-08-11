@@ -33,11 +33,16 @@ Hər dəyişiklikdən sonra HAMISI keçməlidir:
 .venv/Scripts/python.exe -m ruff check src/ tests/ scripts/
 .venv/Scripts/python.exe -m ruff format src/ tests/ scripts/
 .venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (200 fayl)
-.venv/Scripts/python.exe -m pytest tests/ -q    # 1363 test, 43 skip
+.venv/Scripts/python.exe -m pytest tests/ -q    # 1984 test, 45 skip
 .venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast
 ```
 
-Domen coverage qapısı **85%** (hazırda ~92%):
+Kontrast yoxlayıcısı **130 rəng cütünü** ölçür — həm `tokens.py` cütlərini,
+həm də `qss.py`-dəki FAKTİKİ istifadəni (`::placeholder`, `:disabled`,
+`:focus`, `:hover`, sərhədlər). Yalnız tokenləri yoxlamaq kifayət etmirdi:
+dörd kontrast qüsuru məhz bu boşluqda gizlənmişdi.
+
+Domen coverage qapısı **85%** (hazırda ~93%):
 
 ```bash
 .venv/Scripts/python.exe -m pytest tests/unit \
@@ -48,9 +53,14 @@ Domen coverage qapısı **85%** (hazırda ~92%):
 **Qeyd:** `.venv/Scripts/python.exe` işlədin — sistem Python-unda `pytest`
 yoxdur. Windows konsolunda Azərbaycan hərfləri üçün `PYTHONIOENCODING=utf-8`.
 
-`test_mono_role_resolves_to_a_fixed_pitch_font` yalnız `QT_QPA_PLATFORM=offscreen`
-ilə bu maşında uğursuz olur (monospace şrift həll olunmur) — mühit xüsusiyyətidir,
-reqressiya deyil.
+`test_mono_role_resolves_to_a_fixed_pitch_font` `QT_QPA_PLATFORM=offscreen`
+altında bu maşında **atlanır** (monospace şrift həll olunmur) — mühit
+xüsusiyyətidir, reqressiya deyil.
+
+**Coverage qapısının ölçmədiyi qat:** `pyproject.toml`-dakı
+`omit = ["*/presentation/*"]` bütün təqdimat qatını — o cümlədən 11 yazı
+kontrollerini — hər coverage hesabatından çıxarır. Onları ölçmək üçün
+müvəqqəti `--cov-config` lazımdır.
 
 ---
 
@@ -285,7 +295,10 @@ açarın məcburi olduğunu oradan öyrənir.
 |---|---|---|
 | `KOMPASOS_FERNET_KEY`, `KOMPASOS_HASH_PEPPER` | ❌ istehsalatda | `--strict` işə düşmür |
 | `KOMPASOS_GOOGLE_CLIENT_ID` / `_SECRET` | ✅ | Şəkillər lokal növbədə gözləyir, cərimələr normal yaranır |
-| `KOMPASOS_EVIDENCE_QUEUE_PATH` | ✅ | Defolt `./data/evidence_uploads.db` |
+| `KOMPASOS_EVIDENCE_QUEUE_PATH`, `KOMPASOS_SQLITE_PATH` | ✅ | Defolt `%LOCALAPPDATA%\KompasOS\data\` — CWD-yə nisbi YOX, çünki paketlənmiş `.exe` ixtiyari qovluqdan işə düşür |
+| `KOMPASOS_PRIVATE_SERVER_DSN` | ✅ | Boşdursa baza keçidi işləmir, aydın səbəb qaytarılır |
+| `KOMPASOS_PLUGIN_TRUSTED_PUBLISHERS` | ✅ | Boş = fail-closed, heç bir plugin quraşdırılmır |
+| `KOMPASOS_PLUGIN_PYTHON` | ✅ | Paketlənmiş mühitdə plugin sandbox-u üçün interpretator; tapılmasa plugin icra olunmur |
 
 ---
 

@@ -20,6 +20,7 @@ from decimal import Decimal
 
 import pytest
 
+from src.application.use_cases.leave_verification import OperationNotPermittedError
 from src.domain.entities import (
     AttendanceRecord,
     CheckInStatus,
@@ -29,6 +30,7 @@ from src.domain.entities import (
     LeaveStatus,
     PermissionOverride,
 )
+from src.domain.entities.fine import FineStatus
 from src.domain.value_objects import (
     Money,
     PermissionEffect,
@@ -548,7 +550,7 @@ def test_fine_export_lock(database: Database, tenant: TenantId, store_id: StoreI
             fine_type = cur.fetchone()
     assert fine_type is not None
 
-    issued_at = datetime.now(tz=UTC) - timedelta(hours=100)  # pəncərə bağlanıb
+    issued_at = datetime.now(tz=UTC) - timedelta(hours=100)
     fine = Fine(
         fine_id=new_fine_id(),
         tenant_id=tenant,
@@ -568,9 +570,31 @@ def test_fine_export_lock(database: Database, tenant: TenantId, store_id: StoreI
 
     now = datetime.now(tz=UTC)
     with database.unit_of_work(tenant) as uow:
+        # ADDIM 1 — cərimə hələ İCMALDADIR (`PENDING_REVIEW`).
+        # Vaxt keçsə də export-a DÜŞMÜR: işçi onu nə görüb, nə də etiraz
+        # hüququ alıb (bölmə 6, hüquqi risk). Sorğu əvvəllər yalnız
+        # `status <> 'REVERSED'` yoxlayırdı və məhz bu sətri buraxırdı.
+        assert uow.fines.list_exportable(tenant, now=now) == []
+
+    # ADDIM 2 — aylıq icmal cəriməni NƏŞR edir; 72 saatlıq pəncərə MƏHZ
+    # BURADAN başlayır, ona görə nəşr anı keçmişə qoyulur.
+    with database.unit_of_work(tenant, user_id=operator_id) as uow:
+        stored = uow.fines.get(fine.id)
+        assert stored is not None
+        assert stored.status is FineStatus.PENDING_REVIEW
+        assert stored.appeal_window_closes_at is None, (
+            "nəşr olunmamış cərimədə pəncərə açılmamalıdır (miqrasiya 016)"
+        )
+        stored.publish(reviewed_by=operator_id, published_at=issued_at)
+        uow.fines.save(stored)
+        uow.commit()
+
+    with database.unit_of_work(tenant) as uow:
         exportable = uow.fines.list_exportable(tenant, now=now)
         assert len(exportable) == 1
         assert exportable[0].id == fine.id
+        assert exportable[0].published_at is not None, "`published_at` DB-yə yazılmadı"
+        assert exportable[0].appeal_window_closes_at == issued_at + timedelta(hours=72)
 
         # Ləğv edildikdən sonra export-dan ÇIXMALIDIR
         reversed_fine = exportable[0]
@@ -621,6 +645,113 @@ def test_open_fine_within_window_not_exportable(
         uow.fines.save(fine)
         uow.commit()
         assert uow.fines.list_exportable(tenant, now=datetime.now(tz=UTC)) == []
+
+
+@requires_db
+def test_appeal_window_starts_at_publication_not_creation(
+    database: Database, tenant: TenantId, store_id: StoreId
+) -> None:
+    """Miqrasiya 016: 72 saat NƏŞRDƏN sayılır (`trg_fine_appeal_window`).
+
+    Köhnə trigger sütunu INSERT anında `now() + 72h` ilə doldururdu. Cərimə
+    icmalda bir həftə qalsaydı, işçi onu GÖRDÜYÜ gün etiraz müddəti artıq
+    bitmiş olardı — `fine.py` başlığındakı "ƏN VACİB DETAL"ın pozulması.
+    """
+    worker_id = make_employee_row(database, tenant, store_id, SystemRole.SELLER, with_pin=True)
+    operator_id = make_employee_row(database, tenant, store_id, SystemRole.CAMERA_OPERATOR)
+
+    with database.system_scope() as conn:
+        conn.execute(
+            "INSERT INTO fine_types (tenant_id, name_az, standard_amount) VALUES (%s, %s, 10.00)",
+            (tenant, f"Növ-{uuid.uuid4().hex[:6]}"),
+        )
+        conn.commit()
+    with database.system_scope() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id FROM fine_types WHERE tenant_id = %s LIMIT 1", (tenant,))
+        fine_type = cur.fetchone()
+    assert fine_type is not None
+
+    issued_at = datetime.now(tz=UTC) - timedelta(days=10)  # çoxdan yaradılıb
+    fine = Fine(
+        fine_id=new_fine_id(),
+        tenant_id=tenant,
+        employee_id=worker_id,
+        store_id=store_id,
+        source=FineSource.MANUAL_CAMERA,
+        amount=Money(Decimal("10.00")),
+        issued_at=issued_at,
+        fine_type_id=fine_type["id"],
+        issued_by=operator_id,
+        photo_evidence_url="https://storage/z.jpg",
+    )
+
+    with database.unit_of_work(tenant, user_id=operator_id) as uow:
+        uow.fines.save(fine)
+        uow.commit()
+
+    # (a) İcmalda gözləyən cərimədə sayğac HƏLƏ BAŞLAMAYIB.
+    with database.unit_of_work(tenant) as uow:
+        stored = uow.fines.get(fine.id)
+        assert stored is not None
+        assert stored.appeal_window_closes_at is None
+        assert stored.is_appeal_window_open(now=datetime.now(tz=UTC)) is True
+
+    # (b) Nəşrdən SONRA pəncərə məhz nəşr anından açılır — yaradılışdan YOX.
+    published_at = datetime.now(tz=UTC)
+    with database.unit_of_work(tenant, user_id=operator_id) as uow:
+        stored = uow.fines.get(fine.id)
+        assert stored is not None
+        stored.publish(reviewed_by=operator_id, published_at=published_at)
+        uow.fines.save(stored)
+        uow.commit()
+
+    with database.unit_of_work(tenant) as uow:
+        republished = uow.fines.get(fine.id)
+        assert republished is not None
+        assert republished.appeal_window_closes_at == published_at + timedelta(hours=72)
+        # 10 gün əvvəl yaradılmasına baxmayaraq etiraz hüququ HƏLƏ AÇIQDIR.
+        assert republished.is_appeal_window_open(now=datetime.now(tz=UTC)) is True
+        assert uow.fines.list_exportable(tenant, now=datetime.now(tz=UTC)) == []
+
+
+@requires_db
+def test_timeout_escalated_leave_blocks_a_second_open_request(
+    database: Database, tenant: TenantId, store_id: StoreId
+) -> None:
+    """Miqrasiya 016: `uq_leave_one_open_per_employee` `TIMEOUT_ESCALATED`-i də tutur.
+
+    Domendə `LeaveStatus.is_open` onu AÇIQ sayır; indeks isə əvvəl yalnız iki
+    statusu əhatə edirdi, yəni "45 dəqiqə gözlə, sonra istədiyin qədər icazə
+    aç" yolu DB səviyyəsində açıq qalırdı.
+    """
+    worker_id = make_employee_row(database, tenant, store_id, SystemRole.SELLER, with_pin=True)
+
+    escalated = LeaveRequest(
+        request_id=new_leave_request_id(),
+        tenant_id=tenant,
+        employee_id=worker_id,
+        store_id=store_id,
+        requested_time=datetime.now(tz=UTC) - timedelta(hours=2),
+        status=LeaveStatus.TIMEOUT_ESCALATED,
+    )
+    with database.unit_of_work(tenant) as uow:
+        uow.leave_requests.save(escalated)
+        uow.commit()
+
+    second = LeaveRequest(
+        request_id=new_leave_request_id(),
+        tenant_id=tenant,
+        employee_id=worker_id,
+        store_id=store_id,
+        requested_time=datetime.now(tz=UTC),
+        status=LeaveStatus.OUTSIDE,
+    )
+    # Repository xam `UniqueViolation`-ı iş qaydası istisnasına çevirir.
+    with (
+        database.unit_of_work(tenant) as uow,
+        pytest.raises(OperationNotPermittedError, match="açıq icazə"),
+    ):
+        uow.leave_requests.save(second)
 
 
 # --------------------------------------------------------------------------- #

@@ -51,7 +51,16 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # TEST ÇƏRÇİVƏSİ İMZALANMIŞ `.exe`-YƏ DÜŞMƏMƏLİDİR
+    # -------------------------------------------------------------------------
+    # Bu gün `src/` altında heç bir modul `pytest`-i idxal etmir, ona görə bu
+    # siyahı praktikada BOŞ nəticə verir — yəni CI-ın bayraqlı yolu ilə çıxış
+    # fərqi YARATMIR (spec ↔ CI paritetini pozmur, bax fayl başlığı).
+    # O, REQRESSİYA BARYERİDİR: istehsalat modulunda təsadüfən qalan bir
+    # `import pytest` (məs. `pytest.approx` və ya köçürülmüş fixture köməkçisi)
+    # bütün test ağacını buraxılış paketinə dartardı. Belə sürüşmə nə testdə,
+    # nə də lint-də görünür — yalnız paketin ölçüsündə və hücum səthində.
+    excludes=['pytest', '_pytest', 'tests'],
     noarchive=False,
     optimize=0,
 )
@@ -68,7 +77,37 @@ exe = EXE(  # noqa: F821
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    # UPX NATİV KİTABXANALARA TOXUNMAMALIDIR
+    # -------------------------------------------------------------------------
+    # NİYƏ BU SİYAHI LAZIMDIR: `upx=True` yalnız UPX ikili faylı PATH-dədirsə
+    # işə düşür. GitHub Windows runner-ində UPX YOXDUR, ona görə CI-ın verdiyi
+    # `.exe` SIXILMAMIŞDIR; UPX quraşdırılmış hazırlayıcı maşınında isə eyni
+    # spec Qt6/libpq/OpenSSL DLL-lərini sıxardı. Nəticədə bu faylın yeganə
+    # məqsədi olan şey — "CI ilə EYNİ nəticə" (fayl başlığı) — pozulur və
+    # diaqnostika üçün qurulan paket buraxılış paketindən FƏRQLİ olur.
+    # Sıxılmış Qt6 DLL-ləri həm işə düşməmə (plugin `qwindows.dll` yüklənmir),
+    # həm də Authenticode/antivirus evristikasında yalançı-müsbət mənbəyidir —
+    # yəni fərq ən pis yerdə, müştəri maşınında üzə çıxardı.
+    # Tam paritet üçün doğru yol `upx=False`-dur; mövcud sətir qəsdən
+    # dəyişdirilmir (audit səlahiyyəti yalnız ƏLAVƏ etməkdir) — bu istisna
+    # siyahısı isə ən riskli faylları onsuz da kənarda saxlayır.
+    upx_exclude=[
+        'Qt6Core.dll',
+        'Qt6Gui.dll',
+        'Qt6Widgets.dll',
+        'Qt6Svg.dll',
+        'Qt6Network.dll',
+        'qwindows.dll',
+        'shiboken6.abi3.dll',
+        'libpq.dll',        # psycopg[binary] — bağlantı qatının özəyi
+        'libssl-3-x64.dll',
+        'libcrypto-3-x64.dll',
+        'python3.dll',
+        'python311.dll',    # CI-dakı Python versiyası ilə eynidir
+        'vcruntime140.dll',
+        'vcruntime140_1.dll',
+        'msvcp140.dll',
+    ],
     runtime_tmpdir=None,
     # `--windowed` ekvivalenti. Çökmə diaqnostikası üçün MÜVƏQQƏTİ olaraq
     # `True` edilə bilər: `--windowed` rejimdə çökmə səssiz olur, konsolda isə

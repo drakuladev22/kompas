@@ -330,6 +330,9 @@ class Fine(AggregateRoot):
 
 __all__ = [
     "DEFAULT_APPEAL_WINDOW_HOURS",
+    # Export filtri infrastruktur qatında da bu DƏSTDƏN qurulur — siyahını
+    # SQL-də əl ilə təkrar yazmaq iki mənbə yaradardı (bax `repositories.py`).
+    "EXPORTABLE_STATUSES",
     "Fine",
     "FineSource",
     "FineStatus",

@@ -21,11 +21,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QWidget
 
 from src.presentation.theme.manager import enable_styled_background
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import WindowButton
+from src.presentation.widgets.primitives import plain_label
 
 if TYPE_CHECKING:
     from PySide6.QtGui import QMouseEvent
@@ -69,7 +70,7 @@ class TitleBar(QWidget):
         logo.setFixedSize(metrics.TITLEBAR_LOGO_SIZE, metrics.TITLEBAR_LOGO_SIZE)
         layout.addWidget(logo)
 
-        self._title = QLabel(title)
+        self._title = plain_label(title)
         layout.addWidget(self._title)
 
         layout.addStretch(1)

@@ -1,4 +1,4 @@
-"""Özünə-xidmət backup/bərpa qapısı — `can_manage_backups` (bölmə 3, 7) — Faza 5.1.
+"""Özünə-xidmət ehtiyat nüsxə/bərpa qapısı — `can_manage_backups` (bölmə 3, 7) — Faza 5.1.
 
     "`[İnfrastruktur Və Baza Ayarları]` panelində müştəri ÖZÜ, hazırlayıcının
      köməyi olmadan, aydın xəbərdarlıq/təsdiq addımları ilə «Əvvəlki tarixə
@@ -36,7 +36,7 @@ from src.shared.logger import LogChannel, get_logger
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
     from src.domain.interfaces.ports import AuditTrail, Clock
-    from src.domain.value_objects.identifiers import TenantId
+    from src.domain.value_objects.identifiers import EmployeeId, TenantId
     from src.infrastructure.backup.service import BackupRecord
 
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
@@ -45,9 +45,9 @@ MANAGE_BACKUPS_FLAG = "can_manage_backups"
 
 
 class BackupAccessError(KompasOSError):
-    """Backup/bərpa əməliyyatı üçün səlahiyyət yoxdur."""
+    """Ehtiyat nüsxə/bərpa əməliyyatı üçün səlahiyyət yoxdur."""
 
-    user_message = "Backup və bərpa əməliyyatları üçün səlahiyyətiniz yoxdur."
+    user_message = "Ehtiyat nüsxə və bərpa əməliyyatları üçün səlahiyyətiniz yoxdur."
 
 
 @runtime_checkable
@@ -69,7 +69,12 @@ class BackupOperations(Protocol):
         *,
         target_dsn: str,
         confirmation: str,
-        actor_id: object | None = None,
+        # `object | None` DEYİL, `EmployeeId | None`: `Protocol` structural
+        # typing-dir və parametr tipləri KONTRAVARIANTDIR — porta `object`
+        # yazsaydıq, `NightlyBackupService.restore(actor_id: EmployeeId | None)`
+        # daha DAR olduğu üçün porta uyğun sayılmazdı və `composition.py`-da
+        # bağlantı mypy-dan keçməzdi. Dəyər onsuz da həmişə `actor.id`-dir.
+        actor_id: EmployeeId | None = None,
     ) -> None: ...
 
 
@@ -87,7 +92,7 @@ class RestorePoint:
 
 
 class BackupAccessUseCase:
-    """ "Backup və Bərpa" ekranının səlahiyyət qapısı."""
+    """«Ehtiyat Nüsxə və Bərpa» ekranının səlahiyyət qapısı."""
 
     def __init__(
         self,

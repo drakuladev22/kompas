@@ -14,8 +14,11 @@ from src.application.use_cases import (
     OperationNotPermittedError,
     TimeDriftError,
 )
+from src.application.use_cases.leave_verification import MonthlyLeaveUsage
 from src.domain.entities import CheckInStatus, FineSource, LeaveStatus
+from src.domain.entities.base import InvalidStateTransitionError
 from src.domain.entities.employee import Employee
+from src.domain.entities.fine import FineStatus
 from src.domain.entities.position import Position
 from src.domain.policies import FeatureModule, SystemLimitKey
 from src.domain.value_objects.authorization import (
@@ -32,7 +35,8 @@ from src.domain.value_objects.identifiers import (
     StoreId,
     TenantId,
 )
-from src.shared.saga_orchestrator import SagaOrchestrator, SagaStatus
+from src.domain.value_objects.money import Money
+from src.shared.saga_orchestrator import CompensationOutcome, SagaOrchestrator, SagaStatus
 from tests.fixtures.fakes import (
     FakeCameraAssignments,
     FakeClock,
@@ -327,6 +331,138 @@ async def test_saga_compensates_when_fine_save_fails(ctx: Ctx) -> None:
     assert ctx.leave_requests.items[request_id].status is (LeaveStatus.PENDING_RETURN_VERIFICATION)
 
 
+async def test_saga_compensation_discards_fine_when_audit_fails(ctx: Ctx) -> None:
+    """SAGA (bölmə 1): cərimə ARTIQ YARADILDIQDAN SONRA çökmə.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ MƏHZ `write_audit` ADDIMI
+    ──────────────────────────────────────────────────────────────────────────
+    `test_saga_compensates_when_fine_save_fails` daha ERKƏN uğursuzluğu
+    yoxlayır — cərimə heç yaranmır, yəni `undo_create_fine` boş dövrədən
+    ibarətdir və heç nə sübut etmir. Kompensasiyanın həqiqi yolu yalnız
+    cərimə yarandıqdan SONRAKI çökmədə açılır. Orada `reverse()` çağırılırdı
+    və o, `PUBLISHED` tələb etdiyi üçün HƏR dəfə `DomainRuleError` atırdı:
+    kompensasiya uğursuz sayılır, cərimə isə DB-də `PENDING_REVIEW` yetim
+    sətir kimi qalırdı və aylıq icmalda nəşr olunub İKİQAT kəsinti verə
+    bilərdi.
+    """
+    ctx.limits.set(SystemLimitKey.DELAY_FINE_RATE_PER_MINUTE, "0.50")
+    open_leave(ctx)
+    ctx.clock.set(at(13, 30))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+
+    request_id = next(iter(ctx.leave_requests.items))
+    ctx.audit.failure = RuntimeError("Audit yazısı çökdü")
+
+    outcome = await ctx.leave_uc().verify_return(
+        tenant_id=TENANT, operator_id=OPERATOR, request_id=request_id
+    )
+
+    assert outcome.succeeded is False
+    assert outcome.saga.status is SagaStatus.PENDING_RECONCILIATION
+    # Kompensasiyanın ÖZÜ çökməməlidir — əvvəl `reverse()` burada partlayırdı.
+    assert outcome.saga.compensation_outcome is CompensationOutcome.FULLY_COMPENSATED
+    fine_step = next(e for e in outcome.saga.executions if e.step_name == "create_fine")
+    assert fine_step.compensated is True
+    assert fine_step.compensation_error is None
+
+    # Cərimə SİLİNMİR (bölmə 4), lakin ölü statusa keçir və məbləği sıfırlanır.
+    assert len(ctx.fines.items) == 1
+    fine = next(iter(ctx.fines.items.values()))
+    assert fine.status is FineStatus.REVERSED
+    assert fine.amount == Money.zero()
+    assert fine.original_amount == Money.parse("15.00")  # orijinal qalır
+    # Nəşr olunmadığı üçün etiraz pəncərəsi HEÇ VAXT açılmayıb.
+    assert fine.published_at is None
+    # Status da geri qaytarılıb — yarımçıq "VERIFIED" qalmadı.
+    assert ctx.leave_requests.items[request_id].status is LeaveStatus.PENDING_RETURN_VERIFICATION
+
+
+async def test_compensated_fine_does_not_block_a_new_verification(ctx: Ctx) -> None:
+    """Kompensasiyadan sonra TƏKRAR təsdiq bloklanmır.
+
+    `REVERSED` sətir DB-dəki qismən unikal indeksin (miqrasiya 015) əhatəsindən
+    QƏSDƏN kənardadır. Əks halda bir dəfə uğursuz olmuş təsdiq işçinin həmin
+    icazəsini əbədi "təsdiqlənə bilməz" vəziyyətdə saxlayardı.
+    """
+    ctx.limits.set(SystemLimitKey.DELAY_FINE_RATE_PER_MINUTE, "0.50")
+    open_leave(ctx)
+    ctx.clock.set(at(13, 30))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+
+    ctx.audit.failure = RuntimeError("Audit yazısı çökdü")
+    await ctx.leave_uc().verify_return(
+        tenant_id=TENANT, operator_id=OPERATOR, request_id=request_id
+    )
+
+    ctx.audit.failure = None
+    outcome = await ctx.leave_uc().verify_return(
+        tenant_id=TENANT, operator_id=OPERATOR, request_id=request_id
+    )
+
+    assert outcome.succeeded is True
+    assert outcome.fine is not None
+    assert outcome.fine.status is FineStatus.PENDING_REVIEW
+    # Ölü sətir + yeni diri sətir = 2 qeyd, lakin diri olan YALNIZ BİRDİR.
+    live = [f for f in ctx.fines.items.values() if f.status is not FineStatus.REVERSED]
+    assert len(live) == 1
+
+
+async def test_second_verification_creates_no_second_fine(ctx: Ctx) -> None:
+    """Paralel/təkrar `[Təsdiqlə]` — İKİNCİ cərimə YARANMIR.
+
+    Yarışın birinci qatı domendədir (`_require_verifiable`), ikinci qatı isə
+    DB-dəki qismən unikal indeksdir. Bu test birinci qatı sübut edir: təkrar
+    çağırış ilk ADDIMDA dayanır, yəni cərimə addımına ÇATMIR.
+
+    İstisna çağırana qalxmır, çünki Saga onu tutur (`execute` heç vaxt istisna
+    atmır — bax `SagaOrchestrator.execute` docstring); nəticə `SagaResult`
+    üzərindən oxunur.
+    """
+    ctx.limits.set(SystemLimitKey.DELAY_FINE_RATE_PER_MINUTE, "0.50")
+    open_leave(ctx)
+    ctx.clock.set(at(13, 30))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+
+    first = await ctx.leave_uc().verify_return(
+        tenant_id=TENANT, operator_id=OPERATOR, request_id=request_id
+    )
+    assert first.succeeded is True
+    assert len(ctx.fines.items) == 1
+
+    second = await ctx.leave_uc().verify_return(
+        tenant_id=TENANT, operator_id=OPERATOR, request_id=request_id
+    )
+
+    assert second.succeeded is False
+    assert second.saga.failed_step == "update_status", "yarış cərimə addımına çatmamalıdır"
+    assert isinstance(second.saga.error, InvalidStateTransitionError)
+    assert second.fine is None
+
+    # İKİNCİ YAZI YOXDUR və birinci cərimə toxunulmaz qalıb.
+    assert len(ctx.fines.items) == 1
+    assert next(iter(ctx.fines.items.values())).status is FineStatus.PENDING_REVIEW
+    assert ctx.leave_requests.items[request_id].status is LeaveStatus.VERIFIED
+
+
+async def test_verify_return_reads_the_row_under_lock(ctx: Ctx) -> None:
+    """Yazma axını KİLİDLİ oxudan keçir (oxu-yalnız yol toxunulmazdır)."""
+    open_leave(ctx)
+    ctx.clock.set(at(13, 0))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+
+    assert ctx.leave_requests.locked_reads == []  # STEP 1/2 kilid tələb etmir
+
+    await ctx.leave_uc().verify_return(
+        tenant_id=TENANT, operator_id=OPERATOR, request_id=request_id
+    )
+
+    assert ctx.leave_requests.locked_reads == [request_id]
+
+
 async def test_operator_outside_scope_blocked(ctx: Ctx) -> None:
     """FAIL-SAFE (bölmə 4): operator öz mağazası olmayan sorğunu təsdiqləyə bilməz."""
     open_leave(ctx)
@@ -494,6 +630,51 @@ def test_check_in_reject_notifies_hr(ctx: Ctx) -> None:
     assert outcome.was_rejected is True
     assert outcome.record.status is CheckInStatus.NOT_STARTED
     assert "CHECK_IN_REJECTED" in ctx.notifier.categories()
+
+
+def test_check_in_decision_reads_the_row_under_lock(ctx: Ctx) -> None:
+    """STEP C yazma axını kilidli oxudan keçir, oxu-yalnız yol isə YOX."""
+    ctx.clock.set(at(8, 0))
+    uc = ctx.checkin_uc()
+    uc.start_day(tenant_id=TENANT, employee_id=WORKER, store_id=STORE, work_date=DAY)
+
+    # `employee_can_request_leave` və növbə siyahısı kilid tələb etmir.
+    uc.employee_can_request_leave(WORKER, DAY)
+    uc.pending_queue(OPERATOR)
+    assert ctx.attendance.locked_reads == []
+
+    uc.verify(tenant_id=TENANT, operator_id=OPERATOR, employee_id=WORKER, work_date=DAY)
+
+    assert ctx.attendance.locked_reads == [(WORKER, DAY)]
+
+
+def test_second_check_in_decision_is_blocked_before_audit(ctx: Ctx) -> None:
+    """Paralel təsdiq/rədd — İKİNCİ qərar audit-ə DÜŞMÜR.
+
+    Yarış qapağı olmasaydı hər iki operator `PENDING_VERIFICATION` görər,
+    hər ikisi audit yazar və DB-də yalnız sonuncu status qalardı — yəni
+    jurnal ilə faktiki vəziyyət bir-birini təkzib edərdi. Test məhz bunu
+    yoxlayır: ikinci qərar istisna atır və YENİ audit sətri yaranmır.
+    """
+    ctx.clock.set(at(8, 0))
+    uc = ctx.checkin_uc()
+    uc.start_day(tenant_id=TENANT, employee_id=WORKER, store_id=STORE, work_date=DAY)
+    uc.verify(tenant_id=TENANT, operator_id=OPERATOR, employee_id=WORKER, work_date=DAY)
+
+    audit_count = len(ctx.audit.entries)
+
+    with pytest.raises(OperationNotPermittedError, match="PENDING_VERIFICATION"):
+        uc.reject(
+            tenant_id=TENANT,
+            operator_id=OPERATOR,
+            employee_id=WORKER,
+            reason="İkinci operator eyni anda rədd etməyə çalışır",
+            work_date=DAY,
+        )
+
+    assert len(ctx.audit.entries) == audit_count
+    assert ctx.attendance.items[next(iter(ctx.attendance.items))].status is CheckInStatus.VERIFIED
+    assert "CHECK_IN_REJECTED" not in ctx.notifier.categories()
 
 
 def test_pending_queue_is_fail_safe_without_assignment(ctx: Ctx) -> None:
@@ -673,3 +854,56 @@ def test_zero_limit_disables_the_warning(ctx: Ctx) -> None:
 
     open_leave(ctx)
     assert "MONTHLY_LEAVE_LIMIT_EXCEEDED" not in ctx.notifier.categories()
+
+
+def test_monthly_limit_is_exceeded_only_strictly_above_240() -> None:
+    """TAM SƏRHƏD: 240 dəqiqə limitin İÇİNDƏDİR, 241 isə aşılmadır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    OPERATOR SEÇİMİ VƏ ONUN ƏSASI
+    ──────────────────────────────────────────────────────────────────────────
+    `MonthlyLeaveUsage.is_exceeded` `used > limit` yazır, yəni `>` (`>=` YOX).
+    Spesifikasiya bölmə 3 bunu *"Aylıq İcazə Müddəti Limiti (defolt 240 dəq.)"*
+    kimi verir — 240 icazə verilən MAKSİMUMdur, qadağan olunan ilk dəyər deyil.
+    `>=` seçilsəydi, büdcəsini DƏQİQ işlətmiş işçi "limiti aşıb" kimi HR-a
+    bildirilərdi; bu, xəbərdarlığın etibarını itirər və hər ay onlarla yalançı
+    siqnal yaradardı.
+
+    Sərhəd `remaining_minutes` ilə də uzlaşmalıdır: tam 240-da qalıq 0-dır,
+    lakin bu "aşılma" DEYİL.
+    """
+    exactly_at_limit = MonthlyLeaveUsage(used_minutes=240, limit_minutes=240)
+    one_over = MonthlyLeaveUsage(used_minutes=241, limit_minutes=240)
+    one_under = MonthlyLeaveUsage(used_minutes=239, limit_minutes=240)
+
+    assert one_under.is_exceeded is False
+    assert exactly_at_limit.is_exceeded is False, "240 dəq. limitin İÇİNDƏDİR"
+    assert one_over.is_exceeded is True
+
+    assert one_under.remaining_minutes == 1
+    assert exactly_at_limit.remaining_minutes == 0
+    # Aşılmada qalıq MƏNFİ olmur — sıfırda kəsilir.
+    assert one_over.remaining_minutes == 0
+
+
+def test_monthly_limit_boundary_reaches_the_notification(ctx: Ctx) -> None:
+    """Sərhəd qərarı use case axınında da eyni tərəfə düşür.
+
+    `MonthlyLeaveUsage` təkbaşına doğru olsa da, bildiriş şərti ayrıca yerdə
+    (`request_leave`) yazılıb. Bu test ikisinin bir-birindən sürüşmədiyini
+    təsbit edir: TAM limitdə bildiriş YOXDUR, bir dəqiqə sonra VAR.
+    """
+    ctx.limits.set(SystemLimitKey.MONTHLY_LEAVE_MINUTES_LIMIT, "240")
+    _verified_minutes(ctx, 240)
+
+    open_leave(ctx)
+    assert "MONTHLY_LEAVE_LIMIT_EXCEEDED" not in ctx.notifier.categories()
+
+    # Açıq sorğu bağlanır (ikinci STEP 1 üçün şərt), sonra cəm 241-ə çatır.
+    for request in ctx.leave_requests.items.values():
+        if request.status.is_open:
+            request.status = LeaveStatus.CANCELLED
+    _verified_minutes(ctx, 1)
+
+    open_leave(ctx)
+    assert "MONTHLY_LEAVE_LIMIT_EXCEEDED" in ctx.notifier.categories()

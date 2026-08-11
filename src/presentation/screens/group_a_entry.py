@@ -23,7 +23,6 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QProgressBar,
     QSizePolicy,
@@ -41,10 +40,13 @@ from src.presentation.widgets.primitives import (
     body_label,
     mono_label,
     muted_label,
+    plain_label,
     stretch,
 )
 
 if TYPE_CHECKING:
+    from PySide6.QtGui import QShowEvent
+
     from src.presentation.theme.manager import ThemeManager
 
 #: Maketdəki giriş kartının eni.
@@ -131,7 +133,7 @@ class SplashScreen(QWidget):
         )
         layout.addWidget(logo, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        wordmark = QLabel("KompasOS")
+        wordmark = plain_label("KompasOS")
         wordmark_font = wordmark.font()
         wordmark_font.setPixelSize(34)
         wordmark_font.setWeight(QFont.Weight.DemiBold)
@@ -216,7 +218,7 @@ class AdminLoginScreen(QWidget):
             alignment=Qt.AlignmentFlag.AlignHCenter,
         )
 
-        heading = QLabel("Hesabınıza Daxil Olun")
+        heading = plain_label("Hesabınıza Daxil Olun")
         heading_font = heading.font()
         heading_font.setPixelSize(22)
         heading_font.setWeight(QFont.Weight.DemiBold)
@@ -254,6 +256,28 @@ class AdminLoginScreen(QWidget):
             widget = field.input_widget()
             if isinstance(widget, QLineEdit):
                 widget.returnPressed.connect(self._on_submit)
+
+        # ──────────────────────────────────────────────────────────────────
+        # FOKUS ZƏNCİRİ EKRANIN QURULMASININ SONUNDADIR
+        # ──────────────────────────────────────────────────────────────────
+        # `setTabOrder` iki MÖVCUD widget arasında əlaqə qurur; hər hansı biri
+        # sonradan yaradılsaydı, Qt onu zəncirin sonuna ATARDI və sıra vizual
+        # sıradan ayrılardı. Ona görə zəncir bütün widget-lər yarandıqdan
+        # SONRA, bir yerdə qurulur.
+        QWidget.setTabOrder(self._username.input_widget(), self._password.input_widget())
+        QWidget.setTabOrder(self._password.input_widget(), self._submit)
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 - Qt adlandırması
+        """Ekran görünəndə fokus istifadəçi adı sahəsinə qoyulur.
+
+        Fokus KONSTRUKTORDA verilmir: giriş ekranı örtükdəki `QStackedWidget`
+        -in bir səhifəsidir və konstruktor işlədikdə hələ görünmür — Qt fokus
+        tələbini gizli widget üçün saxlamır. Sistem bloklanmadan sonra ekrana
+        QAYIDANDA da fokus yenidən ilk sahədə olmalıdır, ona görə `showEvent`
+        (bir dəfəlik bayraq deyil) düzgün yerdir.
+        """
+        super().showEvent(event)
+        self._username.focus_input()
 
     def _on_submit(self) -> None:
         username = self._username.text().strip()
@@ -317,7 +341,7 @@ class _WizardStep(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
 
-        self._badge = QLabel(str(number))
+        self._badge = plain_label(str(number))
         self._badge.setFixedSize(28, 28)
         self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge_font = self._badge.font()
@@ -331,7 +355,7 @@ class _WizardStep(QWidget):
         text_layout.setContentsMargins(0, 0, 0, 0)
         text_layout.setSpacing(2)
 
-        self._title = QLabel(title)
+        self._title = plain_label(title)
         title_font = self._title.font()
         title_font.setPixelSize(14)
         title_font.setWeight(QFont.Weight.DemiBold)
@@ -461,7 +485,7 @@ class FirstRunWizard(QWidget):
         layout.setContentsMargins(48, 40, 48, 32)
         layout.setSpacing(22)
 
-        self._heading = QLabel()
+        self._heading = plain_label()
         heading_font = self._heading.font()
         heading_font.setPixelSize(24)
         heading_font.setWeight(QFont.Weight.DemiBold)
@@ -763,7 +787,7 @@ class FatalStartupScreen(QWidget):
         card.setFixedWidth(560)
         card.body().setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        heading = QLabel("KompasOS işə düşə bilmədi")
+        heading = plain_label("KompasOS işə düşə bilmədi")
         heading_font = heading.font()
         heading_font.setPixelSize(24)
         heading_font.setWeight(QFont.Weight.DemiBold)

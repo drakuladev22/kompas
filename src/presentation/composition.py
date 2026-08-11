@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.infrastructure.timekeeping.clock import SystemClock
+from src.shared.data_paths import resolve_data_file
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
@@ -45,7 +46,17 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from src.application.use_cases.audit_query import AuditQueryUseCase
+    from src.application.use_cases.backup_access import BackupAccessUseCase
+    from src.application.use_cases.catalog_management import (
+        FineTypeCatalogUseCase,
+        LeaveTypeCatalogUseCase,
+        WorkModeCatalogUseCase,
+    )
     from src.application.use_cases.daily_attendance import DailyAttendanceSheetUseCase
+    from src.application.use_cases.dashboard_layout import DashboardLayoutUseCase
+    from src.application.use_cases.db_switch import DatabaseSwitchUseCase
+    from src.application.use_cases.employee_profile import EmployeeProfileAccessUseCase
+    from src.application.use_cases.erp_connection import ErpConnectionWizardUseCase
     from src.application.use_cases.fine_management import (
         FineAppealUseCase,
         ManualFineUseCase,
@@ -56,10 +67,12 @@ if TYPE_CHECKING:
     from src.application.use_cases.permission_guards import (
         PermissionHierarchyGuardUseCase,
     )
+    from src.application.use_cases.plugin_management import PluginManagementUseCase
     from src.application.use_cases.position_management import PositionManagementUseCase
     from src.application.use_cases.reporting import MonthlyReportUseCase
     from src.application.use_cases.root_control import RootControlUseCase
     from src.application.use_cases.sales_points import SalesPointsUseCase
+    from src.application.use_cases.sales_review_queue import SalesReviewQueueUseCase
     from src.application.use_cases.shift_scheduling import (
         ShiftPlanningUseCase,
         ShiftSwapUseCase,
@@ -85,6 +98,64 @@ class _NullNtp:
 
     def drift_seconds(self) -> float | None:
         return None
+
+
+class _LazyBufferDrain:
+    """`OfflineBufferDrain` — SQLite buferini YALNIZ ilk sorğuda açır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ TƏNBƏL
+    ──────────────────────────────────────────────────────────────────────────
+    `Session` HƏR ekran əməliyyatında qurulur, `OfflineBuffer` konstruktoru
+    isə SQLite faylı açır (WAL jurnalı, `PRAGMA`-lar, sxem icrası). Onu hər
+    sessiyada açmaq bir iş günündə minlərlə fayl deskriptoru demək olardı —
+    halbuki bufer YALNIZ baza keçidində (`DatabaseSwitchUseCase`) oxunur.
+
+    ──────────────────────────────────────────────────────────────────────────
+    XƏTA UDULMUR
+    ──────────────────────────────────────────────────────────────────────────
+    Bufer açıla bilmirsə istisna ÖTÜRÜLÜR. `0` qaytarmaq daha "yumşaq"
+    görünərdi, lakin `_run_phases` addım 2-də məhz bu rəqəmə baxıb "bütün
+    offline yazılar göndərildi" qərarını verir — yəni sükutlu `0` keçidi
+    sinxronlaşmamış məlumat üzərində başladardı və həmin yazılar itərdi.
+    """
+
+    def __init__(self) -> None:
+        self._adapter: Any = None
+
+    def _ensure(self) -> Any:
+        if self._adapter is None:
+            from src.infrastructure.offline.buffer import OfflineBuffer  # noqa: PLC0415
+            from src.infrastructure.persistence.migration import (  # noqa: PLC0415
+                BufferDrainAdapter,
+            )
+            from src.infrastructure.security.encryption import (  # noqa: PLC0415
+                EncryptionService,
+            )
+
+            # AÇAR `.env.example`-dəki MÖVCUD `KOMPASOS_SQLITE_PATH`-dir.
+            # Yeni ad (məs. `KOMPASOS_OFFLINE_BUFFER_PATH`) uydursaydıq, eyni
+            # fayl üçün İKİ konfiqurasiya açarı yaranardı və quraşdırıcı
+            # birini doldurub digərinin işlədiyini düşünərdi. Həmin açar
+            # təyin olunubsa DAVRANIŞ EYNİDİR — o, hər şeydən üstündür.
+            #
+            # DEFOLT isə artıq `./data/...` DEYİL: cari qovluq paketlənmiş
+            # `.exe`-də ixtiyaridir (System32 / Program Files) və orada SQLite
+            # faylı YARADILA BİLMİR — offline bufer məhz ilk yazı anında
+            # çökərdi. Köhnə `./data/offline_buffer.db` hələ mövcuddursa o
+            # işlədilməyə davam edir (göndərilməmiş yazı itməsin) — səbəb və
+            # niyə köçürmə edilmədiyi `shared/data_paths.py` başlığındadır.
+            path = resolve_data_file("KOMPASOS_SQLITE_PATH", "offline_buffer.db")
+            self._adapter = BufferDrainAdapter(OfflineBuffer(path, encryption=EncryptionService()))
+        return self._adapter
+
+    def pending_count(self, tenant_id: TenantId) -> int:
+        count: int = self._ensure().pending_count(tenant_id)
+        return count
+
+    def flush(self, tenant_id: TenantId) -> int:
+        remaining: int = self._ensure().flush(tenant_id)
+        return remaining
 
 
 class StartupError(KompasOSError):
@@ -129,6 +200,23 @@ class Session:
     root_control: RootControlUseCase
     permission_guard: PermissionHierarchyGuardUseCase
 
+    # --- Faza 5/6 ekranlarının arxası -------------------------------------- #
+    #
+    # Bu use case-lər ARTIQ yazılmışdı, lakin `Session`-a qoşulmamışdı — yəni
+    # onları çağıracaq bir yol YOX idi və ekranlar boş qalırdı
+    # (`tests/unit/test_screen_binding_coverage.py::PENDING_LIVE_BINDING`).
+    # Onları burada qurmaq "ekran → use case" zəncirinin tək əskik halqası idi.
+    work_modes: WorkModeCatalogUseCase
+    fine_types: FineTypeCatalogUseCase
+    leave_types: LeaveTypeCatalogUseCase
+    backups: BackupAccessUseCase
+    plugins: PluginManagementUseCase
+    dashboard_layout: DashboardLayoutUseCase
+    db_switch: DatabaseSwitchUseCase
+    sales_review: SalesReviewQueueUseCase
+    employee_profile: EmployeeProfileAccessUseCase
+    erp_connections: ErpConnectionWizardUseCase
+
     def commit(self) -> None:
         self.uow.commit()
 
@@ -150,12 +238,24 @@ class Session:
     def toggles(self) -> Any:
         return self.uow.repository("toggles")
 
+    @property
+    def notifications(self) -> Any:
+        """Header zəngi + bildiriş panelinin oxu yolu (bölmə 7).
+
+        Use case YOXDUR və bu, qəsdəndir: siyahını göstərmək və sətri
+        "oxundu" etmək heç bir iş qaydası daşımır (səlahiyyət yoxlaması,
+        status keçidi, hesablama yoxdur). Bunun üçün use case yaratmaq
+        `screen_data._fines`-də izah edilən səhvin təkrarı olardı — use
+        case-i göstəriş vasitəsinə çevirmək.
+        """
+        return self.uow.repository("notifications")
+
     def max_upload_bytes(self) -> int:
         """`system_limits.MAX_UPLOAD_SIZE_BYTES` (bölmə 3, defolt 5 MB).
 
         `ApplicationContext.run_evidence_uploads()` hər dövrədə bunu oxuyur və
         `DriveProviderFactory`-yə ötürür ki, şəkil həddi koda deyil, ROOT
-        Control Center-ə bağlı olsun. `google_drive.MAX_UPLOAD_BYTES` yalnız
+        İdarə Mərkəzinə bağlı olsun. `google_drive.MAX_UPLOAD_BYTES` yalnız
         fallback-dır (limit mənbəyi olmayan yollar üçün).
         """
         key = SystemLimitKey.MAX_UPLOAD_SIZE_BYTES
@@ -189,6 +289,11 @@ class ApplicationContext:
         self._evidence_queue: Any = None
         self._drive_factory: Any = None
         self._drive_limit: int | None = None
+        # Offline bufer də TƏNBƏLdir və eyni səbəbdəndir: `Session` HƏR
+        # əməliyyatda qurulur, bufer konstruktoru isə SQLite faylı açır (WAL
+        # jurnalı + sxem icrası). Hər sessiyada yeni bağlantı açmaq dəstək
+        # tutumunu tükəndirərdi — halbuki bufer YALNIZ baza keçidində lazımdır.
+        self._offline_drain: Any = None
 
     @property
     def database(self) -> Database:
@@ -351,22 +456,43 @@ class ApplicationContext:
     def evidence_queue(self) -> Any:
         """Sübut şəkillərinin lokal növbəsi (`EvidenceUploadQueue`)."""
         if self._evidence_queue is None:
-            import os  # noqa: PLC0415
-            from pathlib import Path  # noqa: PLC0415
-
             from src.infrastructure.storage.upload_queue import (  # noqa: PLC0415
                 EvidenceUploadQueue,
             )
 
-            raw = os.environ.get("KOMPASOS_EVIDENCE_QUEUE_PATH", "").strip()
-            path = Path(raw) if raw else Path("./data/evidence_uploads.db")
-            self._evidence_queue = EvidenceUploadQueue(path)
+            # `KOMPASOS_EVIDENCE_QUEUE_PATH` təyin olunubsa davranış EYNİDİR.
+            # Defolt isə istifadəçi məlumat qovluğudur: paketlənmiş `.exe`-nin
+            # cari qovluğu (System32 / Program Files) yazıla bilməz və ilk
+            # sübut şəkli `unable to open database file` ilə itərdi. Şəkillərin
+            # baytları `evidence_spool/` qovluğunda — indeksin YANINDA —
+            # saxlandığı üçün köhnə fayl mövcud olduqda yol DƏYİŞMİR; səbəb
+            # `shared/data_paths.py` başlığındadır (köçürmə qəsdən yoxdur).
+            path = resolve_data_file("KOMPASOS_EVIDENCE_QUEUE_PATH", "evidence_uploads.db")
+            # Növbə faylı diskə YAZMAZDAN ƏVVƏL ölçünü yoxlayır, hədd isə
+            # Root-dan idarə olunur — provider ilə eyni mənbə (bölmə 3).
+            self._evidence_queue = EvidenceUploadQueue(path, max_upload_bytes=self._upload_limit())
         return self._evidence_queue
+
+    def _upload_limit(self) -> int:
+        """Cari `MAX_UPLOAD_SIZE_BYTES` — oxuna bilmirsə provider defoltu.
+
+        Baza əlçatmazlığı burada İSTİSNA ATMIR: verilməli cavab "şəkil qəbul
+        edilsinmi" deyil, "hansı hədlə" idi. Cavabsız qaldıqda fallback
+        işləyir və cərimə axını dayanmır (bax `upload_queue` başlığı).
+        """
+        from src.infrastructure.storage.google_drive import MAX_UPLOAD_BYTES  # noqa: PLC0415
+
+        try:
+            with self.session() as session:
+                return int(session.max_upload_bytes())
+        except Exception:
+            _log.warning("EVIDENCE_LIMIT_FALLBACK", extra={"bytes": MAX_UPLOAD_BYTES})
+            return MAX_UPLOAD_BYTES
 
     def drive_providers(self, *, max_upload_bytes: int) -> Any:
         """Aktiv Drive bağlantısı üçün provider fabriki — yoxdursa `None`.
 
-        `max_upload_bytes` ROOT Control Center-dən gəlir və fabrik hər dəfə
+        `max_upload_bytes` ROOT İdarə Mərkəzindən gəlir və fabrik hər dəfə
         deyil, YALNIZ dəyər dəyişəndə yenidən qurulur: fabrik provider-ləri
         (HTTP klienti + token) keşləyir və hər dövrədə onu atmaq lazımsız
         token yeniləməsi deməkdir. Root sürüşdürücünü tərpədən kimi növbəti
@@ -433,8 +559,14 @@ class ApplicationContext:
                 EvidenceUploadWorker,
             )
 
+            queue = self.evidence_queue()
+            # Növbə tətbiq işlədikcə yaşayır — Root sürüşdürücünü tərpədəndə
+            # onun ön-yoxlaması da yeni həddi bilməlidir, əks halda iki tərəf
+            # (növbə və provider) eyni fayla fərqli cavab verərdi. Sətir məhz
+            # burada dayanır ki, növbə faylı tənbəl qalsın (bax konstruktor).
+            queue.set_max_upload_bytes(limit)
             worker = EvidenceUploadWorker(
-                queue=self.evidence_queue(),
+                queue=queue,
                 provider_factory=factory,
                 on_uploaded=self._attach_evidence,
             )
@@ -479,6 +611,60 @@ class ApplicationContext:
             resolver.register(row["id"], str(row["name"]))
         return resolver
 
+    def ntp_drift_seconds(self) -> float | None:
+        """Ölçülmüş saat sürüşməsi — ölçülməyibsə `None` (bax `_NullNtp`).
+
+        `None` "sürüşmə yoxdur" DEMƏK DEYİL, "ölçülməyib" deməkdir və Sistem
+        Sağlamlığı ekranı bu fərqi saxlamalıdır: `0.0` göstərmək ölçülməmiş
+        saatı "ideal" kimi təqdim edərdi və problem gizli qalardı.
+        """
+        try:
+            return self._ntp.drift_seconds()
+        except Exception:
+            _error_log.exception("NTP_DRIFT_READ_FAILED")
+            return None
+
+    # --------------------------- baza keçidi qatı ---------------------------- #
+
+    def offline_drain(self) -> Any:
+        """`OfflineBufferDrain` — bufer ilk SORĞUDA açılır (bax konstruktor)."""
+        if self._offline_drain is None:
+            self._offline_drain = _LazyBufferDrain()
+        return self._offline_drain
+
+    def migrator(self) -> Any:
+        """`DatabaseMigrator` — iki hədəfin DSN-i mühitdən gəlir.
+
+        Şəxsi server DSN-i BOŞ ola bilər və bu, xəta deyil: müştərilərin
+        əksəriyyəti yalnız buludda işləyir. Həmin halda keçid cəhdi
+        `PgDumpMigrator._require_dsn`-dən aydın Azərbaycanca mesajla qayıdır
+        («Şəxsi server bağlantısı konfiqurasiya edilməyib») — burada `None`
+        qaytarmaq isə use case-i tamamilə qurulmamış saxlayardı və ekran
+        səbəbi göstərə bilməzdi.
+
+        Obyekt KEŞLƏNMİR: `PgDumpMigrator` `switch_active()` ilə seçilmiş
+        hədəfi yaddaşda saxlayır, lakin keçid bir dəfəlik texniki əməliyyatdır
+        və hər sessiyada yeni nüsxə qurmaq heç bir resurs tutmur (konstruktor
+        nə fayl, nə bağlantı açır).
+        """
+        import os  # noqa: PLC0415
+
+        from src.domain.value_objects.infrastructure import DatabaseTarget  # noqa: PLC0415
+        from src.infrastructure.persistence.migration import (  # noqa: PLC0415
+            PgDumpMigrator,
+            read_scalar,
+        )
+
+        return PgDumpMigrator(
+            dsn_by_target={
+                DatabaseTarget.CLOUD: os.environ.get("DATABASE_URL", "").strip(),
+                DatabaseTarget.PRIVATE_SERVER: os.environ.get(
+                    "KOMPASOS_PRIVATE_SERVER_DSN", ""
+                ).strip(),
+            },
+            checksum_reader=read_scalar,
+        )
+
     # ------------------------------- sessiya --------------------------------- #
 
     @contextmanager
@@ -490,11 +676,31 @@ class ApplicationContext:
     def _build_session(self, uow: PostgresUnitOfWork) -> Session:
         """Use case qrafını cari `UnitOfWork`-un repo-ları ilə qurur."""
         from src.application.use_cases.audit_query import AuditQueryUseCase  # noqa: PLC0415
+        from src.application.use_cases.backup_access import (  # noqa: PLC0415
+            BackupAccessUseCase,
+        )
+        from src.application.use_cases.catalog_management import (  # noqa: PLC0415
+            FineTypeCatalogUseCase,
+            LeaveTypeCatalogUseCase,
+            WorkModeCatalogUseCase,
+        )
         from src.application.use_cases.daily_attendance import (  # noqa: PLC0415
             DailyAttendanceSheetUseCase,
         )
+        from src.application.use_cases.dashboard_layout import (  # noqa: PLC0415
+            DashboardLayoutUseCase,
+        )
+        from src.application.use_cases.db_switch import (  # noqa: PLC0415
+            DatabaseSwitchUseCase,
+        )
         from src.application.use_cases.dual_control_guard import (  # noqa: PLC0415
             DualControlDeadlockGuardUseCase,
+        )
+        from src.application.use_cases.employee_profile import (  # noqa: PLC0415
+            EmployeeProfileAccessUseCase,
+        )
+        from src.application.use_cases.erp_connection import (  # noqa: PLC0415
+            ErpConnectionWizardUseCase,
         )
         from src.application.use_cases.fine_management import (  # noqa: PLC0415
             FineAppealUseCase,
@@ -512,6 +718,9 @@ class ApplicationContext:
         from src.application.use_cases.permission_guards import (  # noqa: PLC0415
             PermissionHierarchyGuardUseCase,
         )
+        from src.application.use_cases.plugin_management import (  # noqa: PLC0415
+            PluginManagementUseCase,
+        )
         from src.application.use_cases.position_management import (  # noqa: PLC0415
             PositionManagementUseCase,
         )
@@ -520,6 +729,9 @@ class ApplicationContext:
             RootControlUseCase,
         )
         from src.application.use_cases.sales_points import SalesPointsUseCase  # noqa: PLC0415
+        from src.application.use_cases.sales_review_queue import (  # noqa: PLC0415
+            SalesReviewQueueUseCase,
+        )
         from src.application.use_cases.shift_scheduling import (  # noqa: PLC0415
             ShiftPlanningUseCase,
             ShiftSwapUseCase,
@@ -534,7 +746,23 @@ class ApplicationContext:
         from src.application.use_cases.user_management import (  # noqa: PLC0415
             UserManagementUseCase,
         )
+        from src.infrastructure.backup.service import NightlyBackupService  # noqa: PLC0415
+        from src.infrastructure.erp.one_c_connector import (  # noqa: PLC0415
+            OneCConnectorFactory,
+        )
+        from src.infrastructure.erp.sales import (  # noqa: PLC0415
+            PostgresSalesReviewRepository,
+        )
+        from src.infrastructure.erp.servers import (  # noqa: PLC0415
+            ErpServerRepository,
+            PostgresStoreServerMappingRepository,
+        )
         from src.infrastructure.notifications.notifier import PostgresNotifier  # noqa: PLC0415
+        from src.infrastructure.plugins.signature import (  # noqa: PLC0415
+            PluginSignatureVerifier,
+            trust_store_from_env,
+        )
+        from src.infrastructure.security.encryption import EncryptionService  # noqa: PLC0415
         from src.shared.saga_orchestrator import SagaOrchestrator  # noqa: PLC0415
 
         repo = uow.repository
@@ -543,12 +771,34 @@ class ApplicationContext:
         audit = uow.audit
         notifier = PostgresNotifier(self._database)
 
+        # 1C REPO-LARI `uow.repository`-DƏ DEYİL — bu, qəsdəndir: onlar
+        # `Database` alır və öz iş vahidini açır (bax `ErpServerRepository`),
+        # çünki sinxronizasiya worker-i də eyni sinifləri GUI-dən tamamilə
+        # kənarda işlədir. Onları bağlantı-səviyyəli repo-lara çevirmək həmin
+        # yolu qırardı; şifrələmə isə burada YOX, repo-nun içində qalır.
+        erp_servers = ErpServerRepository(self._database, self._tenant_id, EncryptionService())
+
         planning = ShiftPlanningUseCase(
             shifts=repo("shifts"),
             leave_requests=uow.leave_requests,
             audit=audit,
             clock=clock,
             notifier=notifier,
+        )
+
+        # XAL USE CASE-i YEREL DƏYİŞƏNDİR, çünki İKİ yerdə lazımdır: həm
+        # `Session.sales_points`, həm də «Şübhəli Satışlar» növbəsinin
+        # `points` asılılığı. İkinci nüsxə qursaydıq, eyni satışın xal
+        # köçürməsi iki fərqli obyektdən keçərdi və `transfer_for_transaction`
+        # daxilindəki modul yoxlaması iki dəfə oxunardı — nəticə eyni olsa da,
+        # "hansı nüsxə doğrudur" sualı sonradan çaşdırıcı olur.
+        sales_points = SalesPointsUseCase(
+            points=repo("sales_points"),
+            rewards=repo("rewards"),
+            audit=audit,
+            clock=clock,
+            notifier=notifier,
+            toggles=repo("toggles"),
         )
 
         return Session(
@@ -620,14 +870,7 @@ class ApplicationContext:
                 notifier=notifier,
                 toggles=repo("toggles"),
             ),
-            sales_points=SalesPointsUseCase(
-                points=repo("sales_points"),
-                rewards=repo("rewards"),
-                audit=audit,
-                clock=clock,
-                notifier=notifier,
-                toggles=repo("toggles"),
-            ),
+            sales_points=sales_points,
             reports=MonthlyReportUseCase(),
             audit_query=AuditQueryUseCase(
                 reader=repo("audit_reader"),
@@ -678,6 +921,73 @@ class ApplicationContext:
                 flags=repo("permission_flags"),
                 audit=audit,
                 clock=clock,
+            ),
+            # ---------------- Faza 5/6 ekranlarının arxası ------------------ #
+            #
+            # ÜÇ KATALOQ, ÜÇ AYRI USE CASE: hər biri öz flag-ını yoxlayır
+            # (`can_manage_work_modes` / `_fine_types` / `_leave_types`) və
+            # onları bir sinifdə birləşdirmək HR-a cərimə qiymətini dəyişmək
+            # imkanı verərdi (bax `catalog_management.py` başlığı).
+            work_modes=WorkModeCatalogUseCase(
+                repository=repo("work_modes"),
+                audit=audit,
+                clock=clock,
+            ),
+            fine_types=FineTypeCatalogUseCase(
+                repository=repo("fine_types"),
+                audit=audit,
+                clock=clock,
+            ),
+            leave_types=LeaveTypeCatalogUseCase(
+                repository=repo("leave_types"),
+                audit=audit,
+                clock=clock,
+            ),
+            backups=BackupAccessUseCase(
+                catalog=repo("backup_records"),
+                # `NightlyBackupService` gecə planlayıcısının da işlətdiyi
+                # SİNİFdir — `BackupAccessUseCase` yalnız onun üzərinə
+                # `can_manage_backups` qapısını qoyur (bax use case başlığı).
+                operations=NightlyBackupService(self._database),
+                audit=audit,
+                clock=clock,
+            ),
+            plugins=PluginManagementUseCase(
+                registry=repo("plugins"),
+                # Etibar reyestri BOŞ ola bilər — o zaman heç bir plugin
+                # quraşdırılmır (fail-closed, bax `trust_store_from_env`).
+                verifier=PluginSignatureVerifier(trust_store_from_env()),
+                audit=audit,
+                clock=clock,
+            ),
+            dashboard_layout=DashboardLayoutUseCase(
+                store=repo("preferences"),
+                clock=clock,
+                toggles=repo("toggles"),
+            ),
+            db_switch=DatabaseSwitchUseCase(
+                read_only=repo("read_only"),
+                buffer=self.offline_drain(),
+                migrator=self.migrator(),
+                events=repo("migration_events"),
+                audit=audit,
+                clock=clock,
+                notifier=notifier,
+            ),
+            sales_review=SalesReviewQueueUseCase(
+                repository=PostgresSalesReviewRepository(self._database, self._tenant_id),
+                points=sales_points,
+                audit=audit,
+                clock=clock,
+            ),
+            # Profil ekranı YALNIZ `Clock` alır: o, məlumat OXUMUR, verilmiş
+            # profilə kimin baxa biləcəyini həll edir (bax use case başlığı).
+            employee_profile=EmployeeProfileAccessUseCase(clock=clock),
+            erp_connections=ErpConnectionWizardUseCase(
+                servers=erp_servers,
+                connectors=OneCConnectorFactory(erp_servers.credentials_for),
+                audit=audit,
+                mappings=PostgresStoreServerMappingRepository(self._database, self._tenant_id),
             ),
         )
 

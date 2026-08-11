@@ -25,6 +25,7 @@ mağazaların sorğularını gözlədiyini sanardı.
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import Qt, Signal
@@ -33,7 +34,6 @@ from PySide6.QtWidgets import (
     QDateEdit,
     QDialog,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QPlainTextEdit,
     QSizePolicy,
@@ -54,14 +54,22 @@ from src.presentation.widgets.primitives import (
     Divider,
     FilterChip,
     body_label,
+    is_activation_key,
     mono_label,
     muted_label,
+    plain_label,
     stretch,
     title_label,
 )
 
 if TYPE_CHECKING:
-    from PySide6.QtGui import QDragEnterEvent, QDropEvent, QMouseEvent
+    from PySide6.QtGui import (
+        QDragEnterEvent,
+        QDropEvent,
+        QKeyEvent,
+        QMouseEvent,
+        QShowEvent,
+    )
 
     from src.presentation.theme.manager import ThemeManager
 
@@ -252,7 +260,7 @@ class OperatorQueueScreen(Screen):
         reminder_layout.setSpacing(10)
         from src.presentation.widgets import icons  # noqa: PLC0415
 
-        glyph = QLabel()
+        glyph = plain_label()
         glyph.setPixmap(icons.render("shield", theme.color("--color-info"), size=18))
         reminder_layout.addWidget(glyph)
         reminder_layout.addWidget(
@@ -472,7 +480,7 @@ class ManualTimeOverrideDialog(QDialog):
         self._reason.textChanged.connect(self._on_reason_changed)
         reason_layout.addWidget(self._reason)
 
-        self._reason_error = QLabel("")
+        self._reason_error = plain_label()
         self._reason_error.setProperty("variant", "danger-text")
         self._reason_error.setVisible(False)
         reason_layout.addWidget(self._reason_error)
@@ -482,7 +490,7 @@ class ManualTimeOverrideDialog(QDialog):
 
         # -------------------------- dual-control ---------------------------- #
         self._dual_control = Card(padding=14, spacing=6)
-        self._dual_control.add(title_label("Dual-Control tələb olunacaq", size=14))
+        self._dual_control.add(title_label("Cüt Nəzarətli Təsdiq Tələb Olunacaq", size=14))
         self._dual_control_detail = body_label("", size=13)
         self._dual_control.add(self._dual_control_detail)
         self._dual_control.setVisible(False)
@@ -503,6 +511,29 @@ class ManualTimeOverrideDialog(QDialog):
         self._submit.clicked.connect(self._on_submit)
         buttons_layout.addWidget(self._submit)
         card.add(buttons)
+
+        # ──────────────────────────────────────────────────────────────────
+        # ENTER TƏSDİQ ETMİR — İMTİNA EDİR
+        # ──────────────────────────────────────────────────────────────────
+        # Bu modal anti-fraud nöqtəsidir: vaxtın əl ilə düzəldilməsi audit
+        # jurnalına yazılır və hədd aşılarsa Dual-Control tələb edir. Səbəb
+        # sahəsi `QPlainTextEdit`-dir, yəni orada Enter YENİ SƏTİR yazır —
+        # istifadəçi mətn yazarkən Enter-in formanı göndərməsini gözləmir.
+        # Defolt təsdiq düyməsi bu gözləntini pozardı və izlənilən bir
+        # əməliyyat təsadüfən başladılardı.
+        cancel.setDefault(True)
+        cancel.setAutoDefault(False)
+        self._submit.setDefault(False)
+        self._submit.setAutoDefault(False)
+
+        # Fokus sırası: vaxt → səbəb → imtina → göndər.
+        QWidget.setTabOrder(self._time_edit, self._reason)
+        QWidget.setTabOrder(self._reason, cancel)
+        QWidget.setTabOrder(cancel, self._submit)
+
+        # İlkin fokus DÜZƏLDİLƏCƏK VAXTDADIR — modalın bütün mövcudluq səbəbi
+        # odur; səbəb sahəsi ondan sonra gəlir.
+        self._time_edit.setFocus(Qt.FocusReason.OtherFocusReason)
 
     # ------------------------------- məntiq ---------------------------------- #
 
@@ -568,10 +599,22 @@ class PhotoDropZone(Card):
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumHeight(120)
+        # ──────────────────────────────────────────────────────────────────
+        # NİYƏ BU SAHƏ MÜTLƏQ KLAVİATURA İLƏ İŞLƏMƏLİDİR
+        # ──────────────────────────────────────────────────────────────────
+        # Foto sübutu MƏCBURİDİR (bax sinif başlığı): şəkil olmadan cərimə
+        # yazıla bilmir. Sahə yalnız `mousePressEvent`-ə bağlı qalsaydı,
+        # siçansız istifadəçi cərimə axınını SONA QƏDƏR apara bilməzdi —
+        # yəni bir əlçatanlıq qüsuru bütöv bir iş prosesini bağlayardı.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName("Foto sübutu seç")
+        self.setAccessibleDescription(
+            "Şəkli bura sürükləyin və ya Enter ilə fayl seçimini açın (PNG/JPG)"
+        )
 
         from src.presentation.widgets import icons  # noqa: PLC0415
 
-        self._glyph = QLabel()
+        self._glyph = plain_label()
         self._glyph.setPixmap(icons.render("image", theme.color("--color-text-muted"), size=26))
         self._glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.add(self._glyph)
@@ -594,7 +637,8 @@ class PhotoDropZone(Card):
             self.set_file(urls[0].toLocalFile())
             event.acceptProposedAction()
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt adlandırması
+    def _activate(self) -> None:
+        """Fayl seçimini açır — siçan və klaviatura üçün ORTAQ yol."""
         from PySide6.QtWidgets import QFileDialog  # noqa: PLC0415
 
         path, _ = QFileDialog.getOpenFileName(
@@ -602,7 +646,17 @@ class PhotoDropZone(Card):
         )
         if path:
             self.set_file(path)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt adlandırması
+        self._activate()
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt adlandırması
+        if is_activation_key(event):
+            self._activate()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def set_file(self, path: str) -> None:
         from pathlib import Path  # noqa: PLC0415
@@ -655,7 +709,7 @@ class FineEntryScreen(Screen):
             Column("Növ", 180),
             Column("Tarix", 110, mono=True),
             Column("Məbləğ", 110),
-            Column("Status"),
+            Column("Vəziyyət"),
         ]
 
         self.add(self._build_form(fine_types, stores, employees))
@@ -672,6 +726,17 @@ class FineEntryScreen(Screen):
             ),
         )
         self.add(self._table)
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 - Qt adlandırması
+        """Ekran açılanda fokus formanın ilk sahəsinə («Cərimə Növü») qoyulur.
+
+        Səbəb `AdminLoginScreen.showEvent`-də izah olunub: ekran örtükdəki
+        yığının bir səhifəsidir və konstruktor işlədikdə hələ görünmür.
+        Fokusun forma ilə başlaması operatorun ilk hərəkətini — növ seçmək —
+        siçansız da mümkün edir; qiymət sahəsi məhz həmin seçimdən dolur.
+        """
+        super().showEvent(event)
+        self._type.focus_input()
 
     # -------------------------------- forma ---------------------------------- #
 
@@ -734,7 +799,7 @@ class FineEntryScreen(Screen):
         photo_layout.addWidget(field_label("Foto Sübutu *"))
         self._photo = PhotoDropZone(self.theme)
         photo_layout.addWidget(self._photo)
-        self._photo_error = QLabel("")
+        self._photo_error = plain_label()
         self._photo_error.setProperty("variant", "danger-text")
         self._photo_error.setVisible(False)
         photo_layout.addWidget(self._photo_error)
@@ -750,6 +815,23 @@ class FineEntryScreen(Screen):
         self._submit.clicked.connect(self._on_submit)
         submit_layout.addWidget(self._submit)
         card.add(submit_row)
+
+        # Zəncir bütün sahələr yarandıqdan SONRA qurulur (bax
+        # `group_a_entry.AdminLoginScreen`): Qt `setTabOrder`-i yalnız MÖVCUD
+        # widget cütünə tətbiq edir və sonradan yaradılan hər şeyi zəncirin
+        # sonuna atır. Sıra maketdəki oxu istiqamətini təkrarlayır:
+        # növ → mağaza → işçi → tarix → foto → qeyd et.
+        # «Qiymət» sıradan KƏNARDADIR — o, deaktivdir və dəyəri növdən gəlir.
+        chain: tuple[QWidget, ...] = (
+            self._type.input_widget(),
+            self._store.input_widget(),
+            self._employee.input_widget(),
+            self._date.input_widget(),
+            self._photo,
+            self._submit,
+        )
+        for previous, following in pairwise(chain):
+            QWidget.setTabOrder(previous, following)
 
         return card
 

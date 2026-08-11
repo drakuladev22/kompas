@@ -2,7 +2,7 @@
 
 Maket: "KompasOS - Qrup C.dc.html", ekranlar 09–14.
 
-    09  Admin / CEO Dashboard
+    09  Admin / CEO İdarə Paneli
     10  İcazə Matrisi (Discord-tərzi)
     11  İstifadəçi və Rol İdarəetməsi
     12  Növbə Planlama (aylıq matris)
@@ -18,6 +18,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -41,6 +42,7 @@ from src.presentation.widgets.charts import (
     StatTile,
 )
 from src.presentation.widgets.data_table import Column, DataTable
+from src.presentation.widgets.forms import FormField
 from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
@@ -52,16 +54,19 @@ from src.presentation.widgets.primitives import (
     body_label,
     mono_label,
     muted_label,
+    plain_label,
     stretch,
     title_label,
 )
 
 if TYPE_CHECKING:
+    from PySide6.QtGui import QShowEvent
+
     from src.presentation.theme.manager import ThemeManager
 
 
 # --------------------------------------------------------------------------- #
-# 09 — Admin / CEO Dashboard
+# 09 — Admin / CEO İdarə Paneli
 # --------------------------------------------------------------------------- #
 
 
@@ -214,7 +219,7 @@ class PermissionMatrixScreen(Screen):
     heç kim tərəfindən dəyişdirilə bilməz" deməkdir. Onu gizlətsək, admin
     həmin icazənin ümumiyyətlə mövcud olmadığını düşünər və nə üçün
     işlədiyini başa düşməzdi. Maket də bunu izah edir: "Qıfıllı icazələr
-    hardlock-dur — yalnız ROOT Control Center-dən dəyişdirilir."
+    hardlock-dur — yalnız ROOT İdarə Mərkəzindən dəyişdirilir."
     """
 
     role_selected = Signal(str)
@@ -235,6 +240,17 @@ class PermissionMatrixScreen(Screen):
         layout.addWidget(self._build_role_panel())
         layout.addWidget(self._build_matrix_panel(), 1)
         self.add(container)
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 - Qt adlandırması
+        """Fokus vəzifə axtarışına qoyulur — matrisin GİRİŞ nöqtəsi budur.
+
+        Matris onlarla qutucuqdan ibarətdir və hansısa qutucuqda başlamaq
+        təsadüfi olardı; axın isə həmişə eynidir — əvvəlcə vəzifə seçilir,
+        sonra icazələr dəyişdirilir. Axtarış sahəsi həmin ilk addımın ən
+        qısa yoludur (21 filialda vəzifə siyahısı uzundur).
+        """
+        super().showEvent(event)
+        self._role_search.setFocus(Qt.FocusReason.OtherFocusReason)
 
     # ------------------------------ sol panel -------------------------------- #
 
@@ -349,7 +365,7 @@ class PermissionMatrixScreen(Screen):
 
         layout.addWidget(
             muted_label(
-                "Qıfıllı icazələr hardlock-dur — yalnız ROOT Control Center-dən dəyişdirilir."
+                "Qıfıllı icazələr hardlock-dur — yalnız ROOT İdarə Mərkəzindən dəyişdirilir."
             )
         )
         layout.addWidget(self._build_override_card())
@@ -357,7 +373,7 @@ class PermissionMatrixScreen(Screen):
 
     def _build_override_card(self) -> Card:
         card = Card(padding=16, spacing=10)
-        card.add(title_label("Fərdi Override", size=14))
+        card.add(title_label("Fərdi İstisna", size=14))
         card.add(muted_label("Bir istifadəçiyə rolundan kənar icazə vermək"))
         self._override_search = QLineEdit()
         self._override_search.setPlaceholderText("İstifadəçi axtar")
@@ -400,7 +416,7 @@ class PermissionMatrixScreen(Screen):
                 if hardlock:
                     box.setEnabled(False)
                     box.setIcon(icons.icon("lock", self.theme.color("--color-text-muted")))
-                    box.setToolTip("Hardlock — yalnız ROOT Control Center-dən dəyişdirilir")
+                    box.setToolTip("Hardlock — yalnız ROOT İdarə Mərkəzindən dəyişdirilir")
                 self._checkboxes[flag] = box
                 grid.addWidget(box, index // 2, index % 2)
 
@@ -425,6 +441,122 @@ class PermissionMatrixScreen(Screen):
     def _on_cancel(self) -> None:
         if self._active_role is not None:
             self.role_selected.emit(self._active_role)
+
+
+class RoleCreateDialog(QDialog):
+    """«+ Yeni Vəzifə» modalı — ad, pillə və kamera-tipi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    KOD SORUŞULMUR, ADDAN TÖRƏDİLİR
+    ──────────────────────────────────────────────────────────────────────────
+    `RoleDraft` həm `code`, həm `name_az` gözləyir, lakin kod maşın açarıdır
+    (`ANBAR_NEZARETCISI`) və istifadəçidən onu ayrıca yazmasını istəmək iki
+    sahəni sinxron saxlamaq yükünü ona ötürərdi. `PositionManagementUseCase`
+    onsuz da kodu normallaşdırır (`_clean_code`: böyük hərf + alt-xətt), ona
+    görə hər iki sahəyə EYNİ mətn verilir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    KAMERA-TİPİ SEÇİMİ NİYƏ XƏBƏRDARLIQLA GƏLİR
+    ──────────────────────────────────────────────────────────────────────────
+    `is_camera_type=True` custom rol praktikada `Kamera_Nəzarətçisi`-nin
+    ekvivalentidir və maliyyə nəticəli səlahiyyət daşıya bilər (bölmə 3). Use
+    case onu operativ pillə ilə məhdudlaşdırır; dialoq isə həmin nəticəni
+    seçimdən ƏVVƏL yazır ki, qərar məlumatlı olsun.
+
+    Signals:
+        submitted: (ad, prioritet dəyəri, kamera-tipli).
+    """
+
+    submitted = Signal(str, int, bool)
+
+    #: Açılan siyahıdakı pillələr — `RolePriority` dəyərləri ilə eyni sıra.
+    PRIORITIES: Final[tuple[tuple[str, int], ...]] = (
+        ("Rəhbərlik (0)", 0),
+        ("Admin (1)", 1),
+        ("Operativ (2)", 2),
+        ("Personal (3)", 3),
+    )
+
+    def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._theme = theme
+        self.setWindowTitle("Yeni Vəzifə")
+        self.setModal(True)
+        self.setMinimumWidth(470)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        card = Card(padding=26, spacing=18)
+        layout.addWidget(card)
+        card.add(title_label("Yeni Vəzifə", size=19))
+        card.add(Divider())
+
+        self._name = FormField(
+            "Vəzifə adı",
+            placeholder="Məsələn: Anbar Nəzarətçisi",
+            hint="İcazələr rol yaradıldıqdan sonra matrisdən verilir.",
+        )
+        card.add(self._name)
+
+        self._priority = QComboBox()
+        for label, value in self.PRIORITIES:
+            self._priority.addItem(label, value)
+        # Defolt «Personal (3)»: ən aşağı pillə ən az risklidir və pilləni
+        # sonradan qaldırmaq, səhvən yüksək verilmiş pilləni endirməkdən
+        # asandır.
+        self._priority.setCurrentIndex(len(self.PRIORITIES) - 1)
+        card.add(FormField("Səlahiyyət pilləsi", widget=self._priority))
+
+        self._camera = QCheckBox("Kamera-tipli rol")
+        card.add(self._camera)
+        card.add(
+            muted_label(
+                "Kamera-tipli rol cərimə yaza bilən rollar sinfindəndir və "
+                "yalnız operativ (2) və ya daha yüksək pillədə yaradıla bilər.",
+                size=12,
+            )
+        )
+
+        buttons = QWidget()
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(12)
+        buttons_layout.addWidget(stretch())
+
+        cancel = secondary_button("İmtina")
+        cancel.clicked.connect(self.reject)
+        buttons_layout.addWidget(cancel)
+
+        create = action_button("Yarat")
+        create.clicked.connect(self._on_submit)
+        buttons_layout.addWidget(create)
+        card.add(buttons)
+
+        # Enter «Yarat»-ı işə salır: rol YARADILIR, heç nə silinmir və səhv
+        # rol dərhal deaktiv edilə bilir. Açıq təyin edilməsəydi Qt ilk
+        # düyməni («İmtina») defolt sayardı — Enter işi ləğv edərdi.
+        create.setDefault(True)
+        create.setAutoDefault(True)
+        cancel.setAutoDefault(False)
+
+        # Fokus sırası vizual sıra ilə: ad → pillə → kamera-tipi → düymələr.
+        QWidget.setTabOrder(self._name.input_widget(), self._priority)
+        QWidget.setTabOrder(self._priority, self._camera)
+        QWidget.setTabOrder(self._camera, cancel)
+        QWidget.setTabOrder(cancel, create)
+
+        self._name.focus_input()
+
+    def _on_submit(self) -> None:
+        name = self._name.text().strip()
+        self._name.clear_error()
+        if not name:
+            self._name.set_error("Vəzifə adı məcburidir")
+            return
+        self.submitted.emit(name, int(self._priority.currentData()), self._camera.isChecked())
+        self.accept()
 
 
 # --------------------------------------------------------------------------- #
@@ -490,7 +622,7 @@ class UsersScreen(Screen):
                 Column("İşçi", 260),
                 Column("Rol", 200),
                 Column("Mağaza", 220),
-                Column("Status", 160),
+                Column("Vəziyyət", 160),
                 Column("Əməliyyat"),
             ],
             theme,
@@ -645,7 +777,7 @@ class ShiftPlanningScreen(Screen):
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.setSpacing(10)
-            badge = QLabel(code or "—")
+            badge = plain_label(code or "—")
             badge.setFixedSize(26, 26)
             badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
             badge.setStyleSheet(
@@ -709,7 +841,7 @@ class ShiftPlanningScreen(Screen):
         clear_layout(self._matrix_grid)
         self._cells.clear()
 
-        header = QLabel("İşçi")
+        header = plain_label("İşçi")
         header.setProperty("variant", "mono-muted")
         self._matrix_grid.addWidget(header, 0, 0)
 
@@ -718,7 +850,7 @@ class ShiftPlanningScreen(Screen):
             cell_layout = QVBoxLayout(cell)
             cell_layout.setContentsMargins(0, 0, 0, 0)
             cell_layout.setSpacing(0)
-            number_label = QLabel(str(number))
+            number_label = plain_label(str(number))
             number_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             number_font = number_label.font()
             number_font.setPixelSize(11)
@@ -735,7 +867,7 @@ class ShiftPlanningScreen(Screen):
             self._matrix_grid.addWidget(label, row_index, 0)
 
             for column, code in enumerate(day_codes, start=1):
-                cell = QLabel(code)
+                cell = plain_label(code)
                 cell.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 cell.setFixedSize(30, 28)
                 token = codes.get(code, "--color-text-muted")
@@ -814,7 +946,7 @@ class DailyRosterScreen(Screen):
                 Column("İşçi", 220),
                 Column("Plan", 110, mono=True),
                 Column("Giriş", 110, mono=True),
-                Column("Status", 220),
+                Column("Vəziyyət", 220),
                 Column("Qeyd"),
             ],
             theme,
@@ -875,7 +1007,7 @@ class DailyRosterScreen(Screen):
                     row.get("employee", ""),
                     mono_label(row.get("plan", "—")),
                     mono_label(row.get("check_in", "—")),
-                    Chip(status, tone) if status else QLabel("—"),
+                    Chip(status, tone) if status else plain_label("—"),
                     muted_label(row.get("note", "—")),
                 ]
             )
@@ -1065,6 +1197,7 @@ __all__ = [
     "DailyRosterScreen",
     "DashboardScreen",
     "PermissionMatrixScreen",
+    "RoleCreateDialog",
     "ShiftPlanningScreen",
     "ShiftSwapScreen",
     "UsersScreen",

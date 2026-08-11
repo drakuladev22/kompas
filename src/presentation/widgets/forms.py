@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.presentation.theme.manager import refresh_widget_style
+from src.presentation.widgets.primitives import plain_label
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QAbstractSpinBox
@@ -41,7 +43,7 @@ LABEL_SPACING = 7
 
 def field_label(text: str) -> QLabel:
     """13px/500 sahə etiketi."""
-    label = QLabel(text)
+    label = plain_label(text)
     font = label.font()
     font.setPixelSize(13)
     font.setWeight(QFont.Weight.DemiBold)
@@ -89,7 +91,7 @@ class FormField(QWidget):
         self._input = widget
         layout.addWidget(widget)
 
-        self._hint = QLabel(hint)
+        self._hint = plain_label(hint)
         hint_font = self._hint.font()
         hint_font.setPixelSize(12)
         self._hint.setFont(hint_font)
@@ -104,6 +106,17 @@ class FormField(QWidget):
 
     def input_widget(self) -> QLineEdit | QComboBox | QAbstractSpinBox:
         return self._input
+
+    def focus_input(self) -> None:
+        """Fokusu ETİKETƏ deyil, GİRİŞ SAHƏSİNƏ verir.
+
+        `FormField` bir qabdır: `field.setFocus()` fokusu qabın özünə verərdi
+        və Qt onu ilk uşağa ötürməzdi (qabın `focusPolicy`-si `NoFocus`-dur),
+        yəni klaviatura ilə yazmaq mümkün olmazdı. Çağırış nöqtələri
+        `input_widget().setFocus()` yazmasın deyə qayda BURADA saxlanılır —
+        əks halda hər ekran daxili quruluşu bilməli olardı.
+        """
+        self._input.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def text(self) -> str:
         """Sahənin mətni — `QLineEdit` və `QComboBox` üçün işləyir."""

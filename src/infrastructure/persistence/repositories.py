@@ -14,12 +14,15 @@ səhvən owner rolu ilə qoşulsa) izolyasiya qalsın.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 from uuid import UUID
 
+from psycopg import errors as pg_errors
+
+from src.application.use_cases.leave_verification import OperationNotPermittedError
 from src.domain.entities.attendance_record import AttendanceRecord, CheckInStatus
 from src.domain.entities.employee import Employee
-from src.domain.entities.fine import Fine
+from src.domain.entities.fine import EXPORTABLE_STATUSES, Fine
 from src.domain.entities.leave_request import LeaveRequest, LeaveStatus
 from src.domain.entities.position import Position
 from src.domain.value_objects.credentials import Username
@@ -144,6 +147,27 @@ class PostgresPositionRepository(_BaseRepository):
 
         DB trigger-ləri (anti-fraud, hardlock) burada da işə düşür — yəni
         domen qatı yan keçilsə belə qadağan olunmuş flag DB-yə düşmür.
+
+        ──────────────────────────────────────────────────────────────────────
+        `granted_by` NİYƏ SESSİYA KONTEKSTİNDƏN GƏLİR
+        ──────────────────────────────────────────────────────────────────────
+        `enforce_grantor_owns_flag()` (miqrasiya 014) Self-Escalation Guard-ın
+        DB tərəfidir və qərarını `NEW.granted_by` sütununa görə verir. Sütun
+        BOŞ qaldıqda trigger onu SEED yazısı sayır və yoxlamadan buraxır —
+        yəni İcazə Matrisi ekranından gələn hər rol dəyişikliyi DB qapısını
+        sükutla yan keçirdi və qayda yalnız BİR yerdə (domendə) qalırdı.
+        CLAUDE.md bölmə 5 isə hər qaydanın İKİ yerdə olmasını tələb edir.
+
+        Dəyər `app.user_id`-dən oxunur — `UnitOfWork` onu `SET LOCAL` ilə
+        qoyur (`_apply_tenant_context`). Metod imzası DƏYİŞMİR: `granted_by`
+        parametri əlavə etsəydik `PositionRepository` portunu və onun bütün
+        çağırış yerlərini dəyişmək lazım gələrdi, halbuki aktor onsuz da
+        tranzaksiya kontekstindədir.
+
+        `NULLIF(..., '')` vacibdir: `user_id` verilməyən sessiyalarda (ilk
+        quraşdırma, planlayıcı işləri) parametr BOŞ SƏTİRDİR və `::uuid`
+        çevirməsi xəta verərdi — `NULL` isə seed istisnasına düşür, yəni
+        köhnə davranış olduğu kimi qalır.
         """
         self._execute(
             "DELETE FROM position_permissions WHERE position_id = %s AND flag_code <> ALL(%s)",
@@ -152,9 +176,16 @@ class PostgresPositionRepository(_BaseRepository):
         for flag_code in position.granted_flags:
             self._execute(
                 """
-                INSERT INTO position_permissions (position_id, flag_code, granted)
-                VALUES (%s, %s, TRUE)
-                ON CONFLICT (position_id, flag_code) DO UPDATE SET granted = TRUE
+                INSERT INTO position_permissions (position_id, flag_code, granted, granted_by)
+                VALUES (%s, %s, TRUE, NULLIF(current_setting('app.user_id', TRUE), '')::uuid)
+                ON CONFLICT (position_id, flag_code)
+                DO UPDATE SET granted    = TRUE,
+                              -- Kontekstsiz yazı MÖVCUD "verən"i silməməlidir:
+                              -- planlayıcı işi bir sətrə toxunduqda "kim verdi"
+                              -- sualının cavabı itərdi.
+                              granted_by = COALESCE(
+                                  EXCLUDED.granted_by, position_permissions.granted_by
+                              )
                 """,
                 (position.id, flag_code),
             )
@@ -468,6 +499,31 @@ class PostgresLeaveRequestRepository(_BaseRepository):
         )
         return self._hydrate(row) if row else None
 
+    def get_for_update(self, request_id: LeaveRequestId) -> LeaveRequest | None:
+        """`get()`-in SƏTİR KİLİDLİ variantı — YALNIZ yazma axını üçün.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `get()` DƏYİŞDİRİLMİR
+        ──────────────────────────────────────────────────────────────────────
+        `get()` ekranlarda, hesabatlarda və növbə baxışlarında da işlədilir.
+        Ona `FOR UPDATE` qoymaq hər sadə baxışı yazı-kilidinə çevirər və
+        paralel oxuları bir-birinə gözlədərdi. Ona görə kilidli variant AYRICA
+        metoddur; onu yalnız STEP 3 / override / dual-control axını çağırır.
+
+        Kilid TRANZAKSİYA sonuna qədər saxlanılır. Bu, layihənin "uzun-ömürlü
+        tranzaksiya QADAĞANDIR" qaydası ilə ziddiyyət təşkil ETMİR: kontroller
+        naxışı (CLAUDE.md §6) hər əməliyyat üçün ayrıca qısa sessiya açır —
+        panel saatlarla açıq qalsa da tranzaksiya millisaniyələr yaşayır.
+
+        `FOR UPDATE` sətri LOCK edir; `_hydrate` içindəki override oxusu isə
+        kilidsizdir — override sətri append-only-dir və yarışın mövzusu deyil.
+        """
+        row = self._fetch_one(
+            self._SELECT + " WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            (request_id, self._tenant),
+        )
+        return self._hydrate(row) if row else None
+
     def find_open_for_employee(self, employee_id: EmployeeId) -> LeaveRequest | None:
         row = self._fetch_one(
             self._SELECT
@@ -539,6 +595,36 @@ class PostgresLeaveRequestRepository(_BaseRepository):
 
     def save(self, request: LeaveRequest) -> None:
         params = leave_request_to_params(request)
+        try:
+            self._insert(params)
+        except pg_errors.UniqueViolation as error:
+            # ──────────────────────────────────────────────────────────────
+            # STEP 1 TƏKRAR KLİKİ — XAM DB İSTİSNASI OLMAMALIDIR
+            # ──────────────────────────────────────────────────────────────
+            # Use case `find_open_for_employee()` ilə yoxlayır, lakin yoxlama
+            # ilə INSERT arasında pəncərə var: iki paralel sorğu (və ya sadəcə
+            # cüt klik) hər ikisi "açıq icazə yoxdur" görür. Yarışı DB udur —
+            # `uq_leave_one_open_per_employee` ikincini rədd edir.
+            #
+            # Həmin rədd istifadəçiyə `UniqueViolation` kimi çatmamalıdır:
+            # bu, texniki nasazlıq deyil, məhz use case-dəki İŞ QAYDASIDIR.
+            # Ona görə MÖVCUD istisnaya (`OperationNotPermittedError`) və eyni
+            # Azərbaycanca mesaja çevrilir — yeni istisna sinfi yaradılmır ki,
+            # çağıran tərəflər (ekran, kiosk, plugin) tək bir hal tutsun.
+            raise OperationNotPermittedError(
+                "İşçinin artıq açıq icazə sorğusu var (DB unikal indeksi)",
+                user_message="Sizin artıq açıq icazəniz var. Əvvəlcə qayıdışı təsdiqləyin.",
+                context={
+                    "request_id": str(request.id),
+                    "employee_id": str(request.employee_id),
+                    "constraint": getattr(error.diag, "constraint_name", None),
+                },
+            ) from error
+        if request.override is not None:
+            self._save_override(request)
+
+    def _insert(self, params: dict[str, Any]) -> None:
+        """`save()`-ın SQL gövdəsi — dəyişmədən köçürülüb (bax `save()`)."""
         self._execute(
             """
             INSERT INTO leave_requests
@@ -579,8 +665,6 @@ class PostgresLeaveRequestRepository(_BaseRepository):
                 params["escalated_at"],
             ),
         )
-        if request.override is not None:
-            self._save_override(request)
 
     def _save_override(self, request: LeaveRequest) -> None:
         override = request.override
@@ -655,6 +739,23 @@ class PostgresAttendanceRepository(_BaseRepository):
         )
         return attendance_from_row(row) if row else None
 
+    def get_for_day_for_update(
+        self, employee_id: EmployeeId, work_date: date
+    ) -> AttendanceRecord | None:
+        """`get_for_day()`-in SƏTİR KİLİDLİ variantı — YALNIZ STEP C yazma axını.
+
+        Oxu-yalnız yol (`employee_can_request_leave`, növbə siyahısı) kilidsiz
+        qalır: orada kilid heç nə qorumur, yalnız paralel baxışları
+        yavaşladardı. Kilid təsdiq/rədd yarışını bağlayır — bax
+        `RowLockingAttendance` protokolunun izahı.
+        """
+        row = self._fetch_one(
+            self._SELECT
+            + " WHERE employee_id = %s AND work_date = %s AND tenant_id = %s FOR UPDATE",
+            (employee_id, work_date, self._tenant),
+        )
+        return attendance_from_row(row) if row else None
+
     def list_pending_verification(self, store_ids: list[StoreId]) -> list[AttendanceRecord]:
         if not store_ids:
             return []
@@ -723,12 +824,52 @@ class PostgresAttendanceRepository(_BaseRepository):
 # Fine
 # --------------------------------------------------------------------------- #
 
+#: Export-a düşə bilən statusların SQL literal siyahısı.
+#:
+#: MƏNBƏ DOMENDƏDİR — `Fine.EXPORTABLE_STATUSES`. Siyahı burada ƏL İLƏ
+#: təkrar yazılsaydı, domendə `REDUCED` əlavə/çıxarıldıqda SQL sükutla köhnə
+#: qalardı; məhz bu cür sürüşmə `list_exportable`-ı miqrasiya 003-dən sonra
+#: iki il köhnə saxlamışdı. `sorted(...)` determinizm üçündür: dəst
+#: (`frozenset`) sırasızdır, sorğu mətni isə hər proses başlanğıcında EYNİ
+#: olmalıdır (plan keşi və diff oxunaqlığı).
+_EXPORTABLE_STATUS_LITERALS: Final = ", ".join(
+    f"'{status.value}'" for status in sorted(EXPORTABLE_STATUSES, key=lambda s: s.value)
+)
+
+#: `Fine.is_exportable`-in SQL qarşılığı (bölmə 6 LOCK MEXANİZMİ).
+#:
+#: DİNAMİK QURULMA — CLAUDE.md §4-ün "şərtlər SABİT sətir siyahısından qurulur"
+#: istisnası. Dəyərlər istifadəçi girişi DEYİL, `FineStatus` enum-unun
+#: üzvləridir. `%s` placeholder-i ilə ötürülsəydi `status IN (...)` şərti
+#: `idx_fines_export_ready` QİSMƏN indeksinin predikatı ilə mətn olaraq
+#: uyğunlaşmaz və planlaşdırıcı indeksi seçə bilməzdi.
+#:
+#: `S608` susdurma direktivi YOXDUR, çünki ruff bu fraqmenti işarələmir
+#: (fraqmentdə `SELECT`/`FROM` yoxdur) — RUF100 istifadəsiz direktivi rədd edir.
+#: Digər `%s` parametrləri (tenant və vaxt) əvvəlki kimi parametrləşdirilib.
+_EXPORTABLE_FINES_WHERE: Final = (
+    " WHERE tenant_id = %s"
+    f" AND status IN ({_EXPORTABLE_STATUS_LITERALS})"
+    " AND published_at IS NOT NULL"
+    " AND appeal_window_closes_at IS NOT NULL"
+    " AND appeal_window_closes_at <= %s"
+    " AND exported_period IS NULL"
+    " ORDER BY fine_date"
+)
+
 
 class PostgresFineRepository(_BaseRepository):
+    # `published_at`/`reviewed_by`/`review_decision_reason` (miqrasiya 003)
+    # SİYAHIYA ƏLAVƏ EDİLİB: `fine_from_row` onları onsuz da oxumağa hazırdır
+    # (`row.get(...)`), lakin sorğu onları gətirmədiyi üçün nəşr olunmuş cərimə
+    # yaddaşa `published_at = None` ilə qayıdırdı — yəni 72 saatlıq pəncərənin
+    # açılış anı hər oxunuşda İTİRDİ və `is_appeal_window_open()` həmişə `True`
+    # deyirdi (export əbədi bloklanardı, bölmə 6).
     _SELECT = """
         SELECT id, tenant_id, employee_id, store_id, source, fine_type_id,
                leave_request_id, amount, fine_date, issued_by, photo_evidence_url,
-               status, reversed_by, reversed_at, reversal_reason,
+               status, published_at, reviewed_by, review_decision_reason,
+               reversed_by, reversed_at, reversal_reason,
                appeal_window_closes_at, exported_period, created_at AS issued_at
         FROM fines
     """
@@ -755,15 +896,31 @@ class PostgresFineRepository(_BaseRepository):
         return [fine_from_row(row) for row in rows]
 
     def list_exportable(self, tenant_id: TenantId, *, now: datetime) -> list[Fine]:
-        """Bölmə 6 LOCK MEXANİZMİ — DB-dəki `v_exportable_fines` ilə eyni şərt."""
+        """Bölmə 6 LOCK MEXANİZMİ — `Fine.is_exportable` ilə TAM eyni şərt.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `status <> 'REVERSED'` KİFAYƏT DEYİLDİ
+        ──────────────────────────────────────────────────────────────────────
+        Bu sorğu miqrasiya 003-dən ƏVVƏLKİ status modelində yazılmışdı: o
+        vaxt cərimə `ACTIVE` doğulurdu və "ləğv olunmayıb" ilə "işçiyə
+        görünür" EYNİ şey idi. 003 iki mərhələli görünmə gətirdi
+        (`PENDING_REVIEW` → aylıq icmal → `PUBLISHED`, CLAUDE.md bölmə 9) və
+        `v_exportable_fines` görünüşü həmin miqrasiyada yeniləndi — bu sorğu
+        isə YENİLƏNMƏDİ. Nəticədə hələ icmaldan keçməmiş cərimə, `fine_date`
+        üstündən 72 saat keçən kimi maaş export siyahısına düşə bilirdi:
+        işçi onu NƏ GÖRÜB, NƏ də etiraz hüququ alıb (bölmə 6, hüquqi risk).
+
+        İndi üç şərt də domendəki `Fine.is_exportable` ilə birebirdir:
+        status `EXPORTABLE_STATUSES`-dədir, etiraz pəncərəsi bağlanıb,
+        əvvəllər export olunmayıb.
+
+        `published_at IS NOT NULL` ƏLAVƏ ŞƏRT KİMİ: `chk_fine_published`
+        onsuz da tələb edir, lakin sorğunun özü də oxunanda "nəşr olunmuş"
+        anlayışını açıq göstərməlidir — filtr statusdan asılı gizli
+        fərziyyəyə söykənməsin.
+        """
         rows = self._fetch_all(
-            self._SELECT
-            + """
-            WHERE tenant_id = %s AND status <> 'REVERSED'
-              AND exported_period IS NULL
-              AND appeal_window_closes_at <= %s
-            ORDER BY fine_date
-            """,
+            self._SELECT + _EXPORTABLE_FINES_WHERE,
             (tenant_id, now),
         )
         return [fine_from_row(row) for row in rows]
@@ -805,22 +962,40 @@ class PostgresFineRepository(_BaseRepository):
         )
 
     def save(self, fine: Fine) -> None:
+        # İCMAL SÜTUNLARI (`published_at`, `reviewed_by`,
+        # `review_decision_reason`) SİYAHIYA ƏLAVƏ EDİLİB
+        # ────────────────────────────────────────────────────────────────────
+        # `fine_to_params` onları çoxdan verirdi, INSERT isə götürmürdü.
+        # Nəticə iki qüsur idi:
+        #   (a) `publish()`-dan sonra `published_at` DB-yə düşmürdü, halbuki
+        #       `chk_fine_published` (miqrasiya 003) PUBLISHED sətirdə onun
+        #       dolu olmasını TƏLƏB edir — yazı CHECK pozuntusu ilə çökürdü;
+        #   (b) Saga kompensasiyası cəriməni `discard_in_review()` ilə
+        #       `REVERSED` edir və həmin sətir də eyni CHECK-ə dəyirdi.
+        # Sütunlar ƏLAVƏ olunur, mövcud `ON CONFLICT (id) DO UPDATE` naxışı
+        # OLDUĞU KİMİ QALIR — sadəcə yenilənən sahələrin siyahısı genişlənir.
         params = fine_to_params(fine)
         self._execute(
             """
             INSERT INTO fines
                 (id, tenant_id, employee_id, store_id, source, fine_type_id,
                  leave_request_id, amount, fine_date, issued_by,
-                 photo_evidence_url, status, reversed_by, reversed_at,
+                 photo_evidence_url, status, published_at, reviewed_by,
+                 review_decision_reason, reversed_by, reversed_at,
                  reversal_reason, appeal_window_closes_at, exported_period)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
-                amount          = EXCLUDED.amount,
-                status          = EXCLUDED.status,
-                reversed_by     = EXCLUDED.reversed_by,
-                reversed_at     = EXCLUDED.reversed_at,
-                reversal_reason = EXCLUDED.reversal_reason,
-                exported_period = EXCLUDED.exported_period
+                amount                 = EXCLUDED.amount,
+                status                 = EXCLUDED.status,
+                published_at           = EXCLUDED.published_at,
+                reviewed_by            = EXCLUDED.reviewed_by,
+                review_decision_reason = EXCLUDED.review_decision_reason,
+                reversed_by            = EXCLUDED.reversed_by,
+                reversed_at            = EXCLUDED.reversed_at,
+                reversal_reason        = EXCLUDED.reversal_reason,
+                appeal_window_closes_at = EXCLUDED.appeal_window_closes_at,
+                exported_period        = EXCLUDED.exported_period
             """,
             (
                 params["id"],
@@ -835,6 +1010,9 @@ class PostgresFineRepository(_BaseRepository):
                 params["issued_by"],
                 params["photo_evidence_url"],
                 params["status"],
+                params["published_at"],
+                params["reviewed_by"],
+                params["review_decision_reason"],
                 params["reversed_by"],
                 params["reversed_at"],
                 params["reversal_reason"],

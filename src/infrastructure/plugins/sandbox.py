@@ -12,6 +12,9 @@ TƏTBİQ:
     * **Çıxış həcmi limiti** — nəhəng cavabla host-un yaddaşını doldurmaq
       mümkün deyil.
     * Hər çağırış **capability whitelist**-inə qarşı yoxlanılır.
+    * Alt-proses HƏMİŞƏ əsl Python interpretatoru ilə açılır (`shared/
+      runtime.py: plugin_interpreter`) — paketlənmiş `.exe` ilə YOX, çünki
+      `.exe` interpretator deyil və `-I -S` izolyasiyasını daşıya bilməz.
 
 QEYD (dürüstlük): bu, OS-səviyyəli TAM izolyasiya (seccomp/AppContainer/
 job object) DEYİL. Proses hələ də istifadəçinin fayl sistemini oxuya bilər.
@@ -25,7 +28,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,6 +41,7 @@ from src.infrastructure.plugins.contracts import (
     PluginTimeoutError,
 )
 from src.shared.logger import LogChannel, get_logger
+from src.shared.runtime import PLUGIN_PYTHON_ENV, plugin_interpreter
 
 _log = get_logger(__name__)
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
@@ -116,7 +119,37 @@ class PluginSandbox:
         self.manifest = manifest
         self.plugin_path = plugin_path
         self.policy = policy or SandboxPolicy(allowed_capabilities=frozenset(manifest.capabilities))
-        self._python = python_executable or sys.executable
+        # `sys.executable` BURADA ÇAĞIRILMIR: paketlənmiş rejimdə o,
+        # `KompasOS.exe`-dir və interpretator deyil (bax `_command`).
+        # Açıq verilmiş `python_executable` yenə də hər şeydən üstündür —
+        # testlər və xüsusi quraşdırmalar bu yolla interpretator seçir.
+        self._python: str | None = python_executable or plugin_interpreter()
+
+    def _command(self) -> list[str]:
+        """Alt-prosesin argv-si.
+
+        `-I` (isolated) və `-S` (site yox) bayraqları sandbox-un ƏSAS
+        zəmanətini daşıyır: plugin host-un `PYTHONPATH`-ını, user-site
+        paketlərini və `src.*` modullarını GÖRMÜR. Ona görə əmrin ilk elementi
+        həqiqi Python interpretatoru OLMALIDIR.
+
+        İnterpretator tapılmadıqda burada AÇIQ istisna atılır — sükutla
+        `sys.executable`-a qayıtmaq paketdə tətbiqin ikinci nüsxəsini işə
+        salardı və nasazlıq "plugin xəta ilə bitdi (kod 2)" kimi görünərdi
+        (bax `shared/runtime.py: plugin_interpreter`).
+        """
+        if self._python is None:
+            _security_log.warning(
+                "PLUGIN_INTERPRETER_MISSING",
+                extra={"plugin": self.manifest.name, "env_key": PLUGIN_PYTHON_ENV},
+            )
+            raise PluginError(
+                "Plugin icra edilə bilmədi: Python interpretatoru tapılmadı. "
+                f"Paketlənmiş quraşdırmada onu `{PLUGIN_PYTHON_ENV}` mühit "
+                "dəyişəni ilə göstərin.",
+                context={"plugin": self.manifest.name, "env_key": PLUGIN_PYTHON_ENV},
+            )
+        return [self._python, "-I", "-S", str(self.plugin_path)]
 
     def invoke(self, request: PluginRequest) -> PluginResponse:
         """Plugin-ə bir çağırış göndərir və cavabı qaytarır.
@@ -125,6 +158,10 @@ class PluginSandbox:
         beləliklə bir çağırışdakı korlanma digərinə keçmir.
         """
         self.policy.assert_allowed(request.capability)
+
+        # Əmr payload-dan ƏVVƏL qurulur: interpretator yoxdursa plugin heç
+        # vaxt icra olunmayacaq və JSON hazırlamağın mənası yoxdur.
+        command = self._command()
 
         payload = json.dumps(
             {
@@ -138,7 +175,7 @@ class PluginSandbox:
 
         try:
             completed = subprocess.run(  # noqa: S603 - yol və mühit nəzarətdədir
-                [self._python, "-I", "-S", str(self.plugin_path)],
+                command,
                 input=payload,
                 capture_output=True,
                 text=True,

@@ -29,6 +29,7 @@ miqrasiya prosesi isə bu yoxlamadan kənardır.
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
@@ -38,11 +39,12 @@ from src.domain.value_objects.infrastructure import (
     MigrationError,
     MigrationStatus,
 )
+from src.infrastructure.persistence.dsn import dsn_without_password, password_env
 from src.infrastructure.persistence.repositories import _BaseRepository
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from src.domain.value_objects.identifiers import EmployeeId, TenantId
     from src.domain.value_objects.infrastructure import ChecksumPair
@@ -145,6 +147,15 @@ class PgDumpMigrator:
     DSN-lər KONSTRUKTORDA verilir — bu sinif credential oxumur və onları
     log-a yazmır (`--dbname` arqumenti `subprocess`-ə siyahı kimi ötürülür,
     qabıqdan keçmir).
+
+    ──────────────────────────────────────────────────────────────────────────
+    ŞİFRƏ ƏMR SƏTRİNƏ DÜŞMÜR
+    ──────────────────────────────────────────────────────────────────────────
+    Qabıqdan keçməmək KİFAYƏT DEYİL: arqument siyahısının özü prosesin əmr
+    sətridir və eyni maşındakı hər proses onu oxuya bilir (`ps`, Process
+    Explorer). Ona görə DSN `dsn_without_password()` ilə bölünür, şifrə isə
+    `PGPASSWORD` mühit dəyişəni ilə ötürülür — gecəlik ehtiyat nüsxə
+    xidmətindəki EYNİ mexanizm (`persistence/dsn.py`).
     """
 
     def __init__(
@@ -157,6 +168,10 @@ class PgDumpMigrator:
     ) -> None:
         self._dsn = dsn_by_target
         self._checksum_reader = checksum_reader
+        #: Kənardan verilən icraçı (test/xüsusi mühit). İmzası DƏYİŞMİR —
+        #: ona yalnız şifrəsiz əmr sətri gedir, mühit dəyişəni isə daxili
+        #: icraçının işidir (bax `_invoke`).
+        self._external_runner = runner
         self._runner = runner or self._run
         self._on_switch = on_switch
         self._active: DatabaseTarget | None = None
@@ -187,22 +202,28 @@ class PgDumpMigrator:
     # -------------------------------- köçürmə -------------------------------- #
 
     def copy(self, *, source: DatabaseTarget, destination: DatabaseTarget) -> None:
-        """`pg_dump | pg_restore` — məlumatı hədəfə köçürür."""
+        """`pg_dump | pg_restore` — məlumatı hədəfə köçürür.
+
+        Arqumentlərə ŞİFRƏSİZ DSN gedir; şifrə `_invoke` içində mühit
+        dəyişəninə keçir (bax sinif başlığı). Əmrlərin özü, sırası və xəta
+        mesajları dəyişməyib.
+        """
         source_dsn = self._require_dsn(source)
         destination_dsn = self._require_dsn(destination)
 
-        code = self._runner(
+        code = self._invoke(
             [
                 "pg_dump",
                 "--dbname",
-                source_dsn,
+                dsn_without_password(source_dsn),
                 "--format",
                 "custom",
                 "--no-owner",
                 "--no-privileges",
                 "--file",
                 "-",
-            ]
+            ],
+            dsn=source_dsn,
         )
         if code != 0:
             raise MigrationError(
@@ -210,8 +231,16 @@ class PgDumpMigrator:
                 user_message="Məlumatın oxunması alınmadı.",
             )
 
-        code = self._runner(
-            ["pg_restore", "--dbname", destination_dsn, "--clean", "--if-exists", "-"]
+        code = self._invoke(
+            [
+                "pg_restore",
+                "--dbname",
+                dsn_without_password(destination_dsn),
+                "--clean",
+                "--if-exists",
+                "-",
+            ],
+            dsn=destination_dsn,
         )
         if code != 0:
             raise MigrationError(
@@ -249,11 +278,27 @@ class PgDumpMigrator:
             )
         return dsn
 
+    def _invoke(self, command: Sequence[str], *, dsn: str) -> int:
+        """Əmri icra edir; şifrəni əmr sətrindən AYIRIB mühitə ötürür.
+
+        Kənardan `runner` verilibsə o, köhnə imzası ilə (yalnız əmr siyahısı)
+        çağırılır — ona onsuz da şifrəsiz sətir gedir və test qoşquları
+        dəyişməli olmur. Mühit dəyişəni yalnız daxili icraçıya lazımdır.
+        """
+        if self._external_runner is None:
+            return self._run(command, {**os.environ, **password_env(dsn)})
+        return self._runner(command)
+
     @staticmethod
-    def _run(command: Sequence[str]) -> int:
-        # `shell=False` (defolt): DSN parolla birlikdə arqument kimi ötürülür
-        # və qabıq tərəfindən şərh edilmir.
-        completed = subprocess.run(command, check=False, capture_output=True)  # noqa: S603
+    def _run(command: Sequence[str], environment: Mapping[str, str] | None = None) -> int:
+        # `shell=False` (defolt): arqumentlər qabıqdan keçmir. Şifrə isə
+        # arqument DEYİL — `environment` içindəki `PGPASSWORD`-dədir.
+        completed = subprocess.run(  # noqa: S603
+            command,
+            check=False,
+            capture_output=True,
+            env=dict(environment) if environment is not None else None,
+        )
         if completed.returncode != 0:
             _error_log.error(
                 "MIGRATION_COMMAND_FAILED",
@@ -340,6 +385,32 @@ class PostgresMigrationEventLog(_BaseRepository):
         )
 
 
+def read_scalar(dsn: str, sql: str) -> str:
+    """`PgDumpMigrator(checksum_reader=...)` üçün hazır oxuyucu.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AYRICA BAĞLANTI
+    ──────────────────────────────────────────────────────────────────────────
+    Barmaq izi HƏR İKİ bazadan oxunur — mənbədən və HƏDƏFDƏN. Hədəf isə
+    tətbiqin cari `Database` pool-unda YOXDUR (ona hələ keçilməyib), ona görə
+    burada DSN-ə birbaşa qoşulmaqdan başqa yol yoxdur. Bağlantı sorğudan
+    sonra dərhal bağlanır: keçid saatlarla açıq qalan panel deyil, bir dəfəlik
+    texniki pəncərədir.
+
+    Şifrə DSN-in İÇİNDƏDİR və heç bir yerə yazılmır (`psycopg` onu əmr sətrinə
+    çıxarmır) — bu, `PgDumpMigrator._invoke`-dakı `PGPASSWORD` mexanizmindən
+    fərqlidir, çünki orada xarici PROSES işə düşür, burada isə kitabxana.
+    """
+    import psycopg  # noqa: PLC0415
+
+    with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
+        cursor.execute(sql)
+        row = cursor.fetchone()
+    # Boş nəticə "cədvəl boşdur" deməkdir və barmaq izinə boş sətir kimi
+    # daxil olur — istisna atmaq keçidi konfiqurasiya səhvi kimi göstərərdi.
+    return "" if row is None else str(row[0])
+
+
 __all__ = [
     "CHECKSUM_TABLES",
     "READ_ONLY_LIMIT_KEY",
@@ -347,4 +418,5 @@ __all__ = [
     "PgDumpMigrator",
     "PostgresMigrationEventLog",
     "SessionReadOnlyController",
+    "read_scalar",
 ]

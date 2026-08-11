@@ -2,5 +2,27 @@
   "enabledPlugins": {
     "pr-review-toolkit@claude-plugins-official": false,
     "code-review@claude-plugins-official": true
+  },
+  "permissions": {
+    "deny": [
+      "Read(.venv/**)",
+      "Read(venv/**)",
+      "Read(node_modules/**)",
+      "Read(dist/**)",
+      "Read(build/**)",
+      "Read(__pycache__/**)",
+      "Read(*.pyc)",
+      "Read(.git/**)",
+      "Bash(cat .venv/**)",
+      "Bash(cat venv/**)",
+      "Bash(cat dist/**)",
+      "Bash(cat build/**)",
+      "Bash(find .venv*)",
+      "Bash(find venv*)",
+      "Bash(grep -r .venv*)",
+      "Bash(grep -r venv*)",
+      "Bash(ls .venv/**)",
+      "Bash(ls node_modules/**)"
+    ]
   }
 }

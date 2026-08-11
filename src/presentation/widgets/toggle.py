@@ -1,6 +1,6 @@
 """Açar/bağla düyməsi (toggle switch) — Faza 4.2.
 
-Maketdə Ayarlar və ROOT Control Center ekranlarında sürüşən açar işlədilir.
+Maketdə Ayarlar və ROOT İdarə Mərkəzi ekranlarında sürüşən açar işlədilir.
 Qt-də hazır belə widget YOXDUR (`QCheckBox` kvadrat qutudur), ona görə
 `QAbstractButton` üzərində çəkilir.
 

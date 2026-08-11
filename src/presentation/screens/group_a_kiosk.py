@@ -20,7 +20,6 @@ from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
-    QLabel,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -35,6 +34,7 @@ from src.presentation.widgets.primitives import (
     body_label,
     mono_label,
     muted_label,
+    plain_label,
     stretch,
     title_label,
 )
@@ -171,7 +171,7 @@ class PinPadScreen(QWidget):
 
         layout.addSpacing(46)
 
-        prompt = QLabel("PIN kodunuzu daxil edin")
+        prompt = plain_label("PIN kodunuzu daxil edin")
         prompt_font = prompt.font()
         prompt_font.setPixelSize(22)
         prompt_font.setWeight(QFont.Weight.DemiBold)
@@ -189,7 +189,7 @@ class PinPadScreen(QWidget):
         # Xəta sətri HƏMİŞƏ yer tutur (görünməz olsa da) — əks halda mesaj
         # çıxanda bütün klaviatura aşağı sıçrayardı və barmaq səhv düyməyə
         # düşərdi.
-        self._message = QLabel(" ")
+        self._message = plain_label(" ")
         self._message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         message_font = self._message.font()
         message_font.setPixelSize(14)
@@ -392,7 +392,7 @@ class EmployeeHomeScreen(QWidget):
     def _build_status_card(self) -> QWidget:
         card = Card(padding=26, spacing=14)
 
-        card.add(muted_label("Cari status"))
+        card.add(muted_label("Cari vəziyyət"))
 
         status_row = QWidget()
         status_layout = QHBoxLayout(status_row)

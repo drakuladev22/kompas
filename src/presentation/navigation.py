@@ -7,7 +7,7 @@ QAYDA (spesifikasiyadan):
 
 İKİ ŞƏRT EYNİ VAXTDA yoxlanılır:
     1. istifadəçinin icazəsi VAR, VƏ
-    2. modul Root Control Center-də AKTİVDİR (Feature Toggle).
+    2. modul ROOT İdarə Mərkəzində AKTİVDİR (Feature Toggle).
 
 Bu modul `presentation` qatındadır, lakin **PySide6-dan asılı DEYİL** —
 yalnız saf məlumat strukturu və filtrləmə məntiqi. Faza 4-dəki Shell bu
@@ -155,7 +155,7 @@ class NavigationRegistry:
         now: datetime,
         modules: frozenset[str] | None,
     ) -> bool:
-        # Şərt 1 — modul aktivdirmi (Root Control Center)
+        # Şərt 1 — modul aktivdirmi (ROOT İdarə Mərkəzi)
         if (
             entry.feature_module is not None
             and modules is not None

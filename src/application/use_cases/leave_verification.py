@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from src.domain.entities.fine import Fine, FineSource
+from src.domain.entities.fine import Fine, FineSource, FineStatus
 from src.domain.entities.leave_request import LeaveRequest, LeaveStatus
 from src.domain.interfaces.ports import (
     AuditTrail,
@@ -28,6 +28,7 @@ from src.domain.interfaces.ports import (
     LeaveTypeRepository,
     Notifier,
     NtpVerifier,
+    RowLockingLeaveRequests,
     SystemLimits,
 )
 from src.domain.policies import (
@@ -260,7 +261,11 @@ class LeaveVerificationUseCase:
         Zəncirin hər hansı addımı çökərsə kompensasiya işə düşür və əməliyyat
         `PENDING_RECONCILIATION` statusuna keçir (bölmə 1).
         """
-        request = self._require_request(request_id)
+        # Sətir KİLİDLİ oxunur: iki operator eyni sorğunu eyni anda
+        # təsdiqləyəndə ikincisi birincinin commit-ini gözləyir, sonra TƏZƏ
+        # statusu (`VERIFIED`) görür və `verify_return()` onu rədd edir —
+        # yəni ikinci cərimə heç yaranmır (bax `RowLockingLeaveRequests`).
+        request = self._require_request_locked(request_id)
         # Bölmə 3: `can_verify_returns` — YALNIZ kamera-tipli rollarda ola bilər.
         # Timeout keçibsə HR_Admin/CEO operator əvəzinə təsdiq edə bilər (bölmə 4).
         self._require_camera_permission(
@@ -317,12 +322,43 @@ class LeaveVerificationUseCase:
             return fine
 
         def undo_create_fine(_: dict[str, object]) -> None:
+            # ────────────────────────────────────────────────────────────────
+            # NİYƏ `reverse()` DEYİL, `discard_in_review()`
+            # ────────────────────────────────────────────────────────────────
+            # `Fine` HƏMİŞƏ `PENDING_REVIEW` doğulur (bax `fine.py` — iki
+            # mərhələli görünmə), `reverse()` isə `PUBLISHED` tələb edir.
+            # Kompensasiya `reverse()` çağırdığı müddətdə o, HƏR dəfə
+            # `DomainRuleError` atırdı: saga kompensasiyanı "uğursuz" sayır,
+            # cərimə isə DB-də `PENDING_REVIEW` yetim sətir kimi qalırdı.
+            # Aylıq icmal onu görüb `publish()` edə bilərdi — yəni ləğv olunmuş
+            # icazə təsdiqinə görə İKİQAT PUL KƏSİNTİSİ.
+            #
+            # Doğru yol `fine_review.py`-dakı "Sil" qərarı ilə eynidir:
+            # `discard_in_review()` — şərti məhz `PENDING_REVIEW`-dur, qeyd
+            # fiziki SİLİNMİR, `REVERSED` statusuna keçir və məbləği sıfırlanır
+            # (bölmə 4: "orijinal qeyd heç vaxt silinmir").
+            reason = "Saga kompensasiyası — icazə təsdiqi geri qaytarıldı"
             for fine in created_fine:
-                fine.reverse(
-                    decided_by=operator_id,
-                    decided_at=verified_at,
-                    reason="Saga kompensasiyası — icazə təsdiqi geri qaytarıldı",
-                )
+                if fine.status is FineStatus.PENDING_REVIEW:
+                    fine.discard_in_review(
+                        reviewed_by=operator_id,
+                        reviewed_at=verified_at,
+                        reason=reason,
+                    )
+                elif fine.status is FineStatus.PUBLISHED:
+                    # Nəzəri hal: saga icrası aylıq icmalla üst-üstə düşüb və
+                    # cərimə artıq işçiyə görünüb. O zaman yeganə düzgün yol
+                    # etiraz qərarı ilə eyni `reverse()`-dur.
+                    fine.reverse(
+                        decided_by=operator_id,
+                        decided_at=verified_at,
+                        reason=reason,
+                    )
+                else:
+                    # `REVERSED`/`REDUCED` — artıq qərar verilib. Təkrar ləğv
+                    # istisna atardı və kompensasiyanı sükutla uğursuz edərdi;
+                    # idempotentlik naminə addım atlanılır.
+                    continue
                 self._fines.save(fine)
             created_fine.clear()
 
@@ -385,7 +421,8 @@ class LeaveVerificationUseCase:
         reason: str,
     ) -> LeaveRequest:
         """`[Vaxtı Əllə Təyin Et]` — 30+ dəqiqə dual-control-a düşür."""
-        request = self._require_request(request_id)
+        # Yazma axını — kilidli oxu (təsdiqlə override eyni sətrə yazır).
+        request = self._require_request_locked(request_id)
         self._require_camera_permission(
             operator_id,
             "can_override_return_time",
@@ -447,7 +484,8 @@ class LeaveVerificationUseCase:
         request_id: LeaveRequestId,
     ) -> LeaveRequest:
         """İkinci təsdiq — təsdiqçinin flag-i və özünü-təsdiq qadağası yoxlanılır."""
-        request = self._require_request(request_id)
+        # Yazma axını — kilidli oxu (iki təsdiqçinin eyni anda basması).
+        request = self._require_request_locked(request_id)
         now = self._clock.now()
 
         approver = self._employees.get(approver_id)
@@ -546,6 +584,33 @@ class LeaveVerificationUseCase:
                 user_message="Sorğu tapılmadı.",
                 context={"request_id": str(request_id)},
             )
+        return request
+
+    def _require_request_locked(self, request_id: LeaveRequestId) -> LeaveRequest:
+        """`_require_request`-in YAZMA axını üçün sətir-kilidli variantı.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ MÖVCUD METOD DƏYİŞDİRİLMİR
+        ──────────────────────────────────────────────────────────────────────
+        `_require_request` oxu-yalnız yollarda da işlədilə bilər; ona kilid
+        qoymaq hər sadə baxışı yazı-kilidinə çevirərdi. Ona görə kilid AYRICA
+        metoddadır və yalnız STEP 3 / override / dual-control axınları onu
+        çağırır.
+
+        Repo kilidi dəstəkləmirsə (sahtə repo, gələcək adapter) davranış
+        DƏYİŞMİR — mövcud `_require_request` yolu işləyir. Belə halda qoruma
+        DB-dəki qismən unikal indeksdə qalır (miqrasiya 015): kilidin itməsi
+        səssiz ikiqat cərimə demək DEYİL.
+
+        Sətir tapılmadıqda da `_require_request`-ə ötürülür — istisna mətni
+        TƏK YERDƏ qalsın deyə (bir əlavə SELECT yalnız "tapılmadı" halında).
+        """
+        repository = self._leave_requests
+        if not isinstance(repository, RowLockingLeaveRequests):
+            return self._require_request(request_id)
+        request = repository.get_for_update(request_id)
+        if request is None:
+            return self._require_request(request_id)
         return request
 
     def _require_open_request(self, employee_id: EmployeeId) -> LeaveRequest:

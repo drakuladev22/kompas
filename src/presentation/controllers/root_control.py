@@ -1,4 +1,4 @@
-"""ROOT Control Center kontrolleri — ekran ↔ `RootControlUseCase` (bölmə 3).
+"""ROOT İdarə Mərkəzi kontrolleri — ekran ↔ `RootControlUseCase` (bölmə 3).
 
 ──────────────────────────────────────────────────────────────────────────────
 NİYƏ `screen_data.py`-DA DEYİL, AYRI FAYLDA
@@ -60,7 +60,7 @@ LIMIT_LABELS: dict[SystemLimitKey, tuple[str, int, int, str]] = {
         1_440,
         "dəq",
     ),
-    SystemLimitKey.DUAL_CONTROL_THRESHOLD_MINUTES: ("Dual-Control həddi", 1, 1_440, "dəq"),
+    SystemLimitKey.DUAL_CONTROL_THRESHOLD_MINUTES: ("Cüt nəzarət həddi", 1, 1_440, "dəq"),
     SystemLimitKey.PIN_MAX_FAILED_ATTEMPTS: ("PIN üçün maksimum cəhd", 1, 20, "cəhd"),
     SystemLimitKey.PIN_LOCKOUT_MINUTES: ("PIN bloklama müddəti", 1, 1_440, "dəq"),
     SystemLimitKey.NTP_MAX_DRIFT_SECONDS: ("NTP maksimum sürüşmə", 1, 3_600, "san"),
@@ -73,12 +73,12 @@ LIMIT_LABELS: dict[SystemLimitKey, tuple[str, int, int, str]] = {
 #: Modul açarı → Azərbaycanca etiket.
 MODULE_LABELS: dict[FeatureModule, str] = {
     FeatureModule.CAMERA_VERIFICATION: "Kamera Təsdiqi (STEP1-3, Morning Check-in)",
-    FeatureModule.DUAL_CONTROL: "Dual-Control əlavə təsdiq qatı",
+    FeatureModule.DUAL_CONTROL: "Cüt-nəzarətli əlavə təsdiq qatı",
     FeatureModule.SHIFT_SWAP: "Növbə dəyişmə sorğuları",
     FeatureModule.FINE_MODULE: "Cərimə modulu",
     FeatureModule.TASK_ENGINE: "Tapşırıq idarəetməsi",
     FeatureModule.SALES_POINTS: "Satış xalları və mükafatlar",
-    FeatureModule.DASHBOARD_BUILDER: "Dashboard qurucusu",
+    FeatureModule.DASHBOARD_BUILDER: "Panel qurucusu",
     FeatureModule.SUPPORT_CHAT: "Dəstək çatı",
 }
 

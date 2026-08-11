@@ -105,7 +105,7 @@ class NtpVerifier(Protocol):
 
 @runtime_checkable
 class SystemLimits(Protocol):
-    """ROOT Control Center-dəki konfiqurasiya edilə bilən limitlər (bölmə 3)."""
+    """ROOT İdarə Mərkəzindəki konfiqurasiya edilə bilən limitlər (bölmə 3)."""
 
     def get_int(self, tenant_id: TenantId, key: str, default: int) -> int: ...
 
@@ -441,7 +441,7 @@ class LeaveRequestRepository(Protocol):
         """İşçinin həmin ay ərzində TƏSDİQLƏNMİŞ icazə dəqiqələrinin cəmi.
 
         `system_limits.MONTHLY_LEAVE_MINUTES_LIMIT` (defolt 240) ilə müqayisə
-        üçün — bölmə 3 həmin limiti Root Control Center-dən idarə olunan
+        üçün — bölmə 3 həmin limiti ROOT İdarə Mərkəzindən idarə olunan
         parametr kimi sadalayır və onu oxumaq üçün cəm lazımdır.
 
         YALNIZ `VERIFIED` sorğular sayılır: hələ təsdiqlənməmiş sorğunun
@@ -451,6 +451,33 @@ class LeaveRequestRepository(Protocol):
         ...
 
     def save(self, request: LeaveRequest) -> None: ...
+
+
+@runtime_checkable
+class RowLockingLeaveRequests(Protocol):
+    """SƏTİR KİLİDLİ oxu — YALNIZ yazma axını üçün (yarış vəziyyəti qapağı).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AYRICA PROTOKOL, `LeaveRequestRepository`-yə ƏLAVƏ SAHƏ DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    STEP 3-ü iki operator eyni anda təsdiqləyə bilir: `get()` → `verify()` →
+    `save()` ardıcıllığında oxu ilə yazı arasında pəncərə var və hər iki
+    tranzaksiya "status hələ 🟡-dir" görür. Nəticə İKİ ayrı cərimə sətri, yəni
+    işçidən iki dəfə pul kəsilməsi olardı.
+
+    Kilid `LeaveRequestRepository`-nin MƏCBURİ üzvü edilsəydi, portu artıq
+    həyata keçirən hər tərəf (sahtə repo-lar, plugin-lər, gələcək oxu-yalnız
+    adapterlər) sükutla sıradan çıxardı. Ona görə qabiliyyət AYRICA protokolla
+    elan olunur: use case `isinstance` ilə soruşur, dəstəkləyən repo kilidli
+    oxunu verir, dəstəkləməyən isə köhnə yolla işləməyə davam edir.
+
+    Kilidsiz repo-da qoruma İTMİR — ikinci qat DB-dədir: `fines` üzərindəki
+    qismən unikal indeks (miqrasiya 015) ikinci cəriməni onsuz da rədd edir.
+    """
+
+    def get_for_update(self, request_id: LeaveRequestId) -> LeaveRequest | None:
+        """`SELECT ... FOR UPDATE` — sətri tranzaksiya sonuna qədər kilidləyir."""
+        ...
 
 
 @runtime_checkable
@@ -466,6 +493,25 @@ class AttendanceRepository(Protocol):
         ...
 
     def save(self, record: AttendanceRecord) -> None: ...
+
+
+@runtime_checkable
+class RowLockingAttendance(Protocol):
+    """Morning Check-in yazma axını üçün sətir kilidli oxu.
+
+    Eyni səbəb `RowLockingLeaveRequests`-dəki kimidir: STEP C-də `[Təsdiqlə]`
+    və `[Rədd Et]` eyni sətrə yazır. Kilidsiz halda hər iki operator
+    `PENDING_VERIFICATION` görür, hər ikisi audit yazır və DB-də yalnız
+    SONUNCU status qalır — yəni audit jurnalı ilə faktiki status bir-birini
+    təkzib edərdi. Kilid sayəsində ikinci operator təzə statusu oxuyur və
+    `_require_record` onu audit yazılmamışdan ƏVVƏL bloklayır.
+    """
+
+    def get_for_day_for_update(
+        self, employee_id: EmployeeId, work_date: date
+    ) -> AttendanceRecord | None:
+        """`SELECT ... FOR UPDATE` — günün qeydini kilidləyərək oxuyur."""
+        ...
 
 
 @runtime_checkable
@@ -865,6 +911,8 @@ __all__ = [
     "PositionRepository",
     "ReadOnlyModeController",
     "RewardRepository",
+    "RowLockingAttendance",
+    "RowLockingLeaveRequests",
     "SalesDataConnector",
     "SalesPointsRepository",
     "ShiftRepository",

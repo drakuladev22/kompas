@@ -15,7 +15,6 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
@@ -37,6 +36,7 @@ from src.presentation.widgets.primitives import (
     body_label,
     mono_label,
     muted_label,
+    plain_label,
     stretch,
     title_label,
 )
@@ -75,7 +75,7 @@ class ChatBubble(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        bubble = QLabel(text)
+        bubble = plain_label(text)
         bubble.setWordWrap(True)
         bubble.setMaximumWidth(250)
         font = bubble.font()
@@ -152,7 +152,7 @@ class SupportChatWidget(QWidget):
         self._fab.clicked.connect(self.toggle)
 
         # Oxunmamış cavab nişanı — FAB-ın küncündən daşır.
-        self._dot = QLabel(self)
+        self._dot = plain_label(parent=self)
         self._dot.setFixedSize(12, 12)
         self._dot.setStyleSheet(
             f"background-color: {theme.color('--color-brand-amber')};"
@@ -179,7 +179,7 @@ class SupportChatWidget(QWidget):
         header_layout.setContentsMargins(18, 0, 18, 0)
         header_layout.setSpacing(12)
 
-        avatar = QLabel()
+        avatar = plain_label()
         avatar.setFixedSize(34, 34)
         avatar.setPixmap(
             icons.render(
@@ -284,7 +284,7 @@ class SupportChatWidget(QWidget):
         box_layout = QHBoxLayout(box)
         box_layout.setContentsMargins(12, 10, 12, 10)
         box_layout.setSpacing(8)
-        glyph = QLabel()
+        glyph = plain_label()
         glyph.setPixmap(icons.render("file", self._theme.color("--color-text-muted"), size=15))
         box_layout.addWidget(glyph)
         box_layout.addWidget(body_label(file_name, size=12, wrap=False))
@@ -404,7 +404,7 @@ class DeveloperPanelScreen(Screen):
                 Column("Versiya", 110, mono=True),
                 Column("İstifadəçi", 110),
                 Column("Son aktivlik", 150),
-                Column("Status"),
+                Column("Vəziyyət"),
             ],
             theme,
             footnote=(
@@ -605,7 +605,7 @@ class LicenseInactiveScreen(QWidget):
         icon_box = StateIconBox("lock", theme, tone="danger", box_size=62, icon_size=28)
         card.body().addWidget(icon_box, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        heading = QLabel("Lisenziya aktiv deyil")
+        heading = plain_label("Lisenziya aktiv deyil")
         heading_font = heading.font()
         heading_font.setPixelSize(26)
         heading_font.setWeight(QFont.Weight.DemiBold)

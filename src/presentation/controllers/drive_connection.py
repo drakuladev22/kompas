@@ -208,7 +208,7 @@ class DriveConnectionController:
         assert flow is not None
         try:
             credentials = flow.exchange(code)
-            self._repository().connect(
+            connection = self._repository().connect(
                 google_account_email=credentials.account_email or "(naməlum hesab)",
                 refresh_token=credentials.refresh_token,
                 encryption=self._encryption(),
@@ -231,6 +231,29 @@ class DriveConnectionController:
             "DRIVE_CONNECTION_ESTABLISHED",
             extra={"actor_id": str(self._actor.id), "account": credentials.account_email},
         )
+        # DB AUDİTİ: fayl jurnalı rotasiya ilə (10 fayl × 10 MB) itir, halbuki
+        # «hansı Google hesabı nə vaxt, kim tərəfindən qoşuldu» sualı sonradan
+        # — mübahisə və ya təhlükəsizlik araşdırması zamanı — verilir. Root
+        # panelinin «Audit» ekranı yalnız `audit_logs`-u oxuyur.
+        recorded = self._record_audit(
+            action="DRIVE_CONNECTION_ESTABLISHED",
+            connection_id=connection.id,
+            account=connection.google_account_email,
+            status=connection.status.value,
+        )
+        if not recorded:
+            # Bağlantı ARTIQ yazılıb və öz tranzaksiyasında commit olunub —
+            # onu geri qaytarmaq istifadəçini yenidən Google razılığına
+            # göndərmək demək olardı, halbuki nasazlıq audit sətrindədir.
+            # Buna baxmayaraq sükut QADAĞANDIR (CLAUDE.md bölmə 5): istifadəçi
+            # izin natamam olduğunu GÖRMƏLİDİR ki, administratora deyə bilsin.
+            screen.show_error(
+                title="Audit izi yazılmadı",
+                message=(
+                    "Hesab qoşuldu, lakin əməliyyat audit jurnalına düşmədi. "
+                    "Administratora bildirin."
+                ),
+            )
         self._finish(screen)
         # Yeni hesab = yeni provider. Keşlənmiş fabrik köhnə bağlantını
         # saxlayır, ona görə atılır; növbəti dövrə onu ROOT limiti ilə
@@ -262,6 +285,52 @@ class DriveConnectionController:
         from datetime import UTC, datetime  # noqa: PLC0415
 
         return bool(self._actor.has_permission(MANAGE_DRIVE_FLAG, now=datetime.now(UTC)))
+
+    def _record_audit(
+        self,
+        *,
+        action: str,
+        connection_id: Any,
+        account: str,
+        status: str,
+    ) -> bool:
+        """`audit_logs`-a bir sətir yazır. Qaytarır: yazıldımı.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ AYRICA, QISA SESSİYA
+        ──────────────────────────────────────────────────────────────────────
+        Bağlantı sətrini `DriveConnectionRepository` YAZIR və o, `Database`-ə
+        birbaşa bağlıdır (öz `unit_of_work`-u ilə commit edir) — yəni audit-i
+        həmin yazı ilə eyni tranzaksiyaya salmaq mümkün deyil. Kontroller isə
+        sessiya SAXLAMIR (bax modul başlığı və CLAUDE.md bölmə 6), ona görə
+        audit dərhal ardınca öz qısa sessiyasında yazılır və commit edilir.
+
+        İstisna BURADA udulur, LAKİN sükutla deyil: nəticə çağırana `False`
+        kimi qayıdır və o, istifadəçiyə açıq mesaj göstərir. İstisnanı yuxarı
+        ötürsəydik, uğurla qurulmuş bağlantı "qoşulmadı" kimi görünərdi və
+        administrator eyni hesabı təkrar-təkrar qoşmağa çalışardı.
+        """
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                session.uow.audit.record(
+                    tenant_id=self._context.tenant_id,
+                    actor_id=self._actor.id,
+                    action=action,
+                    entity_type="drive_connections",
+                    entity_id=connection_id,
+                    after_state={
+                        # Token DEYİL, yalnız hesabın e-poçtu (SEC-017):
+                        # `refresh_token` bu kontrollerin yaddaşından kənara
+                        # heç bir formada çıxmır.
+                        "account": account,
+                        "status": status,
+                    },
+                )
+                session.commit()
+        except Exception:
+            _error_log.exception("DRIVE_AUDIT_WRITE_FAILED", extra={"account": account})
+            return False
+        return True
 
     def _repository(self) -> Any:
         from src.infrastructure.storage.connections import (  # noqa: PLC0415

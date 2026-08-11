@@ -19,13 +19,13 @@ from typing import TYPE_CHECKING, Final
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QLabel,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 from src.presentation.screens.base import Screen
+from src.presentation.theme.manager import enable_styled_background
 from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.forms import FormField
@@ -39,15 +39,17 @@ from src.presentation.widgets.primitives import (
     LinkLabel,
     StatusDot,
     body_label,
+    is_activation_key,
     mono_label,
     muted_label,
+    plain_label,
     section_label,
     stretch,
     title_label,
 )
 
 if TYPE_CHECKING:
-    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtGui import QKeyEvent, QMouseEvent, QShowEvent
 
     from src.presentation.theme.manager import ThemeManager
 
@@ -86,14 +88,28 @@ class NotificationItem(QWidget):
         self._id = notification.get("id", "")
         unread = notification.get("unread") == "1"
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Sətir klik edilə bilir → klaviatura ilə də çatılmalıdır. Fokus
+        # halqası QSS-dədir (`QWidget[variant="list-row"]:focus`), sərhədin
+        # faktiki çəkilməsi üçün `WA_StyledBackground` lazımdır.
+        self.setProperty("variant", "list-row")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        enable_styled_background(self)
 
-        # Oxunmamış sətir bir ton fərqli fonda göstərilir — nişan nöqtəsi ilə
-        # BİRLİKDƏ, yəni fərq yalnız rəngə bağlı deyil.
+        # Oxunmamış sətir bir ton fərqli fonda göstərilir və yanında amber
+        # nöqtə olur. HƏR İKİSİ RƏNGDİR — yəni rəngi ayırd etməyən istifadəçi
+        # üçün fərq yoxdur. Ona görə vəziyyət əlçatan ADA da yazılır: ekran
+        # oxuyucusu sətri "… — oxunmamış" kimi elan edir. Vizual dizayn
+        # dəyişmir, məlumat isə ikinci kanaldan da keçir.
         if unread:
             self.setStyleSheet(f"background-color: {theme.color('--color-neutral-bg')};")
+        title_text = notification.get("title", "")
+        self.setAccessibleName(f"{title_text} — oxunmamış" if unread else title_text)
+        self.setAccessibleDescription(notification.get("body", ""))
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(20, 14, 20, 14)
+        # 20/14 əvəzinə 18/12 — fərq QSS-dəki 2px şəffaf fokus sərhədidir,
+        # cəmi dəyişmir (bax `widgets/data_table.py`-dakı eyni naxış).
+        layout.setContentsMargins(18, 12, 18, 12)
         layout.setSpacing(12)
 
         kind = notification.get("kind", "system")
@@ -101,7 +117,7 @@ class NotificationItem(QWidget):
             kind, _NOTIFICATION_KINDS["system"]
         )
 
-        glyph = QLabel()
+        glyph = plain_label()
         glyph.setFixedSize(30, 30)
         glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
         glyph.setPixmap(icons.render(icon_name, theme.color(icon_token), size=15, stroke_width=1.6))
@@ -114,7 +130,7 @@ class NotificationItem(QWidget):
         text_layout = QVBoxLayout(text_box)
         text_layout.setContentsMargins(0, 0, 0, 0)
         text_layout.setSpacing(4)
-        text_layout.addWidget(title_label(notification.get("title", ""), size=13))
+        text_layout.addWidget(title_label(title_text, size=13))
         body = notification.get("body", "")
         if body:
             text_layout.addWidget(muted_label(body))
@@ -123,12 +139,25 @@ class NotificationItem(QWidget):
 
         if unread:
             dot = StatusDot(theme.color("--color-brand-amber"))
+            dot.setToolTip("Oxunmamış")
+            dot.setAccessibleName("Oxunmamış")
             layout.addWidget(dot, alignment=Qt.AlignmentFlag.AlignTop)
+
+    def _activate(self) -> None:
+        # Siçan və klaviatura tək yoldan keçir — bax `primitives.FilterChip`.
+        self.clicked.emit(self._id)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt adlandırması
         if event.button() is Qt.MouseButton.LeftButton:
-            self.clicked.emit(self._id)
+            self._activate()
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt adlandırması
+        if is_activation_key(event):
+            self._activate()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class NotificationPanel(Card):
@@ -341,6 +370,25 @@ class ProfileScreen(Screen):
 
         self.add(columns)
         self.body().addStretch(1)
+
+        # Zəncir bütün kartlar qurulduqdan SONRA verilir. Sıra REDAKTƏ EDİLƏ
+        # BİLƏN sahələrdən keçir və söndürülmüş «İstifadəçi adı» / «E-poçt»
+        # sahələrini ATLAYIR — Qt onları onsuz da keçir, lakin zənciri açıq
+        # yazmaq sıranı vizual sıraya bağlayır (ad → telefon → yadda saxla).
+        QWidget.setTabOrder(self._full_name.input_widget(), self._phone.input_widget())
+        QWidget.setTabOrder(self._phone.input_widget(), cancel)
+        QWidget.setTabOrder(cancel, save)
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 - Qt adlandırması
+        """Fokus ilk REDAKTƏ EDİLƏ BİLƏN sahəyə («Ad, Soyad») qoyulur.
+
+        Yuxarıdakı alət zolağındakı «Yadda Saxla» vizual olaraq birincidir,
+        lakin məntiqi ilk addım DEYİL: forma doldurulmamış saxlamaq mənasızdır.
+        Fokusun sahədə başlaması siçansız istifadəçiyə düymələri geri
+        keçməyə (Shift+Tab) məcbur etmir.
+        """
+        super().showEvent(event)
+        self._full_name.focus_input()
 
     def _build_identity(
         self, full_name: str, role_name: str, store_name: str, member_since: str

@@ -11,6 +11,7 @@ Modul xəritəsi:
     page_header  — 62px səhifə başlığı + bildiriş zəngi
     states       — boş / yüklənmə / xəta vəziyyətləri (Qrup G qaydası)
     data_table   — başlıq + kart içində sətirlər
+    safe_text    — tooltip mətninin HTML kimi şərh olunmasının qarşısı
 
 İdxal qaydası: ekranlar bu paketdən idxal edir, əks istiqamət YOXDUR —
 komponent heç bir ekranı tanımır.

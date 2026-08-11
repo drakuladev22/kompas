@@ -3,15 +3,16 @@
 Maket: "KompasOS - Qrup D.dc.html", ekranlar 15–20.
 
     15  ERP / 1C Çox-Server Paneli
-    16  Backup / Bərpa
+    16  Ehtiyat Nüsxə / Bərpa
     17  Sistem Sağlamlığı (Diaqnostika)
     18  Audit Jurnalı
     19  Ayarlar
-    20  ROOT Control Center
+    20  ROOT İdarə Mərkəzi
 """
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import Signal
@@ -19,7 +20,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QPushButton,
     QSpinBox,
@@ -43,6 +43,7 @@ from src.presentation.widgets.primitives import (
     body_label,
     mono_label,
     muted_label,
+    plain_label,
     stretch,
     title_label,
 )
@@ -130,7 +131,7 @@ class ErpServersScreen(Screen):
                 Column("Ünvan", 200, mono=True),
                 Column("Mağaza", 140),
                 Column("Sinxron", 120, mono=True),
-                Column("Status"),
+                Column("Vəziyyət"),
             ],
             theme,
         )
@@ -258,7 +259,7 @@ class ServerConnectionWizard(QDialog):
         for field in (self._name, self._host, self._database, self._username, self._password):
             card.add(field)
 
-        self._result = QLabel("")
+        self._result = plain_label()
         self._result.setVisible(False)
         self._result.setWordWrap(True)
         card.add(self._result)
@@ -281,6 +282,25 @@ class ServerConnectionWizard(QDialog):
         save.clicked.connect(self._on_save)
         buttons_layout.addWidget(save)
         card.add(buttons)
+
+        # Enter «Yadda Saxla»-nı işə salır: server QEYDƏ ALINIR, heç nə
+        # silinmir və səhv qeyd redaktə edilə bilir. Açıq təyin olmasaydı
+        # Qt ilk düyməni («Bağlantını Yoxla») defolt sayardı və Enter
+        # gözlənilmədən şəbəkə sorğusu başladardı.
+        save.setDefault(True)
+        save.setAutoDefault(True)
+        for button in (test, cancel):
+            button.setAutoDefault(False)
+
+        # Fokus sırası vizual sıra ilə: beş sahə → yoxla → imtina → saxla.
+        fields = (self._name, self._host, self._database, self._username, self._password)
+        for previous, following in pairwise(fields):
+            QWidget.setTabOrder(previous.input_widget(), following.input_widget())
+        QWidget.setTabOrder(self._password.input_widget(), test)
+        QWidget.setTabOrder(test, cancel)
+        QWidget.setTabOrder(cancel, save)
+
+        self._name.focus_input()
 
     def collected(self) -> dict[str, str]:
         return {
@@ -307,16 +327,16 @@ class ServerConnectionWizard(QDialog):
 
 
 # --------------------------------------------------------------------------- #
-# 16 — Backup / Bərpa
+# 16 — Ehtiyat Nüsxə / Bərpa
 # --------------------------------------------------------------------------- #
 
 
 class BackupScreen(Screen):
-    """Backup siyahısı, saxlama həcmi və cədvəl.
+    """Ehtiyat nüsxə siyahısı, saxlama həcmi və cədvəl.
 
     Signals:
-        backup_now_requested: "İndi Backup Al".
-        restore_requested: Backup tarixi.
+        backup_now_requested: «İndi Ehtiyat Nüsxə Al».
+        restore_requested: Ehtiyat nüsxə tarixi.
     """
 
     backup_now_requested = Signal()
@@ -332,7 +352,7 @@ class BackupScreen(Screen):
         self._schedule_label = muted_label("")
         toolbar_layout.addWidget(self._schedule_label)
         toolbar_layout.addWidget(stretch())
-        now = action_button("İndi Backup Al")
+        now = action_button("İndi Ehtiyat Nüsxə Al")
         now.clicked.connect(self.backup_now_requested)
         toolbar_layout.addWidget(now)
         self.add(toolbar)
@@ -342,11 +362,11 @@ class BackupScreen(Screen):
                 Column("Tarix", 200, mono=True),
                 Column("Ölçü", 120),
                 Column("Növ", 180),
-                Column("Status", 240),
+                Column("Vəziyyət", 240),
                 Column("Bərpa"),
             ],
             theme,
-            footnote="Son 30 günün backup-ları saxlanılır, sonra avtomatik silinir.",
+            footnote="Son 30 günün ehtiyat nüsxələri saxlanılır, sonra avtomatik silinir.",
         )
         self.add(self._table)
 
@@ -371,7 +391,7 @@ class BackupScreen(Screen):
         auto_row = QWidget()
         auto_layout = QHBoxLayout(auto_row)
         auto_layout.setContentsMargins(0, 0, 0, 0)
-        auto_layout.addWidget(body_label("Avtomatik backup", size=13, wrap=False))
+        auto_layout.addWidget(body_label("Avtomatik ehtiyat nüsxə", size=13, wrap=False))
         auto_layout.addWidget(stretch())
         self._auto_toggle = ToggleSwitch(theme, checked=True)
         auto_layout.addWidget(self._auto_toggle)
@@ -407,9 +427,9 @@ class BackupScreen(Screen):
                 )
                 action: QWidget = restore
             else:
-                # Uğursuz backup-dan bərpa MÜMKÜN DEYİL — düymə göstərmək
+                # Uğursuz ehtiyat nüsxədən bərpa MÜMKÜN DEYİL — düymə göstərmək
                 # istifadəçini yanıldardı.
-                action = QLabel("—")
+                action = plain_label("—")
 
             self._table.add_row(
                 [
@@ -428,7 +448,7 @@ class BackupScreen(Screen):
     def set_storage(self, used_gb: float, total_gb: float, *, count: int) -> None:
         self._storage_value.setText(f"{used_gb:g} GB / {total_gb:g} GB")
         self._storage_meter.set_ratio(used_gb / total_gb if total_gb else 0)
-        self._storage_caption.setText(f"{count} backup saxlanılır")
+        self._storage_caption.setText(f"{count} ehtiyat nüsxə saxlanılır")
 
     def table(self) -> DataTable:
         return self._table
@@ -438,7 +458,7 @@ class RestoreConfirmDialog(QDialog):
     """Bərpa təsdiqi — "ciddi təsdiq-modalı" (spesifikasiya).
 
     Bərpa MÖVCUD məlumatı əvəz edir, yəni geri dönüşü yoxdur. Ona görə
-    istifadəçidən backup tarixini ƏL İLƏ yazmaq tələb olunur — "Bəli"
+    istifadəçidən ehtiyat nüsxə tarixini ƏL İLƏ yazmaq tələb olunur — "Bəli"
     düyməsinə refleks olaraq basmağın qarşısını alır.
     """
 
@@ -467,7 +487,7 @@ class RestoreConfirmDialog(QDialog):
         card.add(title_label("Bu nöqtəyə bərpa edilsin?", size=20))
         card.add(
             body_label(
-                f"{backup_date} tarixli backup bərpa olunacaq. Bu tarixdən "
+                f"{backup_date} tarixli ehtiyat nüsxə bərpa olunacaq. Bu tarixdən "
                 "SONRAKI bütün məlumatlar — davamiyyət qeydləri, cərimələr, "
                 "tapşırıqlar — İTİRİLƏCƏK.",
                 size=14,
@@ -475,7 +495,7 @@ class RestoreConfirmDialog(QDialog):
         )
 
         self._confirm_input = FormField(
-            "Təsdiq üçün backup tarixini yazın",
+            "Təsdiq üçün ehtiyat nüsxə tarixini yazın",
             placeholder=backup_date,
         )
         card.add(self._confirm_input)
@@ -495,10 +515,27 @@ class RestoreConfirmDialog(QDialog):
         buttons_layout.addWidget(self._confirm)
         card.add(buttons)
 
+        # DEFOLT DÜYMƏ İMTİNADIR — bərpa MÖVCUD məlumatı əvəz edir və geri
+        # dönüşü yoxdur (bax sinif başlığı). Enter-ə təsadüfən basmaq bazanı
+        # BƏRPA ETMƏMƏLİDİR; ən pis halda modal bağlanır və istifadəçi onu
+        # yenidən açır. Eyni qərar `MigrationConfirmDialog`-dadır.
+        # `autoDefault` söndürülür ki, fokus «Bərpa Et»-ə düşdükdə Qt onu
+        # müvəqqəti defolt etməsin.
+        cancel.setDefault(True)
+        cancel.setAutoDefault(False)
+        self._confirm.setDefault(False)
+        self._confirm.setAutoDefault(False)
+
+        QWidget.setTabOrder(self._confirm_input.input_widget(), cancel)
+        QWidget.setTabOrder(cancel, self._confirm)
+
+        # İlkin fokus tarix sahəsindədir — axının ilk məntiqi addımı budur.
+        self._confirm_input.focus_input()
+
     def _on_confirm(self) -> None:
         self._confirm_input.clear_error()
         if self._confirm_input.text().strip() != self._backup_date:
-            self._confirm_input.set_error("Tarix backup tarixi ilə üst-üstə düşmür")
+            self._confirm_input.set_error("Tarix ehtiyat nüsxə tarixi ilə üst-üstə düşmür")
             return
         self.confirmed.emit(self._backup_date)
         self.accept()
@@ -998,7 +1035,7 @@ class SettingsScreen(Screen):
 
 
 # --------------------------------------------------------------------------- #
-# 20 — ROOT Control Center
+# 20 — ROOT İdarə Mərkəzi
 # --------------------------------------------------------------------------- #
 
 

@@ -46,7 +46,11 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from src.domain.entities.employee import Employee
-    from src.domain.interfaces.ports import ErpConnectorFactory, ErpServerRegistry
+    from src.domain.interfaces.ports import (
+        AuditTrail,
+        ErpConnectorFactory,
+        ErpServerRegistry,
+    )
     from src.domain.value_objects.erp import (
         ConnectionTestResult,
         ErpServer,
@@ -117,10 +121,19 @@ class ErpConnectionWizardUseCase:
         *,
         servers: ErpServerRegistry,
         connectors: ErpConnectorFactory,
+        audit: AuditTrail,
         mappings: StoreServerMappingRepository | None = None,
     ) -> None:
         self._servers = servers
         self._connectors = connectors
+        # AUDİT MƏCBURİ ASILILIQDIR, `None` DEYİL (`mappings`-dən fərqli
+        # olaraq). Səbəb: modul başlığının 5-ci bəndi «hər əməliyyat
+        # `audit_logs`-a yazılır» deyir və 1C serverinin host/kredensial
+        # dəyişikliyi mağazanın bütün satış axınını başqa mənbəyə yönəldə
+        # bilər. Onu istəyə bağlı etsəydik, bir qurma yerində unudulmaq
+        # qaydanı sükutla ləğv edərdi — halbuki fayl jurnalı rotasiya ilə
+        # itir, `audit_logs` isə qalır.
+        self._audit = audit
         # `None` → xəritələmə ekranı qoşulmayıb (məs. testlərdə). Server
         # idarəetməsi ondan ASILI DEYİL, ona görə məcburi arqument deyil.
         self._mappings = mappings
@@ -141,6 +154,14 @@ class ErpConnectionWizardUseCase:
         self._assert_may_manage(actor, now=now, operation="CREATE")
         test = self._require_successful_test(draft, server_id=None)
         server = self._servers.create(draft, created_by=actor.id, activate=True)
+        self._audit.record(
+            tenant_id=actor.tenant_id,
+            actor_id=actor.id,
+            action="ERP_SERVER_ADDED",
+            entity_type="erp_servers",
+            entity_id=server.id,
+            after_state=_config_state(draft),
+        )
         _audit_log.info(
             "ERP_WIZARD_SERVER_ADDED",
             extra={
@@ -164,6 +185,15 @@ class ErpConnectionWizardUseCase:
         existing = self._servers.require(server_id)
         test = self._require_successful_test(draft, server_id=server_id)
         server = self._servers.update(server_id, draft, updated_by=actor.id, backup_previous=True)
+        self._audit.record(
+            tenant_id=actor.tenant_id,
+            actor_id=actor.id,
+            action="ERP_SERVER_UPDATED",
+            entity_type="erp_servers",
+            entity_id=server_id,
+            before_state=_server_state(existing),
+            after_state=_config_state(draft),
+        )
         _audit_log.info(
             "ERP_WIZARD_SERVER_UPDATED",
             extra={
@@ -189,6 +219,18 @@ class ErpConnectionWizardUseCase:
         """
         self._assert_may_manage(actor, now=now, operation="ROLLBACK")
         restored = self._servers.rollback(server_id, actor_id=actor.id)
+        self._audit.record(
+            tenant_id=actor.tenant_id,
+            actor_id=actor.id,
+            action="ERP_SERVER_ROLLED_BACK",
+            entity_type="erp_servers",
+            entity_id=server_id,
+            after_state=_server_state(restored),
+            # Geri qaytarma TEST TƏLƏB ETMİR (bax metodun docstring-i), yəni
+            # audit oxuyan adam "niyə yoxlanmadan aktivləşdi" sualını verəcək
+            # — səbəb sətrin ÖZÜNDƏ yazılır, sənəddə deyil.
+            reason="Sonuncu işlək konfiqurasiya bərpa edildi (test tələb olunmur)",
+        )
         _audit_log.warning(
             "ERP_WIZARD_ROLLED_BACK",
             extra={"server_id": str(server_id), "actor_id": str(actor.id)},
@@ -208,8 +250,12 @@ class ErpConnectionWizardUseCase:
     ) -> None:
         """Aktivləşdirir/deaktiv edir — sətir SİLİNMİR (tarixi satışlar qalır)."""
         self._assert_may_manage(actor, now=now, operation="STATUS")
+        # Sətir BİR DƏFƏ oxunur və iki məqsədə xidmət edir: `infobase` qapısı
+        # və audit-in `before_state`-i. Statusun ƏVVƏLKİ dəyəri olmadan audit
+        # sətri "nə dəyişdi" sualına cavab verməzdi — yalnız "nə oldu"ya.
+        previous = self._servers.require(server_id)
         if status is ErpServerStatus.ACTIVE:
-            server = self._servers.require(server_id)
+            server = previous
             if not server.infobase.strip():
                 # DB-də `chk_erp_active_requires_infobase` bunu onsuz da
                 # bloklayır; burada isə istifadəçi anlaşılan mesaj alır.
@@ -222,6 +268,27 @@ class ErpConnectionWizardUseCase:
                     context={"server_id": str(server_id)},
                 )
         self._servers.set_status(server_id, status, changed_by=actor.id, reason=reason)
+        # Deaktivləşdirmə sətri SİLMİR, lakin həmin serverdən gələn satış
+        # axınını DAYANDIRIR — yəni "hesabatda rəqəmlər niyə azaldı" sualının
+        # cavabı məhz burada qalmalıdır.
+        self._audit.record(
+            tenant_id=actor.tenant_id,
+            actor_id=actor.id,
+            action="ERP_SERVER_STATUS_CHANGED",
+            entity_type="erp_servers",
+            entity_id=server_id,
+            before_state={"status": previous.status.value},
+            after_state={"status": status.value},
+            reason=reason,
+        )
+        _audit_log.info(
+            "ERP_WIZARD_STATUS_CHANGED",
+            extra={
+                "server_id": str(server_id),
+                "actor_id": str(actor.id),
+                "status": status.value,
+            },
+        )
 
     # ------------------- Mağaza ↔ Server xəritələməsi (bölmə 7) --------------- #
 
@@ -327,6 +394,34 @@ class ErpConnectionWizardUseCase:
                 user_message="Bu əməliyyat üçün səlahiyyətiniz yoxdur.",
                 context={"actor_id": str(actor.id), "operation": operation},
             )
+
+
+# --------------------------------------------------------------------------- #
+# Audit vəziyyəti — ŞİFRƏ HEÇ VAXT DAXİL DEYİL
+# --------------------------------------------------------------------------- #
+#
+# Görünüşün ÖZÜ artıq domendə həll olunub: `ErpServerDraft.auditable()` və
+# `ErpServer.auditable()` şifrəni QƏSDƏN kənarda saxlayır (SEC-013). Burada
+# ikinci nüsxə qurmaq həmin qərarı bir gün fərqləndirərdi, ona görə mövcud
+# metod işlədilir və üzərinə YALNIZ audit-ə xas iki sahə əlavə olunur.
+#
+# `credentials_supplied`: şifrənin DƏYƏRİ yox, dəyişdirilib-dəyişdirilmədiyi
+# faktı. Host eyni qalıb yalnız şifrə dəyişəndə audit sətri əks halda
+# "heç nə dəyişməyib" kimi görünərdi.
+
+
+def _config_state(draft: ErpServerDraft) -> dict[str, object]:
+    """Sihirbazdan gələn konfiqurasiyanın audit təsviri."""
+    state: dict[str, object] = dict(draft.auditable())
+    state["credentials_supplied"] = bool(draft.password)
+    return state
+
+
+def _server_state(server: ErpServer) -> dict[str, object]:
+    """Mövcud sətrin audit təsviri — `before_state` üçün."""
+    state: dict[str, object] = dict(server.auditable())
+    state["status"] = server.status.value
+    return state
 
 
 __all__ = [

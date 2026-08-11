@@ -33,7 +33,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt
-from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel
+from PySide6.QtWidgets import QGraphicsOpacityEffect
+
+from src.presentation.widgets.primitives import plain_label
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -69,7 +71,7 @@ def animate_theme_change(
 
     snapshot = window.grab()
 
-    overlay = QLabel(window)
+    overlay = plain_label(parent=window)
     overlay.setPixmap(snapshot)
     overlay.setGeometry(window.rect())
     overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)

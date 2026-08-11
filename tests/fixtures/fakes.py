@@ -12,7 +12,7 @@ from typing import Any
 
 from src.domain.entities.attendance_record import AttendanceRecord, CheckInStatus
 from src.domain.entities.employee import Employee
-from src.domain.entities.fine import Fine
+from src.domain.entities.fine import Fine, FineSource, FineStatus
 from src.domain.entities.leave_request import LeaveRequest, LeaveStatus
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.identifiers import (
@@ -109,8 +109,21 @@ class RecordingNotifier:
 class RecordingAudit:
     def __init__(self) -> None:
         self.entries: list[dict[str, Any]] = []
+        #: Audit yazısının UĞURSUZLUĞUNU simulyasiya edir (defolt: uğurlu).
+        #:
+        #: NİYƏ LAZIMDIR — Saga zəncirinin SONUNCU addımı `write_audit`-dır.
+        #: Yalnız daha erkən addımın çökməsi test edilsəydi, kompensasiya
+        #: "cərimə artıq YARADILDIQDAN SONRA" heç vaxt işə düşməzdi və məhz
+        #: həmin yolda gizlənən qüsur (kompensasiyanın `reverse()` çağırıb
+        #: `DomainRuleError` alması) testlərdən yaşıl keçərdi.
+        #:
+        #: `AuditTrail.record()`-un istisna udmaması layihə qaydasıdır
+        #: (CLAUDE.md §5) — yəni bu, süni deyil, real ssenaridir.
+        self.failure: Exception | None = None
 
     def record(self, **kwargs: Any) -> None:
+        if self.failure is not None:
+            raise self.failure
         self.entries.append(kwargs)
 
     def actions(self) -> list[str]:
@@ -121,8 +134,22 @@ class InMemoryLeaveRequests:
     def __init__(self) -> None:
         self.items: dict[LeaveRequestId, LeaveRequest] = {}
         self.save_failure: Exception | None = None
+        #: `get_for_update()` neçə dəfə çağırılıb — yazma axınının kilidli
+        #: oxudan keçdiyini test AÇIQ şəkildə yoxlaya bilsin deyə.
+        self.locked_reads: list[LeaveRequestId] = []
 
     def get(self, request_id: LeaveRequestId) -> LeaveRequest | None:
+        return self.items.get(request_id)
+
+    def get_for_update(self, request_id: LeaveRequestId) -> LeaveRequest | None:
+        """`RowLockingLeaveRequests` qabiliyyəti — yaddaşda kilid MƏNASIZDIR.
+
+        Sahtə repo tək saplı testdə işləyir, ona görə burada həqiqi kilid yox,
+        yalnız ÇAĞIRIŞ QEYDİ var: test "yazma axını kilidli oxu istədimi"
+        sualına cavab ala bilir. Həqiqi `FOR UPDATE` davranışı
+        `database/tests/test_guards.sql` və inteqrasiya testlərinin işidir.
+        """
+        self.locked_reads.append(request_id)
         return self.items.get(request_id)
 
     def find_open_for_employee(self, employee_id: EmployeeId) -> LeaveRequest | None:
@@ -170,6 +197,24 @@ class InMemoryLeaveRequests:
         self.items[request.id] = request
 
 
+#: `uq_fines_one_live_auto_delay_per_leave` (miqrasiya 015) indeksinin əhatə
+#: etdiyi DİRİ statuslar. `REVERSED` QƏSDƏN yoxdur — ölü sətir indeks yerini
+#: tutsaydı, kompensasiyadan sonra təkrar təsdiq əbədi bloklanardı.
+LIVE_AUTO_DELAY_STATUSES = frozenset(
+    {FineStatus.PENDING_REVIEW, FineStatus.PUBLISHED, FineStatus.REDUCED}
+)
+
+
+class DuplicateLiveFineError(Exception):
+    """Sahtə repo-da DB unikal indeksinin qarşılığı.
+
+    Real `PostgresFineRepository` bu halda `psycopg.errors.UniqueViolation`
+    alır. Sahtə repo həmin qaydanı təkrarlayır ki, "ikinci cərimə yaranmır"
+    iddiası DB olmadan da yoxlana bilsin — əks halda unit dəsti indeksin
+    olmadığı bir dünyada yaşayardı və qüsuru görməzdi.
+    """
+
+
 class InMemoryFines:
     def __init__(self) -> None:
         self.items: dict[FineId, Fine] = {}
@@ -195,12 +240,34 @@ class InMemoryFines:
     def save(self, fine: Fine) -> None:
         if self.save_failure is not None:
             raise self.save_failure
+        self._require_single_live_auto_delay(fine)
         self.items[fine.id] = fine
+
+    def _require_single_live_auto_delay(self, fine: Fine) -> None:
+        """Bir icazə sorğusuna yalnız BİR diri `AUTO_DELAY` cəriməsi."""
+        if fine.source is not FineSource.AUTO_DELAY or fine.leave_request_id is None:
+            return
+        if fine.status not in LIVE_AUTO_DELAY_STATUSES:
+            return
+        for existing in self.items.values():
+            if (
+                existing.id != fine.id
+                and existing.source is FineSource.AUTO_DELAY
+                and existing.leave_request_id == fine.leave_request_id
+                and existing.status in LIVE_AUTO_DELAY_STATUSES
+            ):
+                raise DuplicateLiveFineError(
+                    f"İcazə sorğusuna ({fine.leave_request_id}) artıq diri "
+                    f"AUTO_DELAY cəriməsi bağlıdır"
+                )
 
 
 class InMemoryAttendance:
     def __init__(self) -> None:
         self.items: dict[AttendanceRecordId, AttendanceRecord] = {}
+        #: `get_for_day_for_update()` çağırışlarının izi (bax
+        #: `InMemoryLeaveRequests.get_for_update` izahı).
+        self.locked_reads: list[tuple[EmployeeId, date]] = []
 
     def get(self, record_id: AttendanceRecordId) -> AttendanceRecord | None:
         return self.items.get(record_id)
@@ -210,6 +277,13 @@ class InMemoryAttendance:
             if record.employee_id == employee_id and record.work_date == work_date:
                 return record
         return None
+
+    def get_for_day_for_update(
+        self, employee_id: EmployeeId, work_date: date
+    ) -> AttendanceRecord | None:
+        """`RowLockingAttendance` qabiliyyəti — yalnız çağırış qeydi."""
+        self.locked_reads.append((employee_id, work_date))
+        return self.get_for_day(employee_id, work_date)
 
     def list_pending_verification(self, store_ids: list[StoreId]) -> list[AttendanceRecord]:
         return [
@@ -300,6 +374,8 @@ class FakeCameraAssignments:
 
 
 __all__ = [
+    "LIVE_AUTO_DELAY_STATUSES",
+    "DuplicateLiveFineError",
     "FakeCameraAssignments",
     "FakeClock",
     "FakeFeatureToggles",

@@ -1,9 +1,9 @@
-"""Dashboard Qurucusu — konfiqurasiya edilə bilən widget şəbəkəsi (bölmə 6).
+"""Panel Qurucusu — konfiqurasiya edilə bilən widget şəbəkəsi (bölmə 6).
 
 ──────────────────────────────────────────────────────────────────────────────
 NİYƏ HƏR WIDGET BİR İCAZƏYƏ BAĞLIDIR
 ──────────────────────────────────────────────────────────────────────────────
-Bölmə 3-ün əsas prinsipi: "GÖRMƏK = SƏLAHİYYƏTİN OLMASI". Dashboard bunun ən
+Bölmə 3-ün əsas prinsipi: "GÖRMƏK = SƏLAHİYYƏTİN OLMASI". İdarə Paneli bunun ən
 asan pozulan yeridir — orada məlumat XÜLASƏ şəklindədir və "onsuz da ümumi
 rəqəmdir" deyə süzgəci atlamaq cazibədardır. Halbuki "bu ay 12 cərimə" rəqəmi
 cərimə görməyə icazəsi olmayan işçi üçün elə həmin məlumatdır.
@@ -51,14 +51,14 @@ EDIT_WIDGETS_FLAG = "can_edit_dashboard_widgets"
 
 
 class DashboardPermissionError(KompasOSError):
-    """Dashboard düzülüşünü dəyişmək səlahiyyəti yoxdur."""
+    """Panel düzülüşünü dəyişmək səlahiyyəti yoxdur."""
 
-    user_message = "Dashboard düzülüşünü dəyişmək səlahiyyətiniz yoxdur."
+    user_message = "Panel düzülüşünü dəyişmək səlahiyyətiniz yoxdur."
 
 
 @dataclass(frozen=True)
 class DashboardWidget:
-    """Bir dashboard bölməsinin tərifi."""
+    """Bir panel bölməsinin tərifi."""
 
     key: str
     title_az: str
@@ -252,7 +252,7 @@ class DashboardLayoutUseCase:
         """`can_edit_dashboard_widgets` — bölmə 3 kataloqundakı redaktə qapısı.
 
         BAXIŞ (`view_for`) bu flag-i TƏLƏB ETMİR: hər istifadəçi öz
-        dashboard-unu görməlidir. Yalnız DÜZÜLÜŞÜ DƏYİŞMƏK məhduddur — əks
+        panelini görməlidir. Yalnız DÜZÜLÜŞÜ DƏYİŞMƏK məhduddur — əks
         halda flag-siz istifadəçi boş ekran görərdi və bunun səbəbi ona
         izahsız qalardı.
         """
@@ -279,7 +279,7 @@ class DashboardLayoutUseCase:
     def _module_enabled(self, widget: DashboardWidget, tenant_id: object) -> bool:
         """Feature Toggle yoxlaması — port verilməyibsə HAMISI açıq sayılır.
 
-        Fail-safe istiqaməti: toggle mənbəyinin olmaması bütün dashboard-u
+        Fail-safe istiqaməti: toggle mənbəyinin olmaması bütün paneli
         boşaltmamalıdır.
         """
         if widget.feature_module is None or self._toggles is None:

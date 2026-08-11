@@ -543,3 +543,59 @@ def test_drive_consent_starts_a_flow_and_cancel_releases_it(qtbot, theme, monkey
     assert controller._flow is None
     assert controller._timer is None
     assert screen._connect.isEnabled()
+
+
+# --------------------------------------------------------------------------- #
+# Dağıdıcı əməliyyatların İNSAN qapısı
+# --------------------------------------------------------------------------- #
+
+
+@requires_qt
+def test_migration_confirm_dialog_requires_the_exact_target_name(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """Baza keçidi modalı YANLIŞ yazıda siqnal YAYMIR.
+
+    Bu, layihənin ən dağıdıcı əməliyyatının insan qapısıdır: hədəf bazanın
+    adı hərfi-hərfinə yazılmalıdır. "Bəli" düyməsi refleks kliklə basıla
+    bilərdi; yazma isə istifadəçini plana BAXMAĞA məcbur edir.
+    """
+    from src.domain.value_objects.infrastructure import DatabaseTarget
+    from src.presentation.screens.group_i import MigrationConfirmDialog
+
+    dialog = MigrationConfirmDialog(
+        theme,
+        destination=DatabaseTarget.PRIVATE_SERVER,
+        summary="Bulud (Supabase) → Şəxsi server",
+        warnings=["12 sinxronlaşmamış yazı var."],
+    )
+    qtbot.addWidget(dialog)
+
+    emitted: list[str] = []
+    dialog.confirmed.connect(emitted.append)
+
+    dialog._input.set_text("səhv ad")
+    dialog._on_confirm()
+    assert emitted == [], "Yanlış ad təsdiq sayılmamalıdır"
+
+    dialog._input.set_text(DatabaseTarget.PRIVATE_SERVER.label_az)
+    dialog._on_confirm()
+    assert emitted == [DatabaseTarget.PRIVATE_SERVER.value]
+
+
+@requires_qt
+def test_restore_confirm_dialog_requires_the_exact_backup_date(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """Bərpa modalı da eyni qaydadadır — tarix hərfi-hərfinə yazılmalıdır."""
+    from src.presentation.screens.group_d import RestoreConfirmDialog
+
+    dialog = RestoreConfirmDialog(theme, backup_date="12.08.2026 02:00")
+    qtbot.addWidget(dialog)
+
+    emitted: list[str] = []
+    dialog.confirmed.connect(emitted.append)
+
+    dialog._confirm_input.set_text("12.08.2026")
+    dialog._on_confirm()
+    assert emitted == []
+
+    dialog._confirm_input.set_text("12.08.2026 02:00")
+    dialog._on_confirm()
+    assert emitted == ["12.08.2026 02:00"]

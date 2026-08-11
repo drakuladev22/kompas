@@ -26,8 +26,10 @@ from src.infrastructure.storage.folder_resolver import (
     year_month,
 )
 from src.infrastructure.storage.google_drive import (
+    EvidenceValidationError,
     GoogleDriveStorageProvider,
     StoreNameResolver,
+    validate_evidence_payload,
 )
 from src.infrastructure.storage.image_cache import ImageCache, default_cache_dir
 from src.infrastructure.storage.quota_monitor import (
@@ -37,6 +39,7 @@ from src.infrastructure.storage.quota_monitor import (
     status_label,
 )
 from src.infrastructure.storage.upload_queue import (
+    CLAIM_STALE_AFTER_SECONDS,
     EvidenceUploadQueue,
     EvidenceUploadWorker,
     PendingUpload,
@@ -44,6 +47,7 @@ from src.infrastructure.storage.upload_queue import (
 )
 
 __all__ = [
+    "CLAIM_STALE_AFTER_SECONDS",
     "WARNING_THRESHOLD",
     "DriveApiClient",
     "DriveApiError",
@@ -56,6 +60,7 @@ __all__ = [
     "DriveQuotaMonitor",
     "EvidenceUploadQueue",
     "EvidenceUploadWorker",
+    "EvidenceValidationError",
     "FolderResolver",
     "GoogleDriveStorageProvider",
     "ImageCache",
@@ -70,5 +75,6 @@ __all__ = [
     "default_cache_dir",
     "sanitize_folder_name",
     "status_label",
+    "validate_evidence_payload",
     "year_month",
 ]

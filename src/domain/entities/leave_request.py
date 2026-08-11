@@ -206,7 +206,7 @@ class LeaveRequest(AggregateRoot):
         self._require_status(
             LeaveStatus.OUTSIDE,
             action="qayıdış bildirişi",
-            hint="Bu düymə yalnız 'Xaricdə' statusunda görünür.",
+            hint="Bu düymə yalnız «Xaricdə» vəziyyətində görünür.",
         )
         if claimed_at < self._requested_time:
             raise DomainRuleError(

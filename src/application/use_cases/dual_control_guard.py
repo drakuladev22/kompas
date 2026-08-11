@@ -8,6 +8,11 @@ PROBLEM (spesifikasiyadan):
     override-lar sonsuza qədər təsdiqsiz qalmasın (bu, real mağazada iş
     dayanmasına və təcili dəstək zənginə səbəb ola bilər)."
 
+TERMİN QEYDİ: yuxarıdakı sitat spesifikasiyanın HƏRFİ mətnidir və olduğu
+kimi saxlanılır. Faktiki interfeys mətni (`WARNING_TITLE_AZ`) isə tam
+Azərbaycanca terminologiyadadır — «manual override» əvəzinə «manual vaxt
+düzəlişi». Sitatı dəyişmək spesifikasiyaya istinadı yalanlayardı.
+
 DAVRANIŞ QƏRARI: bu guard əməliyyatı BLOKLAMIR, XƏBƏRDARLIQ verir.
 Səbəb: tenant qurulmasının ilk anında (birinci istifadəçi yaradılarkən)
 təsdiqçi hələ mövcud olmur — sərt bloklama quraşdırmanı tamamilə mümkünsüz
@@ -26,10 +31,10 @@ from src.shared.logger import LogChannel, get_logger
 
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 
-WARNING_TITLE_AZ = "Diqqət: manual override təsdiqi üçün ikinci istifadəçi tapılmadı"
+WARNING_TITLE_AZ = "Diqqət: manual vaxt düzəlişinin təsdiqi üçün ikinci istifadəçi tapılmadı"
 WARNING_BODY_AZ = (
     "Hazırda `can_approve_dual_control_override` səlahiyyətinə malik aktiv "
-    "istifadəçi yoxdur. 30 dəqiqədən çox fərq yaradan manual override-lar "
+    "istifadəçi yoxdur. 30 dəqiqədən çox fərq yaradan manual vaxt düzəlişləri "
     "təsdiqsiz qalacaq və mağazada iş dayana bilər. Ən azı bir HR_Admin və ya "
     "CEO hesabı aktivləşdirin."
 )
@@ -66,7 +71,7 @@ class DualControlDeadlockGuardUseCase:
             extra={
                 "tenant_id": str(tenant_id),
                 "flag": DUAL_CONTROL_APPROVAL_FLAG,
-                "impact": "30+ dəqiqəlik override-lar təsdiqsiz qalacaq",
+                "impact": "30+ dəqiqəlik vaxt düzəlişləri təsdiqsiz qalacaq",
             },
         )
         if self._notifier is not None:

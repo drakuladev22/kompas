@@ -41,7 +41,7 @@ DEFAULT_RESET_NOTICE_DAYS: Final[int] = 14
 #: Xal etirazı üçün pəncərə — cərimə ilə EYNİ (bölmə 6: "eyni məntiqlə").
 POINTS_DISPUTE_WINDOW_HOURS: Final[int] = 72
 
-#: Neçə AZN brutto satış 1 xal qazandırır (defolt). Root Control Center-dən
+#: Neçə AZN brutto satış 1 xal qazandırır (defolt). ROOT İdarə Mərkəzindən
 #: `POINTS_PER_CURRENCY_UNIT` limiti ilə dəyişdirilir.
 #:
 #: NİYƏ "hər N AZN-ə 1 xal", "hər satışa 1 xal" DEYİL: ikincisi satıcını

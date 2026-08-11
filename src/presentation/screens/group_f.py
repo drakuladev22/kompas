@@ -47,6 +47,7 @@ from src.presentation.widgets.primitives import (
     body_label,
     mono_label,
     muted_label,
+    plain_label,
     stretch,
     title_label,
 )
@@ -94,7 +95,7 @@ class TaskCard(Card):
             evidence_layout = QHBoxLayout(evidence)
             evidence_layout.setContentsMargins(0, 0, 0, 0)
             evidence_layout.setSpacing(8)
-            glyph = QLabel()
+            glyph = plain_label()
             glyph.setPixmap(icons.render("image", theme.color("--color-text-muted"), size=15))
             evidence_layout.addWidget(glyph)
             evidence_layout.addWidget(muted_label(task["evidence"]))
@@ -297,7 +298,7 @@ class SalesPointsScreen(Screen):
             [
                 Column("Tarix", 110, mono=True),
                 Column("Səbəb"),
-                Column("Status", 160),
+                Column("Vəziyyət", 160),
                 Column("Xal", 100),
             ],
             theme,
@@ -376,7 +377,7 @@ class SalesPointsScreen(Screen):
             cost = int(reward["cost"])
             card = Card(padding=18, spacing=10)
 
-            thumbnail = QLabel()
+            thumbnail = plain_label()
             thumbnail.setFixedHeight(72)
             thumbnail.setAlignment(Qt.AlignmentFlag.AlignCenter)
             thumbnail.setPixmap(
@@ -500,7 +501,7 @@ class FineAppealScreen(Screen):
         self._explanation.setPlaceholderText("Nə baş verdiyini qısa izah edin.")
         self._explanation.setFixedHeight(96)
         explanation_layout.addWidget(self._explanation)
-        self._explanation_error = QLabel("")
+        self._explanation_error = plain_label()
         self._explanation_error.setProperty("variant", "danger-text")
         self._explanation_error.setVisible(False)
         explanation_layout.addWidget(self._explanation_error)

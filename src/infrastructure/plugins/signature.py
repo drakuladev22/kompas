@@ -21,6 +21,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Final
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -30,6 +31,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 from src.infrastructure.plugins.contracts import PluginManifest, PluginSignatureError
 from src.shared.logger import LogChannel, get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 
@@ -209,11 +213,58 @@ def sign_plugin(
     return private_key.sign(payload).hex()
 
 
+#: Etibarlı naşirlərin mühit dəyişəni: `Ad:hex_açar,Ad2:hex_açar2`.
+TRUSTED_PUBLISHERS_ENV: Final[str] = "KOMPASOS_PLUGIN_TRUSTED_PUBLISHERS"
+
+
+def trust_store_from_env(*, environment: Mapping[str, str] | None = None) -> TrustStore:
+    """Mühit dəyişənindən etibar reyestri qurur.
+
+    ──────────────────────────────────────────────────────────────────────────
+    BOŞ DƏYİŞƏN = BOŞ REYESTR = HEÇ BİR PLUGIN
+    ──────────────────────────────────────────────────────────────────────────
+    Dəyişən təyin edilməyibsə BOŞ `TrustStore` qaytarılır və `verify()` onu
+    `EMPTY_TRUST_STORE` səbəbi ilə rədd edir (bax sinif başlığı). Bu, sükutla
+    "hər şeyə icazə var"a çevrilməyən yeganə davranışdır: plugin host
+    prosesinə KOD əlavə edir, ona görə konfiqurasiyanın olmaması qadağa
+    deməlidir, icazə yox.
+
+    Yararsız sətir (`:` yoxdur, açar hex deyil) BURADA istisna atmır —
+    sətir sadəcə ATILIR və `PLUGIN_TRUST_ENTRY_IGNORED` jurnala düşür.
+    Səbəb: bir naşirin səhv yazılmış açarı tətbiqin işə düşməsini
+    dayandırmamalıdır; nəticə onsuz da fail-closed istiqamətdədir (həmin
+    naşirin plugin-ləri yüklənmir).
+    """
+    import os  # noqa: PLC0415
+
+    source = os.environ if environment is None else environment
+    raw = str(source.get(TRUSTED_PUBLISHERS_ENV, "")).strip()
+    if not raw:
+        return TrustStore()
+
+    publishers: list[TrustedPublisher] = []
+    for chunk in raw.split(","):
+        name, separator, key_hex = chunk.strip().partition(":")
+        cleaned_name, cleaned_key = name.strip(), key_hex.strip()
+        if not separator or not cleaned_name or not cleaned_key:
+            _security_log.warning("PLUGIN_TRUST_ENTRY_IGNORED", extra={"entry": chunk.strip()[:40]})
+            continue
+        try:
+            bytes.fromhex(cleaned_key)
+        except ValueError:
+            _security_log.warning("PLUGIN_TRUST_KEY_INVALID", extra={"publisher": cleaned_name})
+            continue
+        publishers.append(TrustedPublisher(cleaned_name, cleaned_key))
+    return TrustStore(publishers)
+
+
 __all__ = [
+    "TRUSTED_PUBLISHERS_ENV",
     "PluginSignatureVerifier",
     "TrustStore",
     "TrustedPublisher",
     "canonical_payload",
     "file_sha256",
     "sign_plugin",
+    "trust_store_from_env",
 ]

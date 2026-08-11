@@ -28,7 +28,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QLabel,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -42,6 +41,7 @@ from src.presentation.widgets.primitives import (
     Skeleton,
     body_label,
     muted_label,
+    plain_label,
     stretch,
 )
 
@@ -93,7 +93,7 @@ class StateIconBox(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        glyph = QLabel()
+        glyph = plain_label()
         glyph.setPixmap(
             icons.render(
                 icon_name,
@@ -145,7 +145,7 @@ class EmptyState(QWidget):
         icon_box = StateIconBox(icon_name, theme, tone=tone)
         inner.addWidget(icon_box, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        heading = QLabel(title)
+        heading = plain_label(title)
         heading_font = heading.font()
         heading_font.setPixelSize(metrics.FONT_STATE_TITLE)
         heading_font.setWeight(QFont.Weight.DemiBold)
@@ -218,7 +218,7 @@ class EmptyState(QWidget):
             line_layout.addWidget(key_label)
             line_layout.addWidget(stretch())
 
-            value_label = QLabel(value)
+            value_label = plain_label(value)
             value_font = value_label.font()
             value_font.setPixelSize(metrics.FONT_CAPTION)
             if mono_values:

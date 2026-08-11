@@ -17,12 +17,12 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QWidget
 
 from src.presentation.theme.manager import enable_styled_background
 from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.buttons import icon_button
-from src.presentation.widgets.primitives import Avatar, muted_label, title_label
+from src.presentation.widgets.primitives import Avatar, muted_label, plain_label, title_label
 
 
 class NotificationBell(QWidget):
@@ -51,11 +51,18 @@ class NotificationBell(QWidget):
         size = metrics.HEADER_ICON_BUTTON + self._BADGE_OFFSET
         self.setFixedSize(size, size)
 
-        self._button = icon_button("bell", icon_color, tooltip="Bildirişlər", parent=self)
+        self._button = icon_button(
+            "bell",
+            icon_color,
+            tooltip="Bildirişlər",
+            accessible_name="Bildirişlər",
+            accessible_description="Oxunmamış bildiriş sayı adın yanında elan olunur",
+            parent=self,
+        )
         self._button.move(0, self._BADGE_OFFSET)
         self._button.clicked.connect(self.clicked)
 
-        self._badge = QLabel("", self)
+        self._badge = plain_label("", self)
         self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._badge_bg = badge_bg
         self._badge_fg = badge_fg
@@ -85,6 +92,13 @@ class NotificationBell(QWidget):
     def set_count(self, count: int) -> None:
         """Oxunmamış sayını göstərir; sıfır olduqda nişan gizlənir."""
         self._count = max(0, count)
+        # Say ekran oxuyucusuna da çatmalıdır: nişan düymənin ÜSTÜNDƏ üzən
+        # ayrıca `QLabel`-dir və Qt onu düymənin adı ilə əlaqələndirmir —
+        # yalnız-vizual qalsaydı, oxunmamış bildirişin VARLIĞI görməyən
+        # istifadəçidən gizli olardı.
+        self._button.setAccessibleName(
+            "Bildirişlər" if self._count == 0 else f"Bildirişlər — {self._count} oxunmamış"
+        )
         if self._count == 0:
             self._badge.setVisible(False)
             return
@@ -171,6 +185,8 @@ class PageHeader(QWidget):
             "sun" if dark_mode else "moon",
             icon_color,
             tooltip="Görünüşü dəyiş",
+            accessible_name="Görünüş rejimini dəyiş",
+            accessible_description="İşıqlı və tünd tema arasında keçid edir",
         )
         self._theme_button.clicked.connect(self.theme_toggled)
         layout.addWidget(self._theme_button)
@@ -187,7 +203,7 @@ class PageHeader(QWidget):
         self._avatar = Avatar("", background=avatar_bg, foreground=avatar_fg)
         layout.addWidget(self._avatar)
 
-        self._user_name = QLabel("")
+        self._user_name = plain_label()
         user_font = self._user_name.font()
         user_font.setPixelSize(13)
         user_font.setWeight(QFont.Weight.DemiBold)

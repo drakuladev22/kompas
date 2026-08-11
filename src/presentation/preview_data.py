@@ -54,7 +54,7 @@ _ADMIN_FLAGS: Final = (
     "can_manage_permissions",
     # Sxemdəki `ADMIN` rolu bu üçünə də sahibdir (bax `schema.sql` —
     # "Admin: operativ idarəetmə + həvalə edilmiş icazə kontrolu"), lakin
-    # önizləmə siyahısına düşməmişdi: nəticədə İcazə Matrisi, Dashboard
+    # önizləmə siyahısına düşməmişdi: nəticədə İcazə Matrisi, İdarə Paneli
     # Qurucusu və Hesabatlar ekranları önizləmədə ÜMUMİYYƏTLƏ render
     # olunmurdu — halbuki real Admin onları görür.
     "can_control_user_permissions",
@@ -164,7 +164,7 @@ def build_camera_operator() -> Employee:
 
 
 class DashboardSummary(NamedTuple):
-    """Dashboard rəqəm kartlarının dəyərləri."""
+    """İdarə Paneli rəqəm kartlarının dəyərləri."""
 
     in_store: int
     planned: int
@@ -321,7 +321,7 @@ PERMISSION_GROUPS: Final = [
             ("can_delete_attendance", "Giriş/çıxış qeydini silmək", False, True),
             ("can_fill_daily_attendance", "Tabeli təsdiqləmək", True, False),
             ("can_override_return_time", "Vaxtı manual dəyişmək", False, False),
-            ("can_approve_dual_control_override", "Dual-Control təsdiqi", False, True),
+            ("can_approve_dual_control_override", "Cüt nəzarət təsdiqi", False, True),
         ],
     ),
     (
@@ -339,7 +339,7 @@ PERMISSION_GROUPS: Final = [
         "Sistem",
         [
             ("can_manage_erp_servers", "ERP server idarəetməsi", False, True),
-            ("can_manage_backups", "Backup / Bərpa", False, True),
+            ("can_manage_backups", "Ehtiyat nüsxə / Bərpa", False, True),
             ("can_view_audit_logs", "Audit jurnalına baxmaq", True, False),
         ],
     ),
@@ -540,7 +540,7 @@ AUDIT_ENTRIES: Final = [
         "user": "Elvin Həsənov",
         "action": "Vaxt manual dəyişdirildi",
         "module": "Davamiyyət",
-        "detail": "09:42 → 09:05 · Dual-Control",
+        "detail": "09:42 → 09:05 · Cüt Nəzarət",
     },
     {
         "time": "12.08 09:31",
@@ -626,7 +626,7 @@ NOTIFICATIONS: Final = [
         "id": "n5",
         "kind": "system",
         "category": "system",
-        "title": "Gecə backup-ı uğurla tamamlandı",
+        "title": "Gecə ehtiyat nüsxəsi uğurla tamamlandı",
         "body": "1.8 GB · 12.08.2026 02:00",
         "time": "02:04",
     },
@@ -798,7 +798,7 @@ LEAVE_TYPE_ROWS: Final = [
 ]
 
 # --------------------------------------------------------------------------- #
-# Qrup I — infrastruktur, plugin, dashboard qurucusu
+# Qrup I — infrastruktur, plugin, panel qurucusu
 # --------------------------------------------------------------------------- #
 
 DB_SWITCH_WARNINGS: Final = [

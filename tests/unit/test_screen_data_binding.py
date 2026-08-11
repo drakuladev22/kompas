@@ -37,6 +37,7 @@ SCREEN_DATA: Final = BINDER_MODULE / "screen_data.py"
 
 #: Doldurucu adı → ekran sinfi. `app.py`-dakı `factories` ilə eyni cütlərdir.
 BINDER_SCREENS: Final[dict[str, tuple[str, str]]] = {
+    "_dashboard": ("group_c", "DashboardScreen"),
     "_live_queue": ("group_b", "OperatorQueueScreen"),
     "_fines": ("group_b", "FineEntryScreen"),
     "_shift_planning": ("group_c", "ShiftPlanningScreen"),
@@ -44,9 +45,29 @@ BINDER_SCREENS: Final[dict[str, tuple[str, str]]] = {
     "_daily_roster": ("group_c", "DailyRosterScreen"),
     "_fine_appeals": ("group_f", "FineAppealInboxScreen"),
     "_tasks": ("group_f", "TasksScreen"),
+    "_sales_points": ("group_f", "SalesPointsScreen"),
     "_users": ("group_c", "UsersScreen"),
     "_audit": ("group_d", "AuditScreen"),
     "_reports": ("group_h", "ReportExportScreen"),
+    "_help": ("group_h", "HelpCenterScreen"),
+    "_health": ("group_d", "HealthScreen"),
+}
+
+#: Setter çağırışlarını KÖMƏKÇİ metodlara paylayan doldurucular.
+#:
+#: Dashboard beş müstəqil bölmədən ibarətdir (rəqəm kartları, qrafik, ölçən,
+#: liderlər, serverlər) və hamısını bir funksiyada yazmaq 150 sətirlik blok
+#: yaradardı. Bölünmə imza yoxlamasını POZMAMALIDIR, ona görə köməkçilər
+#: burada AÇIQ sadalanır — yenisi əlavə olunub bura yazılmasa, onun setter
+#: çağırışı statik yoxlamadan kənarda qalar.
+DELEGATED_BINDERS: Final[dict[str, tuple[str, ...]]] = {
+    "_dashboard": (
+        "_dashboard_summary",
+        "_dashboard_fines",
+        "_dashboard_leave",
+        "_dashboard_leaders",
+        "_dashboard_health",
+    ),
 }
 
 
@@ -58,19 +79,27 @@ def _screen_class(module_name: str, class_name: str) -> type:
 
 
 def _setter_calls(binder_name: str) -> list[ast.Call]:
-    """Doldurucu gövdəsindəki `screen.<setter>(…)` çağırışları."""
+    """Doldurucunun (və elan edilmiş köməkçilərinin) `screen.<setter>(…)` çağırışları."""
+    wanted = {binder_name, *DELEGATED_BINDERS.get(binder_name, ())}
     tree = ast.parse(SCREEN_DATA.read_text(encoding="utf-8"))
+    found: set[str] = set()
+    calls: list[ast.Call] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == binder_name:
-            return [
-                call
-                for call in ast.walk(node)
-                if isinstance(call, ast.Call)
-                and isinstance(call.func, ast.Attribute)
-                and isinstance(call.func.value, ast.Name)
-                and call.func.value.id == "screen"
-            ]
-    pytest.fail(f"`{binder_name}` doldurucusu `screen_data.py`-da tapılmadı")
+        if not isinstance(node, ast.FunctionDef) or node.name not in wanted:
+            continue
+        found.add(node.name)
+        calls.extend(
+            call
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "screen"
+        )
+    missing = wanted - found
+    if missing:
+        pytest.fail(f"`screen_data.py`-da tapılmadı: {sorted(missing)}")
+    return calls
 
 
 def test_every_registered_binder_is_covered_here() -> None:
@@ -89,6 +118,10 @@ def test_every_registered_binder_is_covered_here() -> None:
                 if isinstance(value, ast.Attribute) and value.attr.startswith("_")
             }
             break
+
+    # Köməkçilər `_binders()`-də QEYDİYYATDA DEYİL — onlar bir doldurucunun
+    # daxili bölünməsidir və ayrıca ekran açarına bağlanmır.
+    registered -= {name for names in DELEGATED_BINDERS.values() for name in names}
 
     assert registered, "`_binders()` tapılmadı"
     difference = registered ^ set(BINDER_SCREENS)

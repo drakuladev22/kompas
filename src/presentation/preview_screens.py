@@ -416,7 +416,7 @@ def _profile(screen: group_g.ProfileScreen) -> None:
     screen.set_role_info(
         [
             ("Aktiv icazə", "52 / 58"),
-            ("Fərdi override", "2"),
+            ("Fərdi istisna", "2"),
             ("Təyin edilmiş mağaza", "Hamısı (21)"),
         ]
     )

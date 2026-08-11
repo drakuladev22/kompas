@@ -73,10 +73,15 @@ class _Screen:
 
 
 class _Queue:
-    def __init__(self) -> None:
+    def __init__(self, *, failure: Exception | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
+        #: Növbənin ön-yoxlaması (`validate_evidence_payload`) yararsız faylı
+        #: rədd edəndə atılan istisna — sahtədə də eyni davranış modellənir.
+        self.failure = failure
 
     def enqueue(self, **kwargs: Any) -> str:
+        if self.failure is not None:
+            raise self.failure
         self.calls.append(kwargs)
         return f"entry-{len(self.calls)}"
 
@@ -244,6 +249,36 @@ def test_use_case_failure_reports_the_domain_message(tmp_path: Any) -> None:
     assert screen.errors == [("Cərimə yaradılmadı", "Bu mağazada cərimə yaza bilməzsiniz.")]
     assert not context.sessions[0].committed
     assert context.upload_runs == 0, "Cərimə yaranmayıbsa yükləmə də başlamamalıdır"
+
+
+def test_rejected_photo_stops_the_flow_with_a_visible_reason(tmp_path: Any) -> None:
+    """Yararsız şəkil növbənin ön-yoxlamasında kəsilir — SƏSSİZ deyil.
+
+    Növbə `.exe`/böyük faylı artıq `enqueue()`-da rədd edir. Kontroller həmin
+    istisnanı `KompasOSError` kimi tutur, yəni səbəb operatorun ekranına
+    çıxır; cərimə isə sübutsuz yazılmır (bölmə 4 qadağası).
+    """
+    from src.infrastructure.storage.google_drive import EvidenceValidationError
+
+    photo = tmp_path / "sekil.jpg"
+    photo.write_bytes(b"MZ\x90\x00 icra fayli")
+
+    fines = _Fines()
+    context = _Context(fines)
+    context.queue = _Queue(
+        failure=EvidenceValidationError(
+            "Fayl məzmunu şəkil deyil",
+            user_message="Seçilmiş fayl şəkil deyil (JPEG, PNG və ya WEBP olmalıdır).",
+        )
+    )
+    screen = _Screen()
+    _controller(context)._on_submitted(screen, _payload(photo))
+
+    assert screen.errors == [
+        ("Cərimə yaradılmadı", "Seçilmiş fayl şəkil deyil (JPEG, PNG və ya WEBP olmalıdır).")
+    ]
+    assert not fines.issued, "sübutsuz cərimə yazıldı"
+    assert context.upload_runs == 0
 
 
 # --------------------------------------------------------------------------- #

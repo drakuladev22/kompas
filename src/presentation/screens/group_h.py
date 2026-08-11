@@ -33,8 +33,8 @@ from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QDialog,
     QHBoxLayout,
-    QLabel,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -45,6 +45,7 @@ from src.presentation.screens.base import Screen, section_header
 from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.data_table import Column, DataTable
+from src.presentation.widgets.forms import FormField
 from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
@@ -52,9 +53,11 @@ from src.presentation.widgets.primitives import (
     Divider,
     body_label,
     muted_label,
+    plain_label,
     stretch,
     title_label,
 )
+from src.presentation.widgets.safe_text import plain_tooltip
 
 if TYPE_CHECKING:
     from PySide6.QtGui import QMouseEvent
@@ -179,6 +182,122 @@ class CatalogScreen(Screen):
         return cells
 
 
+class CatalogEntryDialog(QDialog):
+    """Kataloq sətrinin yaradılması/redaktəsi — ad + bir dəyər sahəsi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ ÜÇ AYRI DİALOQ DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    `CatalogScreen` üçü üçün ortaqdır (bax modul başlığı) və eyni səbəb burada
+    da qüvvədədir: üç kataloqun fərqi YALNIZ ikinci sahənin etiketi və
+    izahıdır («Saat aralığı» / «Standart məbləğ» / «Tövsiyə olunan müddət»).
+    Üç dialoq eyni validasiya və düymə məntiqini üç dəfə təkrarlayardı.
+
+    ──────────────────────────────────────────────────────────────────────────
+    DİALOQ DOMEN QAYDASINI YOXLAMIR
+    ──────────────────────────────────────────────────────────────────────────
+    Burada yalnız BOŞ sahə tutulur. Formatın (məs. «09:00–18:00») və hədlərin
+    (`MAX_LEAVE_DURATION_MINUTES`) doğruluğunu `catalogs.py` value object-ləri
+    yoxlayır və mesajları Azərbaycancadır. Qaydanı burada TƏKRARLASAYDIQ, iki
+    nüsxə yaranardı və biri dəyişəndə digəri arxada qalardı.
+
+    Signals:
+        submitted: (ad, dəyər mətni).
+    """
+
+    submitted = Signal(str, str)
+
+    def __init__(
+        self,
+        theme: ThemeManager,
+        *,
+        title: str,
+        value_label: str,
+        value_hint: str = "",
+        name: str = "",
+        value: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._theme = theme
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setMinimumWidth(460)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        card = Card(padding=26, spacing=18)
+        layout.addWidget(card)
+        card.add(title_label(title, size=19))
+        card.add(Divider())
+
+        self._name = FormField("Ad", placeholder="Məsələn: Nahar Fasiləsi")
+        self._name.set_text(name)
+        card.add(self._name)
+
+        self._value_label = value_label
+        self._value = FormField(value_label, hint=value_hint)
+        self._value.set_text(value)
+        card.add(self._value)
+
+        buttons = QWidget()
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(12)
+        buttons_layout.addWidget(stretch())
+
+        cancel = secondary_button("İmtina")
+        cancel.clicked.connect(self.reject)
+        buttons_layout.addWidget(cancel)
+
+        save = action_button("Yadda saxla")
+        save.clicked.connect(self._on_submit)
+        buttons_layout.addWidget(save)
+        card.add(buttons)
+
+        # ──────────────────────────────────────────────────────────────────
+        # ENTER NƏYİ İŞƏ SALIR — AÇIQ QƏRAR
+        # ──────────────────────────────────────────────────────────────────
+        # Defolt düymə TƏYİN EDİLMƏSƏYDİ, Qt onu ÖZÜ seçərdi: dialoqdakı ilk
+        # `QPushButton` (burada «İmtina») avtomatik defolt olur və Enter işi
+        # ləğv edərdi. Bu dialoq DAĞIDICI DEYİL — kataloq sətri yaradır və
+        # səhv nəticə asanlıqla geri alınır — ona görə Enter TƏSDİQ edir,
+        # yəni ad/dəyər yazan istifadəçi əlini klaviaturadan ayırmır.
+        # (Dağıdıcı dialoqlarda qərar TƏRSDİR — bax `group_d.py`/`group_i.py`.)
+        save.setDefault(True)
+        save.setAutoDefault(True)
+        cancel.setAutoDefault(False)
+
+        # Fokus sırası vizual sıra ilə: ad → dəyər → imtina → yadda saxla.
+        QWidget.setTabOrder(self._name.input_widget(), self._value.input_widget())
+        QWidget.setTabOrder(self._value.input_widget(), cancel)
+        QWidget.setTabOrder(cancel, save)
+
+        # İlkin fokus ilk MƏNTİQİ sahədədir — redaktə halında da «Ad»-dır,
+        # çünki dəyişdirilməsi ən çox ehtimal olunan sahə odur.
+        self._name.focus_input()
+
+    def _on_submit(self) -> None:
+        name = self._name.text().strip()
+        value = self._value.text().strip()
+
+        # Hər iki sahə AYRICA işarələnir: yalnız birincini göstərsək,
+        # istifadəçi onu düzəldib yenidən rədd cavabı alardı.
+        self._name.clear_error()
+        self._value.clear_error()
+        if not name:
+            self._name.set_error("Ad məcburidir")
+        if not value:
+            self._value.set_error(f"«{self._value_label}» məcburidir")
+        if not name or not value:
+            return
+
+        self.submitted.emit(name, value)
+        self.accept()
+
+
 def work_modes_screen(theme: ThemeManager, *, parent: QWidget | None = None) -> CatalogScreen:
     """İş Rejimləri Kataloqu (bölmə 4, `can_manage_work_modes`)."""
     return CatalogScreen(
@@ -186,7 +305,7 @@ def work_modes_screen(theme: ThemeManager, *, parent: QWidget | None = None) -> 
         columns=[
             Column("Rejim adı"),
             Column("Saat aralığı", 180, mono=True),
-            Column("Status", 110),
+            Column("Vəziyyət", 110),
             Column("Əməliyyat", metrics.CATALOG_ACTION_COLUMN_WIDTH),
         ],
         create_label="Yeni İş Rejimi",
@@ -211,7 +330,7 @@ def fine_types_screen(theme: ThemeManager, *, parent: QWidget | None = None) -> 
         columns=[
             Column("Cərimə növü"),
             Column("Standart məbləğ", 170),
-            Column("Status", 110),
+            Column("Vəziyyət", 110),
             Column("Əməliyyat", metrics.CATALOG_ACTION_COLUMN_WIDTH),
         ],
         create_label="Yeni Cərimə Növü",
@@ -236,7 +355,7 @@ def leave_types_screen(theme: ThemeManager, *, parent: QWidget | None = None) ->
         columns=[
             Column("İcazə növü"),
             Column("Tövsiyə olunan müddət", 190),
-            Column("Status", 110),
+            Column("Vəziyyət", 110),
             Column("Əməliyyat", metrics.CATALOG_ACTION_COLUMN_WIDTH),
         ],
         create_label="Yeni İcazə Növü",
@@ -333,7 +452,7 @@ class ReportExportScreen(Screen):
         head_layout.setContentsMargins(0, 0, 0, 0)
         head_layout.setSpacing(10)
 
-        glyph = QLabel()
+        glyph = plain_label()
         glyph.setFixedSize(32, 32)
         glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
         glyph.setPixmap(icons.render(icon_name, self.theme.color("--color-action-bg"), size=16))
@@ -508,7 +627,7 @@ class HelpTopicCard(Card):
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.setSpacing(10)
 
-            number = QLabel(str(index))
+            number = plain_label(str(index))
             number.setFixedSize(22, 22)
             number.setAlignment(Qt.AlignmentFlag.AlignCenter)
             number.setStyleSheet(
@@ -539,7 +658,13 @@ class HelpCenterScreen(Screen):
     topic_selected = Signal(str)
     support_requested = Signal()
 
-    def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        theme: ThemeManager,
+        *,
+        may_contact_support: bool = True,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(theme, parent=parent)
 
         header = QWidget()
@@ -553,9 +678,20 @@ class HelpCenterScreen(Screen):
             ),
             1,
         )
-        contact = secondary_button("Dəstəyə yaz")
-        contact.clicked.connect(self.support_requested)
-        header_layout.addWidget(contact, alignment=Qt.AlignmentFlag.AlignTop)
+        # «GÖRMƏK = SƏLAHİYYƏTİN OLMASI» (bölmə 8, sətir 279): `can_contact_support`
+        # olmayan istifadəçidə düymə NƏ SÖNDÜRÜLÜR, NƏ GİZLƏDİLİR — ümumiyyətlə
+        # QURULMUR. Eyni qayda üzən dəstək ikonuna da tətbiq olunur
+        # (`app.py::_install_overlays`) və iki yerin AYRILMASI qüsur olardı:
+        # ikonu kəsib düyməni saxlasaydıq, icazəsiz istifadəçi yenə "dəstəyə
+        # yaza bilirəm" nəticəsinə gələrdi.
+        #
+        # Defolt `True`-dur ki, önizləmə/dizayn rejimi (real istifadəçi konteksti
+        # olmayan yol) bütün ekranı göstərə bilsin — `app.py` canlı rejimdə
+        # dəyəri açıq şəkildə ötürür.
+        if may_contact_support:
+            contact = secondary_button("Dəstəyə yaz")
+            contact.clicked.connect(self.support_requested)
+            header_layout.addWidget(contact, alignment=Qt.AlignmentFlag.AlignTop)
         self.add(header)
 
         self._chip_row = QWidget()
@@ -600,7 +736,10 @@ class HelpCenterScreen(Screen):
 
         for key, title, _steps in topics:
             chip = TopicChip(key, az_upper(title.split()[0]))
-            chip.setToolTip(title)
+            # Tooltip `setTextFormat`-a tabe deyil: nişanın mətni `Chip`-də
+            # düz mətndir, tooltip isə ayrıca süzülməlidir. Mövzu başlıqları
+            # hazırda sabitdir, lakin siyahı plagin/DB mənbəyinə açıqdır.
+            chip.setToolTip(plain_tooltip(title))
             chip.clicked.connect(self.topic_selected)
             self._chip_layout.addWidget(chip)
         self._chip_layout.addWidget(stretch())
@@ -614,6 +753,7 @@ class HelpCenterScreen(Screen):
 
 __all__ = [
     "HELP_TOPICS",
+    "CatalogEntryDialog",
     "CatalogScreen",
     "HelpCenterScreen",
     "HelpTopicCard",

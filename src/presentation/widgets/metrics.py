@@ -84,7 +84,7 @@ CONTENT_BOTTOM_SAFE_AREA: Final = 96
 CARD_SPACING: Final = 18
 #: Kart daxili `padding: 16px 20px` (siyahı sətri) / `18px` (adi kart).
 CARD_PADDING: Final = 18
-#: Dashboard widget sətri `grid-auto-rows: 132px`.
+#: İdarə Paneli widget sətri `grid-auto-rows: 132px`.
 DASHBOARD_ROW_HEIGHT: Final = 132
 
 # --------------------------------------------------------------------------- #

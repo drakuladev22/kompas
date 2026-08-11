@@ -1,7 +1,7 @@
-"""Qrup İ — infrastruktur, dashboard qurucusu və plugin idarəetməsi — Faza 5/6.
+"""Qrup İ — infrastruktur, panel qurucusu və plugin idarəetməsi — Faza 5/6.
 
     36  [İnfrastruktur Və Baza Ayarları]  (`can_switch_db`,      bölmə 2)
-    37  Dashboard Qurucusu                (səlahiyyət tələb etmir, bölmə 6)
+    37  Panel Qurucusu                    (səlahiyyət tələb etmir, bölmə 6)
     38  Plugin İdarəetməsi                (`can_manage_plugins`, bölmə 1)
 
 ──────────────────────────────────────────────────────────────────────────────
@@ -19,8 +19,8 @@ from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QDialog,
     QHBoxLayout,
-    QLabel,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -35,6 +35,7 @@ from src.presentation.screens.base import Screen, section_header
 from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.buttons import action_button, icon_button, secondary_button
 from src.presentation.widgets.data_table import Column, DataTable
+from src.presentation.widgets.forms import FormField
 from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
@@ -42,6 +43,7 @@ from src.presentation.widgets.primitives import (
     Divider,
     body_label,
     muted_label,
+    plain_label,
     stretch,
     title_label,
 )
@@ -72,7 +74,7 @@ class PhaseRow(QWidget):
         layout.setContentsMargins(0, 6, 0, 6)
         layout.setSpacing(12)
 
-        self._marker = QLabel()
+        self._marker = plain_label()
         self._marker.setFixedSize(22, 22)
         self._marker.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._marker)
@@ -235,13 +237,130 @@ class InfrastructureScreen(Screen):
         self.show_content()
 
 
+class MigrationConfirmDialog(QDialog):
+    """Baza keçidinin təsdiq modalı — «ciddi təsdiq» addımı (bölmə 2).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ HƏDƏFİN ADI ƏL İLƏ YAZILIR
+    ──────────────────────────────────────────────────────────────────────────
+    Keçid bütün tenant-ı yalnız-oxu rejiminə salır, məlumatı köçürür və aktiv
+    bazanı dəyişir. `MigrationPlan` docstring-i açıq deyir: "Panel bu planı
+    istifadəçiyə GÖSTƏRİR və yalnız təsdiqdən sonra icra başlayır". Sadə
+    "Bəli" düyməsi refleks kliklə basıla bilər; hədəfin adını yazmaq isə
+    istifadəçini plana BAXMAĞA məcbur edir.
+
+    Eyni naxış `RestoreConfirmDialog`-dadır (bərpa üçün nüsxə tarixi yazılır)
+    — iki dağıdıcı əməliyyat üçün iki fərqli təsdiq üslubu istifadəçini
+    çaşdırardı.
+
+    Signals:
+        confirmed: Təsdiqlənmiş hədəf bazanın açarı (`DatabaseTarget.value`).
+    """
+
+    confirmed = Signal(str)
+
+    def __init__(
+        self,
+        theme: ThemeManager,
+        *,
+        destination: DatabaseTarget,
+        summary: str,
+        warnings: list[str],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._theme = theme
+        self._destination = destination
+        self.setWindowTitle("Baza keçidini təsdiq et")
+        self.setModal(True)
+        self.setMinimumWidth(560)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        card = Card(padding=26, spacing=16)
+        layout.addWidget(card)
+
+        card.add(title_label("Baza keçidi başlasın?", size=20))
+        card.add(body_label(summary, size=14))
+        card.add(Divider())
+
+        # Ön yoxlama xəbərdarlıqları TƏSDİQDƏN ƏVVƏL göstərilir: onları
+        # keçiddən sonra göstərmək məlumatı gec çatdırmaq olardı.
+        if warnings:
+            card.add(title_label("Ön yoxlama", size=14))
+            for text in warnings:
+                card.add(body_label(f"• {text}", size=13))
+        else:
+            card.add(muted_label("Ön yoxlama təmizdir."))
+
+        self._input = FormField(
+            "Təsdiq üçün hədəf bazanın adını yazın",
+            placeholder=destination.label_az,
+            hint="Keçid ərzində bütün sessiyalar YALNIZ-OXU rejimində olacaq.",
+        )
+        card.add(self._input)
+
+        buttons = QWidget()
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(12)
+        buttons_layout.addWidget(stretch())
+
+        cancel = secondary_button("İmtina")
+        cancel.clicked.connect(self.reject)
+        buttons_layout.addWidget(cancel)
+
+        confirm = action_button("Keçidi Başlat")
+        confirm.clicked.connect(self._on_confirm)
+        buttons_layout.addWidget(confirm)
+        card.add(buttons)
+
+        # ──────────────────────────────────────────────────────────────────
+        # DEFOLT DÜYMƏ TƏSDİQ DEYİL, İMTİNADIR — QƏSDƏN
+        # ──────────────────────────────────────────────────────────────────
+        # Bu dialoq bütün tenant-ı yalnız-oxu rejiminə salıb məlumatı köçürür.
+        # Sinif başlığı deyir: "Sadə «Bəli» düyməsi refleks kliklə basıla
+        # bilər" — eyni risk KLAVİATURADA daha böyükdür, çünki Enter ekranda
+        # baxmadan da basılır (əvvəlki dialoqun Enter-i "yapışıb" qala bilər).
+        #
+        # Ona görə Enter-in nəticəsi İMTİNA-dır: səhvən basmaq heç nə itirmir,
+        # yalnız modalı bağlayır. Keçid isə şüurlu bir hərəkət tələb edir —
+        # hədəf bazanın adını yazmaq və düyməni açıq şəkildə basmaq.
+        # Eyni qərar `RestoreConfirmDialog`-dadır (`group_d.py`).
+        #
+        # `autoDefault` HƏR İKİ düymədə söndürülür: əks halda fokus təsdiq
+        # düyməsinə düşən kimi Qt onu müvəqqəti defolt edərdi və yuxarıdakı
+        # qoruma sükutla itərdi.
+        cancel.setDefault(True)
+        cancel.setAutoDefault(False)
+        confirm.setDefault(False)
+        confirm.setAutoDefault(False)
+
+        # Fokus sırası: təsdiq sahəsi → imtina → keçidi başlat.
+        QWidget.setTabOrder(self._input.input_widget(), cancel)
+        QWidget.setTabOrder(cancel, confirm)
+
+        # İlkin fokus təsdiq sahəsindədir — düymədə DEYİL: istifadəçinin
+        # atmalı olduğu ilk addım adı yazmaqdır.
+        self._input.focus_input()
+
+    def _on_confirm(self) -> None:
+        self._input.clear_error()
+        if self._input.text().strip() != self._destination.label_az:
+            self._input.set_error("Ad hədəf bazanın adı ilə üst-üstə düşmür")
+            return
+        self.confirmed.emit(self._destination.value)
+        self.accept()
+
+
 # --------------------------------------------------------------------------- #
-# 37 — Dashboard Qurucusu
+# 37 — Panel Qurucusu
 # --------------------------------------------------------------------------- #
 
 
 class WidgetRow(QWidget):
-    """Dashboard qurucusunda bir widget sətri — göstər/gizlət + sıralama.
+    """Panel qurucusunda bir widget sətri — göstər/gizlət + sıralama.
 
     Signals:
         toggled: `(widget_key, görünürmü)`.
@@ -278,12 +397,25 @@ class WidgetRow(QWidget):
         text_layout.addWidget(caption)
         layout.addWidget(text_box, 1)
 
+        # Əlçatan ad SƏTRİN ADINI da daşıyır ("Yuxarı" tək başına mənasızdır:
+        # ekran oxuyucusu düymələri kontekstsiz, bir-bir elan edir və on sətir
+        # boyu eyni "Yuxarı" səslənərdi — hansı widget-in tərpəndiyi bilinməz).
         icon_color = theme.color("--color-text-secondary")
-        up = icon_button("arrow_up", icon_color, tooltip="Yuxarı")
+        up = icon_button(
+            "arrow_up",
+            icon_color,
+            tooltip="Yuxarı",
+            accessible_name=f"{title} — bir sətir yuxarı köçür",
+        )
         up.clicked.connect(lambda: self.moved.emit(self.key, -1))
         layout.addWidget(up)
 
-        down = icon_button("arrow_down", icon_color, tooltip="Aşağı")
+        down = icon_button(
+            "arrow_down",
+            icon_color,
+            tooltip="Aşağı",
+            accessible_name=f"{title} — bir sətir aşağı köçür",
+        )
         down.clicked.connect(lambda: self.moved.emit(self.key, 1))
         layout.addWidget(down)
 
@@ -291,15 +423,20 @@ class WidgetRow(QWidget):
         # animasiya başladır və hadisə dövrü işləməyənə qədər açar hələ də
         # köhnə vəziyyəti çəkir (ekran ilk dəfə boyananda yanlış görünürdü).
         self._toggle = ToggleSwitch(theme, checked=visible)
+        self._toggle.setAccessibleName(f"{title} — paneldə göstər")
         self._toggle.toggled.connect(lambda state: self.toggled.emit(self.key, state))
         layout.addWidget(self._toggle)
+
+        # Sıra vizual sıra ilə üst-üstə düşür: mətn → yuxarı → aşağı → açar.
+        QWidget.setTabOrder(up, down)
+        QWidget.setTabOrder(down, self._toggle)
 
     def set_visible_state(self, visible: bool) -> None:
         self._toggle.setChecked(visible)
 
 
 class DashboardBuilderScreen(Screen):
-    """Dashboard-un konfiqurasiya ekranı (bölmə 6).
+    """İdarə Panelinin konfiqurasiya ekranı (bölmə 6).
 
     Signals:
         layout_changed: Yeni düzülüş (görünən widget açarları, SIRA ilə).
@@ -321,7 +458,7 @@ class DashboardBuilderScreen(Screen):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.addWidget(
             section_header(
-                "Dashboard Qurucusu",
+                "Panel Qurucusu",
                 "Hansı bölmələrin görünəcəyini və sırasını təyin edin.",
             ),
             1,
@@ -550,6 +687,7 @@ class PluginScreen(Screen):
 __all__ = [
     "DashboardBuilderScreen",
     "InfrastructureScreen",
+    "MigrationConfirmDialog",
     "PhaseRow",
     "PluginScreen",
     "WidgetRow",

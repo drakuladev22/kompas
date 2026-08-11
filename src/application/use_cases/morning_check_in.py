@@ -29,6 +29,7 @@ from src.domain.interfaces.ports import (
     FeatureToggles,
     Notifier,
     NtpVerifier,
+    RowLockingAttendance,
     ShiftRepository,
     SystemLimits,
 )
@@ -154,7 +155,11 @@ class MorningCheckInUseCase:
         """`[İşçini Təsdiqlə]` — günün rəsmi başlama vaxtı qeydə alınır."""
         verified_at, _ = self._verified_now(tenant_id, operation="STEP_C_VERIFY")
         day = work_date or verified_at.date()
-        record = self._require_record(employee_id, day)
+        # Kilidli oxu: `[Təsdiqlə]` və `[Rədd Et]` eyni sətrə yazır. Kilidsiz
+        # halda hər iki operator `PENDING_VERIFICATION` görür, hər ikisi audit
+        # yazır və DB-də yalnız sonuncu status qalır — audit jurnalı ilə
+        # faktiki vəziyyət bir-birini təkzib edərdi (bax `RowLockingAttendance`).
+        record = self._require_record_locked(employee_id, day)
         self._require_camera_permission(operator_id, record)
         self._require_operator_scope(operator_id, record.store_id)
 
@@ -196,7 +201,8 @@ class MorningCheckInUseCase:
         """
         rejected_at, _ = self._verified_now(tenant_id, operation="STEP_C_REJECT")
         day = work_date or rejected_at.date()
-        record = self._require_record(employee_id, day)
+        # Kilidli oxu — `verify()` ilə eyni səbəb (paralel təsdiq/rədd yarışı).
+        record = self._require_record_locked(employee_id, day)
         self._require_camera_permission(operator_id, record)
         self._require_operator_scope(operator_id, record.store_id)
 
@@ -246,7 +252,7 @@ class MorningCheckInUseCase:
                 body_az=(
                     f"İşçinin giriş təsdiqi {timeout} dəqiqədən çoxdur gözləyir. "
                     f"HR_Admin və ya CEO manual təsdiq/rədd edə bilər "
-                    f"(Store Manager YOX — dual-control tiering)."
+                    f"(Mağaza Meneceri YOX — cüt nəzarət pilləliyi)."
                 ),
                 is_critical=True,
             )
@@ -312,6 +318,27 @@ class MorningCheckInUseCase:
                 user_message="Bu sorğu artıq emal edilib.",
                 context={"status": record.status.value},
             )
+        return record
+
+    def _require_record_locked(self, employee_id: EmployeeId, work_date: date) -> AttendanceRecord:
+        """`_require_record`-in YAZMA axını üçün sətir-kilidli variantı.
+
+        Mövcud oxu-yalnız yol (`employee_can_request_leave`, növbə siyahısı)
+        TOXUNULMAZ qalır — kilid yalnız STEP C təsdiq/rədd axınındadır.
+        Repo kilidi dəstəkləmirsə davranış əvvəlki kimidir: statusu
+        `_require_record` yenə yoxlayır, sadəcə oxu ilə yazı arasındakı
+        pəncərə bağlanmır.
+
+        Sətir tapılmadıqda (və ya statusu artıq dəyişibsə) yoxlama yenə
+        `_require_record`-a həvalə olunur — istisna mətni və şərt TƏK YERDƏ
+        qalır, iki nüsxə bir-birindən sürüşə bilməz.
+        """
+        repository = self._attendance
+        if not isinstance(repository, RowLockingAttendance):
+            return self._require_record(employee_id, work_date)
+        record = repository.get_for_day_for_update(employee_id, work_date)
+        if record is None or record.status is not CheckInStatus.PENDING_VERIFICATION:
+            return self._require_record(employee_id, work_date)
         return record
 
     def _require_camera_permission(self, operator_id: EmployeeId, record: AttendanceRecord) -> None:

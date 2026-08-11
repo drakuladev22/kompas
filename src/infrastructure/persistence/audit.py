@@ -8,7 +8,7 @@ Spesifikasiya audit yazısını BİR NEÇƏ yerdə qeyd-şərtsiz tələb edir:
     bölmə 3  "Bütün rol/icazə yaratma, dəyişdirmə, silmə əməliyyatları
               `audit_logs`-da tam detallı qeyd olunur (kim, hansı flag, kimə,
               əvvəl/sonra)."
-    bölmə 3  ROOT Control Center: "Hər dəyişiklik (limit, toggle, yeni flag)
+    bölmə 3  ROOT İdarə Mərkəzi: "Hər dəyişiklik (limit, toggle, yeni flag)
               `audit_logs`-da tam detallı qeyd olunur."
     bölmə 4  "Any «Manual Time Override» MUST trigger a mandatory log entry
               in `audit_logs` including operator ID, employee ID, system time,
@@ -50,6 +50,25 @@ if TYPE_CHECKING:
     from psycopg import Connection
 
     from src.domain.value_objects.identifiers import EmployeeId, TenantId
+
+
+def _escape_like(value: str) -> str:
+    """İstifadəçi mətnindəki `ILIKE` joker simvollarını sadə hərfə çevirir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ LAZIMDIR — SQL İNYEKSİYASI DEYİL, NAXIŞ POZULMASI
+    ──────────────────────────────────────────────────────────────────────────
+    Sorğu onsuz da parameterləşdirilib (`%s`), yəni sətir SQL kimi şərh
+    olunmur. Lakin `%` və `_` `ILIKE` naxışının İÇİNDƏ xüsusi mənalıdır:
+    istifadəçi audit axtarışına `%` yazsa, `'%' || '%' || '%'` naxışı bütün
+    sətirlərə uyğun gəlir — süzgəc sükutla "hamısını göstər"ə çevrilir və
+    milyonluq cədvəldə skan yaradır. `_` isə istənilən tək simvolu tutur,
+    yəni `entity_id` axtarışı yanlış sətirlər qaytarır.
+
+    Tərs kəsik ƏVVƏLCƏ əvəz olunur: sonra əlavə etdiyimiz qaçış simvollarını
+    ikinci dəfə emal etməmək üçün sıra vacibdir.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _as_json(state: dict[str, object] | None) -> str | None:
@@ -220,8 +239,13 @@ class PostgresAuditReader:
             # Səbəb mətni və entity ID-si üzrə sərbəst axtarış. `ILIKE`
             # seçildi (tam-mətn indeksi yox), çünki axtarış sahəsi qısa
             # sətirlərdir və indeks yükü faydasını üstələyərdi.
-            clauses.append("(a.reason ILIKE %s OR a.entity_id ILIKE %s)")
-            pattern = f"%{filters.search}%"
+            #
+            # `ESCAPE '\'` AÇIQ verilir: PostgreSQL-in defoltu onsuz da tərs
+            # kəsikdir, lakin `standard_conforming_strings` söndürülmüş bir
+            # bazada həmin defolt fərqli şərh olunur — davranışı server
+            # ayarından ASILI qoymuruq.
+            clauses.append("(a.reason ILIKE %s ESCAPE '\\' OR a.entity_id ILIKE %s ESCAPE '\\')")
+            pattern = f"%{_escape_like(filters.search)}%"
             params.extend([pattern, pattern])
 
         return " AND ".join(clauses), tuple(params)

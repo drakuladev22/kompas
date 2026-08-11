@@ -64,7 +64,14 @@ və bu layihədə kontrast CI qapısıdır (`scripts/check_contrast.py`):
                   bizdə `--color-success` `#1E7A46`     = 4.66:1  ✓
 
     solğun mətn   maket `#93A0B5` / ağ = 2.65:1         → AA-dan AŞAĞI
-                  bizdə `--color-text-muted` `#64738D`  = 4.80:1  ✓
+                  bizdə `--color-text-muted` `#5A6880`  = 5.64:1  ✓
+
+Solğun mətn bir dəfə də (əlçatanlıq auditindən sonra) tündləşdirildi: əvvəlki
+`#64738D` yalnız AĞ fonda ölçülmüşdü (4.80:1) və qapıdan keçirdi, lakin eyni
+etiket ƏSLİNDƏ daha tünd səthlərin üzərində də oturur — kontent sahəsi
+(`#F4F6FA` → 4.43:1), yumşaq neytral sətir (`#EDF0F6` → 4.20:1) və çökük səth
+(`#E6EAF2` → 3.98:1). Yəni qapı "kartda" cütünü yoxlayır, istifadəçi isə mətni
+başqa fonda görürdü. İndi hər dörd fon `check_contrast.py`-dadır.
 
 Maketin YUMŞAQ FONLARI (`--color-*-bg`) olduğu kimi saxlanılır — dəyişən
 yalnız onların ÜZƏRİNDƏKİ mətndir. Beləliklə görünüş maketlə eyni qalır,
@@ -73,6 +80,23 @@ qərarı ilə üst-üstə düşür: rəngi kalibrləmək dizaynı qorumağın yo
 
 İkon rəngi (`--color-nav-item-icon`) maketdəki kimi qalır — o, mətn deyil,
 "iri qrafik element"dir və 3:1 həddindən keçir (`#7B8AA3` / ağ = 3.53:1).
+
+──────────────────────────────────────────────────────────────────────────────
+NİYƏ İKİ SƏRHƏD VƏ İKİ "SOLĞUN" TOKENİ VAR
+──────────────────────────────────────────────────────────────────────────────
+`--color-border` maketin sərhəd tonudur və o, DOLDURULMUŞ elementlərin (düymə,
+giriş sahəsi) kənarını çəkir: orada sərhəd tək əlamət deyil — fon fərqi də var.
+`--color-border-strong` isə YALNIZ fonsuz (şəffaf) idarəetmə elementləri
+üçündür; header-dəki 34×34 ikon düyməsi belədir və onun VARLIĞINI göstərən
+yeganə şey sərhəddir. WCAG 1.4.11 məhz belə hallarda 3:1 tələb edir, maketin
+`#DCE2EC` tonu isə ağ fonda 1.30:1 verirdi — düymə praktiki olaraq görünmürdü.
+
+Eyni məntiq `--color-text-disabled` / `--color-text-placeholder` cütündə də
+işləyir: deaktiv element WCAG-ın kontrast tələbindən RƏSMƏN azaddır (1.4.3
+istisnası), placeholder isə AKTİV sahənin içindədir və istisnaya düşmür — o,
+istifadəçinin nə yazacağını izah edən yeganə mətndir. Ona görə placeholder
+tam 4.5:1 hədəfinə, deaktiv mətn isə (istisnaya baxmayaraq) ən azı 3:1-ə
+kalibrlənib.
 
 ──────────────────────────────────────────────────────────────────────────────
 NİYƏ RADIUS ŞKALASI 4/8/12 DEYİL
@@ -142,7 +166,11 @@ LIGHT_THEME: Final[dict[str, str]] = {
     # --- mətn ---
     "--color-text-primary": BRAND_NAVY,
     "--color-text-secondary": "#4A5568",
-    "--color-text-disabled": "#8A93A6",
+    # Köhnə `#8A93A6` ağ fonda 2.70–3.09:1 verirdi; ton və doyğunluq saxlanıb,
+    # yalnız işıqlıq bir pillə endirilib → 3.66–4.42:1 (bax modul başlığı).
+    "--color-text-disabled": "#6E7890",
+    # Placeholder AKTİV sahənin mətnidir → tam 4.5:1 hədəfi (4.64:1).
+    "--color-text-placeholder": "#677689",
     "--color-text-on-accent": "#FFFFFF",
     # --- vurğu (interaktiv) ---
     "--color-accent": "#9A5F00",
@@ -159,6 +187,9 @@ LIGHT_THEME: Final[dict[str, str]] = {
     "--color-info": "#1B5E9E",
     # --- struktur ---
     "--color-border": "#8A93A6",
+    # Fonsuz idarəetmə elementinin YEGANƏ görünən kənarı (bax modul başlığı):
+    # ağ fonda 4.42:1, yəni 3:1 hədəfini marjinal deyil, aydın keçir.
+    "--color-border-strong": "#6E7890",
     "--color-border-subtle": "#D5DAE4",
     "--color-focus-ring": "#9A5F00",
     "--color-overlay": "#0B1D3A99",
@@ -187,7 +218,11 @@ LIGHT_THEME: Final[dict[str, str]] = {
     "--color-card-bg": "#FFFFFF",
     "--color-card-border": "#DCE2EC",
     "--color-divider": "#EDF0F6",
-    "--color-text-muted": "#64738D",
+    # Bax modul başlığı: `#64738D` yalnız ağ fonda keçirdi, kontent/neytral/
+    # çökük səthlərdə 3.98–4.43:1-ə düşürdü. Ən TÜND fon (`--color-bg-sunken`
+    # `#E6EAF2`) hədəfi təyin etdi: 4.67:1. Ağ fonda 5.64:1 — hələ də əsas
+    # mətndən (16.79:1) açıq şəkildə solğundur, yəni rol itmir.
+    "--color-text-muted": "#5A6880",
     "--color-skeleton": "#E5EAF2",
     "--color-skeleton-alt": "#EDF0F6",
     # --- yumşaq nişan (chip) fonları ---
@@ -216,7 +251,12 @@ DARK_THEME: Final[dict[str, str]] = {
     # --- mətn ---
     "--color-text-primary": "#F2F4F8",
     "--color-text-secondary": "#A8B4CC",
-    "--color-text-disabled": "#6B7B99",
+    # Tünd temada istiqamət TƏRSDİR — oxunaqlığı artırmaq üçün işıqlıq
+    # QALDIRILIR. Köhnə `#6B7B99` yüksəldilmiş səthdə (`#17325C`) 2.70:1
+    # verirdi; `#8091AD` ilə ən pis hal 3.99:1-dir.
+    "--color-text-disabled": "#8091AD",
+    # Placeholder: `#0B1D3A` üzərində 4.68:1, kart fonunda 4.80:1.
+    "--color-text-placeholder": "#7488AB",
     "--color-text-on-accent": BRAND_NAVY,
     # --- vurğu (interaktiv) — tünd fonda brend amberinin ÖZÜ işləyir ---
     "--color-accent": BRAND_AMBER,
@@ -233,6 +273,9 @@ DARK_THEME: Final[dict[str, str]] = {
     "--color-info": "#6BA6E8",
     # --- struktur ---
     "--color-border": "#5E76A0",
+    # Header fonunda (`#0B1424`) 4.75:1, kartda 4.44:1 — `--color-card-border`
+    # (`#22314D`) həmin yerlərdə cəmi 1.32–1.42:1 verirdi.
+    "--color-border-strong": "#6A82AE",
     "--color-border-subtle": "#2A3F63",
     "--color-focus-ring": BRAND_AMBER,
     "--color-overlay": "#000000AA",

@@ -53,6 +53,7 @@ from src.infrastructure.erp.health import ServerHealth, ServerHealthRow
 from src.infrastructure.erp.matching import SalesMatcher, name_similarity, normalize_name
 from src.infrastructure.erp.one_c_connector import OneCConnector, OneCServerConfig
 from src.infrastructure.erp.sync_worker import ErpSyncManager, SalesSyncService
+from tests.fixtures.fakes import RecordingAudit
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -762,7 +763,9 @@ class TestErpSyncManager:
 class TestConnectionWizard:
     def test_icaze_yoxdursa_qadagandir(self) -> None:
         registry = FakeRegistry([])
-        wizard = ErpConnectionWizardUseCase(servers=registry, connectors=FakeConnectorFactory())
+        wizard = ErpConnectionWizardUseCase(
+            servers=registry, connectors=FakeConnectorFactory(), audit=RecordingAudit()
+        )
         with pytest.raises(ErpConnectionError):
             wizard.save_new(actor=make_employee(), draft=make_draft(), now=MOMENT)
         assert registry.created == []
@@ -771,7 +774,9 @@ class TestConnectionWizard:
         registry = FakeRegistry([])
         connectors = FakeConnectorFactory()
         connectors.draft_connector = FakeConnector(error=ErpTransportError("çatmır"))
-        wizard = ErpConnectionWizardUseCase(servers=registry, connectors=connectors)
+        wizard = ErpConnectionWizardUseCase(
+            servers=registry, connectors=connectors, audit=RecordingAudit()
+        )
 
         with pytest.raises(ConnectionNotVerifiedError):
             wizard.save_new(
@@ -781,7 +786,9 @@ class TestConnectionWizard:
 
     def test_ugurlu_testden_sonra_server_yaradilir(self) -> None:
         registry = FakeRegistry([])
-        wizard = ErpConnectionWizardUseCase(servers=registry, connectors=FakeConnectorFactory())
+        wizard = ErpConnectionWizardUseCase(
+            servers=registry, connectors=FakeConnectorFactory(), audit=RecordingAudit()
+        )
 
         outcome = wizard.save_new(
             actor=make_employee(MANAGE_ERP_SERVERS_FLAG), draft=make_draft(), now=MOMENT
@@ -793,7 +800,9 @@ class TestConnectionWizard:
     def test_redakte_evvelki_konfiqurasiyani_backup_edir(self) -> None:
         server = make_server(last_successful_sync=MOMENT)
         registry = FakeRegistry([server])
-        wizard = ErpConnectionWizardUseCase(servers=registry, connectors=FakeConnectorFactory())
+        wizard = ErpConnectionWizardUseCase(
+            servers=registry, connectors=FakeConnectorFactory(), audit=RecordingAudit()
+        )
 
         outcome = wizard.save_existing(
             actor=make_employee(MANAGE_ERP_SERVERS_FLAG),
@@ -808,7 +817,9 @@ class TestConnectionWizard:
     def test_hec_vaxt_islememis_konfiqurasiya_dogrulanmis_sayilmir(self) -> None:
         server = make_server(last_successful_sync=None)
         registry = FakeRegistry([server])
-        wizard = ErpConnectionWizardUseCase(servers=registry, connectors=FakeConnectorFactory())
+        wizard = ErpConnectionWizardUseCase(
+            servers=registry, connectors=FakeConnectorFactory(), audit=RecordingAudit()
+        )
 
         outcome = wizard.save_existing(
             actor=make_employee(MANAGE_ERP_SERVERS_FLAG),
@@ -824,7 +835,9 @@ class TestConnectionWizard:
         registry = FakeRegistry([make_server()])
         connectors = FakeConnectorFactory()
         connectors.draft_connector = FakeConnector(error=ErpTransportError("çatmır"))
-        wizard = ErpConnectionWizardUseCase(servers=registry, connectors=connectors)
+        wizard = ErpConnectionWizardUseCase(
+            servers=registry, connectors=connectors, audit=RecordingAudit()
+        )
 
         wizard.rollback(
             actor=make_employee(MANAGE_ERP_SERVERS_FLAG), server_id=SERVER_A, now=MOMENT
@@ -834,7 +847,9 @@ class TestConnectionWizard:
 
     def test_bos_infobase_ile_aktivlesdirmek_olmaz(self) -> None:
         registry = FakeRegistry([make_server(infobase="  ")])
-        wizard = ErpConnectionWizardUseCase(servers=registry, connectors=FakeConnectorFactory())
+        wizard = ErpConnectionWizardUseCase(
+            servers=registry, connectors=FakeConnectorFactory(), audit=RecordingAudit()
+        )
 
         with pytest.raises(ErpConnectionError):
             wizard.set_status(
@@ -847,7 +862,9 @@ class TestConnectionWizard:
 
     def test_deaktiv_etmek_infobase_teleb_etmir(self) -> None:
         registry = FakeRegistry([make_server(infobase="")])
-        wizard = ErpConnectionWizardUseCase(servers=registry, connectors=FakeConnectorFactory())
+        wizard = ErpConnectionWizardUseCase(
+            servers=registry, connectors=FakeConnectorFactory(), audit=RecordingAudit()
+        )
 
         wizard.set_status(
             actor=make_employee(MANAGE_ERP_SERVERS_FLAG),
@@ -900,3 +917,110 @@ class TestHealthDiagnosis:
     def test_saglam_server_teklif_vermir(self) -> None:
         row = health_row(ServerHealth.HEALTHY)
         assert not row.suggests_settings
+
+
+# --------------------------------------------------------------------------- #
+# Bağlantı Sihirbazı — DB AUDİTİ
+# --------------------------------------------------------------------------- #
+#
+# Modul başlığının 5-ci bəndi «hər əməliyyat `audit_logs`-a yazılır» deyir,
+# lakin yazma yalnız fayl jurnalına (`audit.log`) gedirdi — həmin fayl
+# rotasiya ilə itir və Root panelinin «Audit» ekranı onu OXUMUR. Aşağıdakı
+# testlər vədin kodla uyğunluğunu qapı halına gətirir.
+
+
+class TestConnectionWizardAudit:
+    def _wizard(self, registry: FakeRegistry) -> tuple[ErpConnectionWizardUseCase, RecordingAudit]:
+        audit = RecordingAudit()
+        wizard = ErpConnectionWizardUseCase(
+            servers=registry, connectors=FakeConnectorFactory(), audit=audit
+        )
+        return wizard, audit
+
+    def test_her_yazma_emeliyyati_audit_logs_a_dusur(self) -> None:
+        registry = FakeRegistry([make_server()])
+        wizard, audit = self._wizard(registry)
+        actor = make_employee(MANAGE_ERP_SERVERS_FLAG)
+
+        wizard.save_new(actor=actor, draft=make_draft(), now=MOMENT)
+        wizard.save_existing(
+            actor=actor, server_id=SERVER_A, draft=make_draft(host="10.0.0.9"), now=MOMENT
+        )
+        wizard.rollback(actor=actor, server_id=SERVER_A, now=MOMENT)
+        wizard.set_status(
+            actor=actor, server_id=SERVER_A, status=ErpServerStatus.INACTIVE, now=MOMENT
+        )
+
+        assert audit.actions() == [
+            "ERP_SERVER_ADDED",
+            "ERP_SERVER_UPDATED",
+            "ERP_SERVER_ROLLED_BACK",
+            "ERP_SERVER_STATUS_CHANGED",
+        ]
+        # Hər sətir hansı serverə aid olduğunu daşımalıdır — əks halda audit
+        # "kimsə nəsə etdi" sətrinə çevrilir.
+        assert all(entry["entity_type"] == "erp_servers" for entry in audit.entries)
+        assert all(entry["entity_id"] is not None for entry in audit.entries)
+
+    def test_sifre_audit_setrine_dusmur(self) -> None:
+        """1C şifrəsi `audit_logs`-da açıq mətn kimi görünə bilməz (SEC-013)."""
+        registry = FakeRegistry([make_server()])
+        wizard, audit = self._wizard(registry)
+        actor = make_employee(MANAGE_ERP_SERVERS_FLAG)
+
+        wizard.save_new(actor=actor, draft=make_draft(password="çox-gizli-parol"), now=MOMENT)
+
+        payload = str(audit.entries)
+        assert "çox-gizli-parol" not in payload
+        # Lakin kredensialın DƏYİŞDİRİLDİYİ faktı qalmalıdır.
+        assert audit.entries[0]["after_state"]["credentials_supplied"] is True
+
+    def test_ugursuz_test_audit_setri_yaratmir(self) -> None:
+        """Yazılmayan konfiqurasiya audit-də "yazıldı" kimi görünməməlidir."""
+        registry = FakeRegistry([])
+        connectors = FakeConnectorFactory()
+        connectors.draft_connector = FakeConnector(error=ErpTransportError("çatmır"))
+        audit = RecordingAudit()
+        wizard = ErpConnectionWizardUseCase(servers=registry, connectors=connectors, audit=audit)
+
+        with pytest.raises(ConnectionNotVerifiedError):
+            wizard.save_new(
+                actor=make_employee(MANAGE_ERP_SERVERS_FLAG), draft=make_draft(), now=MOMENT
+            )
+
+        assert audit.entries == []
+
+    def test_status_deyisikliyi_evvelki_deyeri_saxlayir(self) -> None:
+        registry = FakeRegistry([make_server(status=ErpServerStatus.ACTIVE)])
+        wizard, audit = self._wizard(registry)
+
+        wizard.set_status(
+            actor=make_employee(MANAGE_ERP_SERVERS_FLAG),
+            server_id=SERVER_A,
+            status=ErpServerStatus.INACTIVE,
+            now=MOMENT,
+            reason="Anbar köçürülür",
+        )
+
+        entry = audit.entries[-1]
+        assert entry["before_state"] == {"status": "ACTIVE"}
+        assert entry["after_state"] == {"status": "INACTIVE"}
+        assert entry["reason"] == "Anbar köçürülür"
+
+    def test_audit_ugursuzlugu_udulmur(self) -> None:
+        """`AuditTrail.record()` istisna atarsa əməliyyat da uğursuzdur.
+
+        CLAUDE.md bölmə 5: audit yazısı istisna udmur — sessiyaya bağlı
+        çağıran tərəfdə bu, tranzaksiyanın geri qaytarılması deməkdir.
+        """
+        registry = FakeRegistry([])
+        audit = RecordingAudit()
+        audit.failure = RuntimeError("audit cədvəli əlçatmazdır")
+        wizard = ErpConnectionWizardUseCase(
+            servers=registry, connectors=FakeConnectorFactory(), audit=audit
+        )
+
+        with pytest.raises(RuntimeError):
+            wizard.save_new(
+                actor=make_employee(MANAGE_ERP_SERVERS_FLAG), draft=make_draft(), now=MOMENT
+            )

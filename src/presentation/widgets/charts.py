@@ -1,6 +1,6 @@
-"""Dashboard qrafikləri — Faza 4.2.
+"""İdarə Paneli qrafikləri — Faza 4.2.
 
-Maket: Qrup C, ekran 09 (Admin/CEO Dashboard).
+Maket: Qrup C, ekran 09 (Admin/CEO İdarə Paneli).
 
 ──────────────────────────────────────────────────────────────────────────────
 NİYƏ TƏK RƏNG, HƏR FİLİALA AYRI RƏNG DEYİL
@@ -32,10 +32,17 @@ from typing import TYPE_CHECKING, Final, NamedTuple
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from src.presentation.widgets.layout_utils import clear_layout
-from src.presentation.widgets.primitives import Card, muted_label, stretch, title_label
+from src.presentation.widgets.primitives import (
+    Card,
+    muted_label,
+    plain_label,
+    stretch,
+    title_label,
+)
+from src.presentation.widgets.safe_text import plain_tooltip
 
 if TYPE_CHECKING:
     from PySide6.QtGui import QMouseEvent, QPaintEvent
@@ -151,11 +158,15 @@ class BarChart(QWidget):
             )
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt adlandırması
-        """Sütunun üstündə dəyəri tooltip kimi göstərir."""
+        """Sütunun üstündə dəyəri tooltip kimi göstərir.
+
+        Etiket filial adıdır, yəni BAZADAN gəlir; tooltip isə `setTextFormat`
+        ayarına tabe deyil (bax `safe_text.py`) — ona görə burada süzülür.
+        """
         position = event.position()
         for rect, datum, _ in self._bar_rects():
             if rect.left() <= position.x() <= rect.right():
-                self.setToolTip(f"{datum.label}: {datum.display}")
+                self.setToolTip(plain_tooltip(f"{datum.label}: {datum.display}"))
                 break
         else:
             self.setToolTip("")
@@ -298,7 +309,7 @@ class RankList(Card):
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(8)
 
-            rank = QLabel(str(index))
+            rank = plain_label(str(index))
             rank.setProperty("variant", "mono")
             rank.setStyleSheet(f"color: {accent};")
             rank_font = rank.font()
@@ -306,14 +317,14 @@ class RankList(Card):
             rank.setFont(rank_font)
             layout.addWidget(rank)
 
-            label = QLabel(name)
+            label = plain_label(name)
             label_font = label.font()
             label_font.setPixelSize(13)
             label.setFont(label_font)
             layout.addWidget(label)
             layout.addWidget(stretch())
 
-            amount = QLabel(value)
+            amount = plain_label(value)
             amount_font = amount.font()
             amount_font.setPixelSize(13)
             amount_font.setWeight(QFont.Weight.DemiBold)

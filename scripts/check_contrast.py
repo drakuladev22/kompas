@@ -76,6 +76,66 @@ REQUIRED_PAIRS: list[tuple[str, str, float, str]] = [
     ("--color-action-text", "--color-action-bg", AA_NORMAL_TEXT, "Əsas hərəkət düyməsi"),
     ("--color-action-bg", "--color-card-bg", AA_LARGE_TEXT, "Hərəkət düyməsi / kart"),
     ("--color-chart-bar", "--color-card-bg", AA_LARGE_TEXT, "Qrafik sütunu"),
+    # ----------------------------------------------------------------------- #
+    # QSS-DƏKİ FAKTİKİ İSTİFADƏ — əlçatanlıq auditindən sonra
+    # ----------------------------------------------------------------------- #
+    # NİYƏ BU BÖLMƏ VAR: yuxarıdakı cütlər tokenləri "nominal" rolda yoxlayır
+    # (mətn / əsas fon). `theme/qss.py` isə eyni tokenləri BAŞQA fonların
+    # üzərində də işlədir — `:disabled`, `:hover`, `::placeholder`, sərhəd və
+    # nişan qaydalarında. Həmin kombinasiyalar heç yerdə hesablanmırdı, ona
+    # görə dörd AA pozuntusu (placeholder 3.09:1, bağla-hover 3.34:1, ikon
+    # sərhədi 1.30:1, deaktiv mətn 2.70:1) qapıdan sükutla keçmişdi.
+    #
+    # QAYDA: `qss.py`-a yeni rəng CÜTÜ (ön plan + fon eyni qaydada) yazan
+    # hər kəs onu bura da əlavə edir. Cüt burada yoxdursa, o, YOXLANMIR.
+    # --- placeholder (aktiv sahə → tam AA) ---
+    ("--color-text-placeholder", "--color-bg-primary", AA_NORMAL_TEXT, "Placeholder (adi sahə)"),
+    ("--color-text-placeholder", "--color-card-bg", AA_NORMAL_TEXT, "Placeholder (form sahəsi)"),
+    # --- dolu semantik səthlərdə mətn: nişan (badge), danger/success düymə,
+    #     pəncərənin "bağla" düyməsinin hover halı ---
+    ("--color-bg-primary", "--color-danger", AA_NORMAL_TEXT, "Nişan/bağla — xəta"),
+    ("--color-bg-primary", "--color-success", AA_NORMAL_TEXT, "Nişan mətni — uğur"),
+    ("--color-bg-primary", "--color-warning", AA_NORMAL_TEXT, "Nişan mətni — xəbərdarlıq"),
+    ("--color-bg-primary", "--color-info", AA_NORMAL_TEXT, "Nişan mətni — məlumat"),
+    # --- fonsuz idarəetmə elementinin sərhədi (WCAG 1.4.11) ---
+    ("--color-border-strong", "--color-header-bg", AA_LARGE_TEXT, "İkon düyməsi sərhədi"),
+    ("--color-border-strong", "--color-card-bg", AA_LARGE_TEXT, "İkon sərhədi (kart)"),
+    # --- deaktiv mətn: WCAG rəsmən istisna edir, layihə 3:1 tələb edir ---
+    ("--color-text-disabled", "--color-bg-primary", AA_LARGE_TEXT, "Deaktiv mətn"),
+    ("--color-text-disabled", "--color-bg-surface", AA_LARGE_TEXT, "Deaktiv düymə mətni"),
+    ("--color-text-disabled", "--color-neutral-bg", AA_LARGE_TEXT, "Deaktiv hərəkət düyməsi"),
+    ("--color-text-disabled", "--color-card-bg", AA_LARGE_TEXT, "Deaktiv mətn (kart)"),
+    ("--color-text-disabled", "--color-bg-elevated", AA_LARGE_TEXT, "Deaktiv mətn (yüksək)"),
+    ("--color-text-disabled", "--color-bg-sunken", AA_LARGE_TEXT, "Deaktiv mətn (çökük)"),
+    ("--color-text-disabled", "--color-content-bg", AA_LARGE_TEXT, "Deaktiv mətn (kontent)"),
+    # --- fokus halqası hər dayandığı səthin üzərində görünməlidir ---
+    ("--color-focus-ring", "--color-bg-primary", AA_LARGE_TEXT, "Fokus halqası (əsas fon)"),
+    ("--color-focus-ring", "--color-card-bg", AA_LARGE_TEXT, "Fokus halqası (kart)"),
+    ("--color-focus-ring", "--color-header-bg", AA_LARGE_TEXT, "Fokus halqası (header)"),
+    ("--color-focus-ring", "--color-sidebar-bg", AA_LARGE_TEXT, "Fokus halqası (sol panel)"),
+    ("--color-focus-ring", "--color-content-bg", AA_LARGE_TEXT, "Fokus halqası (kontent)"),
+    ("--color-focus-ring", "--color-neutral-bg", AA_LARGE_TEXT, "Fokus halqası (neytral)"),
+    ("--color-focus-ring", "--color-nav-active-bg", AA_LARGE_TEXT, "Fokus halqası (aktiv nav)"),
+    ("--color-focus-ring", "--color-pin-bg", AA_LARGE_TEXT, "Fokus halqası (PIN)"),
+    # --- hover / pressed halları da MƏTN daşıyır ---
+    ("--color-text-on-accent", "--color-accent-hover", AA_NORMAL_TEXT, "Vurğu düyməsi (hover)"),
+    ("--color-text-on-accent", "--color-accent-pressed", AA_NORMAL_TEXT, "Vurğu düyməsi (basılı)"),
+    ("--color-action-text", "--color-action-hover", AA_NORMAL_TEXT, "Hərəkət düyməsi (hover)"),
+    ("--color-action-text", "--color-action-pressed", AA_NORMAL_TEXT, "Hərəkət (basılı)"),
+    ("--color-text-primary", "--color-bg-sunken", AA_NORMAL_TEXT, "Düymə (hover fonu)"),
+    ("--color-titlebar-text", "--color-nav-active-bg", AA_NORMAL_TEXT, "Pəncərə düyməsi (hover)"),
+    ("--color-nav-item-text", "--color-neutral-bg", AA_NORMAL_TEXT, "Nav maddəsi (hover)"),
+    ("--color-nav-item-text", "--color-card-bg", AA_NORMAL_TEXT, "İkinci dərəcəli düymə"),
+    # --- eyni mətn rolunun DİGƏR səthləri (auditdə tapılan boşluq) ---
+    ("--color-text-primary", "--color-bg-elevated", AA_NORMAL_TEXT, "Menyu/tooltip mətni"),
+    ("--color-text-secondary", "--color-card-bg", AA_NORMAL_TEXT, "İkinci dərəcəli (kart)"),
+    ("--color-text-secondary", "--color-bg-sunken", AA_NORMAL_TEXT, "Cədvəl başlığı"),
+    ("--color-text-muted", "--color-content-bg", AA_NORMAL_TEXT, "Solğun mətn (kontent)"),
+    ("--color-text-muted", "--color-bg-surface", AA_NORMAL_TEXT, "Solğun mətn (səth)"),
+    ("--color-text-muted", "--color-neutral-bg", AA_NORMAL_TEXT, "Solğun mətn (neytral sətir)"),
+    ("--color-text-muted", "--color-bg-sunken", AA_NORMAL_TEXT, "Solğun mətn (çökük)"),
+    ("--color-text-muted", "--color-header-bg", AA_NORMAL_TEXT, "Alt başlıq (header)"),
+    ("--color-text-muted", "--color-sidebar-bg", AA_NORMAL_TEXT, "Bölmə etiketi"),
 ]
 
 #: PIN Handshake ekranı fərqli işıqlandırmada istifadə olunur — bölmə 9 orada

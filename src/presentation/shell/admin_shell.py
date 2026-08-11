@@ -239,7 +239,7 @@ class AdminShell(QWidget):
         self.refresh_navigation()
 
     def set_enabled_modules(self, modules: frozenset[str] | None) -> None:
-        """Feature Toggle dəyişdikdə (ROOT Control Center) menyunu yeniləyir."""
+        """Feature Toggle dəyişdikdə (ROOT İdarə Mərkəzi) menyunu yeniləyir."""
         self._enabled_modules = modules
         self.refresh_navigation()
 

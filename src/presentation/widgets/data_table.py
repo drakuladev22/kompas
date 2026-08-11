@@ -27,18 +27,23 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QLabel,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from src.presentation.i18n.text import az_upper
+from src.presentation.theme.manager import enable_styled_background
 from src.presentation.widgets.layout_utils import clear_layout
-from src.presentation.widgets.primitives import Card, Divider
+from src.presentation.widgets.primitives import (
+    Card,
+    Divider,
+    is_activation_key,
+    plain_label,
+)
 
 if TYPE_CHECKING:
-    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtGui import QKeyEvent, QMouseEvent
 
     from src.presentation.theme.manager import ThemeManager
 
@@ -91,9 +96,20 @@ class TableRow(QWidget):
         self._highlighted = highlighted
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # Sətir klik edilə bilir, deməli klaviatura ilə də seçilə bilməlidir —
+        # əks halda cədvəldəki detal panelini yalnız siçanla açmaq olardı.
+        self.setProperty("variant", "table-row")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # QSS-dən gələn (fokus) sərhədin FAKTİKİ çəkilməsi üçün lazımdır:
+        # adi `QWidget` törəməsi üslub fonunu/sərhədini sükutla iqnor edir
+        # (bax `theme/manager.enable_styled_background` izahı).
+        enable_styled_background(self)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(18, 14, 18, 14)
+        # 18/14 əvəzinə 16/12 — fərq QSS-dəki 2px-lik ŞƏFFAF fokus sərhədidir.
+        # Cəmi yenə 18/14-dür, yəni maketin sətir hündürlüyü dəyişmir və sətir
+        # fokus alanda "sıçramır".
+        layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(0)
 
         for column, cell in zip(columns, cells, strict=True):
@@ -112,7 +128,7 @@ class TableRow(QWidget):
         # yazmaq həmin qərarı sükutla ləğv edərdi.
         if isinstance(cell, QWidget):
             return cell
-        label = QLabel(cell)
+        label = plain_label(cell)
         if mono:
             label.setProperty("variant", "mono")
         font = label.font()
@@ -129,10 +145,21 @@ class TableRow(QWidget):
         self._highlighted = highlighted
         self._apply_background()
 
+    def _activate(self) -> None:
+        # Siçan və klaviatura tək yoldan keçir — bax `primitives.FilterChip`.
+        self.clicked.emit()
+
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt adlandırması
         if event.button() is Qt.MouseButton.LeftButton:
-            self.clicked.emit()
+            self._activate()
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt adlandırması
+        if is_activation_key(event):
+            self._activate()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class DataTable(QWidget):
@@ -193,7 +220,7 @@ class DataTable(QWidget):
         layout.setSpacing(0)
 
         for column in self._columns:
-            label = QLabel(az_upper(column.title))
+            label = plain_label(az_upper(column.title))
             label.setProperty("variant", "mono-muted")
             font = label.font()
             font.setPixelSize(11)

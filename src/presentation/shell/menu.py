@@ -13,11 +13,11 @@ gizli qalar və səbəbi görünməz olardı (menyu boş, xəta yox). `test_menu
 bu uyğunluğu yoxlayır.
 
 ──────────────────────────────────────────────────────────────────────────────
-NİYƏ "DASHBOARD" VƏ "AYARLAR" FLAG-SİZDİR
+NİYƏ «İDARƏ PANELİ» VƏ «AYARLAR» FLAG-SİZDİR
 ──────────────────────────────────────────────────────────────────────────────
 `required_flag=None` — hər autentifikasiya olunmuş istifadəçi görür. Bu, iki
 maddə üçün QƏSDƏNDİR: naviqasiyada heç nə görünməyən istifadəçi tətbiqi
-"sınmış" hesab edərdi. Dashboard hər kəsə öz səlahiyyəti çərçivəsində boş və
+"sınmış" hesab edərdi. İdarə Paneli hər kəsə öz səlahiyyəti çərçivəsində boş və
 ya məhdud görünə bilər, Ayarlar isə yalnız şəxsi tənzimləmələrdir (tema,
 bildiriş) — orada başqasının məlumatı yoxdur.
 
@@ -68,7 +68,7 @@ MODULE_DASHBOARD_BUILDER: Final = FeatureModule.DASHBOARD_BUILDER.value
 DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
     MenuEntry(
         key="dashboard",
-        title_az="Dashboard",
+        title_az="İdarə Paneli",
         required_flag=None,
         order=10,
         icon="dashboard",
@@ -180,7 +180,7 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
     ),
     MenuEntry(
         key="backups",
-        title_az="Backup və Bərpa",
+        title_az="Ehtiyat Nüsxə və Bərpa",
         required_flag="can_manage_backups",
         order=140,
         icon="database",
@@ -211,7 +211,7 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
     ),
     MenuEntry(
         key="root_control",
-        title_az="ROOT Mərkəzi",
+        title_az="ROOT İdarə Mərkəzi",
         required_flag="can_manage_system_limits",
         order=170,
         icon="shield",
@@ -259,7 +259,7 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
     ),
     MenuEntry(
         key="dashboard_builder",
-        title_az="Dashboard Qurucusu",
+        title_az="Panel Qurucusu",
         # Bölmə 6: "Yalnız bu modula icazəsi olan rollara görünür".
         # Bayraqsız qaldıqda maddə HƏR istifadəçiyə render olunurdu və bu,
         # "GÖRMƏK = SƏLAHİYYƏTİN OLMASI" prinsipini birbaşa pozurdu.

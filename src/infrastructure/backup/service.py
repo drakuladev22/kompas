@@ -46,8 +46,8 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
-from urllib.parse import urlparse
 
+from src.infrastructure.persistence.dsn import dsn_without_password, password_env
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
@@ -439,18 +439,18 @@ def _sha256_of(path: Path) -> str:
 
 
 def _password_env(dsn: str) -> dict[str, str]:
-    """DSN-dəki şifrəni `PGPASSWORD`-ə köçürür (bax modul başlığı)."""
-    password = urlparse(dsn).password
-    return {"PGPASSWORD": password} if password else {}
+    """DSN-dəki şifrəni `PGPASSWORD`-ə köçürür (bax modul başlığı).
+
+    Məntiq `persistence/dsn.py`-a çıxarıldı — baza keçidi (`pg_dump`/
+    `pg_restore` ilə köçürmə) EYNİ qaydanı işlətməlidir. Ad burada
+    saxlanılır ki, mövcud çağırışlar və testlər qırılmasın.
+    """
+    return password_env(dsn)
 
 
 def _dsn_without_password(dsn: str) -> str:
-    """Şifrəsiz DSN — əmr sətrinə yalnız bu düşür."""
-    parsed = urlparse(dsn)
-    if not parsed.password:
-        return dsn
-    netloc = parsed.netloc.replace(f":{parsed.password}@", "@", 1)
-    return parsed._replace(netloc=netloc).geturl()
+    """Şifrəsiz DSN — əmr sətrinə yalnız bu düşür (bax `persistence/dsn.py`)."""
+    return dsn_without_password(dsn)
 
 
 __all__ = [

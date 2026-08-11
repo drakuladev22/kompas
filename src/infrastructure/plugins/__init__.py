@@ -23,17 +23,20 @@ from src.infrastructure.plugins.sandbox import (
     build_sandbox_env,
 )
 from src.infrastructure.plugins.signature import (
+    TRUSTED_PUBLISHERS_ENV,
     PluginSignatureVerifier,
     TrustedPublisher,
     TrustStore,
     canonical_payload,
     file_sha256,
     sign_plugin,
+    trust_store_from_env,
 )
 
 __all__ = [
     "ALLOWED_ENV_KEYS",
     "SECRET_ENV_PREFIXES",
+    "TRUSTED_PUBLISHERS_ENV",
     "PluginCapability",
     "PluginError",
     "PluginManifest",
@@ -52,4 +55,5 @@ __all__ = [
     "canonical_payload",
     "file_sha256",
     "sign_plugin",
+    "trust_store_from_env",
 ]

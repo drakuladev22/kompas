@@ -9,17 +9,25 @@ FƏRQLİ qurulmalıdır. Həmin qərar üç yerdə lazımdır (`main`, kiosk nə
 plugin sandbox-u) və hər yerdə təkrar yazılsaydı, biri düzəldiləndə digərləri
 səssizcə köhnə davranışda qalardı — audit zamanı məhz bu baş vermişdi.
 
-Modul QƏSDƏN asılılıqsızdır (yalnız `sys`/`pathlib`): `shared` qatı domenin
-altındadır və heç bir infrastruktur paketi idxal etmir.
+Modul QƏSDƏN asılılıqsızdır (yalnız standart kitabxana: `sys`/`os`/`shutil`/
+`pathlib`): `shared` qatı domenin altındadır və heç bir infrastruktur paketi
+idxal etmir.
 """
 
 from __future__ import annotations
 
+import os
+import shutil
 import sys
 from pathlib import Path
+from typing import Final
 
 #: `--onefile` rejimində PyInstaller arxivi açdığı müvəqqəti qovluq.
 _MEIPASS_ATTRIBUTE = "_MEIPASS"
+
+#: Paketlənmiş quraşdırmada plugin interpretatorunun AÇIQ göstərilməsi üçün.
+#: Boş buraxıla bilər — bax `plugin_interpreter()` və `.env.example`.
+PLUGIN_PYTHON_ENV: Final[str] = "KOMPASOS_PLUGIN_PYTHON"
 
 
 def is_frozen() -> bool:
@@ -82,4 +90,67 @@ def relaunch_command() -> list[str]:
     return [sys.executable] if is_frozen() else [sys.executable, "-m", "src.main"]
 
 
-__all__ = ["bundle_root", "deployment_root", "is_frozen", "relaunch_command"]
+def plugin_interpreter() -> str | None:
+    """Plugin alt-prosesi üçün ƏSL Python interpretatoru; tapılmasa `None`.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `sys.executable` PAKETDƏ YARAMIR
+    ──────────────────────────────────────────────────────────────────────────
+    Sandbox `[sys.executable, "-I", "-S", plugin.py]` çağırırdı. Paketlənmiş
+    rejimdə `sys.executable` = `KompasOS.exe`, yəni interpretator DEYİL:
+    `-I -S plugin.py` ona interpretator bayrağı kimi yox, ADİ ARQUMENT kimi
+    çatır və `argparse` "unrecognized arguments" deyib 2 kodu ilə çıxır.
+    Arqumentlər təsadüfən tanınsaydı nəticə daha pis olardı — istifadəçinin
+    ekranında tətbiqin İKİNCİ nüsxəsi açılardı. Hər iki halda sandbox bunu
+    "plugin xəta ilə bitdi (kod 2)" kimi göstərir, yəni ƏSL SƏBƏB gizli qalır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `relaunch_command()` BURADA İŞLƏMİR
+    ──────────────────────────────────────────────────────────────────────────
+    O köməkçi TƏTBİQİ yenidən işə salır — kiosk nəzarətçisinin istədiyi məhz
+    budur. Sandbox-a isə tətbiq yox, TƏMİZ interpretator lazımdır: `-I -S`
+    bayraqları "host-un mühiti, `PYTHONPATH`-ı və modulları görünməsin"
+    deməkdir və `plugins/sandbox.py` bunu açıq zəmanət kimi elan edir
+    (`test_plugin_cannot_import_host_modules`). Plugin-i `.exe`-nin öz
+    proses obrazında (frozen arxivlə birlikdə) icra etsəydik, həmin zəmanət
+    YALNIZ PAKETDƏ və SÜKUTLA itərdi: plugin `src.*` modullarını idxal edə
+    bilərdi. Ona görə paketdə həqiqi interpretator AXTARILIR, tapılmazsa
+    `None` qaytarılır və sandbox aydın səbəblə imtina edir — yanlış proses
+    işə salmaqdansa icra etməmək təhlükəsizdir.
+    """
+    # 1. Quraşdırıcının açıq qərarı hər şeydən üstündür (hər iki rejimdə).
+    override = os.environ.get(PLUGIN_PYTHON_ENV, "").strip()
+    if override:
+        return override
+    # 2. Mənbədən icrada davranış DƏYİŞMİR — bu, elə cari interpretatordur.
+    if not is_frozen():
+        return sys.executable
+    # 3. Paketin YANINA qoyulmuş interpretator (`deployment_root()` ilə eyni
+    #    məntiq: `.exe`-nin qonşuluğu yerləşdirmə artefaktlarının yeridir).
+    names = ("python.exe",) if sys.platform == "win32" else ("python3", "python")
+    root = deployment_root()
+    for directory in (root / "python", root):
+        for name in names:
+            candidate = directory / name
+            if candidate.is_file():
+                return str(candidate)
+    # 4. Sistemdə quraşdırılmış Python.
+    for name in names:
+        found = shutil.which(name)
+        # `WindowsApps` altındakı `python.exe` interpretator DEYİL, Microsoft
+        # Store yönləndiricisidir: alt-proses kimi çağırıldıqda heç nə icra
+        # etmir və 9009 kodu ilə çıxır — yəni "tapıldı" saymaq nasazlığı
+        # anlaşılmaz "plugin xəta ilə bitdi (kod 9009)" mesajına çevirərdi.
+        if found and "WindowsApps" not in found:
+            return found
+    return None
+
+
+__all__ = [
+    "PLUGIN_PYTHON_ENV",
+    "bundle_root",
+    "deployment_root",
+    "is_frozen",
+    "plugin_interpreter",
+    "relaunch_command",
+]

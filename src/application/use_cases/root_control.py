@@ -1,4 +1,4 @@
-"""ROOT Control Center — tenant-səviyyəli idarəetmə (5-ci faza, bənd 5).
+"""ROOT İdarə Mərkəzi — tenant-səviyyəli idarəetmə (5-ci faza, bənd 5).
 
 ──────────────────────────────────────────────────────────────────────────────
 BU PANEL SAAS DEVELOPER PANELİ DEYİL

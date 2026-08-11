@@ -741,9 +741,14 @@ CREATE TRIGGER trg_leave_requests_updated BEFORE UPDATE ON leave_requests
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- Bir işçinin eyni anda yalnız BİR açıq icazəsi ola bilər (STEP 2 düyməsinin şərti)
+-- ---------------------------------------------------------------------------
+-- Status dəsti domendəki `LeaveStatus.is_open` ilə EYNİDİR (miqrasiya 016).
+-- `TIMEOUT_ESCALATED` DAXİLDİR: işçi hələ fiziki olaraq xaricdədir, sadəcə
+-- təsdiq gecikib. Onu kənarda saxlamaq "45 dəqiqə gözlə, sonra istədiyin
+-- qədər icazə aç" yolunu açıq qoyurdu — domen bloklayır, DB isə buraxırdı.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_leave_one_open_per_employee
     ON leave_requests (employee_id)
-    WHERE status IN ('OUTSIDE', 'PENDING_RETURN_VERIFICATION');
+    WHERE status IN ('OUTSIDE', 'PENDING_RETURN_VERIFICATION', 'TIMEOUT_ESCALATED');
 
 CREATE INDEX IF NOT EXISTS idx_leave_pending_queue
     ON leave_requests (store_id, status)
@@ -893,9 +898,15 @@ CREATE TABLE IF NOT EXISTS fines (
     CONSTRAINT chk_fine_auto_requires_leave
         CHECK (source <> 'AUTO_DELAY' OR leave_request_id IS NOT NULL),
     -- Nəşr olunmuş cərimənin HƏM anı, HƏM etiraz son tarixi olmalıdır.
+    -- İSTİSNA (miqrasiya 015 ilə eyni qayda): icmalda "Sil" qərarı və saga
+    -- kompensasiyası cəriməni HEÇ VAXT NƏŞR ETMƏDƏN `REVERSED` edir — belə
+    -- sətirdə `published_at` NULL qalır. Şərt `appeal_window_closes_at`
+    -- üzərində qurulmur, çünki `trg_fine_appeal_window` onu INSERT anında
+    -- onsuz da doldurur; həqiqi görünürlük göstəricisi `published_at`-dır.
     CONSTRAINT chk_fine_published
         CHECK (status = 'PENDING_REVIEW'
-            OR (published_at IS NOT NULL AND appeal_window_closes_at IS NOT NULL)),
+            OR (published_at IS NOT NULL AND appeal_window_closes_at IS NOT NULL)
+            OR (status = 'REVERSED' AND published_at IS NULL)),
     CONSTRAINT chk_fine_reversal
         CHECK (status <> 'REVERSED' OR (reversed_by IS NOT NULL AND reversal_reason IS NOT NULL))
 );
@@ -911,6 +922,23 @@ CREATE INDEX IF NOT EXISTS idx_fines_export_ready
     WHERE status IN ('PUBLISHED', 'REDUCED') AND exported_period IS NULL;
 CREATE INDEX IF NOT EXISTS idx_fines_pending_review
     ON fines (tenant_id, fine_date) WHERE status = 'PENDING_REVIEW';
+
+-- YARIŞ QAPAĞI (miqrasiya 015 ilə eyni qayda — hər ikisi ardıcıl tətbiq olunur)
+-- ---------------------------------------------------------------------------
+-- İki Kamera Operatoru eyni icazə sorğusunu eyni anda təsdiqləyə bilir: oxu
+-- ilə yazı arasındakı pəncərədə hər ikisi statusu hələ `PENDING_RETURN_
+-- VERIFICATION` görür. İndeks olmasa nəticə eyni gecikməyə görə İKİ cərimə,
+-- yəni ikiqat pul kəsintisi olardı.
+--
+-- Şərtdə `REVERSED` QƏSDƏN YOXDUR: Saga kompensasiyası uğursuz təsdiqdə
+-- cəriməni `REVERSED` edir (məbləğ 0.00, qeyd silinmir). Ölü sətir indeks
+-- yerini tutsaydı, işçinin həmin STEP 3-ü TƏKRAR təsdiqlətməsi əbədi
+-- bloklanardı. `REDUCED` isə daxildir — azaldılmış məbləğ hələ də ödənilir.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fines_one_live_auto_delay_per_leave
+    ON fines (leave_request_id)
+    WHERE source = 'AUTO_DELAY'
+      AND leave_request_id IS NOT NULL
+      AND status IN ('PENDING_REVIEW', 'PUBLISHED', 'REDUCED');
 
 -- Mövcud bazalarda köhnə `RESTRICT` qaydasını `NO ACTION`-a keçirir
 -- (yuxarıdakı inline tərif yalnız YENİ quraşdırmalara təsir edir).
@@ -1645,22 +1673,191 @@ CREATE TRIGGER trg_hardlock_override
     FOR EACH ROW EXECUTE FUNCTION enforce_permission_hardlock();
 
 
--- SELF-ESCALATION GUARD: istifadəçi öz hesabına icazə əlavə edə bilməz
+-- SELF-ESCALATION GUARD, 1-ci hissə: istifadəçi öz icazə sətrinə toxuna bilməz
+--
+-- NİYƏ EFFEKT ŞƏRTİ YOXDUR (migration 014 ilə genişləndirildi):
+-- Əvvəl burada `AND NEW.effect = 'GRANT'` şərti var idi, yəni özünə `DENY`
+-- yazmaq mümkün qalırdı. Domen (`permission_guards._assert_not_self`) isə
+-- EFFEKTDƏN ASILI OLMAYARAQ bloklayır — və doğru olan odur: öz səlahiyyətini
+-- azaltmaq da səlahiyyət dəyişikliyidir, iyerarxiya + audit yolundan
+-- keçməlidir. Üstəlik `UNIQUE (user_id, flag_code)` səbəbindən özünə yazılmış
+-- `DENY` sətri sonradan `UPDATE` üçün "tutulmuş yer" rolunu oynayırdı.
+-- İki qatın fərqli davranması auditə hansının həqiqət olduğunu deməyə imkan
+-- vermirdi (CLAUDE.md §5 — hər qayda İKİ yerdə EYNİ olmalıdır).
 CREATE OR REPLACE FUNCTION enforce_self_escalation_guard() RETURNS TRIGGER AS $$
 BEGIN
-    IF NEW.granted_by = NEW.user_id AND NEW.effect = 'GRANT' THEN
+    IF NEW.granted_by = NEW.user_id THEN
         RAISE EXCEPTION
-            'SELF-ESCALATION GUARD: istifadəçi öz hesabına icazə əlavə edə bilməz '
-            '(bölmə 3)';
+            'SELF-ESCALATION GUARD: istifadəçi öz icazə sətrinə toxuna bilməz '
+            '(effekt: % — GRANT və DENY üçün eyni qayda, bölmə 3)', NEW.effect;
     END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
+COMMENT ON FUNCTION enforce_self_escalation_guard() IS
+    'Self-Escalation Guard, 1-ci hissə (bölmə 3): aktor öz icazə sətrinə '
+    'toxuna bilməz. 014: əvvəl yalnız GRANT bloklanırdı, domen isə '
+    '(`_assert_not_self`) hər iki effekti bloklayır — iki qat uyğunlaşdırıldı.';
+
 DROP TRIGGER IF EXISTS trg_self_escalation ON user_permission_overrides;
 CREATE TRIGGER trg_self_escalation
     BEFORE INSERT OR UPDATE ON user_permission_overrides
     FOR EACH ROW EXECUTE FUNCTION enforce_self_escalation_guard();
+
+
+-- SELF-ESCALATION GUARD, 2-ci hissə: səlahiyyət verən həmin flag-ə SAHİB olmalıdır
+--
+-- NİYƏ AYRICA TRIGGER LAZIMDIR (migration 014):
+-- Yuxarıdakı dörd yoxlama yalnız «flag ↔ HƏDƏF» və «aktor ↔ hədəf pilləsi»
+-- əlaqələrinə baxır; «aktor ↔ FLAG» əlaqəsi heç yerdə yoxlanılmırdı. Nəticədə
+-- ekranı yan keçən skript üçün belə yol açıq qalırdı: `Admin` özündə OLMAYAN
+-- `can_manage_leave_types` flag-ini aşağı pilləli bir istifadəçiyə verir və
+-- həmin hesabla işləyir — yəni səlahiyyət artırması bir addım dolayı yolla.
+--
+-- Domen qarşılıqları (semantika EYNİLƏ təkrarlanır, yenisi icad edilmir):
+--   * `permission_guards._assert_actor_owns_flag` — fərdi override;
+--   * `position_management._apply_flags`          — rol-defolt.
+--
+-- Qaydanın dörd istisnası:
+--   1. Geri alma (`DENY` / `granted = FALSE`) yoxlanılmır — icazəni GERİ
+--      ALMAQ səlahiyyət artırması deyil (domendəki ilk şərtin eynisi).
+--   2. `granted_by IS NULL` — sistem seed-i (§23, §24, §25). O anda hələ heç
+--      bir işçi yoxdur; istisna olmasaydı tenant ümumiyyətlə qurula bilməzdi.
+--   3. `Root` — icazə kataloqunun sahibidir. Seed-ə görə onda kamera-əməliyyat
+--      flag-ləri YOXDUR, lakin onları paylamalıdır (əks halda kamera rolunu
+--      heç kim konfiqurasiya edə bilməzdi). MƏHZ rol KODU yoxlanılır, çünki
+--      `Position.effective_system_role` də yalnız kodu `ROOT` olanı `ROOT`
+--      sayır — prioritet 0-lı custom rol `CEO` semantikasına düşür.
+--   4. Eyni sətrin təkrar yazılışı — izahı funksiyanın içindədir.
+--
+-- NİYƏ `v_effective_permissions` GÖRÜNÜŞÜ İŞLƏDİLMİR: o, `WHERE e.is_active`
+-- filtri daşıyır və deaktiv aktoru "flag-siz" göstərərdi; domen
+-- `has_permission` isə aktivlikdən asılı deyil. Fərqli semantika iki qatı
+-- yenidən ayırardı.
+CREATE OR REPLACE FUNCTION enforce_grantor_owns_flag() RETURNS TRIGGER AS $$
+DECLARE
+    v_actor        UUID;
+    v_actor_code   TEXT;
+    v_actor_effect permission_effect;
+    v_role_granted BOOLEAN;
+    v_owns         BOOLEAN;
+BEGIN
+    IF TG_TABLE_NAME = 'position_permissions' THEN
+        IF NOT NEW.granted THEN
+            RETURN NEW;
+        END IF;
+    ELSE  -- user_permission_overrides
+        IF NEW.effect <> 'GRANT' THEN
+            RETURN NEW;
+        END IF;
+    END IF;
+
+    -- İDEMPOTENT TƏKRAR YAZILIŞ İSTİSNASI (istisna 4).
+    -- `EmployeeRepository._sync_overrides()` işçinin HƏR yazılışında bütün
+    -- override sətirlərini yenidən UPSERT edir (`ON CONFLICT DO UPDATE`), yəni
+    -- bu trigger köhnə, ARTIQ TƏSDİQLƏNMİŞ sətirlər üçün də işə düşür. Səlahiyyət
+    -- verənin flag-i sonradan geri alınıbsa, istisna olmadan işçinin adının
+    -- redaktəsi belə çökərdi — halbuki heç bir YENİ səlahiyyət verilmir.
+    -- Domen də eyni cür davranır: `apply_override()` yalnız YENİ qərarı yoxlayır,
+    -- mövcud sətrin təkrar yazılışını yox. Sətir eyni qaldıqda əlavə hüquq
+    -- yaranmır, ona görə istisna qoruma boşluğu açmır.
+    IF TG_TABLE_NAME = 'position_permissions' THEN
+        IF EXISTS (
+            SELECT 1 FROM position_permissions pp
+             WHERE pp.position_id = NEW.position_id
+               AND pp.flag_code   = NEW.flag_code
+               AND pp.granted     = NEW.granted
+               AND pp.granted_by IS NOT DISTINCT FROM NEW.granted_by
+        ) THEN
+            RETURN NEW;
+        END IF;
+    ELSIF EXISTS (
+        SELECT 1 FROM user_permission_overrides upo
+         WHERE upo.user_id    = NEW.user_id
+           AND upo.flag_code  = NEW.flag_code
+           AND upo.effect     = NEW.effect
+           AND upo.granted_by IS NOT DISTINCT FROM NEW.granted_by
+           AND upo.expires_at IS NOT DISTINCT FROM NEW.expires_at
+    ) THEN
+        RETURN NEW;
+    END IF;
+
+    v_actor := NEW.granted_by;
+
+    -- Sistem seed-i (istisna 2).
+    IF v_actor IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT p.code INTO v_actor_code
+      FROM employees e
+      JOIN positions p ON p.id = e.position_id
+     WHERE e.id = v_actor;
+
+    -- Aktor tapılmadı: `position_permissions.granted_by`-da FK yoxdur, həmçinin
+    -- RLS aktorun sətrini gizlədə bilər. `enforce_hierarchy_guard` eyni halda
+    -- `RETURN NEW` edir — iki trigger eyni yazıya fərqli qərar verməməlidir.
+    IF v_actor_code IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF v_actor_code = 'ROOT' THEN   -- istisna 3
+        RETURN NEW;
+    END IF;
+
+    -- Effektiv sahiblik: fərdi override → rol-defolt → FALSE
+    -- (`Employee.has_permission()` ilə eyni ardıcıllıq; vaxtı keçmiş override
+    --  sayılmır, `DENY` isə rol-defoltu ÜSTƏLƏYİR).
+    SELECT upo.effect INTO v_actor_effect
+      FROM user_permission_overrides upo
+     WHERE upo.user_id = v_actor
+       AND upo.flag_code = NEW.flag_code
+       AND (upo.expires_at IS NULL OR upo.expires_at > now());
+
+    IF v_actor_effect IS NOT NULL THEN
+        v_owns := (v_actor_effect = 'GRANT');
+    ELSE
+        SELECT COALESCE(pp.granted, FALSE) INTO v_role_granted
+          FROM employees e
+          LEFT JOIN position_permissions pp
+                 ON pp.position_id = e.position_id
+                AND pp.flag_code = NEW.flag_code
+         WHERE e.id = v_actor;
+        v_owns := COALESCE(v_role_granted, FALSE);
+    END IF;
+
+    IF NOT v_owns THEN
+        RAISE EXCEPTION
+            'SELF-ESCALATION GUARD: "%" flag-i səlahiyyəti verən istifadəçidə '
+            '(%) aktiv deyil — özündə olmayan icazə başqasına və ya rola '
+            'verilə bilməz (bölmə 3)', NEW.flag_code, v_actor;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION enforce_grantor_owns_flag() IS
+    'Self-Escalation Guard, 2-ci hissə (bölmə 3): aktor YALNIZ özündə AKTİV '
+    'olan flag-i verə bilər. Domen qarşılıqları: '
+    '`permission_guards._assert_actor_owns_flag` (fərdi override) və '
+    '`position_management._apply_flags` (rol-defolt). Dörd istisna: geri alma '
+    '(DENY / granted=FALSE), `granted_by IS NULL` (sistem seed-i), `ROOT` və '
+    'dəyişməyən sətrin təkrar yazılışı (repozitoriya hər save-də UPSERT edir).';
+
+-- Hər İKİ yazı yolu bağlanır. Rol tərəfi vacibdir, çünki əks halda qadağa bir
+-- addımla yan keçilərdi: "özümdə olmayan flag-i custom rola qoyum, sonra həmin
+-- rolu hədəfə təyin edim".
+DROP TRIGGER IF EXISTS trg_grantor_owns_flag_override ON user_permission_overrides;
+CREATE TRIGGER trg_grantor_owns_flag_override
+    BEFORE INSERT OR UPDATE ON user_permission_overrides
+    FOR EACH ROW EXECUTE FUNCTION enforce_grantor_owns_flag();
+
+DROP TRIGGER IF EXISTS trg_grantor_owns_flag_position ON position_permissions;
+CREATE TRIGGER trg_grantor_owns_flag_position
+    BEFORE INSERT OR UPDATE ON position_permissions
+    FOR EACH ROW EXECUTE FUNCTION enforce_grantor_owns_flag();
 
 
 -- STRICT HIERARCHY GUARD: yalnız CİDDİ ŞƏKİLDƏ aşağı prioritetli istifadəçiyə
@@ -1712,24 +1909,46 @@ CREATE TRIGGER trg_hierarchy_guard
 
 
 -- Etiraz pəncərəsinin avtomatik təyini (system_limits-dən oxuyur)
+-- ---------------------------------------------------------------------------
+-- SAYĞAC NƏŞRDƏN BAŞLAYIR (miqrasiya 016 ilə eyni qayda)
+-- ---------------------------------------------------------------------------
+-- Domen mənbəyi `Fine.publish()`-dir: `appeal_window_closes_at :=
+-- published_at + appeal_window_hours`. Cərimə həftələrlə icmalda qala bilər;
+-- sayğac yaradılışdan başlasaydı, işçi cəriməni GÖRMƏMİŞ etiraz müddəti bitə
+-- bilərdi (bax `fine.py` başlığı — "ƏN VACİB DETAL").
+--
+-- Trigger `UPDATE`-i də əhatə edir, çünki nəşr məhz UPDATE-dir: əks halda
+-- ekranı yan keçən SQL ilə nəşr olunan cərimənin pəncərəsi heç vaxt
+-- açılmazdı. Dolu sütun TOXUNULMUR — bir dəfə açılmış pəncərə sonradan
+-- dəyişən Root limitindən asılı olmamalıdır (domen də onu dondurur).
 CREATE OR REPLACE FUNCTION set_fine_appeal_window() RETURNS TRIGGER AS $$
 DECLARE
     v_hours INTEGER;
 BEGIN
+    -- (a) Artıq təyin olunub — DONDURULMUŞ dəyər dəyişdirilmir.
     IF NEW.appeal_window_closes_at IS NOT NULL THEN
         RETURN NEW;
     END IF;
+
+    -- (b) Hələ nəşr olunmayıb — sayğac BAŞLAMIR. Sütun QƏSDƏN NULL qalır:
+    --     `Fine.is_appeal_window_open` NULL-u "hələ açıq" kimi oxuyur, yəni
+    --     export bloklanır (fail-safe).
+    IF NEW.published_at IS NULL THEN
+        RETURN NEW;
+    END IF;
+
     SELECT COALESCE(limit_value::INTEGER, 72) INTO v_hours
     FROM system_limits
     WHERE tenant_id = NEW.tenant_id AND limit_key = 'FINE_APPEAL_WINDOW_HOURS';
 
-    NEW.appeal_window_closes_at := now() + make_interval(hours => COALESCE(v_hours, 72));
+    NEW.appeal_window_closes_at :=
+        NEW.published_at + make_interval(hours => COALESCE(v_hours, 72));
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_fine_appeal_window ON fines;
-CREATE TRIGGER trg_fine_appeal_window BEFORE INSERT ON fines
+CREATE TRIGGER trg_fine_appeal_window BEFORE INSERT OR UPDATE ON fines
     FOR EACH ROW EXECUTE FUNCTION set_fine_appeal_window();
 
 
@@ -1809,6 +2028,13 @@ COMMENT ON VIEW v_camera_verification_queue IS
 --   (a) PUBLISHED olmalıdır — PENDING_REVIEW HEÇ VAXT export-a düşmür;
 --   (b) `published_at` + pəncərə keçmiş olmalıdır (`created_at`-dan DEYİL);
 --   (c) artıq export olunmamış olmalıdır.
+--
+-- PƏNCƏRƏ DONDURULMUŞ SÜTUNDAN OXUNUR (miqrasiya 016). Əvvəl görünüş onu hər
+-- sorğuda `published_at + CARİ limit` kimi yenidən hesablayırdı; Root limiti
+-- 72 → 24 saata endirsəydi artıq nəşr olunmuş cərimələrin pəncərəsi
+-- RETROAKTİV bağlanardı. Domen isə dəyəri `publish()` anında dondurur
+-- (`Fine.publish`) və `Fine.is_appeal_window_open` məhz həmin sütunu oxuyur —
+-- indi domen, repository və görünüş üçü də eyni şərti tətbiq edir.
 CREATE OR REPLACE VIEW v_exportable_fines AS
 SELECT f.*
 FROM fines f
@@ -1816,12 +2042,8 @@ FROM fines f
 -- azaldılmış məbləği yenə ödəyir (bax `Fine.is_exportable`).
 WHERE f.status IN ('PUBLISHED', 'REDUCED')
   AND f.published_at IS NOT NULL
-  AND f.published_at + make_interval(hours => (
-          SELECT COALESCE(MAX(sl.limit_value::INTEGER), 72)
-            FROM system_limits sl
-           WHERE sl.tenant_id = f.tenant_id
-             AND sl.limit_key = 'FINE_APPEAL_WINDOW_HOURS'
-      )) <= now()
+  AND f.appeal_window_closes_at IS NOT NULL
+  AND f.appeal_window_closes_at <= now()
   AND f.exported_period IS NULL;
 
 
@@ -2084,7 +2306,7 @@ VALUES
     (NULL, 'ADMIN',              'Admin',               1, TRUE,  FALSE, 'CEO-dan bir pillə aşağı — gündəlik icazə idarəetməsi (həvalə edilmiş)'),
     (NULL, 'HR_ADMIN',           'HR_Admin',            2, TRUE,  FALSE, 'İşçi/növbə/cərimə/etiraz idarəetməsi'),
     (NULL, 'MAGAZA_MENECERI',    'Mağaza Meneceri',     2, TRUE,  FALSE, 'Gündəlik Tabel + öz filialının tapşırıqları (növbə PLANLAMASI YOX)'),
-    (NULL, 'KAMERA_NEZARETCISI', 'Kamera Nəzarətçisi',  2, TRUE,  TRUE,  'iVMS-də görüntünü yoxlayıb təsdiq/override/cərimə verir'),
+    (NULL, 'KAMERA_NEZARETCISI', 'Kamera Nəzarətçisi',  2, TRUE,  TRUE,  'iVMS-də görüntünü yoxlayıb təsdiq/vaxt düzəlişi/cərimə verir'),
     (NULL, 'SATICI',             'Satıcı',              3, TRUE,  FALSE, 'İşçi — Kiosk PIN handshake və İşçi Ana Ekranı')
 ON CONFLICT DO NOTHING;
 
@@ -2108,10 +2330,10 @@ VALUES
     -- Kamera & Cərimə — ANTI-FRAUD (heç vaxt Mağaza_Meneceri/Satıcı-ya).
     -- İlk üçü ƏLAVƏ OLARAQ yalnız kamera-tipli rollarda ola bilər (is_camera_only).
     ('can_verify_returns',                  'KAMERA_CERIME', 'Qayıdışları təsdiqlə',        'STEP 3 və Morning Check-in təsdiqi', 0, TRUE, TRUE),
-    ('can_override_return_time',            'KAMERA_CERIME', 'Vaxtı əllə təyin et',         'Manual Time Override', 0, TRUE, TRUE),
+    ('can_override_return_time',            'KAMERA_CERIME', 'Vaxtı əllə təyin et',         'Manual vaxt düzəlişi', 0, TRUE, TRUE),
     ('can_issue_fines',                     'KAMERA_CERIME', 'Cərimə ver',                  'Manual cərimə qeydiyyatı', 0, TRUE, TRUE),
     -- Bu isə TƏSDİQ tərəfidir: HR_Admin/CEO daşıyır, kamera-tipli rol daşıya BİLMƏZ.
-    ('can_approve_dual_control_override',   'KAMERA_CERIME', 'Dual-control təsdiqi',        '30+ dəqiqəlik override-a ikinci təsdiq (HR_Admin/CEO)', 0, TRUE, FALSE),
+    ('can_approve_dual_control_override',   'KAMERA_CERIME', 'Cüt nəzarət təsdiqi',         '30+ dəqiqəlik vaxt düzəlişinə ikinci təsdiq (HR_Admin/CEO)', 0, TRUE, FALSE),
     ('can_manage_fine_types',               'KAMERA_CERIME', 'Cərimə növlərini idarə et',   'Cərimə Növləri kataloqu (ad + standart qiymət)', 0, FALSE, FALSE),
 
     -- Satış & Mükafat
@@ -2120,8 +2342,8 @@ VALUES
     -- Task & Dashboard
     ('can_assign_tasks',            'TASK_DASHBOARD', 'Tapşırıq təyin et',          'Tapşırıq yaratmaq/təyin etmək', 0, FALSE, FALSE),
     ('can_approve_task_evidence',   'TASK_DASHBOARD', 'Tapşırıq sübutunu təsdiqlə', 'Yüklənmiş sübutu təsdiq/rədd etmək', 0, FALSE, FALSE),
-    ('can_view_dashboard_builder',  'TASK_DASHBOARD', 'Dashboard Builder-ə bax',    'Dashboard Builder ekranı', 0, FALSE, FALSE),
-    ('can_edit_dashboard_widgets',  'TASK_DASHBOARD', 'Widget-ləri redaktə et',     'Dashboard widget konfiqurasiyası', 0, FALSE, FALSE),
+    ('can_view_dashboard_builder',  'TASK_DASHBOARD', 'Panel Qurucusuna bax',       'Panel Qurucusu ekranı', 0, FALSE, FALSE),
+    ('can_edit_dashboard_widgets',  'TASK_DASHBOARD', 'Widget-ləri redaktə et',     'İdarə Paneli widget konfiqurasiyası', 0, FALSE, FALSE),
 
     ('can_publish_fines',           'KAMERA_CERIME', 'Cərimələri filiallara göndər',
         'Aylıq Cərimə İcmalından təsdiqlənmiş cərimələri işçilərə açır', 0, TRUE, FALSE),
@@ -2135,17 +2357,17 @@ VALUES
     ('can_manage_plugins',          'ERP_INFRA', 'Plugin-ləri idarə et',        'İmzalanmış plugin təsdiqi/yüklənməsi', 1, FALSE, FALSE),
     ('can_view_system_health',      'ERP_INFRA', 'Sistem sağlamlığına bax',     'Yalnız monitorinq, konfiqurasiyasız', 0, FALSE, FALSE),
 
-    -- Lisenziya, Backup & Sistem
-    ('can_manage_license',          'SISTEM', 'Lisenziya statusuna bax',   'Lokal lisenziya statusu + aktivasiya açarı (aktiv/deaktiv etmə YOX)', 1, FALSE, FALSE),
+    -- Lisenziya, Ehtiyat Nüsxə & Sistem
+    ('can_manage_license',          'SISTEM', 'Lisenziya vəziyyətinə bax', 'Lokal lisenziya vəziyyəti + aktivasiya açarı (aktiv/deaktiv etmə YOX)', 1, FALSE, FALSE),
     ('can_view_audit_logs',         'SISTEM', 'Audit log-lara bax',        'Audit Log Viewer', 0, FALSE, FALSE),
     ('can_export_reports',          'SISTEM', 'Hesabatları export et',     'Attendance + Bonus&Penalty Excel export', 0, FALSE, FALSE),
-    ('can_manage_backups',          'SISTEM', 'Backup/bərpa',              'Nöqtə-zamanlı bərpa funksiyası', 0, FALSE, FALSE),
+    ('can_manage_backups',          'SISTEM', 'Ehtiyat nüsxə/bərpa',       'Nöqtə-zamanlı bərpa funksiyası', 0, FALSE, FALSE),
 
     -- İcazə İdarəetməsi (HƏSSAS)
     ('can_manage_permissions',      'ICAZE', 'Yeni icazə flag-i yarat',     'System Permission Registry — YALNIZ Root', 1, FALSE, FALSE),
     ('can_manage_positions',        'ICAZE', 'Rol/vəzifə yarat',            'Mövcud flag-lərdən yeni rol tərtib etmək — Root VƏ CEO', 2, FALSE, FALSE),
     ('can_control_user_permissions','ICAZE', 'İstifadəçi icazələrini idarə et', 'Fərdi grant/deny — Hierarchy + Self-Escalation Guard-a tabe', 3, FALSE, FALSE),
-    ('can_manage_system_limits',    'ICAZE', 'Sistem limitləri & Feature Toggle', 'ROOT Control Center — YALNIZ Root', 1, FALSE, FALSE),
+    ('can_manage_system_limits',    'ICAZE', 'Sistem limitləri & Feature Toggle', 'ROOT İdarə Mərkəzi — YALNIZ Root', 1, FALSE, FALSE),
 
     -- Növbə & İş Rejimi
     ('can_manage_work_modes',       'NOVBE', 'İş rejimlərini idarə et',  'İş Rejimləri kataloqu', 0, FALSE, FALSE),
@@ -2267,7 +2489,7 @@ BEGIN
         (p_tenant_id, 'FINE_APPEAL_WINDOW_HOURS',    '72',  'INTEGER', '24', '336',  'Cərimə Etiraz Pəncərəsi (saat)'),
         (p_tenant_id, 'LATE_TOLERANCE_MINUTES',      '15',  'INTEGER', '0',  '120',  'Gecikmə Tolerantlığı (dəqiqə)'),
         (p_tenant_id, 'VERIFICATION_TIMEOUT_MINUTES','45',  'INTEGER', '5',  '240',  'STEP2 / Morning Check-in timeout (dəqiqə)'),
-        (p_tenant_id, 'DUAL_CONTROL_THRESHOLD_MINUTES','30','INTEGER', '5',  '240',  'Dual-Control həddi (dəqiqə)'),
+        (p_tenant_id, 'DUAL_CONTROL_THRESHOLD_MINUTES','30','INTEGER', '5',  '240',  'Cüt nəzarət həddi (dəqiqə)'),
         (p_tenant_id, 'PIN_MAX_FAILED_ATTEMPTS',     '5',   'INTEGER', '3',  '10',   'PIN lockout həddi'),
         (p_tenant_id, 'PIN_LOCKOUT_MINUTES',         '15',  'INTEGER', '5',  '60',   'PIN lockout müddəti (dəqiqə)'),
         (p_tenant_id, 'NTP_MAX_DRIFT_SECONDS',       '60',  'INTEGER', '10', '300',  'TIME_DRIFT_DETECTED həddi (saniyə)'),
@@ -2278,12 +2500,12 @@ BEGIN
     INSERT INTO feature_toggles (tenant_id, module_key, is_enabled, is_structural, description_az)
     VALUES
         (p_tenant_id, 'CAMERA_VERIFICATION', TRUE, TRUE,  'Kamera Təsdiqi — STEP1-3 və Morning Check-in-in struktur əsası'),
-        (p_tenant_id, 'DUAL_CONTROL',        TRUE, FALSE, 'Dual-Control əlavə təsdiq qatı'),
+        (p_tenant_id, 'DUAL_CONTROL',        TRUE, FALSE, 'Cüt-nəzarətli əlavə təsdiq qatı'),
         (p_tenant_id, 'SHIFT_SWAP',          TRUE, FALSE, 'Növbə Dəyişmə Sorğusu (işçi self-service)'),
         (p_tenant_id, 'FINE_MODULE',         TRUE, FALSE, 'Cərimə Modulu (manual + avtomatik)'),
         (p_tenant_id, 'TASK_ENGINE',         TRUE, FALSE, 'Task & Workflow Engine'),
         (p_tenant_id, 'SALES_POINTS',        TRUE, FALSE, 'Gamified satış xalları və mükafat'),
-        (p_tenant_id, 'DASHBOARD_BUILDER',   TRUE, FALSE, 'Custom Dashboard Builder'),
+        (p_tenant_id, 'DASHBOARD_BUILDER',   TRUE, FALSE, 'Panel qurucusu'),
         (p_tenant_id, 'SUPPORT_CHAT',        TRUE, FALSE, 'Diskret texniki dəstək chat-i')
     ON CONFLICT DO NOTHING;
 

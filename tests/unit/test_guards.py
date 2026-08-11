@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -13,7 +13,7 @@ from src.application.use_cases import (
     PermissionChangeRequest,
     PermissionHierarchyGuardUseCase,
 )
-from src.domain.entities import Employee, Position
+from src.domain.entities import Employee, PermissionOverride, Position
 from src.domain.policies import (
     LeaveAllowancePolicy,
     LeaveAllowanceSource,
@@ -208,6 +208,96 @@ def test_root_can_grant_flag_it_does_not_hold(
     seller = make_employee(SystemRole.SELLER)
 
     guard.assert_allowed(request_for(root, seller))
+
+
+# --------------------------------------------------------------------------- #
+# DB PARİTETİ (migration 014) — hər biri `test_guards.sql`-dəki bir testin cütü
+# --------------------------------------------------------------------------- #
+
+
+def test_cannot_deny_own_permissions_either(
+    guard: PermissionHierarchyGuardUseCase,
+) -> None:
+    """Özünə toxunma EFFEKTDƏN ASILI DEYİL (DB cütü: `test_guards.sql` TEST 20).
+
+    DB trigger-i əvvəl yalnız `effect = 'GRANT'` halını bloklayırdı; domen isə
+    hər ikisini. Bu test domen tərəfini KİLİDLƏYİR ki, iki qatı "eyniləşdirmək"
+    adı ilə səhv istiqamətdə — yəni domeni zəiflədərək — uzlaşdırmaq cəhdi
+    dərhal tutulsun.
+    """
+    admin = make_employee(SystemRole.ADMIN, flags=[CONTROL_FLAG, EXPORT_FLAG])
+
+    with pytest.raises(AuthorizationError, match="SELF-ESCALATION"):
+        guard.assert_allowed(request_for(admin, admin, effect=PermissionEffect.DENY))
+
+
+def test_deny_override_on_actor_removes_ownership(
+    guard: PermissionHierarchyGuardUseCase,
+) -> None:
+    """`DENY` override rol-defoltu ÜSTƏLƏYİR (DB cütü: TEST 21).
+
+    Aktorun rolunda flag var, lakin fərdi `DENY` onu söndürüb — həmin flag
+    ARTIQ ötürülə bilməz. Sahibliyin iki qatlı hesablanması `has_permission()`
+    ilə eyni sıradadır; DB trigger-i də məhz bu ardıcıllığı təkrarlayır.
+    """
+    admin = make_employee(SystemRole.ADMIN, flags=[CONTROL_FLAG, EXPORT_FLAG])
+    admin.apply_override(
+        PermissionOverride(
+            flag_code=EXPORT_FLAG.code,
+            effect=PermissionEffect.DENY,
+            granted_by=EmployeeId(uuid.uuid4()),
+        )
+    )
+    seller = make_employee(SystemRole.SELLER)
+
+    with pytest.raises(AuthorizationError, match="aktiv deyil"):
+        guard.assert_allowed(request_for(admin, seller))
+
+
+def test_expired_override_does_not_count_as_ownership(
+    guard: PermissionHierarchyGuardUseCase,
+) -> None:
+    """Vaxtı keçmiş override sahiblik VERMİR (DB cütü: TEST 22).
+
+    Müvəqqəti səlahiyyət bitdikdən sonra onu başqasına ötürmək, müddət
+    məhdudiyyətini bir addımla mənasız edərdi — verilən yeni sətrin öz
+    `expires_at`-ı olmaya bilər.
+    """
+    admin = make_employee(SystemRole.ADMIN, flags=[CONTROL_FLAG])
+    admin.apply_override(
+        PermissionOverride(
+            flag_code=EXPORT_FLAG.code,
+            effect=PermissionEffect.GRANT,
+            granted_by=EmployeeId(uuid.uuid4()),
+            expires_at=NOW - timedelta(hours=1),
+        )
+    )
+    seller = make_employee(SystemRole.SELLER)
+
+    with pytest.raises(AuthorizationError, match="aktiv deyil"):
+        guard.assert_allowed(request_for(admin, seller))
+
+
+def test_active_override_is_enough_to_pass_the_flag_on(
+    guard: PermissionHierarchyGuardUseCase,
+) -> None:
+    """MÜSBƏT HAL: override ilə alınmış flag ötürülə bilir (DB cütü: TEST 19).
+
+    Sahiblik yalnız rol-defoltdan ibarət olsaydı, fərdi override praktikada
+    "yarım icazə" olardı — ekranda görünür, lakin həvalə edilə bilmir.
+    """
+    admin = make_employee(SystemRole.ADMIN, flags=[CONTROL_FLAG])
+    admin.apply_override(
+        PermissionOverride(
+            flag_code=EXPORT_FLAG.code,
+            effect=PermissionEffect.GRANT,
+            granted_by=EmployeeId(uuid.uuid4()),
+            expires_at=NOW + timedelta(hours=1),
+        )
+    )
+    seller = make_employee(SystemRole.SELLER)
+
+    guard.assert_allowed(request_for(admin, seller))
 
 
 # --------------------------------------------------------------------------- #

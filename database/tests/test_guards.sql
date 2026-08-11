@@ -438,13 +438,422 @@ BEGIN
     v_passed := v_passed + 1;
     RAISE NOTICE 'TEST 17 ✓ xarici scheduler girişi (run_all_scheduled_jobs) işləyir';
 
+    -- =====================================================================
+    -- TEST 18: SELF-ESCALATION 2 — özündə OLMAYAN flag başqasına verilə bilməz
+    -- =====================================================================
+    -- `can_manage_leave_types` seed-ə görə HR_Admin-dədir, Admin-də YOXDUR.
+    -- Hardlock səviyyəsi 0, anti-fraud deyil — yəni bu sətri bloklaya bilən
+    -- YEGANƏ qayda `enforce_grantor_owns_flag()`-dır (migration 014).
+    v_failed := FALSE;
+    BEGIN
+        INSERT INTO user_permission_overrides (user_id, flag_code, effect, granted_by)
+        VALUES (v_seller, 'can_manage_leave_types', 'GRANT', v_admin);
+    EXCEPTION WHEN OTHERS THEN
+        v_failed := TRUE;
+    END;
+    IF NOT v_failed THEN
+        RAISE EXCEPTION
+            'TEST 18 UĞURSUZ: Admin özündə olmayan flag-i başqasına verdi!';
+    END IF;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 18 ✓ self-escalation: özündə olmayan flag verilə bilmir';
+
+    -- =====================================================================
+    -- TEST 19: MÜSBƏT HAL — flag override ilə aktora verilirsə, o da verə bilir
+    -- =====================================================================
+    -- Sahiblik İKİ qatın birləşməsidir (rol-defolt + fərdi override), ona görə
+    -- override yolu ilə alınmış flag də "sahiblik" sayılmalıdır — domen
+    -- `Employee.has_permission()` də məhz belə hesablayır.
+    INSERT INTO user_permission_overrides (user_id, flag_code, effect, granted_by)
+    VALUES (v_admin, 'can_manage_leave_types', 'GRANT', v_root);
+
+    INSERT INTO user_permission_overrides (user_id, flag_code, effect, granted_by)
+    VALUES (v_seller, 'can_manage_leave_types', 'GRANT', v_admin);
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 19 ✓ override ilə alınmış flag ötürülə bilir';
+
+    -- =====================================================================
+    -- TEST 20: SELF-ESCALATION 1 — özünə `DENY` də qadağandır
+    -- =====================================================================
+    -- Köhnə trigger yalnız `effect = 'GRANT'` halını tuturdu; domen
+    -- (`_assert_not_self`) isə hər iki effekti bloklayır (migration 014).
+    v_failed := FALSE;
+    BEGIN
+        INSERT INTO user_permission_overrides (user_id, flag_code, effect, granted_by)
+        VALUES (v_admin, 'can_export_reports', 'DENY', v_admin);
+    EXCEPTION WHEN OTHERS THEN
+        v_failed := TRUE;
+    END;
+    IF NOT v_failed THEN
+        RAISE EXCEPTION 'TEST 20 UĞURSUZ: istifadəçi özünə DENY sətri yazdı!';
+    END IF;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 20 ✓ özünə toxunma effektdən asılı olmayaraq bloklanır';
+
+    -- =====================================================================
+    -- TEST 21: `DENY` override rol-defoltu ÜSTƏLƏYİR (sahiblik itir)
+    -- =====================================================================
+    -- Admin rol-defoltu ilə `can_export_reports` daşıyır. Root ona DENY
+    -- yazdıqdan sonra Admin həmin flag-i ARTIQ ötürə bilməməlidir —
+    -- `Employee.has_permission()` ilə eyni prioritet sırası.
+    INSERT INTO user_permission_overrides (user_id, flag_code, effect, granted_by)
+    VALUES (v_admin, 'can_export_reports', 'DENY', v_root);
+
+    v_failed := FALSE;
+    BEGIN
+        INSERT INTO user_permission_overrides (user_id, flag_code, effect, granted_by)
+        VALUES (v_seller, 'can_export_reports', 'GRANT', v_admin);
+    EXCEPTION WHEN OTHERS THEN
+        v_failed := TRUE;
+    END;
+    IF NOT v_failed THEN
+        RAISE EXCEPTION
+            'TEST 21 UĞURSUZ: DENY edilmiş flag hələ də ötürülə bilir!';
+    END IF;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 21 ✓ DENY override sahibliyi ləğv edir';
+
+    -- =====================================================================
+    -- TEST 22: VAXTI KEÇMİŞ override sahiblik saymır
+    -- =====================================================================
+    DECLARE
+        v_expired_flag TEXT := 'can_manage_fine_types';  -- Admin-də YOXDUR
+    BEGIN
+        INSERT INTO user_permission_overrides
+            (user_id, flag_code, effect, granted_by, expires_at)
+        VALUES (v_admin, v_expired_flag, 'GRANT', v_root, now() - INTERVAL '1 hour');
+
+        v_failed := FALSE;
+        BEGIN
+            INSERT INTO user_permission_overrides (user_id, flag_code, effect, granted_by)
+            VALUES (v_seller, v_expired_flag, 'GRANT', v_admin);
+        EXCEPTION WHEN OTHERS THEN
+            v_failed := TRUE;
+        END;
+        IF NOT v_failed THEN
+            RAISE EXCEPTION
+                'TEST 22 UĞURSUZ: vaxtı keçmiş override sahiblik kimi sayıldı!';
+        END IF;
+    END;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 22 ✓ vaxtı keçmiş override sahiblik vermir';
+
+    -- =====================================================================
+    -- TEST 23: ROL YOLU da bağlıdır, SEED yolu isə AÇIQ qalır
+    -- =====================================================================
+    -- (a) `granted_by` göstərilibsə sahiblik yoxlanılır — əks halda qadağa bir
+    --     addımla yan keçilərdi ("flag-i rola qoyum, sonra rolu hədəfə verim").
+    -- (b) `granted_by IS NULL` (sistem seed-i) İSTİSNADIR — §23/§24 seed-i və
+    --     ilk Root bootstrap-ı məhz bu yolla yazılır; istisna olmasaydı bu
+    --     faylın yuxarısındakı `seed_tenant_defaults()` çağırışı belə çökərdi.
+    v_failed := FALSE;
+    BEGIN
+        INSERT INTO position_permissions (position_id, flag_code, granted, granted_by)
+        VALUES (v_pos_seller, 'can_manage_backups', TRUE, v_admin);
+    EXCEPTION WHEN OTHERS THEN
+        v_failed := TRUE;
+    END;
+    IF NOT v_failed THEN
+        RAISE EXCEPTION
+            'TEST 23 UĞURSUZ: Admin özündə olmayan flag-i ROLA verdi!';
+    END IF;
+
+    INSERT INTO position_permissions (position_id, flag_code, granted)
+    VALUES (v_pos_seller, 'can_manage_backups', TRUE);
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 23 ✓ rol yolu bağlıdır, seed yolu (granted_by IS NULL) açıqdır';
+
+    -- =====================================================================
+    -- TEST 24: DƏYİŞMƏYƏN sətrin təkrar yazılışı bloklanmır
+    -- =====================================================================
+    -- `EmployeeRepository._sync_overrides()` işçinin HƏR yazılışında bütün
+    -- override sətirlərini yenidən UPSERT edir. Sahiblik yoxlaması ÜÇÜNCÜ
+    -- şəxsin (verənin) sonrakı vəziyyətindən asılı olduğu üçün istisna
+    -- olmasaydı, verənin flag-i geri alındıqdan sonra HƏMİN İŞÇİNİN ADINI
+    -- REDAKTƏ ETMƏK belə mümkün olmazdı. Aşağıdakı UPSERT `_sync_overrides()`
+    -- sorğusunun hərfi surətidir.
+    DECLARE
+        v_kept_flag TEXT := 'can_view_employee_reports';  -- TEST 7-də verilib
+    BEGIN
+        -- Verənin (Admin) sahibliyi ləğv olunur
+        INSERT INTO user_permission_overrides (user_id, flag_code, effect, granted_by)
+        VALUES (v_admin, v_kept_flag, 'DENY', v_root);
+
+        -- Eyni sətrin təkrar yazılışı — YENİ səlahiyyət qərarı deyil
+        INSERT INTO user_permission_overrides
+            (user_id, flag_code, effect, granted_by, expires_at)
+        VALUES (v_seller, v_kept_flag, 'GRANT', v_admin, NULL)
+        ON CONFLICT (user_id, flag_code) DO UPDATE SET
+            effect     = EXCLUDED.effect,
+            granted_by = EXCLUDED.granted_by,
+            expires_at = EXCLUDED.expires_at;
+
+        -- Mənfi nəzarət: YENİ flag isə hələ də bloklanır
+        v_failed := FALSE;
+        BEGIN
+            INSERT INTO user_permission_overrides (user_id, flag_code, effect, granted_by)
+            VALUES (v_seller, 'can_manage_work_modes', 'GRANT', v_admin);
+        EXCEPTION WHEN OTHERS THEN
+            v_failed := TRUE;
+        END;
+        IF NOT v_failed THEN
+            RAISE EXCEPTION
+                'TEST 24 UĞURSUZ: idempotentlik istisnası YENİ grant-ı da buraxdı!';
+        END IF;
+    END;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 24 ✓ eyni sətrin təkrar yazılışı keçir, yeni grant keçmir';
+
+    -- =====================================================================
+    -- TEST 25: YARIŞ QAPAĞI — bir icazəyə İKİ diri AUTO_DELAY cəriməsi OLMAZ
+    -- =====================================================================
+    -- Miqrasiya 015. Tətbiq qatında sətir kilidi var, lakin kilid yalnız BİR
+    -- tranzaksiya daxilində işləyir; iki paralel proses (və ya ekranı yan
+    -- keçən skript) üçün yeganə etibarlı qapaq DB indeksidir.
+    DECLARE
+        v_leave  UUID;
+        v_fine_1 UUID;
+    BEGIN
+        INSERT INTO leave_requests
+            (tenant_id, employee_id, store_id, requested_time, actual_return_time,
+             verified_at, verified_by, status, requested_minutes, delay_minutes,
+             total_minutes)
+        VALUES (v_tenant, v_seller, v_store, now() - INTERVAL '2 hours',
+                now() - INTERVAL '1 hour', now() - INTERVAL '1 hour', v_root,
+                'VERIFIED', 60, 30, 120)
+        RETURNING id INTO v_leave;
+
+        INSERT INTO fines
+            (tenant_id, employee_id, store_id, source, leave_request_id, amount, status)
+        VALUES (v_tenant, v_seller, v_store, 'AUTO_DELAY', v_leave, 15.00, 'PENDING_REVIEW')
+        RETURNING id INTO v_fine_1;
+
+        v_failed := FALSE;
+        BEGIN
+            INSERT INTO fines
+                (tenant_id, employee_id, store_id, source, leave_request_id, amount, status)
+            VALUES (v_tenant, v_seller, v_store, 'AUTO_DELAY', v_leave, 15.00,
+                    'PENDING_REVIEW');
+        EXCEPTION WHEN OTHERS THEN
+            v_failed := TRUE;
+        END;
+        IF NOT v_failed THEN
+            RAISE EXCEPTION
+                'TEST 25 UĞURSUZ: eyni icazə sorğusuna İKİNCİ diri AUTO_DELAY '
+                'cəriməsi yarandı — ikiqat pul kəsintisi mümkündür!';
+        END IF;
+
+        -- =================================================================
+        -- TEST 26: KOMPENSASİYADAN SONRA TƏKRAR TƏSDİQ BLOKLANMIR
+        -- =================================================================
+        -- ⚠️ İndeksin ən incə şərti. Saga kompensasiyası cəriməni `REVERSED`
+        -- edir (məbləğ 0.00, qeyd silinmir). İndeks ölü sətri də saysaydı,
+        -- işçinin həmin STEP 3-ü təkrar təsdiqlətməsi ƏBƏDİ bloklanardı.
+        --
+        -- Aşağıdakı UPDATE `Fine.discard_in_review()`-un hərfi qarşılığıdır:
+        -- `published_at` NULL QALIR, çünki cərimə heç vaxt işçiyə görünməyib
+        -- (bu, `chk_fine_published`-in 015-dəki istisnasını da yoxlayır).
+        UPDATE fines
+           SET status          = 'REVERSED',
+               amount          = 0.00,
+               reversed_by     = v_root,
+               reversed_at     = now(),
+               reversal_reason = 'Saga kompensasiyası — icazə təsdiqi geri qaytarıldı'
+         WHERE id = v_fine_1;
+
+        BEGIN
+            INSERT INTO fines
+                (tenant_id, employee_id, store_id, source, leave_request_id, amount, status)
+            VALUES (v_tenant, v_seller, v_store, 'AUTO_DELAY', v_leave, 15.00,
+                    'PENDING_REVIEW');
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION
+                'TEST 26 UĞURSUZ: REVERSED sətir indeks yerini tutur — təkrar '
+                'təsdiq əbədi bloklanıb! (%)', SQLERRM;
+        END;
+    END;
+    v_passed := v_passed + 2;
+    RAISE NOTICE 'TEST 25 ✓ ikinci diri AUTO_DELAY cəriməsi bloklandı';
+    RAISE NOTICE 'TEST 26 ✓ REVERSED sətir təkrar təsdiqi bloklamır';
+
+    -- =====================================================================
+    -- TEST 27: BİR İŞÇİYƏ EYNİ ANDA İKİ AÇIQ İCAZƏ OLMAZ
+    -- =====================================================================
+    -- `uq_leave_one_open_per_employee`. STEP 1-in cüt kliki use case-də
+    -- `find_open_for_employee()` ilə yoxlanılır, lakin yoxlama ilə INSERT
+    -- arasında pəncərə var — yarışı məhz bu indeks udur. Repository həmin
+    -- rəddi `OperationNotPermittedError`-a çevirir (xam `UniqueViolation`
+    -- istifadəçiyə çatmır).
+    BEGIN
+        INSERT INTO leave_requests
+            (tenant_id, employee_id, store_id, requested_time, status, requested_minutes)
+        VALUES (v_tenant, v_manager, v_store, now(), 'OUTSIDE', 60);
+
+        v_failed := FALSE;
+        BEGIN
+            INSERT INTO leave_requests
+                (tenant_id, employee_id, store_id, requested_time, status, requested_minutes)
+            VALUES (v_tenant, v_manager, v_store, now(), 'OUTSIDE', 60);
+        EXCEPTION WHEN OTHERS THEN
+            v_failed := TRUE;
+        END;
+        IF NOT v_failed THEN
+            RAISE EXCEPTION
+                'TEST 27 UĞURSUZ: işçiyə eyni anda İKİNCİ açıq icazə yaradıldı!';
+        END IF;
+    END;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 27 ✓ ikinci açıq icazə sorğusu bloklandı';
+
+    -- =====================================================================
+    -- TEST 28: TIMEOUT_ESCALATED də AÇIQ sayılır (domen paritetı)
+    -- =====================================================================
+    -- Miqrasiya 016. `LeaveStatus.is_open` üç statusu əhatə edir; indeks isə
+    -- yalnız ikisini tuturdu, yəni "45 dəqiqə gözlə, sonra istədiyin qədər
+    -- icazə aç" yolu DB səviyyəsində açıq qalırdı.
+    BEGIN
+        -- TEST 27-nin açıq sorğusu eskalasiyaya keçir (STEP 2 timeout-u).
+        UPDATE leave_requests
+           SET status = 'TIMEOUT_ESCALATED', escalated_at = now()
+         WHERE employee_id = v_manager AND status = 'OUTSIDE';
+
+        v_failed := FALSE;
+        BEGIN
+            INSERT INTO leave_requests
+                (tenant_id, employee_id, store_id, requested_time, status, requested_minutes)
+            VALUES (v_tenant, v_manager, v_store, now(), 'OUTSIDE', 60);
+        EXCEPTION WHEN OTHERS THEN
+            v_failed := TRUE;
+        END;
+        IF NOT v_failed THEN
+            RAISE EXCEPTION
+                'TEST 28 UĞURSUZ: TIMEOUT_ESCALATED icazənin üstündən ikinci '
+                'açıq icazə yaradıldı — timeout icazə limitini yan keçir!';
+        END IF;
+
+        -- Mənfi nəzarət: sorğu HƏQİQƏTƏN bağlandıqda yeni icazə mümkündür,
+        -- əks halda indeks işçini əbədi bloklayardı.
+        UPDATE leave_requests
+           SET status = 'CANCELLED'
+         WHERE employee_id = v_manager AND status = 'TIMEOUT_ESCALATED';
+
+        INSERT INTO leave_requests
+            (tenant_id, employee_id, store_id, requested_time, status, requested_minutes)
+        VALUES (v_tenant, v_manager, v_store, now(), 'OUTSIDE', 60);
+    END;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 28 ✓ TIMEOUT_ESCALATED açıq sayılır, CANCELLED isə yox';
+
+    -- =====================================================================
+    -- TEST 29: ETİRAZ PƏNCƏRƏSİ NƏŞRDƏN BAŞLAYIR
+    -- =====================================================================
+    -- Miqrasiya 016. Köhnə trigger sütunu INSERT anında `now() + 72h` ilə
+    -- doldururdu; cərimə icmalda bir həftə qalsaydı işçi onu GÖRDÜYÜ gün
+    -- etiraz müddəti bitmiş olardı (bölmə 4 — "ƏN VACİB DETAL").
+    DECLARE
+        v_leave_2  UUID;
+        v_fine_2   UUID;
+        v_window   TIMESTAMPTZ;
+        v_pub_at   TIMESTAMPTZ := now();
+    BEGIN
+        INSERT INTO leave_requests
+            (tenant_id, employee_id, store_id, requested_time, actual_return_time,
+             verified_at, verified_by, status, requested_minutes, delay_minutes,
+             total_minutes)
+        VALUES (v_tenant, v_admin, v_store, now() - INTERVAL '11 days',
+                now() - INTERVAL '11 days', now() - INTERVAL '11 days', v_root,
+                'VERIFIED', 60, 30, 120)
+        RETURNING id INTO v_leave_2;
+
+        -- (a) İcmalda gözləyən cərimə: sayğac HƏLƏ BAŞLAMIR.
+        INSERT INTO fines
+            (tenant_id, employee_id, store_id, source, leave_request_id, amount,
+             status, fine_date)
+        VALUES (v_tenant, v_admin, v_store, 'AUTO_DELAY', v_leave_2, 15.00,
+                'PENDING_REVIEW', (now() - INTERVAL '10 days')::DATE)
+        RETURNING id INTO v_fine_2;
+
+        SELECT appeal_window_closes_at INTO v_window FROM fines WHERE id = v_fine_2;
+        IF v_window IS NOT NULL THEN
+            RAISE EXCEPTION
+                'TEST 29 UĞURSUZ: nəşr olunmamış cərimədə etiraz pəncərəsi '
+                'açıldı (%) — sayğac yaradılışdan sayılır!', v_window;
+        END IF;
+
+        -- (b) Nəşrdən sonra pəncərə MƏHZ `published_at`-dan hesablanır.
+        UPDATE fines
+           SET status       = 'PUBLISHED',
+               published_at = v_pub_at,
+               reviewed_by  = v_root
+         WHERE id = v_fine_2;
+
+        SELECT appeal_window_closes_at INTO v_window FROM fines WHERE id = v_fine_2;
+        IF v_window IS NULL THEN
+            RAISE EXCEPTION
+                'TEST 29 UĞURSUZ: nəşrdən sonra etiraz pəncərəsi açılmadı!';
+        END IF;
+        IF v_window <> v_pub_at + INTERVAL '72 hours' THEN
+            RAISE EXCEPTION
+                'TEST 29 UĞURSUZ: pəncərə nəşrdən yox, başqa andan sayılıb (% <> %)',
+                v_window, v_pub_at + INTERVAL '72 hours';
+        END IF;
+
+        -- =================================================================
+        -- TEST 30: `PENDING_REVIEW` cərimə EXPORT-a DÜŞMÜR
+        -- =================================================================
+        -- Bölmə 6 (hüquqi risk): işçi cəriməni nə görüb, nə də etiraz hüququ
+        -- alıb. `v_exportable_fines` bu şərti onsuz da tətbiq edirdi;
+        -- repository sorğusu isə yalnız `status <> 'REVERSED'` yoxlayırdı —
+        -- test hər iki qatın EYNİ cavabı verdiyini təsbit edir.
+        UPDATE fines
+           SET status                  = 'PENDING_REVIEW',
+               published_at            = NULL,
+               appeal_window_closes_at = NULL
+         WHERE id = v_fine_2;
+
+        IF EXISTS (SELECT 1 FROM v_exportable_fines WHERE id = v_fine_2) THEN
+            RAISE EXCEPTION
+                'TEST 30 UĞURSUZ: PENDING_REVIEW cərimə export siyahısına düşdü!';
+        END IF;
+
+        -- Nəşr olunmuş, lakin pəncərəsi HƏLƏ AÇIQ cərimə də düşmür.
+        UPDATE fines
+           SET status = 'PUBLISHED', published_at = now(), reviewed_by = v_root
+         WHERE id = v_fine_2;
+        IF EXISTS (SELECT 1 FROM v_exportable_fines WHERE id = v_fine_2) THEN
+            RAISE EXCEPTION
+                'TEST 30 UĞURSUZ: pəncərəsi açıq cərimə export-a düşdü!';
+        END IF;
+
+        -- Pəncərə bağlandıqdan sonra DÜŞÜR (mənfi nəzarət: filtr həddindən
+        -- artıq sərt deyil).
+        UPDATE fines
+           SET appeal_window_closes_at = now() - INTERVAL '1 second'
+         WHERE id = v_fine_2;
+        IF NOT EXISTS (SELECT 1 FROM v_exportable_fines WHERE id = v_fine_2) THEN
+            RAISE EXCEPTION
+                'TEST 30 UĞURSUZ: pəncərəsi bağlanmış cərimə export-dan çıxdı!';
+        END IF;
+    END;
+    v_passed := v_passed + 2;
+    RAISE NOTICE 'TEST 29 ✓ etiraz pəncərəsi nəşrdən (published_at) başlayır';
+    RAISE NOTICE 'TEST 30 ✓ PENDING_REVIEW export-a düşmür, PUBLISHED+bağlı pəncərə düşür';
+
     RAISE NOTICE '';
     RAISE NOTICE '===========================================';
-    RAISE NOTICE 'BÜTÜN GUARD TESTLƏRİ UĞURLU: %/17', v_passed;
+    RAISE NOTICE 'BÜTÜN GUARD TESTLƏRİ UĞURLU: %/30', v_passed;
     RAISE NOTICE '===========================================';
 
     -- Test məlumatlarının təmizlənməsi
     -- (audit_logs sətirləri QƏSDƏN qalır — append-only, FK yoxdur)
+    --
+    -- `fines` və `leave_requests` AÇIQ SİLİNİR, tenant kaskadına buraxılmır:
+    -- `fines.leave_request_id` üzərindəki FK `NO ACTION`-dır (DEFERRABLE
+    -- DEYİL), yəni tək bir `DELETE license_tenants` iki kaskadın hansının
+    -- əvvəl işləməsindən asılı olardı. Açıq sıra bu sualı tamamilə aradan
+    -- qaldırır — test təmizliyi DB daxili sıraya güvənməməlidir.
+    DELETE FROM fines WHERE tenant_id = v_tenant;
+    DELETE FROM leave_requests WHERE tenant_id = v_tenant;
     DELETE FROM license_tenants WHERE tenant_id = v_tenant;
 END
 $$;

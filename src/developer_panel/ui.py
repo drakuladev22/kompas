@@ -192,6 +192,10 @@ class DeveloperPanelWindow(QMainWindow):
         layout.addWidget(self.table, stretch=1)
 
         self.status_label = QLabel("", container)
+        # Vəziyyət sətrinə tenant adı, xəta mətni və dəstək mövzusu düşür —
+        # yəni MƏZMUN İSTİFADƏÇİDƏNDİR. `AutoText` rejimində belə mətndəki
+        # işarə render olunardı (bax `widgets/safe_text.py`).
+        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.status_label)
 
         # Yayım bölməsi yalnız `publisher` verildikdə QURULUR — mövcud olub
@@ -232,6 +236,7 @@ class DeveloperPanelWindow(QMainWindow):
         inner.addWidget(self.crash_table)
 
         self.crash_status = QLabel("", box)
+        self.crash_status.setTextFormat(Qt.TextFormat.PlainText)  # bax `status_label`
         self.crash_status.setWordWrap(True)
         inner.addWidget(self.crash_status)
         return box
@@ -251,6 +256,7 @@ class DeveloperPanelWindow(QMainWindow):
         inner.addWidget(self.ticket_table)
 
         self.ticket_status = QLabel("", box)
+        self.ticket_status.setTextFormat(Qt.TextFormat.PlainText)  # bax `status_label`
         self.ticket_status.setWordWrap(True)
         inner.addWidget(self.ticket_status)
         return box
@@ -291,6 +297,7 @@ class DeveloperPanelWindow(QMainWindow):
         form.addRow("", self.publish_button)
 
         self.publish_status = QLabel("", box)
+        self.publish_status.setTextFormat(Qt.TextFormat.PlainText)  # bax `status_label`
         self.publish_status.setWordWrap(True)
         form.addRow("", self.publish_status)
         return box

@@ -19,6 +19,21 @@ Ona görə rəng ARQUMENTDİR; onu verən tərəf ekran/örtükdür və o, `Them
 -dən oxuyur. QSS ilə ifadə oluna bilən hər şey (kart, chip, ayırıcı) isə
 `variant`/`chip` xüsusiyyəti ilə şablona buraxılır — orada tema avtomatik
 işləyir.
+
+──────────────────────────────────────────────────────────────────────────────
+HƏR ETİKET NİYƏ AÇIQ ŞƏKİLDƏ `PlainText`-dir
+──────────────────────────────────────────────────────────────────────────────
+`QLabel` defolt olaraq `Qt.AutoText` rejimindədir: mətnə baxıb onun HTML olub
+olmadığını ÖZÜ qərara alır. Bu fayldakı fabrikalara isə mətn demək olar həmişə
+BAZADAN gəlir — işçi adı, cərimə səbəbi, mağaza adı, dəstək mesajı. Belə bir
+sətrə `<b>` və ya `<img src=...>` yazılsa, o, ekranda RENDER olunardı: yəni
+istifadəçi məzmunu interfeysin görünüşünü idarə edərdi.
+
+Layihədə QƏSDƏN yazılmış zəngin mətn HEÇ BİR ekranda yoxdur (bütün vurğular
+QSS və `QFont` ilə verilir), ona görə rejimin açıq şəkildə `PlainText`-ə
+sabitlənməsi görünüşü DƏYİŞMİR — yalnız qərarı Qt-nin təxminindən alıb kodun
+öhdəsinə verir. Tooltip isə `QWidget` səviyyəsindədir və bu ayara TABE
+DEYİL — onun üçün `safe_text.plain_tooltip()` var.
 """
 
 from __future__ import annotations
@@ -41,12 +56,42 @@ from PySide6.QtWidgets import (
 from src.presentation.i18n.text import az_upper
 from src.presentation.theme.manager import enable_styled_background
 from src.presentation.widgets import metrics
+from src.presentation.widgets.safe_text import plain_tooltip
 
 if TYPE_CHECKING:
-    from PySide6.QtGui import QMouseEvent, QPaintEvent
+    from PySide6.QtGui import QKeyEvent, QMouseEvent, QPaintEvent
 
 #: Nişan tonları — QSS-dəki `QLabel[chip="…"]` seçiciləri ilə eynidir.
 ChipTone = Literal["success", "warning", "danger", "info", "neutral"]
+
+#: Klaviatura ilə "klik" sayılan düymələr.
+#:
+#: ──────────────────────────────────────────────────────────────────────────
+#: NİYƏ HƏM `Enter`, HƏM `Space`
+#: ──────────────────────────────────────────────────────────────────────────
+#: WAI-ARIA konvensiyası ikisini fərqli elementlərə bağlayır: `button` rolu
+#: hər ikisini, `link` rolu isə yalnız `Enter`-i qəbul edir. Buradakı
+#: elementlər (`FilterChip`, `LinkLabel`, klik edilə bilən kart və sətirlər)
+#: vizual olaraq link kimi görünsə də ƏMƏLİYYAT icra edir — panel açır,
+#: süzgəc tətbiq edir — yəni funksional olaraq düymədir. Ona görə hər iki
+#: düymə qəbul olunur: istifadəçi hansını gözləyirsə, o işləyir.
+#:
+#: `Qt.Key_Enter` `Qt.Key_Return`-dan AYRIDIR — birincisi rəqəm bloğundakı
+#: Enter-dir. İkisindən birini unutmaq nəticəni klaviatura düzülüşündən asılı
+#: edərdi.
+ACTIVATION_KEYS: Final = frozenset(
+    {
+        int(Qt.Key.Key_Return),
+        int(Qt.Key.Key_Enter),
+        int(Qt.Key.Key_Space),
+    }
+)
+
+
+def is_activation_key(event: QKeyEvent) -> bool:
+    """Hadisə "klaviatura ilə klik" sayılırmı."""
+    return event.key() in ACTIVATION_KEYS
+
 
 #: Maketdəki kart kölgəsi: `0 18px 46px rgba(11,29,58,0.28)` (ekran çərçivəsi)
 #: və `0 6px 16px rgba(11,29,58,0.12)` (üzən element). Qt-də `box-shadow`
@@ -61,9 +106,36 @@ _SHADOW_ALPHA: Final = 46
 # --------------------------------------------------------------------------- #
 
 
+def plain_label(text: str = "", parent: QWidget | None = None) -> QLabel:
+    """Rolsuz, DÜZ MƏTN rejimli `QLabel` — birbaşa `QLabel(...)` əvəzinə.
+
+    ──────────────────────────────────────────────────────────────────────
+    NİYƏ AYRICA FABRİKA
+    ──────────────────────────────────────────────────────────────────────
+    Yuxarıdakı rol fabrikaları (`title_label`, `muted_label`, …) mətn
+    rejimini artıq özləri sabitləyir. Lakin ekranlarda ROL TƏLƏB ETMƏYƏN
+    onlarla etiket var — cədvəl xanası, nişan rəqəmi, ikon yeri, boş
+    yer tutucu — və onlar birbaşa `QLabel(...)` çağırırdı, yəni Qt-nin
+    `AutoText` təxmini yenidən qüvvəyə minirdi.
+
+    Qayda hər çağırış yerində `setTextFormat(...)` sətri ilə təkrarlansaydı,
+    növbəti yeni etiketdə unudulardı və boşluq sükutla geri qayıdardı. Bir
+    fabrika isə "düz mətn" qərarını MƏRKƏZLƏŞDİRİR: yeni kod `plain_label()`
+    yazır və qorunma onunla birlikdə gəlir.
+
+    Görünüş DƏYİŞMİR: nə obyekt adı, nə `variant` xüsusiyyəti, nə də şrift
+    verilir — `QLabel(...)`-in etdiyi hər şey eynidir, yalnız mətn rejimi
+    təxminə buraxılmır.
+    """
+    label = QLabel(text, parent)
+    label.setTextFormat(Qt.TextFormat.PlainText)
+    return label
+
+
 def title_label(text: str, *, size: int = metrics.FONT_PAGE_TITLE) -> QLabel:
     """Səhifə/bölmə başlığı — 600 çəki (maketdə `font-weight: 600`)."""
     label = QLabel(text)
+    label.setTextFormat(Qt.TextFormat.PlainText)  # bax modul başlığı
     label.setObjectName("PageTitle")
     font = label.font()
     font.setPixelSize(size)
@@ -75,6 +147,7 @@ def title_label(text: str, *, size: int = metrics.FONT_PAGE_TITLE) -> QLabel:
 def muted_label(text: str, *, size: int = metrics.FONT_CAPTION) -> QLabel:
     """Solğun köməkçi mətn (`--color-text-muted`)."""
     label = QLabel(text)
+    label.setTextFormat(Qt.TextFormat.PlainText)  # bax modul başlığı
     label.setProperty("variant", "muted")
     font = label.font()
     font.setPixelSize(size)
@@ -101,6 +174,7 @@ def mono_label(text: str, *, muted: bool = False, size: int = metrics.FONT_CAPTI
     hint isə heç biri yoxdursa nəticənin yenə sabit-enli olmasını təmin edir.
     """
     label = QLabel(text)
+    label.setTextFormat(Qt.TextFormat.PlainText)  # bax modul başlığı
     label.setProperty("variant", "mono-muted" if muted else "mono")
     font = label.font()
     font.setPixelSize(size)
@@ -122,6 +196,7 @@ def section_label(text: str) -> QLabel:
     yerə görə deyil, ROLA görə verilir.
     """
     label = QLabel(az_upper(text))
+    label.setTextFormat(Qt.TextFormat.PlainText)  # bax modul başlığı
     label.setObjectName("SectionLabel")
     font = label.font()
     font.setPixelSize(metrics.FONT_SECTION_LABEL)
@@ -134,6 +209,7 @@ def section_label(text: str) -> QLabel:
 def body_label(text: str, *, size: int = 14, wrap: bool = True) -> QLabel:
     """Adi gövdə mətni — boş vəziyyət izahları kimi çoxsətirli bloklar üçün."""
     label = QLabel(text)
+    label.setTextFormat(Qt.TextFormat.PlainText)  # bax modul başlığı
     label.setWordWrap(wrap)
     font = label.font()
     font.setPixelSize(size)
@@ -225,6 +301,7 @@ class Chip(QLabel):
         self, text: str, tone: ChipTone = "neutral", *, parent: QWidget | None = None
     ) -> None:
         super().__init__(text, parent)
+        self.setTextFormat(Qt.TextFormat.PlainText)  # bax modul başlığı
         self.setProperty("chip", tone)
         font = self.font()
         font.setPixelSize(metrics.FONT_CAPTION)
@@ -253,6 +330,15 @@ class FilterChip(Chip):
     lakin tip yoxlayıcısı üçün görünməzdir və hadisə imzası səhv yazılsa
     yalnız icra zamanı üzə çıxardı.
 
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `_activate()` ADLI ORTAQ METOD VAR
+    ──────────────────────────────────────────────────────────────────────────
+    Siçan və klaviatura EYNİ əməliyyatı işə salmalıdır. Siqnalı hər iki hadisə
+    idarəedicisində ayrıca `emit` etsəydik, sonradan biri dəyişəndə (məs.
+    ikiqat göndərmə qoruması əlavə olunanda) digəri arxada qalardı və qüsur
+    yalnız klaviatura ilə üzə çıxardı — yəni ən az test edilən yolda.
+    Ona görə hər iki idarəedici bir metoda gedir.
+
     Signals:
         clicked: Nişanın açarı.
     """
@@ -270,15 +356,31 @@ class FilterChip(Chip):
         super().__init__(text, tone, parent=parent)
         self.key = key
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # `QLabel` defolt olaraq `NoFocus`-dur — süzgəc zolağı klaviatura ilə
+        # tamamilə keçilməz idi. Fokus halqası QSS-dədir (`QLabel[chip=…]:focus`).
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def _activate(self) -> None:
+        self.clicked.emit(self.key)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt adlandırması
         if event.button() is Qt.MouseButton.LeftButton:
-            self.clicked.emit(self.key)
+            self._activate()
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt adlandırması
+        if is_activation_key(event):
+            self._activate()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class LinkLabel(QLabel):
     """Mətn şəklində hərəkət — "Hamısını oxunmuş et", "Bütün bildirişlərə bax".
+
+    Siçan və klaviatura yolu `_activate()`-də birləşir — səbəbi `FilterChip`
+    başlığında izah olunub.
 
     Signals:
         clicked: Klik.
@@ -288,19 +390,39 @@ class LinkLabel(QLabel):
 
     def __init__(self, text: str, *, size: int = 13, parent: QWidget | None = None) -> None:
         super().__init__(text, parent)
+        self.setTextFormat(Qt.TextFormat.PlainText)  # bax modul başlığı
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # `variant="link"` yalnız fokus halqasının yerini ayırır — rəngə
+        # toxunmur, ona görə mövcud ekranların görünüşü dəyişmir (bax `qss.py`).
+        self.setProperty("variant", "link")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # Ekran oxuyucusu üçün rol: mətn etiketi deyil, HƏRƏKƏTdir.
+        self.setAccessibleName(text)
         font = self.font()
         font.setPixelSize(size)
         self.setFont(font)
 
+    def _activate(self) -> None:
+        self.clicked.emit()
+
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt adlandırması
         if event.button() is Qt.MouseButton.LeftButton:
-            self.clicked.emit()
+            self._activate()
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt adlandırması
+        if is_activation_key(event):
+            self._activate()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class ClickableCard(Card):
     """Bütövlükdə seçilə bilən kart — siyahı sətirlərində (növbə dəyişmə).
+
+    Siçan və klaviatura yolu `_activate()`-də birləşir — səbəbi `FilterChip`
+    başlığında izah olunub.
 
     Signals:
         clicked: Kartın açarı.
@@ -319,11 +441,22 @@ class ClickableCard(Card):
         super().__init__(padding=padding, spacing=spacing, parent=parent)
         self.key = key
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def _activate(self) -> None:
+        self.clicked.emit(self.key)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt adlandırması
         if event.button() is Qt.MouseButton.LeftButton:
-            self.clicked.emit(self.key)
+            self._activate()
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt adlandırması
+        if is_activation_key(event):
+            self._activate()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class StatusDot(QWidget):
@@ -395,9 +528,13 @@ class Avatar(QWidget):
 
         Widget-i yenidən yaratmaq əvəzinə mövcud olanı yeniləyir — avatar
         layout-da oturur və dəyişdirilməsi valideyn sırasını pozardı.
+
+        Ad tooltip-ə `plain_tooltip()` ilə düşür: tooltip `setTextFormat`-a
+        tabe deyil, yəni bazadakı "Rəşad <img src=...>" sətri burada işarə
+        kimi şərh olunardı (bax `safe_text.py`).
         """
         self._initials = self._compute_initials(full_name)
-        self.setToolTip(full_name)
+        self.setToolTip(plain_tooltip(full_name))
         self.update()
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 - Qt adlandırması
@@ -520,6 +657,7 @@ def stretch() -> QWidget:
 
 
 __all__ = [
+    "ACTIVATION_KEYS",
     "Avatar",
     "Card",
     "Chip",
@@ -532,8 +670,10 @@ __all__ = [
     "StatusDot",
     "body_label",
     "column",
+    "is_activation_key",
     "mono_label",
     "muted_label",
+    "plain_label",
     "row",
     "section_label",
     "stretch",

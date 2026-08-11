@@ -294,8 +294,12 @@ QLineEdit[state="error"], QPlainTextEdit[state="error"] {
     border-color: {{--color-danger}};
 }
 
+/* Placeholder DEAKTİV mətn DEYİL — sahə aktivdir və istifadəçi ondan nə
+   yazacağını öyrənir. WCAG 1.4.3-ün "inactive component" istisnası buna
+   TƏTBİQ OLUNMUR, ona görə `--color-text-disabled` (3.09:1 işıqlıda) əvəzinə
+   tam 4.5:1 hədəfinə kalibrlənmiş ayrıca token işlədilir. */
 QLineEdit::placeholder {
-    color: {{--color-text-disabled}};
+    color: {{--color-text-placeholder}};
 }
 
 QComboBox::drop-down {
@@ -340,6 +344,22 @@ QHeaderView::section {
     font-weight: {{--font-weight-medium}};
 }
 
+/* `DataTable`-in ÖZ sətri (`TableRow`) — Qt cədvəli deyil, adi `QWidget`.
+   Sətir klik edilə bilir, deməli klaviatura ilə də seçilə bilməlidir; fokus
+   halqası üçün yer nişanlarda olduğu kimi əvvəlcədən ayrılır. Sətrin daxili
+   kənar boşluğu Python tərəfdə həmin 2px qədər azaldılıb (`data_table.py`),
+   ona görə sətir hündürlüyü maketdəki kimi qalır. */
+QWidget[variant="table-row"] {
+    border: {{--focus-ring-width}} solid transparent;
+    border-radius: {{--radius-sm}};
+}
+
+/* Bildiriş sətri — eyni naxış (bax `screens/group_g.py`). */
+QWidget[variant="list-row"] {
+    border: {{--focus-ring-width}} solid transparent;
+    border-radius: {{--radius-sm}};
+}
+
 /* ===================== PƏNCƏRƏ BAŞLIĞI (CUSTOM TITLE BAR) ===================== */
 /* Maket: hündürlük 38px, solda amber loqo kvadratı + "KompasOS", sağda —/□/×.
    Pəncərə çərçivəsiz olduğu üçün bu zolaq Windows-un öz başlığını əvəz edir. */
@@ -379,9 +399,14 @@ QPushButton[variant="window"]:hover {
     color: {{--color-titlebar-text}};
 }
 
+/* Mətn rəngi TOKEN-dəndir, hardcode `#FFFFFF` deyil: tünd temada xəta rəngi
+   açıq mərcandır (`#EF5A5A`) və ağ simvol onun üzərində cəmi 3.34:1 verirdi —
+   13px simvol üçün AA 4.5:1 tələb edir. `--color-bg-primary` işıqlıda onsuz da
+   ağdır (6.54:1 dəyişməz qalır), tünddə isə Navy-yə çevrilir (5.02:1).
+   Bu, adi `variant="danger"` düyməsinin ARTIQ işlətdiyi naxışdır. */
 QPushButton[variant="window"][action="close"]:hover {
     background-color: {{--color-danger}};
-    color: #FFFFFF;
+    color: {{--color-bg-primary}};
 }
 
 /* ===================== NAVİQASİYA (SOL PANEL) ===================== */
@@ -460,10 +485,14 @@ QLabel#PageSubtitle {
     font-weight: {{--font-weight-normal}};
 }
 
-/* Header-dəki ikon düymələri (tema, zəng) — 34×34, 9px künc. */
+/* Header-dəki ikon düymələri (tema, zəng) — 34×34, 9px künc.
+   SƏRHƏD `--color-card-border` DEYİL: fon şəffaf olduğu üçün sərhəd düymənin
+   harada başlayıb bitdiyini göstərən YEGANƏ vizual əlamətdir və WCAG 1.4.11
+   ona 3:1 tələb qoyur. Kart sərhədi bu rolda 1.30:1 (işıqlı) / 1.42:1 (tünd)
+   verirdi — kart üçün kifayət, müstəqil idarəetmə elementi üçün yox. */
 QPushButton[variant="icon"] {
     background-color: transparent;
-    border: {{--border-width}} solid {{--color-card-border}};
+    border: {{--border-width}} solid {{--color-border-strong}};
     border-radius: {{--radius-md}};
     min-height: 34px;
     max-height: 34px;
@@ -562,10 +591,20 @@ QPushButton[variant="secondary"][active="true"] {
 
 /* ===================== YUMŞAQ NİŞANLAR (CHIP) ===================== */
 /* Maketdəki status həbləri: yumşaq fon + kalibrlənmiş mətn (bax tokens.py). */
+/* ŞƏFFAF SƏRHƏD NİYƏ HƏMİŞƏ VAR
+   `FilterChip` klaviatura ilə fokuslana bilir və fokus halqası sərhədlə
+   çəkilir. Sərhəd YALNIZ `:focus` halında əlavə edilsəydi, Qt widget-in ölçü
+   hesabına 2px əlavə edərdi və nişan fokus alanda "sıçrayardı" — süzgəc
+   zolağındakı bütün sətir yerini dəyişərdi. Ona görə yer ƏVVƏLCƏDƏN ayrılır,
+   fokusda isə yalnız rəng dolur.
+   Doldurma `4px 8px` əvəzinə `2px 6px`-dir: 2px sərhəd + 2px/6px doldurma =
+   maketdəki 4px/8px qutu. Yəni görünüş DƏYİŞMİR. Rəqəmlər `--focus-ring-width`
+   (2) ilə bağlıdır — o dəyişsə, bu doldurma da dəyişməlidir. */
 QLabel[chip="success"], QLabel[chip="warning"], QLabel[chip="danger"],
 QLabel[chip="info"], QLabel[chip="neutral"] {
+    border: {{--focus-ring-width}} solid transparent;
     border-radius: {{--radius-md}};
-    padding: {{--space-xs}} {{--space-sm}};
+    padding: 2px 6px;
     font-size: {{--font-size-sm}};
     font-weight: {{--font-weight-normal}};
 }
@@ -619,6 +658,17 @@ QLabel[variant="muted"] {
     background-color: transparent;
     color: {{--color-text-muted}};
     font-size: {{--font-size-sm}};
+}
+
+/* Mətn şəklində hərəkət (`LinkLabel`) — klaviatura ilə fokuslana bilir.
+   Rəng BURADA VERİLMİR: link mətni ekrandan-ekrana fərqli rolda görünür
+   (kartda solğun, panel başlığında əsas) və çağırış nöqtəsi onu özü seçir.
+   Bu qayda yalnız fokus halqasının yerini ayırır — nişanlarda olduğu kimi
+   şəffaf sərhəd əvvəlcədən qoyulur ki, fokusda düzülüş sıçramasın. */
+QLabel[variant="link"] {
+    background-color: transparent;
+    border: {{--focus-ring-width}} solid transparent;
+    border-radius: {{--radius-sm}};
 }
 
 /* Rəqəm/kod sahələri (saat, xəta kodu, tenant_id) — maketdə IBM Plex Mono.
@@ -783,6 +833,95 @@ QStatusBar {
     background-color: {{--color-bg-surface}};
     color: {{--color-text-secondary}};
     border-top: {{--border-width}} solid {{--color-border-subtle}};
+}
+
+/* ===================== FOKUS GÖSTƏRİCİSİ (BLOK ƏN SONDA) ===================== */
+/* ──────────────────────────────────────────────────────────────────────────
+   NİYƏ BU BLOK ŞABLONUN ƏN SONUNDADIR — VƏ NİYƏ ONU YUXARI KÖÇÜRMƏK OLMAZ
+   ──────────────────────────────────────────────────────────────────────────
+   Qt Style Sheet CSS2 spesifiklik qaydasını işlədir və BƏRABƏRLİKDƏ SONUNCU
+   qayda qalib gəlir. `QPushButton[variant="action"]` (bir atribut seçicisi) ilə
+   `QPushButton:focus` (bir psevdo-sinif) EYNİ spesifiklikdədir — ona görə
+   yuxarıdakı ümumi `QPushButton:focus` qaydası özündən SONRA gələn hər variant
+   blokunun `border` elanı tərəfindən sükutla əzilirdi.
+
+   Nəticə görünməz bir qüsur idi: `window`, `nav`, `icon`, `action` və
+   `secondary` düymələri `Tab` ilə fokuslananda HEÇ BİR vizual fərq
+   göstərmirdi. Nə Qt xəbərdarlıq edirdi, nə də kontrast skripti — çünki
+   qayda mövcud idi, sadəcə qüvvəyə minmirdi.
+
+   Bu blok həmin variantların hər birini AÇIQ şəkildə təkrar elan edir və
+   şablonun sonunda dayanır. `tests/unit/test_design_system.py` sıranı
+   qapıya salır: yeni variant bloku bundan SONRA əlavə edilsə, test qırılır.
+
+   ──────────────────────────────────────────────────────────────────────────
+   HALQA RƏNGİ HƏR YERDƏ `--color-focus-ring` DEYİL — QƏSDƏN
+   ──────────────────────────────────────────────────────────────────────────
+   Fokus halqası ALTINDAKI səthlə 3:1 kontrast verməlidir. İki yerdə
+   `--color-focus-ring` bunu STRUKTUR olaraq verə bilmir:
+
+     * `action` düyməsi — tünd temada fonu brend amberidir, halqa rəngi də
+       amberdir: 1.00:1, yəni halqa TAMAMİLƏ görünməz olardı. Ona görə orada
+       düymənin ÖZ mətn rəngi (`--color-action-text`) işlədilir — o cüt onsuz
+       da 8.28:1 (tünd) / 16.79:1 (işıqlı) ilə qapıdan keçir.
+     * `window` düyməsi — başlıq zolağı hər iki temada Navy-dir; işıqlı temada
+       dərin amber halqa orada cəmi 3.21:1 verir (marjinal). Zolağın öz mətn
+       rəngi 11.82–13.11:1 verir və onsuz da qapıdadır.
+
+   Qalan variantlarda halqa `--color-focus-ring`-dir və ən pis hal 4.59:1-dir. */
+
+QPushButton[variant="window"]:focus {
+    border: {{--focus-ring-width}} solid {{--color-titlebar-text}};
+}
+
+QPushButton[variant="nav"]:focus,
+QPushButton[variant="nav"][active="true"]:focus {
+    border: {{--focus-ring-width}} solid {{--color-focus-ring}};
+}
+
+QPushButton[variant="icon"]:focus,
+QPushButton[variant="icon"][active="true"]:focus {
+    border: {{--focus-ring-width}} solid {{--color-focus-ring}};
+}
+
+QPushButton[variant="action"]:focus {
+    border: {{--focus-ring-width}} solid {{--color-action-text}};
+}
+
+QPushButton[variant="secondary"]:focus {
+    border: {{--focus-ring-width}} solid {{--color-focus-ring}};
+}
+
+/* Seçilmiş segment fonu `--color-action-bg`-dir (tünddə amber) — yuxarıdakı
+   `action` ilə eyni səbəbdən halqa mətn rəngindədir. */
+QPushButton[variant="secondary"][active="true"]:focus {
+    border: {{--focus-ring-width}} solid {{--color-action-text}};
+}
+
+/* PIN klaviaturası: sərhəd ARTIQ 2px-dir, ona görə fokus ENİ deyil RƏNGİ
+   dəyişir — eni artırmaq düymələri sıçradardı, kiosk isə toxunma ekranıdır
+   və düzülüş sabit qalmalıdır. */
+QPushButton[variant="keypad"]:focus {
+    border-color: {{--color-focus-ring}};
+}
+
+/* Etiket şəklindəki hərəkətlər — `FilterChip`, `LinkLabel`.
+   Yer şəffaf sərhədlə əvvəlcədən ayrılıb, burada yalnız rəng dolur. */
+QLabel[chip="success"]:focus, QLabel[chip="warning"]:focus,
+QLabel[chip="danger"]:focus, QLabel[chip="info"]:focus,
+QLabel[chip="neutral"]:focus, QLabel[variant="link"]:focus {
+    border-color: {{--color-focus-ring}};
+}
+
+/* Klik edilə bilən kart və siyahı sətirləri. Kartın sərhədi onsuz da 1px-dir,
+   ona görə burada EN dəyişmir, yalnız rəng — sətir hündürlüyü sabit qalır. */
+QFrame[variant="card"]:focus {
+    border-color: {{--color-focus-ring}};
+}
+
+QWidget[variant="table-row"]:focus,
+QWidget[variant="list-row"]:focus {
+    border-color: {{--color-focus-ring}};
 }
 """
 

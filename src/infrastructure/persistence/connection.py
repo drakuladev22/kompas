@@ -329,6 +329,17 @@ class PostgresUnitOfWork:
             PostgresStoreWriter,
             PostgresSystemLimits,
         )
+        from src.infrastructure.persistence.migration import (  # noqa: PLC0415
+            PostgresMigrationEventLog,
+            SessionReadOnlyController,
+        )
+        from src.infrastructure.persistence.notification_repositories import (  # noqa: PLC0415
+            PostgresNotificationRepository,
+        )
+        from src.infrastructure.persistence.platform_repositories import (  # noqa: PLC0415
+            PostgresBackupCatalog,
+            PostgresPluginRegistry,
+        )
         from src.infrastructure.persistence.preferences import (  # noqa: PLC0415
             PostgresUserPreferences,
         )
@@ -393,6 +404,21 @@ class PostgresUnitOfWork:
             "report_facts": PostgresReportFactProvider(conn, self._context),
             "support": PostgresSupportTicketRepository(conn, self._context),
             "sync_conflicts": PostgresSyncConflictRepository(conn, self._context),
+            # Bildirişin YAZISI `PostgresNotifier`-dədir (öz tranzaksiyası ilə);
+            # burada qeydiyyatdan keçən yalnız OXU və "oxundu" işarəsidir.
+            "notifications": PostgresNotificationRepository(conn, self._context),
+            # --- Platforma vəziyyəti (Faza 5/6 ekran bağlantısı) --------------
+            # Plugin reyestri və nüsxə kataloqu EYNİ bağlantıdadır, çünki hər
+            # ikisinin əməliyyatı `audit_logs`-a yazır (`PluginManagementUseCase`,
+            # `BackupAccessUseCase`) və audit yazısı onu doğuran əməliyyatla
+            # eyni tranzaksiyada olmalıdır — audit sətri ROLLBACK olunanda
+            # əməliyyat da geri qayıtmalıdır (bax `audit.py` başlığı).
+            "plugins": PostgresPluginRegistry(conn, self._context),
+            "backup_records": PostgresBackupCatalog(conn, self._context),
+            # Baza keçidi: yalnız-oxu bayrağı `system_limits`-də, hadisə
+            # jurnalı isə `db_migration_events`-dədir (bax `migration.py`).
+            "read_only": SessionReadOnlyController(conn, self._context),
+            "migration_events": PostgresMigrationEventLog(conn, self._context),
         }
 
     def _release(self, *, rollback: bool) -> None:

@@ -87,11 +87,21 @@ def test_brand_amber_on_navy_passes_large_text() -> None:
 #: Eyni şey `--color-action-bg` üçün də doğrudur. Onları mürəkkəb saymaq
 #: hər iki cütü düzgün (kontrastlı) edir; fon saysaq, ikinci cütdə fon-fon
 #: müqayisəsi alınardı və nisbət 1:1 olardı.
+#:
+#: YEGANƏ İNVARİANT: hər cütün DƏQİQ BİR ucu bu dəstdə olmalıdır. Kontrast
+#: hesablaması simmetrikdir, ona görə hansı ucun "fon" adlandığının əhəmiyyəti
+#: yoxdur — əhəmiyyətli olan iki ucun sintetik temada FƏRQLİ rəng almasıdır.
+#: `test_every_pair_has_exactly_one_surface_end` bunu qapıya salır ki, yeni
+#: cüt əlavə edən adam səbəbi anlaşılmaz "1.00:1" nəticəsi ilə üzləşməsin.
 _SURFACE_TOKENS = frozenset(
     {
         "--color-bg-primary",
         "--color-bg-surface",
+        "--color-bg-elevated",
+        "--color-bg-sunken",
         "--color-card-bg",
+        "--color-content-bg",
+        "--color-header-bg",
         "--color-sidebar-bg",
         "--color-titlebar-bg",
         "--color-nav-active-bg",
@@ -141,6 +151,25 @@ def test_minimal_theme_covers_every_required_token() -> None:
 def test_surface_tokens_are_all_real() -> None:
     """`_SURFACE_TOKENS` içində artıq işlənməyən ad qalmasın."""
     assert _all_pair_tokens() >= _SURFACE_TOKENS
+
+
+def test_every_pair_has_exactly_one_surface_end() -> None:
+    """Hər cütün DƏQİQ BİR ucu səth olmalıdır.
+
+    İki ucu da səth (və ya heç biri) olan cüt sintetik temada eyni rəngi alır
+    və nisbət 1.00:1 çıxır — test qırılır, lakin səbəb `check_contrast.py`-da
+    deyil, BU fayldakı `_SURFACE_TOKENS` dəstindədir. Xəta mesajı birbaşa
+    günahkar cütü göstərsin deyə invariant ayrıca yoxlanılır.
+    """
+    for foreground, background, _, description in (
+        *check_contrast.REQUIRED_PAIRS,
+        *check_contrast.HIGH_CONTRAST_PAIRS,
+    ):
+        ends = [token in _SURFACE_TOKENS for token in (foreground, background)]
+        assert sum(ends) == 1, (
+            f"«{description}» cütünün dəqiq bir ucu səth olmalıdır: "
+            f"{foreground} / {background} — `_SURFACE_TOKENS`-i yeniləyin"
+        )
 
 
 def test_check_theme_all_pass() -> None:

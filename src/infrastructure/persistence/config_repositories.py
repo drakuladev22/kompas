@@ -1,7 +1,7 @@
 """Konfiqurasiya və cədvəl repository-ləri — Faza 5.
 
 `repositories.py` aqreqat repo-larını (Employee, Fine, …) saxlayır. Bu modul
-isə ROOT Control Center və növbə/icazə kataloqlarının arxasındakı SADƏ
+isə ROOT İdarə Mərkəzi və növbə/icazə kataloqlarının arxasındakı SADƏ
 oxu/yazma portlarını tamamlayır:
 
     SystemLimits                — konfiqurasiya edilə bilən limitlər
@@ -60,7 +60,7 @@ STRUCTURAL_CONFIRMATION_REQUIRED: Final = "STRUKTUR-KRİTİK"
 
 
 class PostgresSystemLimits(_BaseRepository):
-    """ROOT Control Center limitləri (`system_limits` cədvəli)."""
+    """ROOT İdarə Mərkəzi limitləri (`system_limits` cədvəli)."""
 
     def get_int(self, tenant_id: TenantId, key: str, default: int) -> int:
         """Tam ədəd limit.

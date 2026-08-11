@@ -19,6 +19,15 @@ XƏTA EKRANI BOŞ QOYUR, ÇÖKDÜRMÜR
 sorğusundakı problem (məs. `store_id` təyin edilməyib) BÜTÜN örtüyü
 çökdürməməlidir — istifadəçi digər bölmələrdə işləməyə davam edə bilməlidir.
 Səbəb `error.log`-a düşür və boş ekran özü də siqnaldır.
+
+──────────────────────────────────────────────────────────────────────────────
+BAĞLAMASI OLMAYAN AÇAR DA İZ QOYUR
+──────────────────────────────────────────────────────────────────────────────
+`app.py` `_binders()`-dəkindən ÇOX ekran açarı qeydiyyatdan keçirir. Əvvəl
+naməlum açar sükutla keçilirdi — nə istisna, nə jurnal sətri, yəni əskik
+bağlama YALNIZ istifadəçi boş ekran görəndə üzə çıxırdı. İndi həmin hal
+`SCREEN_BINDER_MISSING` xəbərdarlığı verir; davranış eynidir (ekran boş
+qalır, örtük çökmür), lakin qüsur ölçülə bilən hala gəlir.
 """
 
 from __future__ import annotations
@@ -26,7 +35,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 
-from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
+from src.domain.policies import DEFAULT_LIMITS, FeatureModule, SystemLimitKey
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
@@ -57,7 +66,41 @@ _WEEKDAYS_AZ: Final = ("B.e", "Ç.a", "Çər", "C.a", "Cüm", "Şən", "Baz")
 #: Bu qədər dəqiqədən sonra növbə sətri xəbərdarlıq rəngində göstərilir.
 #: 45 dəqiqəlik timeout-un (bölmə 4) YARISI seçilib — operator eskalasiya
 #: baş verməmişdən əvvəl reaksiya verə bilsin.
+#:
+#: DİQQƏT: bu, YALNIZ FALLBACK-dır. Həqiqi mənbə
+#: `system_limits.VERIFICATION_TIMEOUT_MINUTES`-dir (bölmə 3, Root idarə edir)
+#: və hədd hər dəfə ondan hesablanır — bax `late_threshold_minutes()`. Sabit
+#: yalnız limit oxuna bilmədikdə işə düşür; onu silmək "limit yoxdursa
+#: xəbərdarlıq da yoxdur" davranışı yaradardı.
 LATE_QUEUE_MINUTES = 22
+
+#: `v_erp_server_health.health` → dashboard kartındakı ton.
+#:
+#: `INACTIVE` siyahıda YOXDUR, çünki həmin sətirlər sorğuda süzülür (bax
+#: `_dashboard_health`). Naməlum dəyər "warning"a düşür: yeni bir sağlamlıq
+#: vəziyyəti əlavə olunarsa onu SÜKUTLA yaşıl göstərmək ən pis hal olardı.
+_HEALTH_TONES: Final[dict[str, str]] = {
+    "HEALTHY": "success",
+    "DEGRADED": "warning",
+    "STALE": "warning",
+    "NEVER_SYNCED": "danger",
+}
+
+#: Yardım mövzusu → onu görünən edən modul açarı (`FeatureModule` dəyəri).
+#:
+#: `None` = modula bağlı DEYİL. «1C / ERP bağlantısı» belədir: ERP inteqrasiyası
+#: Feature Toggle ilə söndürülən bir modul deyil, quraşdırma addımıdır — onun
+#: təlimatını gizlətmək serveri qura bilməyən müştərini məhz lazım olan anda
+#: köməksiz qoyardı. «Problem yaşayırsınızsa» mövzusu isə `SUPPORT_CHAT`-a
+#: bağlıdır, çünki mətnin özü dəstək düyməsini göstərir.
+HELP_TOPIC_MODULES: Final[dict[str, str | None]] = {
+    "leave": FeatureModule.CAMERA_VERIFICATION.value,
+    "fines": FeatureModule.FINE_MODULE.value,
+    "shifts": FeatureModule.SHIFT_SWAP.value,
+    "erp": None,
+    "points": FeatureModule.SALES_POINTS.value,
+    "support": FeatureModule.SUPPORT_CHAT.value,
+}
 
 
 class ScreenDataBinder:
@@ -68,9 +111,25 @@ class ScreenDataBinder:
         self._actor = actor
 
     def populate(self, key: str, screen: QWidget) -> None:
-        """Ekranı canlı məlumatla doldurur — naməlum açar üçün SƏSSİZ keçir."""
+        """Ekranı canlı məlumatla doldurur — bağlaması olmayan açar İZ QOYUR."""
         binder = self._binders().get(key)
         if binder is None:
+            # DAVRANIŞ DƏYİŞMİR: ekran boş qalır, istisna atılmır, örtük
+            # çökmür — `app.py` 28 ekran açarını qeydiyyatdan keçirir, onların
+            # bir hissəsinin canlı bağlaması hələ yazılmayıb və bu, planlı
+            # vəziyyətdir (bax `tests/unit/test_screen_binding_coverage.py`).
+            # DƏYİŞƏN YALNIZ GÖRÜNÜRLÜKDÜR: əvvəl bu hal heç bir iz qoymurdu,
+            # yəni əskik bağlama yalnız istifadəçi boş ekran görəndə üzə
+            # çıxırdı. `warning` seçilib, `exception` yox — burada tutulmuş
+            # xəta yoxdur, tamamlanmamış bağlama var; `raise` isə qadağandır,
+            # çünki menyuda görünən ekran açılmalıdır (məzmunsuz da olsa).
+            _error_log.warning(
+                "SCREEN_BINDER_MISSING",
+                extra={
+                    "screen": key,
+                    "impact": "ekran boş qalır — canlı bağlama hələ yazılmayıb",
+                },
+            )
             return
         try:
             with self._context.session(user_id=self._actor.id) as session:
@@ -81,6 +140,7 @@ class ScreenDataBinder:
 
     def _binders(self) -> dict[str, Callable[[Session, Any], None]]:
         return {
+            "dashboard": self._dashboard,
             "live_queue": self._live_queue,
             "fines": self._fines,
             "shift_planning": self._shift_planning,
@@ -88,10 +148,233 @@ class ScreenDataBinder:
             "daily_roster": self._daily_roster,
             "fine_appeals": self._fine_appeals,
             "tasks": self._tasks,
+            "sales_points": self._sales_points,
             "users": self._users,
             "audit": self._audit,
             "reports": self._reports,
+            "help": self._help,
+            "health": self._health,
         }
+
+    # ------------------------------ Qrup C ----------------------------------- #
+
+    def _dashboard(self, session: Session, screen: Any) -> None:
+        """Admin / CEO İdarə Paneli — beş bölmə, hamısı AQREQASİYA.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ USE CASE DEYİL, BİRBAŞA SQL
+        ──────────────────────────────────────────────────────────────────────
+        Burada heç bir iş qərarı verilmir: nə status keçidi, nə səlahiyyət
+        yoxlaması, nə hesablama qaydası var — yalnız SAYĞAC göstərilir. Eyni
+        səbəb `_fines`-də də yazılıb: use case-ə "dashboard üçün say" metodu
+        əlavə etmək onu göstəriş vasitəsinə çevirərdi.
+
+        Rəqəmlərin MƏNASI isə mövcud qaydalardan gəlir və burada YENİDƏN
+        təyin edilmir: `VERIFIED` = mağazadadır (bölmə 4 STEP C),
+        `PENDING_VERIFICATION` + `PENDING_RETURN_VERIFICATION` = operatorun
+        birləşmiş növbəsi (`_live_queue` ilə eyni iki mənbə), `OPEN` +
+        `EVIDENCE_SUBMITTED` = açıq tapşırıq (`_tasks` ilə eyni dəst).
+        """
+        today = datetime.now(UTC).date()
+        month_start = today.replace(day=1)
+        next_month = _next_month(month_start)
+        previous_month = _previous_month(month_start)
+
+        totals = _fine_month_totals(
+            session,
+            month_start=month_start,
+            next_month=next_month,
+            previous_month=previous_month,
+        )
+        self._dashboard_summary(session, screen, today=today, fine_totals=totals)
+        self._dashboard_fines(session, screen, month_start=month_start, next_month=next_month)
+        self._dashboard_leave(session, screen, month_start=month_start, next_month=next_month)
+        self._dashboard_leaders(session, screen, today=today)
+        self._dashboard_health(session, screen)
+
+    def _dashboard_summary(
+        self, session: Session, screen: Any, *, today: date, fine_totals: tuple[str, str]
+    ) -> None:
+        """Dörd rəqəm kartı — bir sorğu, səkkiz sayğac."""
+        row = session.uow.connection.execute(
+            """
+            SELECT
+              (SELECT count(*) FROM attendance_records
+                WHERE tenant_id = %s AND work_date = %s
+                  AND check_in_status = 'VERIFIED')                     AS in_store,
+              (SELECT count(*) FROM shift_assignments
+                WHERE tenant_id = %s AND shift_date = %s
+                  AND NOT is_off_day)                                   AS planned,
+              (SELECT count(*) FROM attendance_records
+                WHERE tenant_id = %s AND work_date = %s
+                  AND check_in_status = 'PENDING_VERIFICATION')         AS pending_entry,
+              (SELECT count(*) FROM leave_requests
+                WHERE tenant_id = %s
+                  AND status = 'PENDING_RETURN_VERIFICATION')           AS pending_return,
+              (SELECT min(requested_at) FROM attendance_records
+                WHERE tenant_id = %s AND work_date = %s
+                  AND check_in_status = 'PENDING_VERIFICATION')         AS oldest_entry,
+              (SELECT min(return_claimed_time) FROM leave_requests
+                WHERE tenant_id = %s
+                  AND status = 'PENDING_RETURN_VERIFICATION')           AS oldest_return,
+              (SELECT count(*) FROM tasks
+                WHERE tenant_id = %s
+                  AND status IN ('OPEN', 'EVIDENCE_SUBMITTED'))         AS open_tasks,
+              (SELECT count(*) FROM tasks
+                WHERE tenant_id = %s AND deadline < now()
+                  AND status IN ('OPEN', 'EVIDENCE_SUBMITTED'))         AS overdue_tasks
+            """,
+            (
+                session.tenant_id,
+                today,
+                session.tenant_id,
+                today,
+                session.tenant_id,
+                today,
+                session.tenant_id,
+                session.tenant_id,
+                today,
+                session.tenant_id,
+                session.tenant_id,
+                session.tenant_id,
+            ),
+        ).fetchone()
+        counts = row or {}
+
+        # Ən uzun gözləmə İKİ mənbədən ən KÖHNƏSİDİR — növbə birləşmişdir
+        # (bölmə 4), ona görə "ən uzunu" da birləşmiş dəstə aid olmalıdır.
+        oldest = _earliest(counts.get("oldest_entry"), counts.get("oldest_return"))
+        pending = int(counts.get("pending_entry") or 0) + int(counts.get("pending_return") or 0)
+
+        screen.set_summary(
+            in_store=int(counts.get("in_store") or 0),
+            planned=int(counts.get("planned") or 0),
+            pending=pending,
+            longest_wait=f"{_minutes_since(oldest)} dəq" if oldest is not None else "—",
+            fines_total=fine_totals[0],
+            fines_delta=fine_totals[1],
+            open_tasks=int(counts.get("open_tasks") or 0),
+            overdue_tasks=int(counts.get("overdue_tasks") or 0),
+        )
+
+    def _dashboard_fines(
+        self, session: Session, screen: Any, *, month_start: date, next_month: date
+    ) -> None:
+        """Filial üzrə cərimə sütunları — bu ayın BÜTÜN statusları.
+
+        `PENDING_REVIEW` sətirlər DƏ daxildir və bu, qəsdəndir: dashboard
+        idarəetmə göstəricisidir, hesabat ixracı deyil. Bölmə 6-nın LOCK
+        mexanizmi yalnız EXPORT-a aiddir (`_reports`) — ayın ortasında
+        "cərimə yoxdur" göstərmək menecerə yanlış mənzərə verərdi.
+        """
+        rows = session.uow.connection.execute(
+            """
+            SELECT COALESCE(s.name, '—') AS store_name,
+                   COALESCE(SUM(f.amount), 0) AS total
+              FROM fines f
+              LEFT JOIN stores s ON s.id = f.store_id
+             WHERE f.tenant_id = %s AND f.fine_date >= %s AND f.fine_date < %s
+             GROUP BY s.name
+             ORDER BY total DESC
+             LIMIT 12
+            """,
+            (session.tenant_id, month_start, next_month),
+        ).fetchall()
+        screen.set_fines_by_branch(
+            [
+                (str(row["store_name"]), float(row["total"] or 0), f"{row['total'] or 0} ₼")
+                for row in rows
+            ],
+            period=_month_text(),
+        )
+
+    def _dashboard_leave(
+        self, session: Session, screen: Any, *, month_start: date, next_month: date
+    ) -> None:
+        """İcazə ölçəni — istifadə / tenant büdcəsi.
+
+        Büdcə = `MONTHLY_LEAVE_MINUTES_LIMIT` × aktiv işçi sayı. Limit
+        SPESİFİKASİYADA işçi başınadır (bölmə 3) və burada YENİDƏN təyin
+        edilmir — sadəcə eyni limit tenant miqyasına vurulur ki, ölçən
+        nisbəti göstərə bilsin. Qayda (240 dəq aşıldıqda XƏBƏRDARLIQ, bloklama
+        YOX) `MonthlyLeaveUsage`-də qalır; bu ölçən heç nə bloklamır.
+        """
+        key = SystemLimitKey.MONTHLY_LEAVE_MINUTES_LIMIT
+        per_employee = session.limits.get_int(
+            session.tenant_id, key.value, int(DEFAULT_LIMITS[key])
+        )
+        row = session.uow.connection.execute(
+            """
+            SELECT
+              (SELECT COALESCE(SUM(total_minutes), 0) FROM leave_requests
+                WHERE tenant_id = %s AND requested_time >= %s
+                  AND requested_time < %s)              AS used_minutes,
+              (SELECT count(*) FROM employees
+                WHERE tenant_id = %s AND is_active)     AS active_employees
+            """,
+            (session.tenant_id, month_start, next_month, session.tenant_id),
+        ).fetchone()
+        used = float((row or {}).get("used_minutes") or 0)
+        headcount = int((row or {}).get("active_employees") or 0)
+        screen.set_leave_usage(used, float(per_employee * headcount))
+
+    def _dashboard_leaders(self, session: Session, screen: Any, *, today: date) -> None:
+        """Xal liderləri — CARİ 6 aylıq dövr (`PointsPeriod`, bölmə 6).
+
+        Dövr sərhədi domendən götürülür, "son 30 gün" kimi bir kəsim
+        uydurulmur: xallar 1 Yanvar / 1 İyul-da sıfırlanır və liderlik
+        lövhəsi sıfırlanmadan SONRA köhnə dövrün adlarını göstərməməlidir.
+        """
+        from src.domain.value_objects.gamification import PointsPeriod  # noqa: PLC0415
+
+        period = PointsPeriod.containing(today)
+        rows = session.uow.connection.execute(
+            """
+            SELECT e.first_name, e.last_name, SUM(l.delta_points) AS total
+              FROM points_ledger l
+              JOIN employees e ON e.id = l.employee_id
+             WHERE l.tenant_id = %s AND l.period_start = %s AND l.status <> 'REVERSED'
+             GROUP BY e.first_name, e.last_name
+             HAVING SUM(l.delta_points) > 0
+             ORDER BY total DESC
+             LIMIT 5
+            """,
+            (session.tenant_id, period.start),
+        ).fetchall()
+        screen.set_leaders([(_full_name(row), _points_text(row["total"])) for row in rows])
+
+    def _dashboard_health(self, session: Session, screen: Any) -> None:
+        """1C serverlərinin vəziyyəti — `v_erp_server_health` görünüşündən.
+
+        `INACTIVE` sətirlər GÖSTƏRİLMİR: `ServerHealth.needs_attention` onları
+        qəsdən kənarda saxlayır — deaktivləşdirmə adminin QƏRARIDIR, nasazlıq
+        deyil. Onları daimi sarı ilə göstərmək kartı "həmişə xəbərdarlıq"
+        halına salar və REAL problem itərdi. Tam siyahı «Sistem Sağlamlığı»
+        ekranındadır.
+        """
+        rows = session.uow.connection.execute(
+            """
+            SELECT server_name, health, sync_delay_seconds
+              FROM v_erp_server_health
+             WHERE tenant_id = %s AND health <> 'INACTIVE'
+             ORDER BY server_name
+             LIMIT 8
+            """,
+            # `tenant_id` şərti RLS-ə ƏLAVƏ ikinci qatdır (CLAUDE.md bölmə 6):
+            # görünüş `security_invoker` ilə işləyir, lakin bir konfiqurasiya
+            # səhvi bütün tenant-ların serverlərini bir dashboard-a tökərdi.
+            (session.tenant_id,),
+        ).fetchall()
+        screen.set_server_health(
+            [
+                (
+                    str(row["server_name"]),
+                    _sync_delay_text(row["sync_delay_seconds"]),
+                    _HEALTH_TONES.get(str(row["health"]), "warning"),
+                )
+                for row in rows
+            ]
+        )
 
     # ------------------------------ Qrup B ----------------------------------- #
 
@@ -108,6 +391,12 @@ class ScreenDataBinder:
             # FAIL-SAFE (bölmə 4): təyinatsız operator HEÇ NƏ görmür.
             screen.set_entries([])
             return
+
+        # Xəbərdarlıq həddi CANLI limitdən hesablanır: Root timeout-u 45-dən
+        # 20 dəqiqəyə endirsə, sabit 22 ilə operator xəbərdarlığı ESKALASİYADAN
+        # SONRA görərdi — yəni siqnal öz mənasını itirərdi (bax
+        # `late_threshold_minutes` və `LATE_QUEUE_MINUTES` şərhi).
+        late_after = late_threshold_minutes(session)
 
         # `(gözləmə dəqiqəsi, sətir)` cütü ilə yığılır: `QueueEntry` gözləməni
         # MƏTN kimi saxlayır ("18 dəq") və mətnə görə sıralamaq "9 dəq"-i
@@ -127,7 +416,7 @@ class ScreenDataBinder:
                         kind="Giriş Təsdiqi",
                         timestamp_text=_hhmm(record.requested_at),
                         waiting_text=f"{waited} dəq",
-                        is_late=waited >= LATE_QUEUE_MINUTES,
+                        is_late=waited >= late_after,
                     ),
                 )
             )
@@ -145,7 +434,7 @@ class ScreenDataBinder:
                         kind="Qayıdış Təsdiqi",
                         timestamp_text=_hhmm(request.requested_time),
                         waiting_text=f"{waited} dəq",
-                        is_late=waited >= LATE_QUEUE_MINUTES,
+                        is_late=waited >= late_after,
                     ),
                 )
             )
@@ -315,7 +604,7 @@ class ScreenDataBinder:
     def _fine_appeals(self, session: Session, screen: Any) -> None:
         appeals = session.fine_appeals.inbox(tenant_id=session.tenant_id, actor=self._actor)
         now = datetime.now(UTC)
-        # SLA həddi ROOT Control Center-dən gəlir (bölmə 3) — burada sabit
+        # SLA həddi ROOT İdarə Mərkəzindən gəlir (bölmə 3) — burada sabit
         # 72 yazmaq Root-un dəyişdirdiyi dəyəri sükutla yan keçərdi.
         key = SystemLimitKey.FINE_APPEAL_WINDOW_HOURS
         sla_hours = session.limits.get_int(session.tenant_id, key.value, int(DEFAULT_LIMITS[key]))
@@ -370,7 +659,141 @@ class ScreenDataBinder:
             ],
         )
 
+    def _sales_points(self, session: Session, screen: Any) -> None:
+        """Satış Xalları — İŞÇİNİN ÖZ balansı, tarixçəsi və kataloqu (bölmə 6).
+
+        ──────────────────────────────────────────────────────────────────────
+        SƏLAHİYYƏT DEYİL, SAHİBLİK
+        ──────────────────────────────────────────────────────────────────────
+        `SalesPointsUseCase.balance_for` səlahiyyət TƏLƏB ETMİR: işçinin öz
+        balansına baxması onun hüququdur (bax use case başlığı). Ona görə
+        burada `self._actor.id` işlədilir və "başqasının balansı" yolu
+        ÜMUMİYYƏTLƏ yoxdur — kimin baxdığı sualı struktur olaraq bağlanıb.
+
+        YAZI yolu (`appeal_requested`, `reward_requested`) burada QOŞULMUR:
+        onlar `points_ledger`-ə yazır və hər yazıdan sonra siyahı yenidən
+        oxunmalıdır, yəni öz kontrollerini tələb edir (CLAUDE.md bölmə 6).
+        """
+        balance = session.sales_points.balance_for(self._actor.id, tenant_id=session.tenant_id)
+        available = int(balance.available)
+
+        catalog = [
+            item
+            for _reward_id, item in session.sales_points.list_rewards_for_employee(
+                session.tenant_id
+            )
+        ]
+        # "Növbəti mükafat" = balansı hələ ÇATMAYAN ən ucuz mükafat. Hamısı
+        # əlçatandırsa ən BAHALI götürülür ki, ölçən 100%-də dolu görünsün —
+        # sıfır dəyər ölçəni "hədəf yoxdur" halında bölmə xətasına salardı.
+        out_of_reach = sorted(item.cost_points for item in catalog if item.cost_points > available)
+        next_cost = (
+            out_of_reach[0]
+            if out_of_reach
+            else max((item.cost_points for item in catalog), default=0)
+        )
+        screen.set_balance(
+            available,
+            monthly_delta=_monthly_points_delta(session, self._actor.id),
+            to_next_reward=max(0, next_cost - available),
+            next_reward_cost=next_cost,
+            rank_text=_points_rank_text(session, self._actor.id, period_start=balance.period.start),
+        )
+
+        # Tarixçə `points_ledger`-dən BİRBAŞA oxunur: `PointsEntry` aqreqatı
+        # `reason` MƏTNİNİ daşımır (o, yalnız "nə qədər xal qüvvədədir"
+        # sualına cavab verir), ekran isə səbəb sütunu göstərir.
+        rows = session.uow.connection.execute(
+            """
+            SELECT l.created_at, l.delta_points, l.reason, l.status,
+                   a.status AS appeal_status
+              FROM points_ledger l
+              LEFT JOIN points_appeals a ON a.ledger_id = l.id
+             WHERE l.tenant_id = %s AND l.employee_id = %s AND l.period_start = %s
+             ORDER BY l.created_at DESC
+             LIMIT 100
+            """,
+            (session.tenant_id, self._actor.id, balance.period.start),
+        ).fetchall()
+        screen.set_history(
+            [
+                {
+                    "date": f"{row['created_at']:%d.%m}" if row["created_at"] else "—",
+                    "reason": str(row["reason"] or "—"),
+                    "status": _points_status_text(row),
+                    "points": _points_text(row["delta_points"], reversed_=_is_reversed(row)),
+                }
+                for row in rows
+            ],
+            # `period=` — `SalesPointsScreen.set_history`-nin FAKTİKİ açar
+            # adıdır (`_fines`-dəki `period_text=` BAŞQA ekrandır). Səhv ad
+            # `TypeError` verərdi və `populate()` onu udardı: tarixçə canlı
+            # rejimdə həmişə boş qalardı.
+            period=_month_text(),
+        )
+        screen.set_catalog(
+            [{"name": item.name, "cost": str(item.cost_points)} for item in catalog],
+            balance=available,
+        )
+
     # ------------------------------ Qrup D/H --------------------------------- #
+
+    def _help(self, session: Session, screen: Any) -> None:
+        """Yardım Mərkəzi — mövzular GÖRÜNƏN modullara görə süzülür.
+
+        ──────────────────────────────────────────────────────────────────────
+        AÇARLAR TOGGLE CƏDVƏLİ İLƏ EYNİDİR
+        ──────────────────────────────────────────────────────────────────────
+        Süzgəc `FeatureModule` dəyərləri üzərində işləyir — `feature_toggles`
+        cədvəlinin və `shell/menu.py`-ın işlətdiyi EYNİ açarlar. Burada öz ad
+        məkanımızı qursaydıq (məs. `"fines"` ↔ `"FINE_MODULE"`), uyğunsuzluq
+        maketdə görünməz qalar və yalnız istehsalatda üzə çıxardı — layihədə
+        məhz bu qüsur olub (bax `menu.py` başlığı).
+
+        Toggle mənbəyi oxunmasa BÜTÜN mövzular göstərilir (fail-open): yardım
+        mətnini gizlətmək dəstək yükünü artırar, azaltmaz (bax
+        `HelpCenterScreen` başlığı) — bu, naviqasiyadakı `_enabled_modules`
+        ilə eyni istiqamətdir.
+        """
+        try:
+            enabled = frozenset(session.toggles.enabled_modules(session.tenant_id))
+        except Exception:
+            _error_log.exception("HELP_TOGGLES_LOAD_FAILED")
+            screen.set_visible_topics(None)
+            return
+
+        screen.set_visible_topics(
+            frozenset(
+                topic
+                for topic, module in HELP_TOPIC_MODULES.items()
+                if module is None or module in enabled
+            )
+        )
+
+    def _health(self, session: Session, screen: Any) -> None:
+        """Sistem Sağlamlığı — YALNIZ FAKTİKİ ölçülən göstəricilər (bölmə 6).
+
+        ──────────────────────────────────────────────────────────────────────
+        YENİ İŞ QAYDASI İCAD EDİLMİR
+        ──────────────────────────────────────────────────────────────────────
+        Bu ekranın öz use case-i YOXDUR və olmamalıdır: burada heç bir qərar
+        verilmir, mövcud mənbələr bir yerə yığılır — baza cavab müddəti,
+        `NtpVerifier` sürüşməsi, offline bufer sayğacı, `sync_conflicts` və
+        `v_erp_server_health`. Hər rəqəmin arxasında REAL ölçmə var.
+
+        ──────────────────────────────────────────────────────────────────────
+        ÖLÇÜLƏ BİLMƏYƏN GÖSTƏRİCİ GÖSTƏRİLMİR
+        ──────────────────────────────────────────────────────────────────────
+        Maketdə «Disk (server)» kartı var, lakin tətbiqdə server diskini
+        ölçən mənbə YOXDUR. Onu `0%` və ya "naməlum" ilə göstərmək monitorinq
+        ekranının ƏSAS məqsədini pozardı: burada göstərilən hər rəqəm etibarlı
+        olmalıdır. NTP sürüşməsi də ölçülməyibsə (`_NullNtp`) kart
+        ÜMUMİYYƏTLƏ qurulmur — `0.0 san` "saat dəqiqdir" kimi oxunardı.
+        """
+        screen.set_last_check(f"Son yoxlama: {_hhmm(datetime.now(UTC))}")
+        screen.set_metrics(_health_metrics(session, self._context))
+        screen.set_latencies(_health_latencies(session))
+        screen.set_alerts(_health_alerts(session, self._actor))
 
     def _audit(self, session: Session, screen: Any) -> None:
         page = session.audit_query.search(tenant_id=session.tenant_id, actor=self._actor)
@@ -415,6 +838,429 @@ class ScreenDataBinder:
 # --------------------------------------------------------------------------- #
 # Köməkçilər
 # --------------------------------------------------------------------------- #
+
+
+def late_threshold_minutes(session: Session) -> int:
+    """Növbə sətrinin "gecikib" sayıldığı hədd — CANLI limitdən hesablanır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ SABİT DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Hədd `VERIFICATION_TIMEOUT_MINUTES`-in YARISIDIR: operator eskalasiya baş
+    verməmişdən ƏVVƏL reaksiya verə bilsin. Bu münasibət sabit yazılsaydı
+    (22 = 45 / 2), yalnız yazıldığı gün doğru olardı — Root timeout-u 20
+    dəqiqəyə endirən kimi eskalasiya 20-də baş verər, xəbərdarlıq isə hələ
+    22-də görünərdi, yəni operator siqnalı GECİKMİŞ alardı.
+
+    Eyni naxış `_fine_appeals`-dakı `FINE_APPEAL_WINDOW_HOURS` üçün də
+    işlədilir — limit oxunuşunun tək düzgün forması budur.
+
+    Ən azı 1 dəqiqə qaytarılır: Root timeout-u 1 dəqiqəyə salsa, `45 // 2`
+    məntiqi 0 verərdi və HƏR sətir doğulan anda "gecikmiş" görünərdi — belə
+    bir siyahıda xəbərdarlıq rəngi heç nə demir.
+    """
+    key = SystemLimitKey.VERIFICATION_TIMEOUT_MINUTES
+    try:
+        timeout = int(
+            session.limits.get_int(session.tenant_id, key.value, int(DEFAULT_LIMITS[key]))
+        )
+    except Exception:
+        # Limit mənbəyi cavab vermədi — sabit FALLBACK işə düşür. Xəbərdarlığı
+        # tamamilə söndürmək (məs. `sys.maxsize`) növbəni "hər şey qaydasında"
+        # kimi göstərərdi, halbuki problem yalnız konfiqurasiya oxunuşundadır.
+        _error_log.warning(
+            "QUEUE_LATE_THRESHOLD_FALLBACK",
+            extra={"minutes": LATE_QUEUE_MINUTES, "limit_key": key.value},
+        )
+        return LATE_QUEUE_MINUTES
+    return max(1, timeout // 2)
+
+
+def _next_month(month_start: date) -> date:
+    """Ayın SONU yarı-açıq aralıq kimi — `< next_month`.
+
+    `<= ayın son günü` yazsaydıq, `TIMESTAMPTZ` sütunlarda həmin günün
+    saatları kəsilərdi; `DATE` və `TIMESTAMPTZ` sütunlar eyni sorğuda
+    işlədildiyi üçün TƏK forma seçilib.
+    """
+    return (
+        date(month_start.year + 1, 1, 1)
+        if month_start.month == 12  # noqa: PLR2004 — dekabr ilin son ayıdır
+        else date(month_start.year, month_start.month + 1, 1)
+    )
+
+
+def _previous_month(month_start: date) -> date:
+    return (
+        date(month_start.year - 1, 12, 1)
+        if month_start.month == 1
+        else date(month_start.year, month_start.month - 1, 1)
+    )
+
+
+def _earliest(*moments: Any) -> datetime | None:
+    """Verilənlərdən ən KÖHNƏSİ — hamısı `None`-dursa `None`."""
+    values = [moment for moment in moments if isinstance(moment, datetime)]
+    return min(values) if values else None
+
+
+def _fine_month_totals(
+    session: Session, *, month_start: date, next_month: date, previous_month: date
+) -> tuple[str, str]:
+    """(bu ayın cəmi, keçən aya nisbətən dəyişmə mətni).
+
+    Faiz KEÇƏN AY sıfır olduqda hesablanmır — "+∞%" mənasız göstəricidir və
+    ilk ay hər quraşdırmada belədir. Həmin halda müqayisə əvəzinə vəziyyət
+    yazılır ("keçən ay cərimə olmayıb").
+    """
+    row = session.uow.connection.execute(
+        """
+        SELECT
+          (SELECT COALESCE(SUM(amount), 0) FROM fines
+            WHERE tenant_id = %s AND fine_date >= %s AND fine_date < %s) AS current_total,
+          (SELECT COALESCE(SUM(amount), 0) FROM fines
+            WHERE tenant_id = %s AND fine_date >= %s AND fine_date < %s) AS previous_total
+        """,
+        (
+            session.tenant_id,
+            month_start,
+            next_month,
+            session.tenant_id,
+            previous_month,
+            month_start,
+        ),
+    ).fetchone()
+    current = float((row or {}).get("current_total") or 0)
+    previous = float((row or {}).get("previous_total") or 0)
+
+    total_text = f"{current:,.0f} ₼".replace(",", " ")
+    if previous <= 0:
+        return (total_text, "keçən ay cərimə olmayıb")
+    change = (current - previous) / previous * 100
+    return (total_text, f"keçən aya nisbətən {change:+.0f}%")
+
+
+def _sync_delay_text(seconds: Any) -> str:
+    """Sinxronizasiya gecikməsi — saniyə/dəqiqə/saat.
+
+    `None` "heç vaxt sinxronlaşmayıb" deməkdir və `0 san` kimi göstərilmir:
+    sıfır gecikmə ideal vəziyyətdir, məlumatsızlıq isə problem əlamətidir.
+    """
+    if seconds is None:
+        return "sinxronlaşmayıb"
+    value = int(seconds)
+    if value < 60:  # noqa: PLR2004 — bir dəqiqə
+        return f"{value} san"
+    if value < 3600:  # noqa: PLR2004 — bir saat
+        return f"{value // 60} dəq"
+    return f"{value // 3600} saat"
+
+
+def _points_text(delta: Any, *, reversed_: bool = False) -> str:
+    """Xal sətri — işarə ilə BİRLİKDƏ (rəng tək daşıyıcı deyil).
+
+    Geri alınmış sətir MƏNFİ işarə ilə göstərilir: ledger-də dəyər müsbət
+    qalır (`points_ledger` sətri silinmir, yalnız `REVERSED` olur), lakin
+    işçinin balansına təsiri çıxılmadır — ekranda müsbət göstərmək "xal
+    hələ məndədir" deyə oxunardı.
+    """
+    value = int(delta or 0)
+    sign = "−" if reversed_ else "+"
+    return f"{sign}{abs(value)}"
+
+
+def _is_reversed(row: Any) -> bool:
+    return str(row["status"]) == "REVERSED"
+
+
+def _points_status_text(row: Any) -> str:
+    """Ekranın `_HISTORY_TONES` açarları: «Təsdiqli» / «Gözləyir» / «Geri alınıb».
+
+    Sıra vacibdir: geri alınmış sətrin açıq etirazı ola bilməz, lakin
+    etirazı GÖZLƏYƏN sətir hələ qüvvədədir — ona görə `REVERSED` əvvəl
+    yoxlanılır.
+    """
+    if _is_reversed(row):
+        return "Geri alınıb"
+    if str(row["appeal_status"] or "") == "PENDING":
+        return "Gözləyir"
+    return "Təsdiqli"
+
+
+def _monthly_points_delta(session: Session, employee_id: Any) -> int:
+    """Bu TƏQVİM ayında qazanılan xal — kartdakı «Bu ay +N xal».
+
+    Dövr (6 aylıq) deyil, AY götürülür: kart aylıq tempi göstərir, balans
+    isə onsuz da dövrə görə hesablanır (`balance_for`).
+    """
+    today = datetime.now(UTC).date()
+    month_start = today.replace(day=1)
+    row = session.uow.connection.execute(
+        """
+        SELECT COALESCE(SUM(delta_points), 0) AS total
+          FROM points_ledger
+         WHERE tenant_id = %s AND employee_id = %s
+           AND status <> 'REVERSED'
+           AND created_at >= %s AND created_at < %s
+        """,
+        (session.tenant_id, employee_id, month_start, _next_month(month_start)),
+    ).fetchone()
+    return int((row or {}).get("total") or 0)
+
+
+def _points_rank_text(session: Session, employee_id: Any, *, period_start: date) -> str:
+    """«N nəfər arasında K-cı» — İŞÇİNİN ÖZ FİLİALI üzrə.
+
+    Filial daxilində müqayisə edilir, tenant miqyasında yox: 21 filialda
+    235 nəfər arasında sıra işçi üçün mənasız rəqəmdir və satış həcmi
+    filialdan filiala fərqlənir. Sətir `sales_transactions.store_id`
+    üzərindən bağlanır, çünki xal həmişə bir satışdan doğur.
+    """
+    row = session.uow.connection.execute(
+        """
+        WITH totals AS (
+            SELECT e.id, SUM(l.delta_points) AS total
+              FROM points_ledger l
+              JOIN employees e ON e.id = l.employee_id
+             WHERE l.tenant_id = %s AND l.period_start = %s AND l.status <> 'REVERSED'
+               AND e.store_id = (SELECT store_id FROM employees WHERE id = %s)
+             GROUP BY e.id
+        )
+        SELECT (SELECT count(*) FROM totals) AS people,
+               (SELECT count(*) FROM totals t
+                 WHERE t.total > COALESCE((SELECT total FROM totals WHERE id = %s), 0)) AS ahead
+        """,
+        (session.tenant_id, period_start, employee_id, employee_id),
+    ).fetchone()
+    people = int((row or {}).get("people") or 0)
+    if people == 0:
+        return "Reytinq hələ formalaşmayıb"
+    return f"{people} nəfər arasında {int((row or {}).get('ahead') or 0) + 1}-ci"
+
+
+#: Baza cavab müddətinin "norma" həddi (millisaniyə) — kartın tonu bundan
+#: asılıdır. Bu, İŞ QAYDASI DEYİL və `system_limits`-ə aid deyil: heç bir
+#: əməliyyat bloklanmır, yalnız rəng seçilir. Dəyər maketdəki «Norma: < 50 ms»
+#: mətnindən götürülüb ki, ekranın izahı ilə rəngi bir-birini təkzib etməsin.
+DB_PING_WARNING_MS: Final = 50
+DB_PING_DANGER_MS: Final = 250
+
+#: NTP sürüşməsinin xəbərdarlıq həddi — `system_limits.NTP_MAX_DRIFT_SECONDS`
+#: oxuna bilmədikdə işlənən FALLBACK (həqiqi mənbə Root-dadır, bölmə 3).
+NTP_DRIFT_FALLBACK_SECONDS: Final = 60
+
+
+def _health_metrics(session: Session, context: Any) -> list[tuple[str, str, str, str]]:
+    """Rəqəm kartları — `(ad, dəyər, izah, ton)`.
+
+    Siyahı DİNAMİKDİR: ölçülə bilməyən göstərici sadəcə əlavə olunmur (bax
+    `_health` docstring-i). Ona görə ekranda 2 kart da görünə bilər, 4 da.
+    """
+    metrics: list[tuple[str, str, str, str]] = []
+    metrics.append(_db_ping_metric(session))
+
+    drift = context.ntp_drift_seconds()
+    if drift is not None:
+        key = SystemLimitKey.NTP_MAX_DRIFT_SECONDS
+        try:
+            limit = int(
+                session.limits.get_int(session.tenant_id, key.value, int(DEFAULT_LIMITS[key]))
+            )
+        except Exception:
+            limit = NTP_DRIFT_FALLBACK_SECONDS
+        metrics.append(
+            (
+                "NTP sapması",
+                f"{drift:+.1f} san",
+                f"Hədd: ±{limit} san",
+                "success" if abs(drift) <= limit else "danger",
+            )
+        )
+
+    pending = _offline_pending(session, context)
+    if pending is not None:
+        metrics.append(
+            (
+                "Sinxronlaşmamış yazı",
+                str(pending),
+                "Offline bufer növbəsi",
+                "success" if pending == 0 else "warning",
+            )
+        )
+
+    conflicts = _open_conflicts(session)
+    metrics.append(
+        (
+            "Sync konflikti",
+            str(conflicts),
+            "Həll gözləyən sətir",
+            "success" if conflicts == 0 else "warning",
+        )
+    )
+    return metrics
+
+
+def _db_ping_metric(session: Session) -> tuple[str, str, str, str]:
+    """Bazanın cavab müddəti — REAL ölçmə (`SELECT 1` gediş-gəlişi).
+
+    Sabit dəyər və ya "OK" yazmaq mənasız olardı: bu kartın yeganə məqsədi
+    bağlantının nə qədər ləng olduğunu göstərməkdir. Ölçmə sorğunun ÖZÜNÜ
+    əhatə edir (şəbəkə + parse + cavab), yəni istifadəçinin hiss etdiyi
+    gecikmə ilə eyni cinsdəndir.
+    """
+    import time  # noqa: PLC0415
+
+    started = time.monotonic()
+    session.uow.connection.execute("SELECT 1").fetchone()
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+
+    if elapsed_ms >= DB_PING_DANGER_MS:
+        tone = "danger"
+    elif elapsed_ms >= DB_PING_WARNING_MS:
+        tone = "warning"
+    else:
+        tone = "success"
+    return ("Baza (DB Ping)", f"{elapsed_ms} ms", f"Norma: < {DB_PING_WARNING_MS} ms", tone)
+
+
+def _offline_pending(session: Session, context: Any) -> int | None:
+    """Offline buferdəki gözləyən yazı sayı — bufer açıla bilmirsə `None`.
+
+    `None` halında kart GÖSTƏRİLMİR: `0` yazmaq "hər şey sinxrondur" demək
+    olardı, halbuki əsl vəziyyət "oxuya bilmədim"dir (bax `_LazyBufferDrain`).
+    """
+    try:
+        return int(context.offline_drain().pending_count(session.tenant_id))
+    except Exception:
+        _error_log.warning("HEALTH_OFFLINE_BUFFER_UNREADABLE")
+        return None
+
+
+def _open_conflicts(session: Session) -> int:
+    """Həll gözləyən sinxronizasiya konfliktləri (`sync_conflicts`).
+
+    Use case-in `open_count()` metodu `can_view_employee_reports` tələb edir;
+    burada REPO birbaşa oxunur, çünki ekran onsuz da `can_view_system_health`
+    flag-i ilə açılır (bax `menu.py`) və sağlamlıq sayğacı üçün İKİNCİ,
+    əlaqəsiz bir flag tələb etmək istifadəçini izahsız boş kartla qoyardı.
+    Sayğac heç bir konflikt MƏZMUNUNU açmır — yalnız ədəddir.
+    """
+    try:
+        return int(session.uow.repository("sync_conflicts").open_count(session.tenant_id))
+    except Exception:
+        _error_log.exception("HEALTH_CONFLICT_COUNT_FAILED")
+        return 0
+
+
+def _health_latencies(session: Session) -> list[tuple[str, str, str]]:
+    """1C serverlərinin sinxron gecikməsi — `v_erp_server_health` görünüşü.
+
+    `INACTIVE` sətirlər DƏ göstərilir (dashboard-dan fərqli olaraq): bu ekran
+    diaqnostika üçündür və "server niyə məlumat göndərmir" sualının cavabı
+    çox vaxt məhz "deaktiv edilib"dir.
+    """
+    rows = session.uow.connection.execute(
+        """
+        SELECT server_name, health, sync_delay_seconds
+          FROM v_erp_server_health
+         WHERE tenant_id = %s
+         ORDER BY server_name
+         LIMIT 20
+        """,
+        (session.tenant_id,),
+    ).fetchall()
+    return [
+        (
+            str(row["server_name"]),
+            "deaktiv"
+            if str(row["health"]) == "INACTIVE"
+            else _sync_delay_text(row["sync_delay_seconds"]),
+            _HEALTH_TONES.get(str(row["health"]), "warning"),
+        )
+        for row in rows
+    ]
+
+
+def _health_alerts(session: Session, actor: Any) -> list[tuple[str, str, str]]:
+    """Aktiv xəbərdarlıqlar — `(mətn, vaxt, ton)`.
+
+    Üç REAL mənbə birləşdirilir: problemli 1C serverləri (diaqnoz mətni
+    domendədir — `ServerHealthRow.diagnosis`), oxunmamış KRİTİK bildirişlər
+    və açıq sinxronizasiya konfliktləri. Yeni xəbərdarlıq NÖVÜ icad edilmir.
+    """
+    alerts: list[tuple[str, str, str]] = []
+    now = datetime.now(UTC)
+
+    rows = session.uow.connection.execute(
+        """
+        SELECT server_name, health, last_error_at, consecutive_failures, mapped_stores
+          FROM v_erp_server_health
+         WHERE tenant_id = %s AND health IN ('DEGRADED', 'STALE', 'NEVER_SYNCED')
+         ORDER BY server_name
+         LIMIT 10
+        """,
+        (session.tenant_id,),
+    ).fetchall()
+    for row in rows:
+        alerts.append(
+            (
+                f"{row['server_name']}: {_erp_diagnosis(row)}",
+                _hhmm(row["last_error_at"]),
+                "danger" if str(row["health"]) == "NEVER_SYNCED" else "warning",
+            )
+        )
+
+    for notification in _critical_notifications(session, actor):
+        alerts.append(
+            (
+                notification.title_az,
+                _hhmm(notification.created_at),
+                "danger" if notification.is_critical else "warning",
+            )
+        )
+
+    conflicts = _open_conflicts(session)
+    if conflicts:
+        alerts.append(
+            (
+                f"{conflicts} sinxronizasiya konflikti həll gözləyir — "
+                "eyni qeyd iki yerdə fərqli dəyişdirilib.",
+                _hhmm(now),
+                "warning",
+            )
+        )
+    return alerts
+
+
+def _erp_diagnosis(row: Any) -> str:
+    """Sətri domendəki diaqnoz mətninə çevirir.
+
+    Mətn BURADA yazılmır — `ServerHealthRow.diagnosis` onu texniki-olmayan
+    dildə verir (bölmə 7 tələbi) və eyni mətn «ERP Serverləri» ekranında da
+    görünür. İki yerdə iki fərqli izah istifadəçini çaşdırardı.
+    """
+    from src.infrastructure.erp.health import ServerHealth, ServerHealthRow  # noqa: PLC0415
+
+    return ServerHealthRow(
+        server_id="",
+        server_name=str(row["server_name"]),
+        host="",
+        health=ServerHealth(str(row["health"])),
+        status="",
+        consecutive_failures=int(row["consecutive_failures"] or 0),
+        mapped_stores=int(row["mapped_stores"] or 0),
+        sync_interval_seconds=300,
+    ).diagnosis
+
+
+def _critical_notifications(session: Session, actor: Any) -> list[Any]:
+    """Oxunmamış KRİTİK bildirişlər — sistem hadisələrinin izi (bölmə 7)."""
+    try:
+        rows = session.notifications.list_for_recipient(actor.id)
+    except Exception:
+        _error_log.exception("HEALTH_NOTIFICATIONS_FAILED")
+        return []
+    return [row for row in rows if row.is_critical and row.is_unread][:5]
 
 
 def _employee_name(session: Session, employee_id: Any) -> str:
@@ -509,4 +1355,10 @@ def _position_name(session: Session, employee_id: Any) -> str:
     return str(employee.position.name_az) if employee is not None else "—"
 
 
-__all__ = ["LATE_QUEUE_MINUTES", "MATRIX_WINDOW_DAYS", "ScreenDataBinder"]
+__all__ = [
+    "HELP_TOPIC_MODULES",
+    "LATE_QUEUE_MINUTES",
+    "MATRIX_WINDOW_DAYS",
+    "ScreenDataBinder",
+    "late_threshold_minutes",
+]

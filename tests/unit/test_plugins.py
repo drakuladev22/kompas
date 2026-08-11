@@ -364,3 +364,45 @@ def test_canonical_payload_is_stable(plugin_file: Path) -> None:
 
     assert first == second
     assert json.loads(first)["file_sha256"] == digest
+
+
+# --------------------------------------------------------------------------- #
+# Mühitdən qurulan etibar reyestri (GUI bağlantısı — `composition.py`)
+# --------------------------------------------------------------------------- #
+
+
+def test_trust_store_from_env_is_empty_without_configuration() -> None:
+    """Dəyişən yoxdursa reyestr BOŞDUR — yəni heç bir plugin yüklənmir.
+
+    Fail-closed istiqamət: plugin host prosesinə KOD əlavə edir, ona görə
+    "hələ konfiqurasiya etməmişik" vəziyyəti sükutla "hər şeyə icazə var"a
+    çevrilməməlidir.
+    """
+    from src.infrastructure.plugins import trust_store_from_env
+
+    assert trust_store_from_env(environment={}).is_empty is True
+
+
+def test_trust_store_from_env_parses_publisher_pairs() -> None:
+    from src.infrastructure.plugins import TRUSTED_PUBLISHERS_ENV, trust_store_from_env
+
+    key = Ed25519PrivateKey.generate().public_key().public_bytes_raw().hex()
+    store = trust_store_from_env(environment={TRUSTED_PUBLISHERS_ENV: f"KompasOS Rəsmi:{key}"})
+
+    assert store.publisher_names == ("KompasOS Rəsmi",)
+
+
+def test_trust_store_skips_broken_entries_without_raising() -> None:
+    """Bir naşirin səhv açarı tətbiqin işə düşməsini DAYANDIRMAMALIDIR.
+
+    Nəticə onsuz da fail-closed istiqamətdədir — həmin naşirin plugin-ləri
+    yüklənmir, digərləri isə işləyir.
+    """
+    from src.infrastructure.plugins import TRUSTED_PUBLISHERS_ENV, trust_store_from_env
+
+    key = Ed25519PrivateKey.generate().public_key().public_bytes_raw().hex()
+    store = trust_store_from_env(
+        environment={TRUSTED_PUBLISHERS_ENV: f"qırıq-sətir,Naşir:zzz,Yaxşı:{key}"}
+    )
+
+    assert store.publisher_names == ("Yaxşı",)

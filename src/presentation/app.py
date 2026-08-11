@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from src.presentation.controllers.auth import AuthController
     from src.presentation.controllers.fine_entry import FineEntryController
     from src.presentation.controllers.kiosk import KioskController, KioskOutcome
+    from src.presentation.controllers.sales_review import SalesReviewController
     from src.presentation.controllers.screen_data import ScreenDataBinder
     from src.presentation.widgets.worker_status import WorkerStatus
 
@@ -129,6 +130,9 @@ class KompasApplication:
         self._binder: ScreenDataBinder | None = None
         #: Cərimə formasının yazı yolu — dropdown-ları da bu verir.
         self._fine_entry: FineEntryController | None = None
+        #: «Şübhəli Satışlar» növbəsi — işçi açılan siyahısını O verir, ona
+        #: görə ekran QURULMAZDAN ƏVVƏL lazımdır (bax `_register_screens`).
+        self._sales_review: SalesReviewController | None = None
         #: Sübut şəkillərini arxa planda Drive-a köçürən taymer.
         self._upload_timer: QTimer | None = None
 
@@ -308,12 +312,19 @@ class KompasApplication:
             from src.presentation.controllers.fine_entry import (  # noqa: PLC0415
                 FineEntryController,
             )
+            from src.presentation.controllers.sales_review import (  # noqa: PLC0415
+                SalesReviewController,
+            )
             from src.presentation.controllers.screen_data import (  # noqa: PLC0415
                 ScreenDataBinder,
             )
 
             self._binder = ScreenDataBinder(self._context, employee)
             self._fine_entry = FineEntryController(self._context, employee)
+            # Növbə kontrolleri BURADA qurulur, çünki ekranın açılan siyahısı
+            # (işçi adları) KONSTRUKTORA lazımdır — ekran qurulandan sonra
+            # onu doldurmaq mümkün deyil.
+            self._sales_review = SalesReviewController(self._context, employee)
             self._start_upload_timer()
         shell = AdminShell(
             theme=self._theme,
@@ -445,6 +456,260 @@ class KompasApplication:
             return
         DriveConnectionController(self._context, self._current_employee).attach(screen)
 
+    def _attach_catalog_admin(self, key: str, screen: QWidget) -> None:
+        """Üç kataloq ekranını öz use case-inə bağlayır (bölmə 4).
+
+        Ekran sinfi ÜÇÜ üçün ORTAQDIR (`group_h.CatalogScreen`), ona görə
+        `isinstance` hansı kataloq olduğunu AYIRD EDƏ BİLMİR — açar açıq
+        şəkildə ötürülür. Bu, `make(key, ...)`-dəki eyni açardır, yəni maket
+        (`preview_screens`) və canlı yol eyni ad məkanını işlədir.
+
+        Kontrollerə istinad SAXLANMIR: o, siqnallara bağladığı `lambda`-ların
+        bağlamasında yaşayır və ekranla birlikdə ölür (eyni naxış
+        `_attach_root_control`-dadır).
+        """
+        from src.presentation.controllers.catalog_admin import (  # noqa: PLC0415
+            CatalogAdminController,
+        )
+        from src.presentation.screens.group_h import CatalogScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, CatalogScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        CatalogAdminController(self._context, self._current_employee, key=key).attach(screen)
+
+    def _attach_write_controller(self, key: str, screen: QWidget) -> None:
+        """Ekran sinfinə görə YAZI kontrollerini qoşur.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ CƏDVƏL, NİYƏ `elif` ZƏNCİRİ DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Faza 5/6-da bağlanan ekranların sayı 12-ni keçdi və `elif` zənciri həm
+        oxunmaz, həm də hər yeni ekranda bir az daha uzun olurdu. Cədvəl eyni
+        SIRA semantikasını saxlayır (ilk uyğunluq qazanır — alt-siniflər üçün
+        vacibdir), lakin yeni sətir əlavə etmək bir sətirlik dəyişiklikdir.
+
+        `key` YALNIZ kataloqlara lazımdır: üç kataloq EYNİ sinifdəndir
+        (`group_h.CatalogScreen`) və `isinstance` hansı olduğunu ayırd edə
+        bilmir (bax `controllers/catalog_admin.py` başlığı).
+        """
+        from src.presentation.screens import (  # noqa: PLC0415
+            group_b,
+            group_c,
+            group_d,
+            group_f,
+            group_g,
+            group_h,
+            group_i,
+        )
+
+        handlers: tuple[tuple[type[QWidget], Callable[[QWidget], None]], ...] = (
+            # Ayarlar ekranı tema seçimini örtüyə bağlayır — bu, önizləmə
+            # məzmunu deyil, real davranışdır və hər iki rejimdə lazımdır.
+            (group_d.SettingsScreen, self._attach_settings),
+            # ROOT paneli həm oxuyur, həm yazır (limit, modul açarı, yeni flag).
+            (group_d.RootControlScreen, self._attach_root_control),
+            (group_d.DriveConnectionScreen, self._attach_drive_connection),
+            # Cərimə formasının və növbənin YAZI yolları (sübut yükləməsi,
+            # manual vaxt düzəlişi) — hər ikisi ROOT limitlərini işlədir.
+            (group_b.FineEntryScreen, self._attach_fine_entry),
+            (group_b.OperatorQueueScreen, self._attach_camera_queue),
+            (group_h.CatalogScreen, lambda widget: self._attach_catalog_admin(key, widget)),
+            (group_h.HelpCenterScreen, self._attach_help_center),
+            # Faza 5/6 yazı yolları — hər biri öz use case-inə bağlanır.
+            (group_c.PermissionMatrixScreen, self._attach_permission_matrix),
+            (group_f.UnassignedSalesScreen, self._attach_sales_review),
+            (group_i.PluginScreen, self._attach_plugin_admin),
+            (group_i.DashboardBuilderScreen, self._attach_dashboard_builder),
+            (group_g.ProfileScreen, self._attach_profile),
+            # Faza 3 yekunu: ERP, ehtiyat nüsxə, baza keçidi və diaqnostika.
+            (group_d.ErpServersScreen, self._attach_erp_servers),
+            (group_d.BackupScreen, self._attach_backups),
+            (group_i.InfrastructureScreen, self._attach_infrastructure),
+            (group_d.HealthScreen, self._attach_health),
+        )
+        for screen_type, handler in handlers:
+            if isinstance(screen, screen_type):
+                handler(screen)
+                return
+
+    def _attach_settings(self, screen: QWidget) -> None:
+        """Ayarlar ekranındakı tema seçimi — hər iki rejimdə qoşulur (bölmə 9)."""
+        from src.presentation.screens.group_d import SettingsScreen  # noqa: PLC0415
+
+        if not isinstance(screen, SettingsScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        screen.select_theme(self._theme.preference.value)
+        screen.theme_selected.connect(self._on_theme_selected)
+
+    def _attach_profile(self, screen: QWidget) -> None:
+        """Profil ekranını canlı hesab məlumatına bağlayır (bölmə 2, 3).
+
+        `username`/`email` sahələri ekranda QƏSDƏN söndürülüb və kontroller
+        onları yazı yoluna BURAXMIR (bax `controllers/profile.py` başlığı).
+        """
+        from src.presentation.controllers.profile import ProfileController  # noqa: PLC0415
+        from src.presentation.screens.group_g import ProfileScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, ProfileScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        ProfileController(self._context, self._current_employee).attach(screen)
+
+    def _attach_plugin_admin(self, screen: QWidget) -> None:
+        """Plugin ekranını `PluginManagementUseCase`-ə bağlayır (bölmə 1)."""
+        from src.presentation.controllers.plugin_admin import (  # noqa: PLC0415
+            PluginAdminController,
+        )
+        from src.presentation.screens.group_i import PluginScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, PluginScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        PluginAdminController(self._context, self._current_employee).attach(screen)
+
+    def _attach_dashboard_builder(self, screen: QWidget) -> None:
+        """Dashboard qurucusunu `DashboardLayoutUseCase`-ə bağlayır (bölmə 6)."""
+        from src.presentation.controllers.dashboard_builder import (  # noqa: PLC0415
+            DashboardBuilderController,
+        )
+        from src.presentation.screens.group_i import (  # noqa: PLC0415
+            DashboardBuilderScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, DashboardBuilderScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        DashboardBuilderController(self._context, self._current_employee).attach(screen)
+
+    def _attach_sales_review(self, screen: QWidget) -> None:
+        """«Şübhəli Satışlar» növbəsini `SalesReviewQueueUseCase`-ə bağlayır."""
+        from src.presentation.controllers.sales_review import (  # noqa: PLC0415
+            SalesReviewController,
+        )
+        from src.presentation.screens.group_f import UnassignedSalesScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, UnassignedSalesScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        controller = self._sales_review or SalesReviewController(
+            self._context, self._current_employee
+        )
+        controller.attach(screen)
+
+    def _attach_permission_matrix(self, screen: QWidget) -> None:
+        """İcazə Matrisini `PositionManagementUseCase`-ə bağlayır (bölmə 3).
+
+        Bütün qoruyucu qaydalar (Strict Hierarchy, Self-Escalation, hardlock,
+        anti-fraud) use case-in İÇİNDƏDİR — kontroller onları təkrarlamır,
+        yalnız istisnanı istifadəçiyə izah edir.
+        """
+        from src.presentation.controllers.permission_matrix import (  # noqa: PLC0415
+            PermissionMatrixController,
+        )
+        from src.presentation.screens.group_c import PermissionMatrixScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, PermissionMatrixScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        PermissionMatrixController(self._context, self._current_employee).attach(screen)
+
+    def _attach_erp_servers(self, screen: QWidget) -> None:
+        """1C server panelini `ErpConnectionWizardUseCase`-ə bağlayır (bölmə 7).
+
+        Kredensiallar nə ekrana, nə jurnala düşür (SEC-013) — audit görünüşü
+        domendəki `auditable()`-dədir (bax `controllers/erp_servers.py`).
+        """
+        from src.presentation.controllers.erp_servers import (  # noqa: PLC0415
+            ErpServersController,
+        )
+        from src.presentation.screens.group_d import ErpServersScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, ErpServersScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        ErpServersController(self._context, self._current_employee).attach(screen)
+
+    def _attach_backups(self, screen: QWidget) -> None:
+        """Backup ekranını `BackupAccessUseCase`-ə bağlayır (bölmə 7).
+
+        Bərpa İKİ təsdiq qapısından keçir və heç biri yan keçilmir (bax
+        `controllers/backup_admin.py` başlığı).
+        """
+        from src.presentation.controllers.backup_admin import (  # noqa: PLC0415
+            BackupAdminController,
+        )
+        from src.presentation.screens.group_d import BackupScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, BackupScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        BackupAdminController(self._context, self._current_employee).attach(screen)
+
+    def _attach_infrastructure(self, screen: QWidget) -> None:
+        """Baza keçidi panelini `DatabaseSwitchUseCase`-ə bağlayır (bölmə 2)."""
+        from src.presentation.controllers.infrastructure import (  # noqa: PLC0415
+            InfrastructureController,
+        )
+        from src.presentation.screens.group_i import (  # noqa: PLC0415
+            InfrastructureScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, InfrastructureScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        InfrastructureController(self._context, self._current_employee).attach(screen)
+
+    def _attach_health(self, screen: QWidget) -> None:
+        """«Yenidən Yoxla» düyməsini canlı oxumaya bağlayır (bölmə 6).
+
+        Sistem Sağlamlığı əsasən OXU ekranıdır və məzmunu `screen_data._health`
+        doldurur; burada yalnız yenidən-oxuma tetikləyicisi qoşulur. Ayrıca
+        kontroller yaratmaq bir sətirlik yenidən-oxuma üçün lazımsız qat
+        olardı (eyni qərar «Yardım Mərkəzi»ndə də verilib).
+        """
+        from src.presentation.screens.group_d import HealthScreen  # noqa: PLC0415
+
+        if self._preview or self._binder is None:
+            return
+        if not isinstance(screen, HealthScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        binder = self._binder
+        screen.recheck_requested.connect(lambda: binder.populate("health", screen))
+
+    def _attach_help_center(self, screen: QWidget) -> None:
+        """«Dəstəyə yaz» düyməsini MÖVCUD üzən dəstək panelinə bağlayır.
+
+        Yeni bir yazı yolu AÇILMIR: bilet yaratma axını onsuz da
+        `SupportChatWidget`-dədir və o, `can_contact_support` yoxlanışından
+        keçib qurulur (`_install_overlays`). Düymə həmin paneli açır — iki
+        ayrı göndərmə yolu olsaydı, biri düzəldiləndə digəri arxada qalardı.
+
+        Panel qurulmayıbsa (icazə yoxdur) düymə də EKRANDA YOXDUR — ona görə
+        burada `None` halı sükutla keçilir, bu, əlçatmaz vəziyyətdir.
+        """
+        from src.presentation.screens.group_h import HelpCenterScreen  # noqa: PLC0415
+
+        if not isinstance(screen, HelpCenterScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        screen.support_requested.connect(self._open_support_panel)
+
+    def _open_support_panel(self) -> None:
+        support = self._support
+        if support is None or not hasattr(support, "open_panel"):
+            return
+        support.open_panel()
+        support.raise_()
+
     def _attach_root_control(self, screen: QWidget) -> None:
         """ROOT panelini `RootControlUseCase`-ə bağlayır (bölmə 3, bənd 1-4).
 
@@ -504,24 +769,7 @@ class KompasApplication:
                 elif self._binder is not None:
                     # İstehsalat: eyni imza, canlı məlumat (bax `screen_data`).
                     self._binder.populate(key, screen)
-                # Ayarlar ekranı tema seçimini örtüyə bağlayır — bu, önizləmə
-                # məzmunu deyil, real davranışdır və hər iki rejimdə lazımdır.
-                if isinstance(screen, group_d.SettingsScreen):
-                    screen.select_theme(self._theme.preference.value)
-                    screen.theme_selected.connect(self._on_theme_selected)
-                # ROOT paneli TƏK ekrandır ki, həm oxuyur, həm yazır (limit,
-                # modul açarı, yeni flag) — ona görə `_binder` yerinə öz
-                # kontrolleri var (bax `controllers/root_control.py`).
-                elif isinstance(screen, group_d.RootControlScreen):
-                    self._attach_root_control(screen)
-                elif isinstance(screen, group_d.DriveConnectionScreen):
-                    self._attach_drive_connection(screen)
-                # Cərimə formasının və növbənin YAZI yolları (sübut yükləməsi,
-                # manual vaxt düzəlişi) — hər ikisi ROOT limitlərini işlədir.
-                elif isinstance(screen, group_b.FineEntryScreen):
-                    self._attach_fine_entry(screen)
-                elif isinstance(screen, group_b.OperatorQueueScreen):
-                    self._attach_camera_queue(screen)
+                self._attach_write_controller(key, screen)
                 return screen
 
             return build
@@ -532,6 +780,10 @@ class KompasApplication:
         stores: list[str] = []
         fine_types: list[str] = []
         queue_stores: list[str] = []
+        #: «Şübhəli Satışlar» AYRI siyahı işlədir: cərimə siyahısı operatorun
+        #: ÖZ filialları ilə məhduddur, satış uyğunlaşması isə şirkət
+        #: miqyasındadır (bax `SalesReviewController.employee_names`).
+        sales_names: list[str] = []
         if self._preview:
             from src.presentation import preview_data  # noqa: PLC0415
 
@@ -539,11 +791,15 @@ class KompasApplication:
             stores = list(preview_data.STORES)
             fine_types = list(preview_data.FINE_TYPES)
             queue_stores = list(preview_data.STORES[:2])
-        elif self._fine_entry is not None:
-            # Canlı rejim: dropdown-lar operatorun ÖZ filiallarından qurulur
-            # (bax `FineEntryController.options` — fail-safe boş siyahı).
-            fine_types, stores, names = self._fine_entry.options()
-            queue_stores = stores
+            sales_names = names
+        else:
+            if self._fine_entry is not None:
+                # Canlı rejim: dropdown-lar operatorun ÖZ filiallarından qurulur
+                # (bax `FineEntryController.options` — fail-safe boş siyahı).
+                fine_types, stores, names = self._fine_entry.options()
+                queue_stores = stores
+            if self._sales_review is not None:
+                sales_names = self._sales_review.employee_names()
 
         factories: dict[str, Callable[[], QWidget]] = {
             "dashboard": lambda: group_c.DashboardScreen(theme),
@@ -557,7 +813,7 @@ class KompasApplication:
             "fine_appeals": lambda: group_f.FineAppealInboxScreen(theme),
             "tasks": lambda: group_f.TasksScreen(theme),
             "sales_points": lambda: group_f.SalesPointsScreen(theme),
-            "unassigned_sales": lambda: group_f.UnassignedSalesScreen(theme, employees=names),
+            "unassigned_sales": lambda: group_f.UnassignedSalesScreen(theme, employees=sales_names),
             "users": lambda: group_c.UsersScreen(theme),
             "permissions": lambda: group_c.PermissionMatrixScreen(theme),
             "erp_servers": lambda: group_d.ErpServersScreen(theme),
@@ -573,7 +829,12 @@ class KompasApplication:
             "work_modes": lambda: group_h.work_modes_screen(theme),
             "fine_types": lambda: group_h.fine_types_screen(theme),
             "leave_types": lambda: group_h.leave_types_screen(theme),
-            "help": lambda: group_h.HelpCenterScreen(theme),
+            # «Dəstəyə yaz» düyməsi icazəsi olmayan istifadəçidə QURULMUR
+            # (bölmə 8: "bu ikon UI-dan ümumiyyətlə render olunmur") — eyni
+            # qapı üzən dəstək ikonuna da tətbiq olunur.
+            "help": lambda: group_h.HelpCenterScreen(
+                theme, may_contact_support=self._may_contact_support()
+            ),
             "infrastructure": lambda: group_i.InfrastructureScreen(theme),
             "plugins": lambda: group_i.PluginScreen(theme),
             "dashboard_builder": lambda: group_i.DashboardBuilderScreen(theme),
@@ -638,7 +899,19 @@ class KompasApplication:
         self._support = support
         self._notifications = panel
 
+        # Dəstək panelinin CANLI yolu. Əvvəl `message_sent` heç nəyə bağlı
+        # DEYİLDİ: istifadəçi mesaj yazır, o, ekranda görünür və heç yerə
+        # getmirdi — kəsilmiş yol. Bax `controllers/support_chat.py` başlığı.
+        if support is not None:
+            self._attach_support_chat(support)
+
         shell.header().bell_clicked.connect(self._toggle_notifications)
+        # SIRA VACİBDİR: canlı bağlama zəng siqnalına `_toggle_notifications`-DAN
+        # SONRA qoşulur. Qt birbaşa slotları qoşulma sırası ilə çağırır, yəni
+        # kontroller işə düşəndə panelin görünürlüyü ARTIQ dəyişib və o, sorğunu
+        # yalnız panel AÇILANDA göndərir. Əks sıra hər bağlanışda da bir sorğu
+        # demək olardı — panel isə gün ərzində onlarla dəfə açılıb-bağlanır.
+        self._attach_notifications(shell, panel)
 
         # Örtük ölçüsü dəyişəndə üzən elementlər yenidən yerləşdirilir.
         original_resize = shell.resizeEvent
@@ -649,6 +922,46 @@ class KompasApplication:
 
         shell.resizeEvent = on_resize  # type: ignore[method-assign]
         QTimer.singleShot(0, lambda: self._reposition_overlays(shell))
+
+    def _attach_support_chat(self, widget: QWidget) -> None:
+        """Üzən dəstək panelini `SupportChatUseCase`-ə bağlayır (bölmə 8).
+
+        Önizləmə yolu TOXUNULMAZ qalır: maketdə söhbət `preview_screens`
+        tərəfindən doldurulur və heç bir baza sorğusu getmir.
+        """
+        from src.presentation.controllers.support_chat import (  # noqa: PLC0415
+            SupportChatController,
+        )
+        from src.presentation.screens.group_e import SupportChatWidget  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(widget, SupportChatWidget):  # pragma: no cover - tip qoruyucusu
+            return
+        SupportChatController(self._context, self._current_employee).attach(widget)
+
+    def _attach_notifications(self, shell: AdminShell, panel: QWidget) -> None:
+        """Bildiriş panelinin CANLI yazı/oxu yolu (bölmə 7).
+
+        Əvvəl panel YALNIZ önizləmə rejimində doldurulurdu: istehsalatda
+        `PostgresNotifier` `notifications` sətrini yazırdı, lakin heç kim onu
+        OXUMURDU — nə panel, nə header nişanı. Nəticədə bölmə 7-nin in-app
+        kanalı tamamilə ölü idi və e-poçt fallback-ı ilə əvəzlənmişdi.
+
+        Önizləmə yolu TOXUNULMAZ qalır (`preview_screens.populate`) və hər iki
+        yol EYNİ açarları işlədir — maket/canlı ad məkanı ayrılığı layihədə
+        artıq bir dəfə gizli qüsur yaradıb (bax `shell/menu.py` başlığı).
+        """
+        from src.presentation.controllers.notifications import (  # noqa: PLC0415
+            NotificationsController,
+        )
+        from src.presentation.screens.group_g import NotificationPanel  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(panel, NotificationPanel):  # pragma: no cover - tip qoruyucusu
+            return
+        NotificationsController(self._context, self._current_employee).attach(panel, shell.header())
 
     def _reposition_overlays(self, shell: AdminShell) -> None:
         if isinstance(self._support, QWidget) and hasattr(self._support, "reposition"):
