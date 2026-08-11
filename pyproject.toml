@@ -206,7 +206,25 @@ filterwarnings = [
 [tool.coverage.run]
 branch = true
 source = ["src"]
-omit = ["*/__init__.py", "*/presentation/*"]
+# TƏQDİMAT QATI NİYƏ ARTIQ GİZLƏDİLMİR
+# ---------------------------------------------------------------------------
+# Əvvəl burada `*/presentation/*` da vardı. O istisna vaxtilə "GUI ölçülə
+# bilmir" fərziyyəsi ilə qoyulmuşdu, lakin bu artıq DOĞRU DEYİL: Faza 5-6-da
+# yazı kontrollerləri (`controllers/root_control.py`, `fine_entry.py`,
+# `camera_queue.py`, `drive_connection.py`, plugin quraşdırma, baza keçidi,
+# bərpa) sırf Python məntiqidir və `tests/` altında sahtələrlə ölçülür.
+# İstisna həmin ən riskli yolları HƏR hesabatdan çıxarırdı — yəni orada
+# yaranan boşluq heç bir rəqəmdə görünmürdü. Ölçülməyən kod = bilinməyən risk.
+#
+# RƏSMİ QAPI TƏSİRLƏNMİR: `ci.yml`-dəki qapı `--cov=src/domain --cov=src/shared
+# --cov=src/infrastructure/security` ilə çağırılır; `--cov` verilən yollar
+# `source`-u əvəz edir, ona görə təqdimat qatı o hesablamaya ONSUZ DA daxil
+# deyil və 85% həddi dəyişmir. Bu dəyişiklik yalnız `--cov=src` ilə çağırılan
+# TAM hesabatı dürüst edir.
+#
+# `__init__.py` istisnası qalır: onlar yalnız re-export sətirlərindən ibarətdir
+# və ölçüdə iştirakı faizi süni şəkildə şişirdərdi.
+omit = ["*/__init__.py"]
 
 [tool.coverage.report]
 show_missing = true

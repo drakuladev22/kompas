@@ -105,18 +105,27 @@ class _Repo:
         self.read_calls: list[tuple[uuid.UUID, EmployeeId]] = []
         self.all_calls: list[EmployeeId] = []
         self.list_calls = 0
+        #: Kontrollerin ötürdüyü auditoriya süzgəci — hər çağırışda yazılır.
+        self.hidden_seen: list[frozenset[str]] = []
 
-    def list_for_recipient(self, recipient_id: EmployeeId) -> list[NotificationRow]:
+    def list_for_recipient(
+        self, recipient_id: EmployeeId, *, hidden_categories: Any
+    ) -> list[NotificationRow]:
         self.list_calls += 1
+        self.hidden_seen.append(frozenset(hidden_categories))
         assert recipient_id == ACTOR
         return self.rows
 
-    def mark_read(self, notification_id: uuid.UUID, recipient_id: EmployeeId) -> int:
+    def mark_read(
+        self, notification_id: uuid.UUID, recipient_id: EmployeeId, *, hidden_categories: Any
+    ) -> int:
         self.read_calls.append((notification_id, recipient_id))
+        self.hidden_seen.append(frozenset(hidden_categories))
         return 1
 
-    def mark_all_read(self, recipient_id: EmployeeId) -> int:
+    def mark_all_read(self, recipient_id: EmployeeId, *, hidden_categories: Any) -> int:
         self.all_calls.append(recipient_id)
+        self.hidden_seen.append(frozenset(hidden_categories))
         return len(self.rows)
 
 
@@ -148,14 +157,23 @@ class _Context:
 
 
 class _Actor:
+    """Defolt: heç bir flag daşımayan `Satıcı` — ən dar auditoriya."""
+
     id = ACTOR
 
+    def __init__(self, *flags: str) -> None:
+        self._flags = frozenset(flags)
 
-def _wire(rows: list[NotificationRow]) -> tuple[_Panel, _Header, _Repo, _Context]:
+    def has_permission(self, flag_code: str, *, now: datetime) -> bool:
+        assert now.tzinfo is not None, "Vaxt tz-aware olmalıdır"
+        return flag_code in self._flags
+
+
+def _wire(rows: list[NotificationRow], *flags: str) -> tuple[_Panel, _Header, _Repo, _Context]:
     repo = _Repo(rows)
     context = _Context(repo)
     panel, header = _Panel(), _Header()
-    controller = NotificationsController(context, _Actor())  # type: ignore[arg-type]
+    controller = NotificationsController(context, _Actor(*flags))  # type: ignore[arg-type]
     controller.attach(panel, header)  # type: ignore[arg-type]
     return panel, header, repo, context
 
@@ -268,6 +286,48 @@ def test_database_failure_leaves_the_panel_empty_instead_of_crashing(monkeypatch
 
 
 # --------------------------------------------------------------------------- #
+# Auditoriya marşrutlaşdırması (bölmə 7)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_seller_does_not_receive_manager_level_notifications() -> None:
+    """Flag daşımayan `Satıcı` tenant səviyyəli təsdiq sətirlərini GÖRMÜR.
+
+    Əvvəl `recipient_id IS NULL` olan HƏR sətir hamıya göstərilirdi: satıcı
+    "manual vaxt düzəlişi təsdiq gözləyir" və "Drive-da yer qalmayıb"
+    bildirişlərini görürdü — nə edə biləcəyi bir şey, nə də ona aid məlumat.
+    """
+    _, _, repo, _ = _wire([_row()])
+
+    hidden = repo.hidden_seen[0]
+    assert "DUAL_CONTROL_PENDING" in hidden
+    assert "DRIVE_QUOTA" in hidden
+    assert "FINE_APPEAL_PENDING" in hidden
+
+
+def test_the_flag_holder_keeps_seeing_their_own_queue() -> None:
+    """Etirazı təsdiqləyən şəxsdən onun növbə bildirişi GİZLƏDİLMİR."""
+    _, _, repo, _ = _wire([_row()], "can_approve_leave_appeal")
+
+    hidden = repo.hidden_seen[0]
+    assert "FINE_APPEAL_PENDING" not in hidden
+    assert "DRIVE_QUOTA" in hidden, "Digər kateqoriyalar açılmamalıdır"
+
+
+def test_badge_and_write_paths_use_the_same_filter() -> None:
+    """Sayğac və «oxundu» yazısı EYNİ süzgəcdən keçir.
+
+    Fərqli olsaydı, istifadəçi görə bilmədiyi bir bildiriş üçün nişan görər
+    və onu heç vaxt təmizləyə bilməzdi.
+    """
+    panel, _, repo, _ = _wire([_row(), _row()])
+
+    panel.mark_all_read_requested.emit()
+
+    assert len(set(repo.hidden_seen)) == 1, "Oxu və yazı yolları eyni dəsti ötürməlidir"
+
+
+# --------------------------------------------------------------------------- #
 # Sətir → panel formatı (maketlə EYNİ açarlar)
 # --------------------------------------------------------------------------- #
 
@@ -360,18 +420,34 @@ def _repository(rows: list[dict[str, Any]] | None = None) -> tuple[Any, _FakeCon
 def test_listing_covers_personal_and_tenant_wide_rows() -> None:
     """`recipient_id IS NULL` sətirləri kəsilsəydi, onlar HEÇ KİMƏ görünməzdi."""
     repo, conn = _repository([])
-    repo.list_for_recipient(ACTOR)
+    repo.list_for_recipient(ACTOR, hidden_categories=())
 
     sql, params = conn.executed[-1]
-    assert "recipient_id = %s OR recipient_id IS NULL" in sql
+    assert "recipient_id = %s OR (recipient_id IS NULL" in sql
     assert "tenant_id = %s" in sql, "RLS-ə ƏLAVƏ açıq tenant şərti olmalıdır"
     assert params[0] == TENANT
     assert params[1] == ACTOR
+    assert params[2] == [], "Süzgəc boş olduqda tenant sətirləri kəsilməməlidir"
+
+
+def test_hidden_categories_are_pushed_into_the_query() -> None:
+    """Səlahiyyəti çatmayan kateqoriya SQL-də kəsilir, Python-da yox.
+
+    Süzgəci sətirlər gətirildikdən sonra tətbiq etsəydik, `LIMIT 50`
+    istifadəçinin görə bildiyi sətirləri görə bilmədikləri ilə doldurar və
+    panel boş görünərdi.
+    """
+    repo, conn = _repository([])
+    repo.list_for_recipient(ACTOR, hidden_categories=("DRIVE_QUOTA", "DUAL_CONTROL_PENDING"))
+
+    sql, params = conn.executed[-1]
+    assert "category <> ALL(%s::text[])" in sql, "Boş massiv üçün tip çevirməsi vacibdir"
+    assert params[2] == ["DRIVE_QUOTA", "DUAL_CONTROL_PENDING"]
 
 
 def test_marking_read_does_not_move_the_first_read_moment() -> None:
     repo, conn = _repository()
-    repo.mark_read(uuid.uuid4(), ACTOR)
+    repo.mark_read(uuid.uuid4(), ACTOR, hidden_categories=())
 
     sql, _ = conn.executed[-1]
     assert "read_at IS NULL" in sql, "Təkrar klik ilk oxunma vaxtını dəyişməməlidir"
@@ -379,12 +455,18 @@ def test_marking_read_does_not_move_the_first_read_moment() -> None:
 
 
 def test_mark_all_read_is_limited_to_the_visible_audience() -> None:
+    """«Hamısını oxunmuş et» görünməyən sətri OXUNDU edə bilməz.
+
+    `read_at` sətrin öz sahəsidir (per-istifadəçi oxunma cədvəli yoxdur), yəni
+    süzgəcsiz UPDATE həqiqi auditoriyanın hələ görmədiyi xəbərdarlığı da
+    sükutla "oxunmuş" edərdi.
+    """
     repo, conn = _repository()
-    repo.mark_all_read(ACTOR)
+    repo.mark_all_read(ACTOR, hidden_categories=("DRIVE_QUOTA",))
 
     sql, params = conn.executed[-1]
-    assert "recipient_id = %s OR recipient_id IS NULL" in sql
-    assert params == (TENANT, ACTOR)
+    assert "recipient_id = %s OR (recipient_id IS NULL" in sql
+    assert params == (TENANT, ACTOR, ["DRIVE_QUOTA"])
 
 
 def test_rows_are_hydrated_with_the_unread_flag() -> None:
@@ -402,7 +484,7 @@ def test_rows_are_hydrated_with_the_unread_flag() -> None:
             }
         ]
     )
-    rows = repo.list_for_recipient(ACTOR)
+    rows = repo.list_for_recipient(ACTOR, hidden_categories=())
 
     assert len(rows) == 1
     assert rows[0].is_unread

@@ -312,6 +312,17 @@ def fine_from_row(row: Row) -> Fine:
         photo_evidence_url=row.get("photo_evidence_url"),
     )
     # DB-dəki faktiki pəncərə saxlanılır (konstruktor yenidən hesablayır).
+    #
+    # `appeal_window_hours` ÖTÜRÜLMÜR və bu, qəsdəndir: `fines` cədvəlində belə
+    # sütun YOXDUR — nəşr anında hesablanmış NƏTİCƏ (`appeal_window_closes_at`)
+    # saxlanılır (miqrasiya 016). Yəni bərpa olunmuş obyektdə sahə sinif
+    # defoltunda (72) qalır və bu, YALNIZ `publish()` üçün əhəmiyyətlidir.
+    # Həmin yolda dəyər tenant limitindən açıq şəkildə ötürülür
+    # (`MonthlyFineReviewUseCase.publish_batch`), ona görə burada sətirdən
+    # oxumağa ehtiyac yoxdur. Artıq nəşr olunmuş cərimədə isə aşağıdakı
+    # DONDURULMUŞ sütun tək həqiqətdir — onu saatdan yenidən hesablamaq
+    # (`published_at + hours`) Root limiti dəyişdikdə işçinin etiraz müddətini
+    # RETROAKTİV uzadar/qısaldardı.
     fine.appeal_window_closes_at = row.get("appeal_window_closes_at")
     fine.status = FineStatus(row["status"])
     fine.published_at = row.get("published_at")

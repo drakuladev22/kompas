@@ -35,12 +35,13 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from src.domain.entities.fine import Fine, FineStatus
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
-    from src.domain.interfaces.ports import AuditTrail, Clock, Notifier
+    from src.domain.interfaces.ports import AuditTrail, Clock, Notifier, SystemLimits
     from src.domain.value_objects.identifiers import FineId, TenantId
 
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
@@ -97,10 +98,16 @@ class MonthlyFineReviewUseCase:
         clock: Clock,
         audit: AuditTrail,
         notifier: Notifier,
+        limits: SystemLimits,
     ) -> None:
         self._clock = clock
         self._audit = audit
         self._notifier = notifier
+        # `limits` MƏCBURİDİR (`None` fallback-ı YOXDUR): etiraz pəncərəsi
+        # nəşr anında DONDURULUR və sonradan düzəldilə bilmir. Limit mənbəyi
+        # olmayan bir nəşr işçinin etiraz hüququnu səssizcə 72 saata
+        # sabitləyərdi — ona görə asılılıq açıq tələb olunur.
+        self._limits = limits
 
     # ------------------------------ görünmə ---------------------------------- #
 
@@ -162,6 +169,11 @@ class MonthlyFineReviewUseCase:
 
         batch_id = uuid4()
         result = PublishResult(batch_id=batch_id, review_month=review_month)
+        # Limit BİR DƏFƏ oxunur: eyni "[Bütün Filiallara Göndər]" basışında
+        # nəşr olunan cərimələrin pəncərəsi eyni uzunluqda olmalıdır. Hər
+        # sətir üçün ayrıca oxusaydıq, dəst ortasında Root limiti dəyişdikdə
+        # eyni partiyadakı iki cərimə fərqli müddət alardı.
+        window_hours = self._appeal_window_hours(tenant_id)
 
         for fine_id, fine in pending.items():
             decision = by_id.get(fine_id, FineDecision(fine_id=fine_id))
@@ -177,7 +189,15 @@ class MonthlyFineReviewUseCase:
                 fine.discard_in_review(reviewed_by=actor.id, reviewed_at=now, reason=reason)
                 result.discarded.append(fine_id)
             else:
-                fine.publish(reviewed_by=actor.id, published_at=now)
+                # Pəncərə uzunluğu TENANT-dan gəlir, `Fine` sinfinin
+                # defoltundan yox: icmaldan gələn obyekt repository-dən bərpa
+                # olunub və bərpa yolunda bu sahə HƏMİŞƏ 72 qalır (bax
+                # `Fine.publish` və `mappers.fine_from_row` şərhləri).
+                fine.publish(
+                    reviewed_by=actor.id,
+                    published_at=now,
+                    appeal_window_hours=window_hours,
+                )
                 result.published.append(fine_id)
 
         self._record(actor, tenant_id, result, now=now)
@@ -200,6 +220,16 @@ class MonthlyFineReviewUseCase:
                 user_message="Cərimələri göndərmək səlahiyyətiniz yoxdur.",
                 context={"actor_id": str(actor.id)},
             )
+
+    def _appeal_window_hours(self, tenant_id: TenantId) -> int:
+        """Tenant-ın etiraz pəncərəsi (saat) — `ManualFineUseCase` ilə eyni naxış.
+
+        Defolt sinifdə DEYİL, `DEFAULT_LIMITS`-dədir: həqiqi mənbə
+        `system_limits` cədvəlidir (ROOT İdarə Mərkəzi), buradakı dəyər yalnız
+        cədvəl sətri olmadıqda işə düşən fallback-dır.
+        """
+        key = SystemLimitKey.FINE_APPEAL_WINDOW_HOURS
+        return self._limits.get_int(tenant_id, key.value, int(DEFAULT_LIMITS[key]))
 
     def _record(
         self,

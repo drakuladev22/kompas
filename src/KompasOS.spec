@@ -2,31 +2,33 @@
 # =============================================================================
 # KompasOS — PyInstaller spesifikasiyası
 # =============================================================================
-# DİQQƏT: CI BU FAYLI İŞLƏTMİR.
+# BU FAYL QURMANIN TƏK HƏQİQƏT MƏNBƏYİDİR.
 #
-# `.github/workflows/ci.yml` (staging-build və production-release) `.exe`-ni
-# BAYRAQLARLA qurur:
+# `.github/workflows/ci.yml`-dəki HƏR İKİ qurma job-u (staging-build və
+# production-release) məhz bu spec-i çağırır:
 #
-#     pyinstaller --noconfirm --clean --onefile --windowed \
-#       --name KompasOS --icon assets/kompasos.ico src/main.py
+#     pyinstaller --noconfirm --clean src/KompasOS.spec
 #
-# Fayl repozitoriyada saxlanılır (bax `.gitignore`-dakı `!KompasOS.spec`
-# istisnası), çünki lokal təkrar-qurma və diaqnostika üçün rahatdır. Lakin o,
-# CI üçün MƏNBƏ DEYİL — buradakı dəyişiklik buraxılışa TƏSİR ETMİR.
-#
-# NİYƏ TƏK MƏNBƏYƏ KEÇİLMƏDİ
+# NİYƏ BAYRAQLI ƏMRDƏN İMTİNA EDİLDİ
 # -----------------------------------------------------------------------------
-# CI-ın bayraqlı yolu auditdə lokal olaraq təkrarlanıb və İŞLƏK `.exe` verib
-# (Qt `qwindows.dll`, `libpq`, `libssl`, `_argon2_cffi_bindings` — hamısı
-# paketə düşür, `warn-*.txt`-də əhəmiyyətli çatışmazlıq yoxdur). İmzalanmış
-# istehsalat yolunu (SEC-012) yoxlanılmamış bir qurma yoluna keçirmək audit
-# çərçivəsində əsassız risk olardı. Ona görə CI mənbə olaraq qalır, bu fayl
-# isə onunla EYNİ nəticəni verəcək şəkildə saxlanılır.
+# Əvvəl CI `.exe`-ni bayraqlarla qururdu (`--onefile --windowed --name ...`),
+# bu fayl isə yalnız "lokal diaqnostika" idi. Nəticə: buradakı `excludes` və
+# `upx_exclude` kimi qərarlar İMZALANMIŞ artefakta HEÇ VAXT düşmürdü, amma
+# fayla baxan adam düşdüyünü zənn edirdi. İki paralel təsvirin sinxron
+# qalmasını yalnız intizam təmin edirdi — və belə paritet həmişə səssizcə
+# pozulur, çünki pozuntu nə testdə, nə lint-də görünür; yalnız müştəri
+# maşınında üzə çıxır. Bir təsvir + iki istehlakçı bu sinifdən olan bütün
+# qüsurları struktur olaraq mümkünsüz edir.
 #
-# QAYDA: bu iki yer BİRLİKDƏ dəyişdirilir. Burada `--collect-all` və ya
-# `hiddenimports` əlavə edilirsə, EYNİ dəyişiklik CI əmrinə də yazılmalıdır,
-# əks halda buraxılış paketi lokal paketdən fərqlənər — və fərq yalnız
-# müştəri maşınında üzə çıxar.
+# SEMANTİK PARİTET (köhnə əmr → bu fayl), sətir-bə-sətir:
+#   --onefile   → EXE(...) çağırışına `a.binaries` və `a.datas` DAXİLDİR və
+#                 COLLECT bloku YOXDUR; yəni tək fayllıq paket.
+#   --windowed  → `console=False`
+#   --name      → `name='KompasOS'` (çıxış yolu `dist/KompasOS.exe` DƏYİŞMİR —
+#                 SEC-012 imzalama addımı məhz bu yolu gözləyir).
+#   --icon      → `icon=...assets/kompasos.ico`
+#   --add-data  → `datas=[(...kompasos.ico, 'assets')]`
+# Yeganə QƏSDLİ fərq `upx=False`-dur (səbəbi aşağıda, EXE blokunda).
 #
 # `hiddenimports` NİYƏ BOŞDUR
 # -----------------------------------------------------------------------------
@@ -54,8 +56,8 @@ a = Analysis(
     # TEST ÇƏRÇİVƏSİ İMZALANMIŞ `.exe`-YƏ DÜŞMƏMƏLİDİR
     # -------------------------------------------------------------------------
     # Bu gün `src/` altında heç bir modul `pytest`-i idxal etmir, ona görə bu
-    # siyahı praktikada BOŞ nəticə verir — yəni CI-ın bayraqlı yolu ilə çıxış
-    # fərqi YARATMIR (spec ↔ CI paritetini pozmur, bax fayl başlığı).
+    # siyahı praktikada BOŞ nəticə verir — köhnə bayraqlı əmrlə qurulan paketə
+    # nisbətən çıxışı DƏYİŞMİR (keçid təhlükəsizdir).
     # O, REQRESSİYA BARYERİDİR: istehsalat modulunda təsadüfən qalan bir
     # `import pytest` (məs. `pytest.approx` və ya köçürülmüş fixture köməkçisi)
     # bütün test ağacını buraxılış paketinə dartardı. Belə sürüşmə nə testdə,
@@ -76,21 +78,24 @@ exe = EXE(  # noqa: F821
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    # UPX NATİV KİTABXANALARA TOXUNMAMALIDIR
+    # UPX QƏSDƏN SÖNDÜRÜLÜB — QURMA MAŞINDAN ASILI OLMAMALIDIR
     # -------------------------------------------------------------------------
-    # NİYƏ BU SİYAHI LAZIMDIR: `upx=True` yalnız UPX ikili faylı PATH-dədirsə
-    # işə düşür. GitHub Windows runner-ində UPX YOXDUR, ona görə CI-ın verdiyi
-    # `.exe` SIXILMAMIŞDIR; UPX quraşdırılmış hazırlayıcı maşınında isə eyni
-    # spec Qt6/libpq/OpenSSL DLL-lərini sıxardı. Nəticədə bu faylın yeganə
-    # məqsədi olan şey — "CI ilə EYNİ nəticə" (fayl başlığı) — pozulur və
-    # diaqnostika üçün qurulan paket buraxılış paketindən FƏRQLİ olur.
-    # Sıxılmış Qt6 DLL-ləri həm işə düşməmə (plugin `qwindows.dll` yüklənmir),
-    # həm də Authenticode/antivirus evristikasında yalançı-müsbət mənbəyidir —
-    # yəni fərq ən pis yerdə, müştəri maşınında üzə çıxardı.
-    # Tam paritet üçün doğru yol `upx=False`-dur; mövcud sətir qəsdən
-    # dəyişdirilmir (audit səlahiyyəti yalnız ƏLAVƏ etməkdir) — bu istisna
-    # siyahısı isə ən riskli faylları onsuz da kənarda saxlayır.
+    # `upx=True` (PyInstaller-in defoltu) yalnız UPX ikili faylı PATH-dədirsə
+    # işə düşür. GitHub Windows runner-ində UPX YOXDUR, hazırlayıcı maşınında
+    # isə ola bilər — yəni eyni commit-dən qurulan iki `.exe` MÜXTƏLİF çıxardı.
+    # Bu, spec-i tək mənbəyə çevirməyin bütün mənasını puç edir: reproduksiya
+    # edilə bilməyən qurma ilə "CI-da işləmir, məndə işləyir" sinfindən olan
+    # qüsuru araşdırmaq mümkün deyil.
+    # İkinci və daha ağır səbəb: UPX Qt6/libpq/OpenSSL DLL-lərini sıxdıqda
+    # `qwindows.dll` plugin-i yüklənməyə bilir (pəncərə ümumiyyətlə açılmır),
+    # üstəlik sıxılmış icra faylı Authenticode/antivirus evristikasında
+    # yalançı-müsbət mənbəyidir — imzalanmış buraxılış üçün (SEC-012) bu,
+    # qazanılan bir neçə meqabaytdan qat-qat bahalı riskdir.
+    upx=False,
+    # `upx=False` olduqda bu siyahı praktikada işə düşmür; qəsdən SAXLANILIR ki,
+    # kimsə gələcəkdə sıxılmanı yenidən açsa, ən riskli fayllar onsuz da kənarda
+    # qalsın (söndürməni geri qaytarmaq bir sətirdir, bu siyahını yenidən
+    # kəşf etmək isə bir çökmə araşdırması).
     upx_exclude=[
         'Qt6Core.dll',
         'Qt6Gui.dll',

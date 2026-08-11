@@ -416,9 +416,60 @@ class _Employees:
         return self._employee
 
 
+class _PermissionFlagCatalog:
+    """`permission_flags` repo-su — rol kartındakı "Aktiv icazə" sayğacı üçün."""
+
+    def list_all(self) -> list[Any]:
+        return [type("_Flag", (), {"code": "can_manage_employees"})()]
+
+
+class _ProfileCursor:
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self._rows = rows
+
+    def fetchall(self) -> list[dict[str, Any]]:
+        return self._rows
+
+    def fetchone(self) -> dict[str, Any] | None:
+        return self._rows[0] if self._rows else None
+
+
+class _ProfileConnection:
+    """`auth_sessions` sorğusu üçün minimal bağlantı.
+
+    Boş siyahı QAYTARIR və bu, real vəziyyətdir: giriş axını hələ sessiya
+    sətri yazmır (bax `profile._session_rows` şərhi). Vacib olan sorğunun
+    ÇAĞIRILA BİLMƏSİDİR — metod olmasaydı `refresh()` `AttributeError` alıb
+    xəta yoluna düşərdi və test yazının ardınca ekranın yenilənməsini heç
+    vaxt yoxlamamış olardı.
+    """
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _ProfileCursor:
+        self.queries.append(" ".join(sql.split()))
+        return _ProfileCursor([])
+
+
+class _EmployeeProfileAccess:
+    """`require_view` — öz profilinə həmişə icazə (bax use case)."""
+
+    def __init__(self) -> None:
+        self.checks: list[tuple[Any, Any]] = []
+
+    def require_view(self, *, viewer: Any, subject: Any) -> None:
+        self.checks.append((viewer, subject))
+
+
 class _ProfileUow:
     def __init__(self, employee: Any) -> None:
         self.employees = _Employees(employee)
+        self.connection = _ProfileConnection()
+
+    def repository(self, name: str) -> Any:
+        assert name == "permission_flags", f"Gözlənilməyən repo: {name}"
+        return _PermissionFlagCatalog()
 
 
 class _ProfileSession:
@@ -426,6 +477,7 @@ class _ProfileSession:
         self.tenant_id = TENANT
         self.users = users
         self.uow = _ProfileUow(employee)
+        self.employee_profile = _EmployeeProfileAccess()
         self.commits = 0
 
     def commit(self) -> None:
@@ -459,7 +511,14 @@ def _profile_employee() -> Any:
 
 
 def test_profile_save_writes_only_the_name() -> None:
-    """`username`/`email` yazı yoluna DÜŞMÜR (bax modul başlığı)."""
+    """`username`/`email` yazı yoluna DÜŞMÜR (bax modul başlığı).
+
+    `screen.errors` YOXLANILIR və bu, sonradan əlavə edilib: sahtə əvvəllər
+    yarımçıq idi (`employee_profile` və `uow.connection` yox idi), ona görə
+    yazıdan sonrakı `refresh()` `AttributeError` alıb `except Exception`
+    yoluna düşürdü. Test yenə keçirdi, çünki xətanı oxumurdu — yəni
+    "yazıdan sonra ekran yenilənir" iddiası HEÇ VAXT yoxlanmamışdı.
+    """
     employee = _profile_employee()
     users = _Users()
     session = _ProfileSession(employee, users)
@@ -478,6 +537,12 @@ def test_profile_save_writes_only_the_name() -> None:
     # İstifadəçi adı ekranın göndərdiyi dəyərdən DEYİL, mövcud hesabdan gəlir.
     assert str(draft.username) == "r.mammadov"
     assert session.commits == 1
+    assert screen.errors == [], "Uğurlu yazıdan sonra ekranda xəta görünməməlidir"
+    # Yazının ARDINCA oxu: hesab kartı yenidən dolduruldu və qapı çağırıldı.
+    assert screen.account["username"] == "r.mammadov"
+    assert screen.account["password_note"] == PASSWORD_POLICY_NOTE
+    assert session.employee_profile.checks, "`require_view` qapısı yan keçilməməlidir"
+    assert any("auth_sessions" in query for query in session.uow.connection.queries)
 
 
 def test_profile_save_refuses_an_empty_name() -> None:

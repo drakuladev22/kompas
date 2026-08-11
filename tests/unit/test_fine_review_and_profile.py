@@ -25,6 +25,7 @@ from src.application.use_cases.fine_review import (
 )
 from src.domain.entities import Employee, Fine, FineSource, FineStatus, Position
 from src.domain.entities.base import DomainRuleError
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects import (
     AuthorizationError,
     Money,
@@ -40,7 +41,12 @@ from src.domain.value_objects.identifiers import (
     StoreId,
     TenantId,
 )
-from tests.fixtures.fakes import FakeClock, RecordingAudit, RecordingNotifier
+from tests.fixtures.fakes import (
+    FakeClock,
+    FakeSystemLimits,
+    RecordingAudit,
+    RecordingNotifier,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -112,6 +118,7 @@ def review_uc() -> tuple[MonthlyFineReviewUseCase, RecordingAudit, RecordingNoti
         clock=FakeClock(PUSHED),  # type: ignore[arg-type]
         audit=audit,  # type: ignore[arg-type]
         notifier=notifier,  # type: ignore[arg-type]
+        limits=FakeSystemLimits(),  # type: ignore[arg-type]
     )
     return use_case, audit, notifier
 
@@ -213,6 +220,81 @@ def test_appeal_window_starts_at_publish_not_creation() -> None:
     # Nəşrdən 71 saat sonra açıq, 73 saat sonra bağlı.
     assert fine.is_appeal_window_open(now=PUSHED + timedelta(hours=71)) is True
     assert fine.is_appeal_window_open(now=PUSHED + timedelta(hours=73)) is False
+
+
+def test_publish_batch_uses_the_tenant_appeal_window_not_the_class_default() -> None:
+    """Tenant 48 saat təyin edibsə nəşr 72 saatlıq pəncərə AÇMAMALIDIR.
+
+    `fine_from_row()` `appeal_window_hours` ötürmür (sütun yoxdur), yəni
+    icmaldan gələn hər cərimə sinif defoltu ilə (72) bərpa olunur. Limit
+    nəşr yolunda ötürülməsəydi, ROOT İdarə Mərkəzindəki dəyər bu axında
+    sükutla NƏZƏRƏ ALINMAZDI.
+    """
+    limits = FakeSystemLimits({SystemLimitKey.FINE_APPEAL_WINDOW_HOURS.value: "48"})
+    use_case = MonthlyFineReviewUseCase(
+        clock=FakeClock(PUSHED),  # type: ignore[arg-type]
+        audit=RecordingAudit(),  # type: ignore[arg-type]
+        notifier=RecordingNotifier(),  # type: ignore[arg-type]
+        limits=limits,  # type: ignore[arg-type]
+    )
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+    # Repository-dən bərpa olunmuş cərimə ilə eyni vəziyyət: sahə defoltdadır.
+    restored = make_fine(created=CREATED)
+    assert restored.appeal_window_hours == 72
+
+    use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={restored.id: restored},
+        decisions=[],
+    )
+
+    assert restored.appeal_window_closes_at == PUSHED + timedelta(hours=48)
+
+
+def test_published_window_is_frozen_and_ignores_a_later_limit_change() -> None:
+    """Nəşrdən sonra limitin dəyişməsi ARTIQ açılmış pəncərəni tərpətmir.
+
+    Miqrasiya 016-dakı qərar budur: `appeal_window_closes_at` nəşr anında
+    DONDURULUR. Əks halda Root limiti 48 → 24 saata endirəndə artıq nəşr
+    olunmuş cərimələrin etiraz müddəti retroaktiv bağlanardı.
+    """
+    limits = FakeSystemLimits({SystemLimitKey.FINE_APPEAL_WINDOW_HOURS.value: "48"})
+    use_case = MonthlyFineReviewUseCase(
+        clock=FakeClock(PUSHED),  # type: ignore[arg-type]
+        audit=RecordingAudit(),  # type: ignore[arg-type]
+        notifier=RecordingNotifier(),  # type: ignore[arg-type]
+        limits=limits,  # type: ignore[arg-type]
+    )
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+    fine = make_fine(created=CREATED)
+    use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={fine.id: fine},
+        decisions=[],
+    )
+
+    limits.set(SystemLimitKey.FINE_APPEAL_WINDOW_HOURS, "24")
+
+    assert fine.appeal_window_closes_at == PUSHED + timedelta(hours=48)
+    assert fine.is_appeal_window_open(now=PUSHED + timedelta(hours=30)) is True
+
+
+def test_publish_rejects_a_non_positive_appeal_window() -> None:
+    """Sıfır saatlıq pəncərə etiraz hüququnu doğulduğu an bağlayardı."""
+    fine = make_fine(created=CREATED)
+
+    with pytest.raises(DomainRuleError, match="müsbət saat"):
+        fine.publish(
+            reviewed_by=EmployeeId(uuid.uuid4()),
+            published_at=PUSHED,
+            appeal_window_hours=0,
+        )
+
+    assert fine.status is FineStatus.PENDING_REVIEW, "Rədd edilən nəşr statusu dəyişməməlidir"
 
 
 def test_unpublished_fine_window_counts_as_open() -> None:

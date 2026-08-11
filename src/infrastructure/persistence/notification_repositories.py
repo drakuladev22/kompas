@@ -18,12 +18,18 @@ hissəsi isə TENANT səviyyəsindədir (`recipient_id IS NULL`) — məs. "giri
 təsdiqi gecikir", "ödəniş xatırlatması". İkinci qrup use case-lərdə açıq
 şərhlərlə belə yazılıb ("HR_Admin + Store Manager", "bütün adminlərə").
 
-Panel HƏR İKİSİNİ göstərir. Alternativ — yalnız şəxsi sətirləri göstərmək —
-rədd edildi, çünki tenant səviyyəli bildirişlər tətbiq daxilində HEÇ KİMƏ
+Panel HƏR İKİ NÖVÜ göstərir — şəxsi sətir HƏMİŞƏ, tenant səviyyəli sətir isə
+AUDİTORİYASINA görə. Alternativ — yalnız şəxsi sətirləri göstərmək — rədd
+edildi, çünki tenant səviyyəli bildirişlər tətbiq daxilində HEÇ KİMƏ
 görünməzdi; bölmə 7 isə məhz onları "tətbiq daxilində göstərilir + e-poçt
-ehtiyat kanalı" kimi təsvir edir. Kateqoriyaya görə flag-əsaslı incə
-marşrutlaşdırma (məs. `DRIVE_QUOTA` → yalnız `can_manage_drive_connection`)
-spesifikasiyada TƏYİN EDİLMƏYİB və burada UYDURULMUR.
+ehtiyat kanalı" kimi təsvir edir.
+
+Auditoriya cədvəli BURADA DEYİL, domendədir
+(`value_objects/notifications.TENANT_NOTIFICATION_AUDIENCE`): "kim görməlidir"
+iş qaydasıdır, SQL detalı deyil, və eyni sual gələcəkdə e-poçt marşrutunda da
+veriləcək. Bu qat yalnız hazır dəsti şərtə çevirir. Cədvəldə olmayan
+kateqoriya ƏVVƏLKİ KİMİ hamıya görünür (fail-open) — yeni modulun bildirişi
+sükutla itməməlidir.
 
 ──────────────────────────────────────────────────────────────────────────────
 "OXUNDU" SƏTRİN ÖZ SAHƏSİDİR, İSTİFADƏÇİ-BİLDİRİŞ CÜTÜNÜN YOX
@@ -43,6 +49,7 @@ from typing import TYPE_CHECKING, Any
 from src.infrastructure.persistence.repositories import _BaseRepository
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime
     from uuid import UUID
 
@@ -85,17 +92,36 @@ class PostgresNotificationRepository(_BaseRepository):
         FROM notifications
     """
 
-    #: Şəxsi VƏ tenant səviyyəli sətirlər — bax modul başlığı.
-    _AUDIENCE = "(recipient_id = %s OR recipient_id IS NULL)"
+    #: Şəxsi sətir HƏMİŞƏ, tenant səviyyəli sətir isə auditoriyaya görə.
+    #:
+    #: Şərt "görünənlər" yox, "GİZLƏDİLƏNLƏR" üzərində qurulub (`<> ALL`):
+    #: siyahıya salınmamış kateqoriya belə görünməyə davam edir. Tərsi
+    #: (`= ANY(görünənlər)`) yeni kateqoriyanı domen cədvəlinə yazılana qədər
+    #: sükutla gizlədərdi — bölmə 7-nin "gözdən qaçmasın" məqsədinin əksi.
+    #:
+    #: `::text[]` çevirməsi BOŞ siyahı üçün lazımdır: parametr boş massiv
+    #: olduqda server tipi təyin edə bilmir və sorğu xəta verərdi.
+    _AUDIENCE = "(recipient_id = %s OR (recipient_id IS NULL AND category <> ALL(%s::text[])))"
 
     def list_for_recipient(
-        self, recipient_id: EmployeeId, *, limit: int = PANEL_LIMIT
+        self,
+        recipient_id: EmployeeId,
+        *,
+        hidden_categories: Sequence[str],
+        limit: int = PANEL_LIMIT,
     ) -> list[NotificationRow]:
         """Ən yeni bildirişlər — oxunmuşlar da daxil.
 
         Oxunmuşlar SÜZÜLMÜR: panel onları solğun sətir kimi göstərir və
         istifadəçi "bayaq nə yazılmışdı" sualına cavab tapmalıdır. Yalnız
         oxunmamışları göstərsəydik, panel klikdən sonra boşalardı.
+
+        Args:
+            hidden_categories: Aktorun səlahiyyəti çatmayan tenant səviyyəli
+                kateqoriyalar (`hidden_tenant_categories()` nəticəsi).
+                Arqument MƏCBURİDİR və defolt dəyəri YOXDUR: defolt boş dəst
+                olsaydı, çağırışı unutmaq süzgəci sükutla söndürərdi və qüsur
+                yalnız istehsalatda görünərdi.
         """
         rows = self._fetch_all(
             f"""{self._SELECT}
@@ -103,26 +129,33 @@ class PostgresNotificationRepository(_BaseRepository):
             ORDER BY created_at DESC
             LIMIT %s
             """,
-            (self._tenant, recipient_id, limit),
+            (self._tenant, recipient_id, list(hidden_categories), limit),
         )
         return [_hydrate(row) for row in rows]
 
-    def mark_read(self, notification_id: UUID, recipient_id: EmployeeId) -> int:
+    def mark_read(
+        self, notification_id: UUID, recipient_id: EmployeeId, *, hidden_categories: Sequence[str]
+    ) -> int:
         """Bir sətri oxunmuş edir. Qaytarır: dəyişən sətir sayı.
 
         `read_at IS NULL` şərti QƏSDƏNDİR: eyni sətrə ikinci klik ilk oxunma
         vaxtını sürüşdürməməlidir — "nə vaxt görüldü" sualının cavabı ilk
         baxışdır.
+
+        Auditoriya şərti burada da var: `read_at` sətrin ÖZ sahəsidir (ayrıca
+        `notification_reads` cədvəli yoxdur — bax modul başlığı), yəni
+        görmədiyi sətri "oxundu" edən istifadəçi onu HƏQİQİ auditoriyanın
+        gözündən də silərdi.
         """
         return self._execute(
             f"""
             UPDATE notifications SET read_at = now()
              WHERE id = %s AND tenant_id = %s AND read_at IS NULL AND {self._AUDIENCE}
             """,  # noqa: S608 — şərtlər sabit siyahıdandır
-            (notification_id, self._tenant, recipient_id),
+            (notification_id, self._tenant, recipient_id, list(hidden_categories)),
         )
 
-    def mark_all_read(self, recipient_id: EmployeeId) -> int:
+    def mark_all_read(self, recipient_id: EmployeeId, *, hidden_categories: Sequence[str]) -> int:
         """«Hamısını oxunmuş et» — yalnız GÖRÜNƏN auditoriya üçün.
 
         Şərt `list_for_recipient` ilə eynidir: istifadəçi görmədiyi bir
@@ -133,7 +166,7 @@ class PostgresNotificationRepository(_BaseRepository):
             UPDATE notifications SET read_at = now()
              WHERE tenant_id = %s AND read_at IS NULL AND {self._AUDIENCE}
             """,  # noqa: S608 — şərtlər sabit siyahıdandır
-            (self._tenant, recipient_id),
+            (self._tenant, recipient_id, list(hidden_categories)),
         )
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import smtplib
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,9 +20,11 @@ import pytest
 from src.domain.value_objects.identifiers import EmployeeId, TenantId
 from src.domain.value_objects.notifications import (
     ALWAYS_CRITICAL_CATEGORIES,
+    TENANT_NOTIFICATION_AUDIENCE,
     NotificationCategory,
     email_body,
     email_subject,
+    hidden_tenant_categories,
     is_critical_category,
 )
 from src.infrastructure.notifications.crash_reporter import (
@@ -224,6 +227,87 @@ class TestCriticality:
 
         assert "Kompas Retail" in body
         assert "Mətn" in body
+
+
+# --------------------------------------------------------------------------- #
+# Domen: tenant səviyyəli bildirişin auditoriyası
+# --------------------------------------------------------------------------- #
+
+
+class TestTenantAudience:
+    """`recipient_id IS NULL` sətrini kim görür (bölmə 7 marşrutlaşdırması)."""
+
+    def test_flagsiz_isci_menecer_kateqoriyalarini_gormur(self) -> None:
+        hidden = hidden_tenant_categories(lambda _flag: False)
+
+        assert hidden == frozenset(TENANT_NOTIFICATION_AUDIENCE)
+
+    def test_hər_flagi_olan_aktordan_hec_ne_gizlenmir(self) -> None:  # noqa: PLC2401
+        assert hidden_tenant_categories(lambda _flag: True) == frozenset()
+
+    def test_bir_flag_yalniz_oz_kateqoriyasini_acir(self) -> None:
+        hidden = hidden_tenant_categories(lambda flag: flag == "can_manage_drive_connection")
+
+        assert "DRIVE_QUOTA" not in hidden
+        assert "FINE_APPEAL_PENDING" in hidden
+
+    def test_timeout_bildirisi_iki_flagden_biri_ile_acilir(self) -> None:
+        """Timeout-dan sonra HR_Admin/CEO operator ƏVƏZİNƏ təsdiq edə bilər.
+
+        Qapı `_require_camera_permission`-dadır: `can_verify_returns` VƏ YA
+        (timeout halında) `can_approve_dual_control_override`. Auditoriya
+        yalnız birincidən ibarət olsaydı, təsdiqi verməli olan HR_Admin
+        xəbərdarlığı görməzdi.
+        """
+        by_camera = hidden_tenant_categories(lambda flag: flag == "can_verify_returns")
+        by_approver = hidden_tenant_categories(
+            lambda flag: flag == "can_approve_dual_control_override"
+        )
+
+        assert "VERIFICATION_TIMEOUT" not in by_camera
+        assert "VERIFICATION_TIMEOUT" not in by_approver
+        assert "CHECK_IN_TIMEOUT" not in by_approver
+
+    def test_cedvelde_olmayan_kateqoriya_gizlenmir(self) -> None:
+        """Fail-open: naməlum kateqoriya sükutla itməməlidir."""
+        hidden = hidden_tenant_categories(lambda _flag: False)
+
+        assert "YENI_MODUL_XEBERDARLIGI" not in hidden
+
+    def test_cerimelerin_nesri_hec_vaxt_suzulmur(self) -> None:
+        """`MONTHLY_FINES_PUBLISHED` cərimə alan İŞÇİYƏ də çatmalıdır.
+
+        Bildiriş cərimələrin görünən olduğunu elan edir və 72 saatlıq etiraz
+        pəncərəsi həmin andan sayılır. Onu auditoriyaya bağlamaq işçini öz
+        cəriməsindən və sayğacın başlamasından xəbərsiz qoyardı — etiraz
+        hüququ kağız üzərində qalardı. Test qərarı KİLİDLƏYİR: kateqoriya
+        cədvələ əlavə edilsə burada düşür.
+        """
+        assert "MONTHLY_FINES_PUBLISHED" not in TENANT_NOTIFICATION_AUDIENCE
+        assert "MONTHLY_FINES_PUBLISHED" not in hidden_tenant_categories(lambda _flag: False)
+
+    def test_teciili_giris_berpasi_yalniz_auditi_gorene_gedir(self) -> None:
+        """Təhlükəsizlik hadisəsi adi işçiyə göstərilmir."""
+        assert "EMERGENCY_ACCESS_RECOVERY" in hidden_tenant_categories(lambda _flag: False)
+        assert "EMERGENCY_ACCESS_RECOVERY" not in hidden_tenant_categories(
+            lambda flag: flag == "can_view_audit_logs"
+        )
+
+    def test_auditoriya_flagleri_sxem_reyestrinde_movcuddur(self) -> None:
+        """Səhv yazılmış flag adı kateqoriyanı HEÇ KİMƏ göstərməzdi.
+
+        `has_permission()` naməlum ad üçün sadəcə `False` qaytarır — nə xəta,
+        nə jurnal. Menyu maddələri üçün eyni qapı `test_menu_registry.py`-da
+        qoyulub; burada bildiriş marşrutu üçün təkrarlanır.
+        """
+        schema = (Path(__file__).resolve().parents[2] / "database" / "schema.sql").read_text(
+            encoding="utf-8"
+        )
+        for category, flags in TENANT_NOTIFICATION_AUDIENCE.items():
+            for flag in flags:
+                assert f"'{flag}'" in schema, (
+                    f"'{category}' auditoriyası sxemdə olmayan '{flag}' flag-inə istinad edir"
+                )
 
 
 # --------------------------------------------------------------------------- #

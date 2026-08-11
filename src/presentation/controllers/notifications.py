@@ -42,6 +42,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
+from src.domain.value_objects.notifications import hidden_tenant_categories
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
@@ -160,11 +161,19 @@ class NotificationsController:
         except ValueError:
             _error_log.warning("NOTIFICATION_ID_INVALID", extra={"value": raw_id})
             return
-        self._write(lambda repository: repository.mark_read(notification_id, self._actor.id))
+        hidden = hidden_categories_for(self._actor)
+        self._write(
+            lambda repository: repository.mark_read(
+                notification_id, self._actor.id, hidden_categories=hidden
+            )
+        )
         self.refresh(panel, header)
 
     def _on_mark_all(self, panel: NotificationPanel, header: PageHeader) -> None:
-        self._write(lambda repository: repository.mark_all_read(self._actor.id))
+        hidden = hidden_categories_for(self._actor)
+        self._write(
+            lambda repository: repository.mark_all_read(self._actor.id, hidden_categories=hidden)
+        )
         self.refresh(panel, header)
 
     # ------------------------------- baza yolu ------------------------------- #
@@ -173,7 +182,8 @@ class NotificationsController:
         try:
             with self._context.session(user_id=self._actor.id) as session:
                 rows: list[NotificationRow] = session.notifications.list_for_recipient(
-                    self._actor.id
+                    self._actor.id,
+                    hidden_categories=hidden_categories_for(self._actor),
                 )
                 return rows
         except Exception:
@@ -188,6 +198,23 @@ class NotificationsController:
                 session.commit()
         except Exception:
             _error_log.exception("NOTIFICATION_READ_MARK_FAILED")
+
+
+def hidden_categories_for(actor: Employee) -> frozenset[str]:
+    """Aktorun görməyəcəyi tenant səviyyəli kateqoriyalar (bölmə 7).
+
+    Qayda domendədir (`TENANT_NOTIFICATION_AUDIENCE`); burada yalnız aktorun
+    EFFEKTİV icazələri predikata çevrilir — `has_permission` fərdi override-ı
+    da nəzərə alır, yəni Root bir işçiyə müvəqqəti `can_approve_shift_swap`
+    versə, həmin işçi növbə sorğusu bildirişini DƏRHAL görür.
+
+    Funksiya kontrollerin İÇİNDƏ deyil, modul səviyyəsindədir: eyni süzgəc
+    `screen_data._critical_notifications`-a da lazımdır və iki yerdə iki cür
+    hesablansaydı, İdarə Panelindəki kritik siyahı ilə zəng nişanı fərqli
+    dəst göstərərdi.
+    """
+    now = datetime.now(UTC)
+    return hidden_tenant_categories(lambda flag: actor.has_permission(flag, now=now))
 
 
 # --------------------------------------------------------------------------- #
@@ -245,4 +272,4 @@ def _time_text(moment: datetime, *, now: datetime) -> str:
     return f"{local:%d.%m} {local:%H:%M}"
 
 
-__all__ = ["NotificationsController"]
+__all__ = ["NotificationsController", "hidden_categories_for"]

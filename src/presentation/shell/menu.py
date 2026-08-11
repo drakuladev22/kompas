@@ -21,6 +21,13 @@ maddə üçün QƏSDƏNDİR: naviqasiyada heç nə görünməyən istifadəçi t
 ya məhdud görünə bilər, Ayarlar isə yalnız şəxsi tənzimləmələrdir (tema,
 bildiriş) — orada başqasının məlumatı yoxdur.
 
+EYNİ QAYDA SELF-SERVICE EKRANLARINA DA AİDDİR (`profile`, `help`,
+`sales_points`): istifadəçinin ÖZ məlumatını görməsi səlahiyyət tələb etmir —
+qapı orada deyil, "başqasının məlumatı" yolunun mövcud OLMAMASINDADIR. Belə
+ekrana idarəetmə flag-i qoymaq (məs. `can_manage_sales_points`) işçini öz
+balansından kəsir, halbuki bölmə 3 həmin flag-i menecer əməliyyatı kimi
+tərif edir.
+
 Diqqət: menyunun görünməsi ƏMƏLİYYAT İCAZƏSİ DEYİL. Ekranı açan hər əməliyyat
 öz yoxlamasını ayrıca aparır (bax `navigation.NavigationRegistry.is_visible`
 şərhi).
@@ -131,7 +138,21 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
     MenuEntry(
         key="sales_points",
         title_az="Satış Xalları",
-        required_flag="can_manage_sales_points",
+        # FLAG-SİZ — `profile`/`dashboard`/`help` ilə eyni səbəbdən.
+        #
+        # Ekran (`group_f.SalesPointsScreen` + `screen_data._sales_points`)
+        # YALNIZ aktorun ÖZ balansını, öz tarixçəsini və hamıya açıq mükafat
+        # kataloqunu göstərir: `SalesPointsUseCase.balance_for` səlahiyyət
+        # yoxlamır və "başqasının balansı" yolu ÜMUMİYYƏTLƏ yoxdur.
+        #
+        # `can_manage_sales_points` isə bölmə 3-də MENECER səlahiyyətidir —
+        # "xalları əl ilə düzəltmək, mükafat mübadiləsini təsdiqləmək". Onu
+        # bu maddəyə qapı qoymaq işçinin ÖZ balansını görməsini menecer
+        # səlahiyyətinə bağlayırdı: adi `Satıcı`-da heç bir flag yoxdur
+        # (schema.sql §23), yəni bölmə 6-nın "öz cari xal balansı" tələbi
+        # sükutla işləmirdi. Menecer tərəfi (korreksiya/təsdiq) hələ ayrıca
+        # ekran deyil; flag «Şübhəli Satışlar» maddəsində qapı olaraq qalır.
+        required_flag=None,
         feature_module=MODULE_SALES,
         order=90,
         icon="star",

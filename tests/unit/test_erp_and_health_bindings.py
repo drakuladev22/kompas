@@ -34,7 +34,17 @@ NOW: Final = datetime(2026, 8, 12, 9, 40, tzinfo=UTC)
 
 
 def _actor() -> Any:
-    return type("_Actor", (), {"id": EmployeeId(uuid.uuid4())})()
+    """Flag daşımayan aktor.
+
+    `has_permission` MÜTLƏQ olmalıdır: bildiriş auditoriyası süzgəci
+    (`hidden_categories_for`) onu çağırır və metod olmasaydı sorğu `except`
+    blokunda udulub siyahı boş qayıdardı — test yaşıl, yol isə ölü olardı.
+    """
+    return type(
+        "_Actor",
+        (),
+        {"id": EmployeeId(uuid.uuid4()), "has_permission": lambda self, flag, *, now: False},
+    )()
 
 
 class _Cursor:
@@ -280,7 +290,10 @@ class _HealthUow:
 
 
 class _Notifications:
-    def list_for_recipient(self, employee_id: Any) -> list[Any]:
+    def list_for_recipient(self, employee_id: Any, *, hidden_categories: Any) -> list[Any]:
+        # Süzgəc imzada MƏCBURİDİR — çağırışı unutmaq auditoriya qaydasını
+        # sükutla söndürərdi (bax `notification_repositories` başlığı).
+        assert hidden_categories is not None
         return []
 
 

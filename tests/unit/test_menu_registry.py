@@ -150,6 +150,46 @@ def test_toggle_backed_modules_are_actually_used_by_the_menu() -> None:
     assert not missing, f"Bu modulların menyu təmsilçisi yoxdur: {sorted(missing)}"
 
 
+#: Səlahiyyət tələb ETMƏYƏN maddələr — hər biri üçün səbəb yazılıb.
+#: Siyahı testin ÖZÜNDƏ saxlanılır ki, bir maddənin flag-i təsadüfən
+#: silinəndə test onu tutsun (`menu.py`-dan oxusaydıq, yoxlama özünü
+#: təsdiqləyən tavtologiyaya çevrilərdi).
+_FLAGLESS_KEYS: Final[dict[str, str]] = {
+    "dashboard": "Hər kəsə öz səlahiyyəti çərçivəsində görünür",
+    "help": "Yardım mərkəzi — məlumat səthi",
+    "settings": "Yalnız şəxsi tənzimləmələr (tema, bildiriş)",
+    "profile": "Öz profili",
+    "sales_points": "Öz xal balansı — self-service (bölmə 6, İşçi Ana Ekranı)",
+}
+
+
+@pytest.mark.parametrize("key", sorted(_FLAGLESS_KEYS), ids=sorted(_FLAGLESS_KEYS))
+def test_self_service_entries_are_not_gated_by_a_flag(key: str) -> None:
+    """Öz məlumatını görmək səlahiyyət tələb etmir.
+
+    `sales_points` bu siyahıya sonradan əlavə edildi: ekran işçinin ÖZ
+    balansıdır (`screen_data._sales_points` yalnız `actor.id` ilə işləyir),
+    lakin maddə `can_manage_sales_points` tələb edirdi — bölmə 3-də MENECER
+    səlahiyyəti kimi tərif olunan flag. Nəticədə heç bir flag daşımayan adi
+    `Satıcı` öz xal balansını GÖRƏ BİLMİRDİ.
+    """
+    entry = next(e for e in DEFAULT_ENTRIES if e.key == key)
+    assert entry.required_flag is None, (
+        f"'{key}' maddəsi self-service-dir ({_FLAGLESS_KEYS[key]}) — "
+        f"flag qapısı istifadəçini öz məlumatından kəsir"
+    )
+
+
+def test_manager_side_of_sales_points_keeps_its_flag() -> None:
+    """`can_manage_sales_points` menyudan TAM çıxarılmır.
+
+    «Şübhəli Satışlar» növbəsi (`sales_review_queue.py`) məhz bu flag ilə
+    qorunur — self-service düzəlişi menecer qapısını zəiflətməməlidir.
+    """
+    entry = next(e for e in DEFAULT_ENTRIES if e.key == "unassigned_sales")
+    assert entry.required_flag == "can_manage_sales_points"
+
+
 def test_dashboard_builder_requires_a_permission() -> None:
     """Bölmə 6: "Yalnız bu modula icazəsi olan rollara görünür".
 

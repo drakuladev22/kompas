@@ -1254,9 +1254,20 @@ def _erp_diagnosis(row: Any) -> str:
 
 
 def _critical_notifications(session: Session, actor: Any) -> list[Any]:
-    """Oxunmamış KRİTİK bildirişlər — sistem hadisələrinin izi (bölmə 7)."""
+    """Oxunmamış KRİTİK bildirişlər — sistem hadisələrinin izi (bölmə 7).
+
+    Auditoriya süzgəci zəng panelindəki ilə EYNİ funksiyadan gəlir: İdarə
+    Panelindəki kritik siyahı zəng nişanından geniş olsaydı, istifadəçi
+    paneldə tapa bilmədiyi bir sətri burada görərdi.
+    """
+    from src.presentation.controllers.notifications import (  # noqa: PLC0415
+        hidden_categories_for,
+    )
+
     try:
-        rows = session.notifications.list_for_recipient(actor.id)
+        rows = session.notifications.list_for_recipient(
+            actor.id, hidden_categories=hidden_categories_for(actor)
+        )
     except Exception:
         _error_log.exception("HEALTH_NOTIFICATIONS_FAILED")
         return []

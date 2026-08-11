@@ -24,7 +24,10 @@ Ona görə kateqoriya siyahısı BURADA, domendə saxlanılır və bildiriş qat
 from __future__ import annotations
 
 from enum import Enum
-from typing import Final
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class NotificationCategory(str, Enum):
@@ -86,6 +89,123 @@ def is_critical_category(category: str) -> bool:
     return category.strip().upper() in ALWAYS_CRITICAL_CATEGORIES
 
 
+# --------------------------------------------------------------------------- #
+# TENANT SƏVİYYƏLİ BİLDİRİŞİN AUDİTORİYASI
+# --------------------------------------------------------------------------- #
+#
+# `notifications.recipient_id` NULL olduqda sətir konkret işçiyə ünvanlanmayıb —
+# o, "bunu edə bilən adam görsün" deməkdir. Marşrutlaşdırma qaydası əvvəllər
+# HEÇ YERDƏ yazılmamışdı və panel belə sətirləri HAMIYA göstərirdi: adi
+# `Satıcı` "manual vaxt düzəlişi təsdiq gözləyir" və ya "Drive-da yer qalmayıb"
+# sətirlərini görürdü. Bu, bölmə 3-ün "GÖRMƏK = SƏLAHİYYƏTİN OLMASI"
+# prinsipinə ziddir və eyni zamanda həqiqi bildirişləri səs-küydə itirirdi.
+#
+# CƏDVƏL HARDAN GƏLİR — UYDURULMUR. Hər sətir ya `notify()` çağırışının
+# yanındakı şərhdə adı çəkilən alıcıdan, ya da bildirişin TƏLƏB ETDİYİ
+# əməliyyatı qoruyan flag-dən götürülüb. Rol adları (`HR_Admin`, `Mağaza
+# Meneceri`, `CEO`) `schema.sql` §23-dəki rol → flag seed-i ilə flag-ə
+# çevrilib; seçilən flag həmin rolların HAMISINDA var və adı çəkilməyən
+# rollarda yoxdur.
+#
+# BOŞLUQ = FAIL-OPEN. Cədvəldə OLMAYAN kateqoriya HAMIYA görünür (mövcud
+# davranış saxlanılır). Əks istiqamət — naməlum kateqoriyanı gizlətmək —
+# rədd edildi: yeni modul öz kateqoriyasını əlavə etdikdə bildiriş sükutla
+# heç kimə çatmazdı və səbəbi heç bir jurnalda görünməzdi.
+#
+# ŞƏXSİ SƏTİR (`recipient_id = <işçi>`) BU CƏDVƏLDƏN ASILI DEYİL — o, HƏMİŞƏ
+# öz sahibinə görünür: "cərimə etirazınız rədd edildi" sətrini işçidən
+# gizlətmək bildirişin bütün məqsədini pozardı.
+TENANT_NOTIFICATION_AUDIENCE: Final[dict[str, tuple[str, ...]]] = {
+    # `leave_verification.escalate_timeouts` / `morning_check_in.escalate_timeouts`:
+    # mətn açıq deyir ki, "HR_Admin və ya CEO manual təsdiq edə bilər".
+    # Həmin yolun qapısı `_require_camera_permission`-dadır: normal halda
+    # `can_verify_returns`, timeout-dan sonra isə `can_approve_dual_control_override`.
+    # Auditoriya məhz bu iki flag-dir — biri əməliyyatın SAHİBİ, digəri
+    # timeout müdaxiləsi hüququdur.
+    "VERIFICATION_TIMEOUT": ("can_verify_returns", "can_approve_dual_control_override"),
+    "CHECK_IN_TIMEOUT": ("can_verify_returns", "can_approve_dual_control_override"),
+    # `leave_verification.override_return_time`: bildiriş İKİNCİ TƏSDİQ tələb
+    # edir. `schema.sql` §22 flag təsvirini birbaşa yazır: "30+ dəqiqəlik vaxt
+    # düzəlişinə ikinci təsdiq (HR_Admin/CEO)".
+    "DUAL_CONTROL_PENDING": ("can_approve_dual_control_override",),
+    # `dual_control_guard`: şərh "bütün adminlərə" deyir. Deadlock-un YEGANƏ
+    # həlli təsdiq flag-ini kiməsə vermək olduğu üçün auditoriya icazə paylaya
+    # bilən roldur — `can_control_user_permissions` (Admin/CEO/Root, §23).
+    "DUAL_CONTROL_DEADLOCK_RISK": ("can_control_user_permissions",),
+    # `fine_management.submit_appeal`: şərhdə flag adbaad yazılıb.
+    "FINE_APPEAL_PENDING": ("can_approve_leave_appeal",),
+    # `shift_scheduling.request_swap`: şərhdə flag adbaad yazılıb.
+    "SHIFT_SWAP_PENDING": ("can_approve_shift_swap",),
+    # `storage/quota_monitor`: şərhdə marşrut adbaad yazılıb.
+    "DRIVE_QUOTA": ("can_manage_drive_connection",),
+    # `morning_check_in.reject` və `leave_verification.request_leave`:
+    # hər ikisinin şərhi "HR_Admin + Store Manager" deyir. §23-də bu iki rolun
+    # kəsişməsindəki və işçi davranışına aid olan flag `can_view_employee_reports`-dur
+    # ("fərdi performans/cərimə tarixçəsinə yalnız-baxış"). `Satıcı` və kamera
+    # rolları onu daşımır.
+    "CHECK_IN_REJECTED": ("can_view_employee_reports",),
+    "MONTHLY_LEAVE_LIMIT_EXCEEDED": ("can_view_employee_reports",),
+    # `authentication.EmergencyAccessRecoveryUseCase`: hazırlayıcı tərəfin
+    # icra etdiyi fövqəladə giriş bərpası TƏHLÜKƏSİZLİK hadisəsidir, iş
+    # bildirişi deyil. Onu görməli olan şəxs audit izini onsuz da izləyəndir
+    # — `can_view_audit_logs`. Hamıya göstərmək hücum səthini genişləndirirdi:
+    # adi işçiyə "kimin hansı hesaba fövqəladə giriş açdığı" məlumatı nə
+    # lazımdır, nə də onunla bir şey edə bilər.
+    "EMERGENCY_ACCESS_RECOVERY": ("can_view_audit_logs",),
+    # `shift_scheduling._detect_conflicts`: münaqişəni yalnız cədvəli dəyişən
+    # şəxs həll edə bilər (sorğunu bağlamaq / günü yenidən planlamaq), yəni
+    # `ATTENDANCE_SHEET_MISMATCH` ilə eyni auditoriya — hər ikisi növbə
+    # PLANI ilə faktiki vəziyyət arasındakı fərqdən doğur.
+    "SHIFT_CHANGE_CONFLICT": ("can_manage_shifts",),
+    # `payment_reminders.NotifierReminderSender`: lisenziya ödənişi kirayəçi
+    # inzibatçısının işidir. `can_manage_license` §22-də səviyyə-1 hardlock-dur
+    # (Root; CEO-ya defolt verilmir), yəni auditoriya dar və dəqiqdir.
+    # E-poçt ehtiyat kanalı BU SÜZGƏCDƏN ASILI DEYİL — o, şirkət əlaqə
+    # ünvanına gedir (`notifier.py` başlığı), ona görə ödəniş xəbərdarlığı
+    # tətbiq daxilində darlaşsa da şirkətə çatmağa davam edir.
+    "PAYMENT_REMINDER": ("can_manage_license",),
+    # `daily_attendance.submit`: şərh yalnız "HR_Admin-ə xəbərdarlıq" deyir.
+    # Uyğunsuzluq TABEL ilə NÖVBƏ PLANI arasındadır, yəni cavab verəcək şəxs
+    # planın sahibidir — `can_manage_shifts` (HR_Admin-də var, Mağaza
+    # Menecerində yoxdur, §23). Mağaza Meneceri tabeli ÖZÜ doldurur
+    # (`can_fill_daily_attendance`); ona öz təqdim etdiyi sətir barədə
+    # xəbərdarlıq göndərmək məlumat vermir.
+    "ATTENDANCE_SHEET_MISMATCH": ("can_manage_shifts",),
+    # ─────────────────────────────────────────────────────────────────────
+    # `MONTHLY_FINES_PUBLISHED` BURAYA QƏSDƏN SALINMIR — ONU SÜZMƏYİN.
+    # ─────────────────────────────────────────────────────────────────────
+    # Bu bildiriş cərimələrin artıq GÖRÜNƏN olduğunu elan edir və 72 saatlıq
+    # etiraz pəncərəsi məhz həmin andan sayılır (`fine_review.py` qəsdli
+    # deviasiyası: `PENDING_REVIEW` → aylıq icmal → `PUBLISHED`). Kimsə onu
+    # "menecer bildirişi" sanıb auditoriyaya bağlasa, cərimə alan işçi
+    # cəriməsinin açıldığından və sayğacın başladığından XƏBƏRSİZ qalar —
+    # yəni etiraz hüququ formal olaraq var, praktikada isə yoxdur. Cədvəldə
+    # olmaması onu HAMIYA görünən saxlayır və bu, tələb olunan davranışdır.
+}
+
+
+def hidden_tenant_categories(has_flag: Callable[[str], bool]) -> frozenset[str]:
+    """Aktorun GÖRMƏMƏLİ olduğu tenant səviyyəli kateqoriyalar.
+
+    "Görünənlər" yox, "gizlədilənlər" qaytarılır və bu, qəsdəndir: sorğu
+    süzgəci `category <> ALL(...)` şəklində qurulur, yəni cədvəldə OLMAYAN
+    kateqoriya avtomatik görünür (fail-open, bax cədvəl başlığı). Görünənlər
+    siyahısı qaytarılsaydı, hər yeni kateqoriya cədvələ yazılana qədər
+    sükutla gizlənərdi.
+
+    Args:
+        has_flag: `Employee.has_permission` üzərində qurulan predikat. Domen
+            burada `Employee`-ni birbaşa QƏBUL ETMİR — `value_objects` qatı
+            `entities` qatından asılı olmamalıdır (əks istiqamət artıq var).
+            Predikat həm də fərdi override-ları avtomatik nəzərə alır.
+    """
+    return frozenset(
+        category
+        for category, flags in TENANT_NOTIFICATION_AUDIENCE.items()
+        if not any(has_flag(flag) for flag in flags)
+    )
+
+
 def email_subject(category: str, title_az: str) -> str:
     """E-poçt mövzusu — qutuda süzgəclənə bilsin deyə prefiks daşıyır.
 
@@ -119,8 +239,10 @@ def email_body(title_az: str, body_az: str, *, tenant_name: str = "") -> str:
 
 __all__ = [
     "ALWAYS_CRITICAL_CATEGORIES",
+    "TENANT_NOTIFICATION_AUDIENCE",
     "NotificationCategory",
     "email_body",
     "email_subject",
+    "hidden_tenant_categories",
     "is_critical_category",
 ]

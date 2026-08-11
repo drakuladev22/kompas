@@ -374,16 +374,18 @@ jobs:
           pip install -r requirements.txt
           pip install "$(grep -E '^pyinstaller' requirements-dev.txt)"
 
-      # QEYD: `src/KompasOS.spec` BU ƏMRDƏ İŞTİRAK ETMİR — build bayraqlarla
-      # aparılır. Spec faylı lokal diaqnostika üçündür və eyni nəticəni
-      # verəcək şəkildə saxlanılır; birində dəyişiklik digərinə də yazılmalıdır.
+      # QURMA TƏSVİRİ TƏK YERDƏDİR — `src/KompasOS.spec`.
+      # Əvvəl bu addım bayraqlarla qururdu (`--onefile --windowed --name ...`),
+      # spec faylı isə ayrıca yaşayırdı. Nəticədə spec-dəki `excludes` və
+      # `upx_exclude` kimi qərarlar buraxılan artefakta HEÇ VAXT düşmürdü, halbuki
+      # fayla baxan adam düşdüyünü zənn edirdi. İki paralel təsviri sinxron
+      # saxlayan yeganə şey intizam idi — belə paritet səssizcə pozulur, çünki
+      # pozuntu nə testdə, nə də lint-də görünür, yalnız müştəri maşınında.
+      # Spec bütün köhnə bayraqların semantikasını birebir təkrarlayır
+      # (`--onefile`/`--windowed`/`--name`/`--icon`/`--add-data`) və çıxış yolu
+      # DƏYİŞMİR: `dist/KompasOS.exe`.
       - name: PyInstaller ilə .exe yığ (imzasız)
-        run: |
-          pyinstaller --noconfirm --clean --onefile --windowed `
-            --name KompasOS `
-            --icon assets/kompasos.ico `
-            --add-data "assets/kompasos.ico;assets" `
-            src/main.py
+        run: pyinstaller --noconfirm --clean src/KompasOS.spec
 
       - name: Staging artefaktını yüklə
         uses: actions/upload-artifact@v4
@@ -420,14 +422,11 @@ jobs:
           pip install -r requirements.txt
           pip install "$(grep -E '^pyinstaller' requirements-dev.txt)"
 
-      # QEYD: `src/KompasOS.spec` BU ƏMRDƏ İŞTİRAK ETMİR (bax staging job-u).
+      # Staging job-u ilə EYNİ spec — imzalanan artefaktın staging-də sınanandan
+      # fərqlənməməsi üçün. Çıxış yolu `dist/KompasOS.exe`-dir; aşağıdakı
+      # imzalama, doğrulama və checksum addımları məhz bu yolu gözləyir (SEC-012).
       - name: PyInstaller ilə .exe yığ
-        run: |
-          pyinstaller --noconfirm --clean --onefile --windowed `
-            --name KompasOS `
-            --icon assets/kompasos.ico `
-            --add-data "assets/kompasos.ico;assets" `
-            src/main.py
+        run: pyinstaller --noconfirm --clean src/KompasOS.spec
 
       # -------------------------------------------------------------------
       # AUTHENTICODE İMZALAMA (spesifikasiya bölmə 1: ".exe imzalanmalıdır")
@@ -500,11 +499,47 @@ jobs:
           (Get-FileHash dist/KompasOS.exe -Algorithm SHA256).Hash |
             Out-File -Encoding ascii dist/KompasOS.exe.sha256
 
+      # -------------------------------------------------------------------
+      # BAZA SXEMİ ARTEFAKTI — `.exe` İLƏ EYNİ BURAXILIŞDA
+      #
+      # NİYƏ LAZIMDIR: `.exe` Supabase-i özü yeniləmir. İndiyədək buraxılışda
+      # yalnız `.exe` + checksum vardı, yəni sxemi yeniləyən şəxs hansı
+      # miqrasiyaların məhz BU `.exe` ilə getdiyini repo tarixçəsindən ÖZÜ
+      # tapmalı idi — artefaktla sxem versiyası arasında heç bir bağ yox idi.
+      # Səhvin qiyməti isə asimmetrikdir: çatışmayan bir miqrasiya tətbiqin
+      # gözlədiyi sütunu yox edir və çökmə quraşdırma anında deyil, həmin
+      # ekran ilk dəfə açılanda — yəni iş günü ortasında — üzə çıxır.
+      # ZIP-in adına teq yazılır ki, "hansı sxem hansı `.exe`-yə aiddir"
+      # sualı artefaktın ADINDAN cavablansın, sənədə güvənmədən.
+      #
+      # `.sha256` `.exe`-dəki ilə eyni səbəbdəndir: ZIP açıq internetdən
+      # endirilir və bazaya DDL tətbiq etmək geri qaytarılması ən çətin
+      # əməliyyatdır — tətbiqdən ƏVVƏL bütövlüyü yoxlana bilməlidir.
+      # -------------------------------------------------------------------
+      - name: Baza sxemi artefaktını hazırla
+        shell: pwsh
+        run: |
+          $zip = "dist/kompasos-database-${{ github.ref_name }}.zip"
+          # `database/*` = `schema.sql` + `migrations/*.sql` + `tests/*.sql`.
+          # Bazis sxem TƏK BAŞINA tam quraşdırma verir (CLAUDE.md bölmə 7),
+          # miqrasiyalar isə üstünə qatlanır — ona görə hər ikisi ZIP-dədir;
+          # `tests/*.sql` (guard yoxlamaları) da daxildir, çünki tətbiqdən
+          # sonra qoruyucuların həqiqətən qurulduğunu təsdiqləyən yeganə vasitə odur.
+          Compress-Archive -Path database/* -DestinationPath $zip -Force
+          (Get-FileHash $zip -Algorithm SHA256).Hash |
+            Out-File -Encoding ascii "$zip.sha256"
+          Write-Host "Sxem artefaktı: $zip"
+
       # Auto-update client (Faza 3) bu release-i yoxlayır — bax bölmə 1, 8.
       - name: GitHub Release yarat
         uses: softprops/action-gh-release@v2
         with:
+          # Sxem faylları qlob ilə verilir, çünki adlarında teq var; `.exe`
+          # sətirləri qəsdən olduğu kimi saxlanılır — auto-update kanalı məhz
+          # bu iki dəyişməz ada baxır.
           files: |
             dist/KompasOS.exe
             dist/KompasOS.exe.sha256
+            dist/kompasos-database-*.zip
+            dist/kompasos-database-*.zip.sha256
           generate_release_notes: true

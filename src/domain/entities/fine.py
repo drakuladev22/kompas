@@ -171,10 +171,37 @@ class Fine(AggregateRoot):
         """
         return self.status is not FineStatus.PENDING_REVIEW
 
-    def publish(self, *, reviewed_by: EmployeeId, published_at: datetime) -> None:
+    def publish(
+        self,
+        *,
+        reviewed_by: EmployeeId,
+        published_at: datetime,
+        appeal_window_hours: int | None = None,
+    ) -> None:
         """ "[Bütün Filiallara Göndər]" — cərimə işçiyə açılır.
 
         Etiraz pəncərəsi MƏHZ BURADA başlayır.
+
+        Args:
+            appeal_window_hours: Tenant-ın NƏŞR ANINDAKI
+                `FINE_APPEAL_WINDOW_HOURS` limiti. Verilmədikdə obyektin
+                yaradılışda dondurduğu dəyər işlədilir.
+
+                NİYƏ BURADA DA QƏBUL EDİLİR — cərimə repository-dən BƏRPA
+                ediləndə bu sahə sətirdən oxuna bilmir (`fines` cədvəlində
+                belə sütun YOXDUR, yalnız hesablanmış `appeal_window_closes_at`
+                var), yəni bərpa olunmuş obyektdə həmişə sinif defoltu (72)
+                qalırdı. Nəticədə 48 saat təyin etmiş tenant-ın icmaldan
+                nəşr etdiyi cərimə yenə 72 saatlıq pəncərə alırdı.
+
+                Alternativ — `fines`-ə yeni sütun əlavə etmək — rədd edildi:
+                dəyər NƏŞR anında onsuz da `appeal_window_closes_at`-a
+                DONDURULUR (miqrasiya 016), yəni saxlanması təkrar məlumat
+                olardı və iki mənbə arasında fərq riski yaradardı.
+
+                Miqrasiya 016-dakı `trg_fine_appeal_window` trigger-i də eyni
+                anda eyni limiti oxuyur — bu parametr həmin qaydanın domendəki
+                EYNİSİDİR (CLAUDE.md §5: hər qayda iki yerdə eyni olmalıdır).
         """
         require_aware(published_at, field="published_at")
         if self.status is not FineStatus.PENDING_REVIEW:
@@ -182,6 +209,17 @@ class Fine(AggregateRoot):
                 f"Yalnız icmal gözləyən cərimə nəşr edilə bilər, cari status: {self.status.value}",
                 context={"fine_id": str(self.id), "status": self.status.value},
             )
+        if appeal_window_hours is not None:
+            if appeal_window_hours <= 0:
+                # Sıfır/mənfi pəncərə cəriməni işçiyə göründüyü AN etiraz
+                # hüququndan məhrum edərdi — `system_limits`-dəki `min_value`
+                # (24 saat) onsuz da bunu bloklayır, lakin limit mənbəyi
+                # əlçatmaz olduqda (fallback yolu) domen də susmamalıdır.
+                raise DomainRuleError(
+                    "Etiraz pəncərəsi müsbət saat olmalıdır",
+                    context={"appeal_window_hours": appeal_window_hours},
+                )
+            self.appeal_window_hours = appeal_window_hours
         self.status = FineStatus.PUBLISHED
         self.published_at = published_at
         self.reviewed_by = reviewed_by

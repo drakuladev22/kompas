@@ -106,9 +106,11 @@ from src.domain.value_objects.licensing import (
 from src.domain.value_objects.money import CURRENCY_CODE, InvalidMoneyError, Money
 from src.domain.value_objects.notifications import (
     ALWAYS_CRITICAL_CATEGORIES,
+    TENANT_NOTIFICATION_AUDIENCE,
     NotificationCategory,
     email_body,
     email_subject,
+    hidden_tenant_categories,
     is_critical_category,
 )
 from src.domain.value_objects.penalty import (
@@ -148,6 +150,7 @@ __all__ = [
     "NAME_MATCH_THRESHOLD",
     "PIN_LENGTH",
     "POINTS_DISPUTE_WINDOW_HOURS",
+    "TENANT_NOTIFICATION_AUDIENCE",
     "WEAK_PINS",
     "AppealId",
     "AttendanceRecordId",
@@ -241,6 +244,7 @@ __all__ = [
     "email_body",
     "email_subject",
     "extend_by_month",
+    "hidden_tenant_categories",
     "is_critical_category",
     "payment_warning",
     "require_aware",
