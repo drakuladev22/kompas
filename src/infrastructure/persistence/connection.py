@@ -399,6 +399,10 @@ class PostgresUnitOfWork:
         from src.infrastructure.persistence.announcement_repository import (  # noqa: PLC0415
             PostgresAnnouncementRepository,
         )
+        from src.infrastructure.persistence.annual_leave_repository import (  # noqa: PLC0415
+            PostgresAnnualLeaveBalanceRepository,
+            PostgresAnnualLeaveRequestRepository,
+        )
         from src.infrastructure.persistence.attrition_repository import (  # noqa: PLC0415
             PostgresAttritionRepository,
         )
@@ -435,6 +439,10 @@ class PostgresUnitOfWork:
         from src.infrastructure.persistence.exception_repositories import (  # noqa: PLC0415
             PostgresExceptionRepository,
             PostgresExceptionSourceCatalog,
+        )
+        from src.infrastructure.persistence.field_report_repositories import (  # noqa: PLC0415
+            PostgresFieldReportCatalog,
+            PostgresFieldReportRepository,
         )
         from src.infrastructure.persistence.migration import (  # noqa: PLC0415
             PostgresMigrationEventLog,
@@ -591,6 +599,25 @@ class PostgresUnitOfWork:
             # YALNIZ-OXU aqreqasiya — heç bir başqa repo ilə eyni tranzaksiya
             # tələb etmir (yazı yolu yoxdur, bax use case modul başlığı).
             "multi_store_benchmark": PostgresMultiStoreBenchmarkRepository(conn, self._context),
+            # --- #26+#27 Sahə hesabatları (kompas1.md Faza 3) ------------------
+            # Eyni bağlantıda: hesabat + checklist bəndləri + düzəliş tapşırığı
+            # + audit BİR tranzaksiyada olmalıdır. Tapşırıq `catalog_
+            # repositories.PostgresTaskRepository` ilə yazılır (Struktur Qərar B:
+            # mövcud Tapşırıq Mühərriki) — o da elə bu dict-dədir, yəni
+            # uğursuz bənd ilə ondan doğan tapşırıq ATOMİKDİR: biri yazılıb
+            # digəri yazılmayan vəziyyət mümkün deyil.
+            "field_reports": PostgresFieldReportRepository(conn, self._context),
+            "field_report_catalog": PostgresFieldReportCatalog(conn, self._context),
+            # --- #28 İllik məzuniyyət balansı (kompas1.md Faza 4) --------------
+            # Eyni bağlantıda: sorğunun statusu, balansın azalması və audit BİR
+            # tranzaksiyada olmalıdır. Ayrı bağlantılarda təsdiq yazılıb balans
+            # azalmamış qala bilərdi — yəni işçi pulsuz gün alardı.
+            #
+            # GÜNDAXİLİ İCAZƏ İLƏ QARIŞDIRILMASIN: `leave_requests` (yuxarıda)
+            # STEP1/STEP2 axınının dəqiqə əsaslı sətirləridir və bu iki repo
+            # bir-birini ÇAĞIRMIR (bax `entities/annual_leave.py` başlığı).
+            "annual_leave_balances": PostgresAnnualLeaveBalanceRepository(conn, self._context),
+            "annual_leave_requests": PostgresAnnualLeaveRequestRepository(conn, self._context),
             # Bildirişin YAZISI `PostgresNotifier`-dədir (öz tranzaksiyası ilə);
             # burada qeydiyyatdan keçən yalnız OXU və "oxundu" işarəsidir.
             "notifications": PostgresNotificationRepository(conn, self._context),

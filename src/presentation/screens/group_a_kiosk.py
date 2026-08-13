@@ -31,6 +31,7 @@ from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
+    Chip,
     Divider,
     body_label,
     mono_label,
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
     from PySide6.QtGui import QPaintEvent
 
     from src.presentation.theme.manager import ThemeManager
+    from src.presentation.widgets.primitives import ChipTone
 
 #: PIN uzunluğu (bölmə 9 — 4 rəqəm).
 PIN_LENGTH: Final = 4
@@ -359,6 +361,7 @@ class EmployeeHomeScreen(QWidget):
         logout_requested: "Çıxış".
         tasks_requested / rewards_requested / appeal_requested: kart keçidləri.
         open_shift_claim_requested: `[Bu Növbəni Götür]` (#16 — elan id-si).
+        annual_leave_request_requested: `[Məzuniyyət Sorğusu]` (#28).
 
     ──────────────────────────────────────────────────────────────────────────
     "AÇIQ NÖVBƏLƏR" KARTI NİYƏ STATUS DÜYMƏSİNDƏN AYRIDIR
@@ -370,6 +373,12 @@ class EmployeeHomeScreen(QWidget):
     asılı deyil. Onu status düyməsinə qatsaydıq, "Mağazadayam" vəziyyətində
     işçi ya icazə istəyə, ya növbə götürə bilərdi — ikisi bir düyməyə
     sığmaz.
+
+    EYNİ ƏSASLANDIRMA "İLLİK MƏZUNİYYƏT" KARTINA DA AİDDİR (#28) və orada bir
+    qat da güclüdür: statusdakı `[İcazə İstəyirəm]` STEP1 gündaxili icazədir
+    (DƏQİQƏ, `leave_verification.py`), məzuniyyət isə İLLİK haqqdır (GÜN).
+    İkisini eyni düyməyə yığmaq iki fərqli mexanizmi bir-birinə qarışdırardı —
+    işçi "icazə" sözünü basıb hansı sistemin işə düşdüyünü bilməzdi.
     """
 
     action_requested = Signal(object)
@@ -379,6 +388,7 @@ class EmployeeHomeScreen(QWidget):
     rewards_requested = Signal()
     appeal_requested = Signal()
     open_shift_claim_requested = Signal(str)
+    annual_leave_request_requested = Signal()
 
     def __init__(
         self,
@@ -509,6 +519,10 @@ class EmployeeHomeScreen(QWidget):
         layout.addWidget(self._build_points_card(), 1)
         layout.addWidget(self._build_fines_card(), 1)
         layout.addWidget(self._build_open_shifts_card(), 1)
+        # #28 İllik Məzuniyyət — kartlar sırasının SONUNDA: soldan sağa
+        # "bugün → bu ay → gələcək" ritmi qorunur (tapşırıq/xal/cərimə cari
+        # dövrə, açıq növbə yaxın günlərə, məzuniyyət isə bütün ilə aiddir).
+        layout.addWidget(self._build_annual_leave_card(), 1)
         return container
 
     def _build_tasks_card(self) -> Card:
@@ -694,6 +708,158 @@ class EmployeeHomeScreen(QWidget):
         self._open_shift_hint.setText(message or "Hazırda sizin üçün açıq növbə yoxdur.")
         self._open_shift_hint.setVisible(True)
 
+    # ------------------------ illik məzuniyyət (#28) -------------------------- #
+
+    def _build_annual_leave_card(self) -> Card:
+        """ "İllik Məzuniyyət" kartı — #28 (kompas1.md Faza 4).
+
+        Struktur "Xal Balansım" kartının ikizidir (böyük rəqəm + izah + tək
+        düymə), çünki hər ikisi İŞÇİNİN ÖZ BALANSIDIR və hər ikisi səlahiyyət
+        TƏLƏB ETMİR (`AnnualLeaveUseCase.my_balance` / `SalesPointsUseCase.
+        balance_for`). Öz haqqını görmək üçün flag istəmək işçini öz
+        məlumatından kəsərdi (`menu.py` başlığındakı self-service qaydası).
+        """
+        card = Card(padding=22, spacing=12)
+
+        head = QWidget()
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(0, 0, 0, 0)
+        head_layout.addWidget(title_label("İllik Məzuniyyət", size=16))
+        head_layout.addWidget(stretch())
+        self._annual_leave_year = mono_label("", muted=True, size=12)
+        head_layout.addWidget(self._annual_leave_year)
+        card.add(head)
+        card.add(Divider())
+
+        # "14/21" — `available_days`/`total_days`; mətn EKRANDA qurulur, use
+        # case yalnız rəqəmləri verir (bax `AnnualLeaveBalanceView` başlığı).
+        self._annual_leave_value = title_label("—", size=32)
+        card.add(self._annual_leave_value)
+
+        self._annual_leave_caption = muted_label("gün qalıb")
+        card.add(self._annual_leave_caption)
+
+        # KÖÇÜRMƏ SƏTRİ HƏMİŞƏ GÖRÜNÜR (bax `set_annual_leave_balance`).
+        #
+        # TON NİŞANDADIR, MƏTNDƏ DEYİL. `Chip` rəng cütləri (`--color-warning`
+        # / `--color-warning-bg`) `scripts/check_contrast.py`-də AA NORMAL mətn
+        # həddi ilə ölçülür; eyni rəngi 12px mətn kimi kart fonuna yazsaydıq,
+        # tünd temada `--color-danger`/`--color-bg-surface` cütü 4.33:1-ə
+        # düşərdi — yəni ən vacib xəbərdarlıq ən pis oxunan sətir olardı.
+        self._annual_leave_chip = Chip("", "neutral")
+        self._annual_leave_chip.setVisible(False)
+        card.add(self._annual_leave_chip)
+
+        self._annual_leave_carryover = body_label("", size=12)
+        self._annual_leave_carryover.setStyleSheet(
+            f"color: {self._theme.color('--color-text-muted')};"
+        )
+        card.add(self._annual_leave_carryover)
+
+        card.body().addStretch(1)
+
+        self._annual_leave_message = body_label("", size=12)
+        self._annual_leave_message.setVisible(False)
+        card.add(self._annual_leave_message)
+
+        request = action_button("Məzuniyyət Sorğusu")
+        request.setMinimumHeight(44)  # bölmə 9 — toxunma hədəfinin minimumu
+        request.clicked.connect(self.annual_leave_request_requested)
+        card.add(request)
+        return card
+
+    def set_annual_leave_balance(self, balance: dict[str, str]) -> None:
+        """Balans kartını doldurur (#28).
+
+        Args:
+            balance: `year`, `available`, `total`, `carried_over`,
+                `carryover_deadline`, `carryover_expired` (`"1"`/`"0"`)
+                açarları olan sözlük. Açarlar maket (`preview_screens`) və
+                canlı yolda (`controllers/annual_leave.py::_to_balance_row`)
+                EYNİDİR (CLAUDE.md §6). BOŞ sözlük normal haldır — balans
+                qeydi olmayan işçi ekranı ÇÖKDÜRMÜR, "—" görür.
+
+        ──────────────────────────────────────────────────────────────────────
+        KÖÇÜRMƏ SON TARİXİ NİYƏ HƏMİŞƏ YAZILIR
+        ──────────────────────────────────────────────────────────────────────
+        "İstifadə et ya itir" qaydası (`ANNUAL_LEAVE_CARRYOVER_DEADLINE_*`)
+        işçinin PULUNU yandırır: keçən ildən köçürülən gün son tarixdən sonra
+        balansdan silinir. Bunu bilməyən işçi günü itirir və itkini yalnız
+        FAKT olandan sonra görür. Ona görə sətir üç vəziyyətdə də göstərilir:
+
+          * köçürülmüş gün VAR, vaxt keçməyib → `warning` nişanı, gün sayı və
+            son tarix birlikdə;
+          * köçürülmüş gün VAR, vaxt KEÇİB → `danger` nişanı: rəqəm hələ
+            balansda görünə bilər (gecəlik iş növbəti icrada silir), lakin
+            işçi ona ARTIQ arxalanmamalıdır;
+          * köçürülmüş gün YOX → nişan gizlənir, LAKİN son tarix solğun
+            sətirdə qalır, çünki qaydanın ÖZÜ gələn il üçün planlaşdırmaya
+            təsir edir və işçi onu ƏVVƏLCƏDƏN bilməlidir.
+        """
+        year = balance.get("year", "")
+        available = balance.get("available", "")
+        total = balance.get("total", "")
+
+        self._annual_leave_year.setText(year)
+        if available and total:
+            self._annual_leave_value.setText(f"{available}/{total}")
+            self._annual_leave_caption.setText("gün qalıb")
+        else:
+            # Balans sətri hələ yoxdur (yeni işçi, oxu xətası) — kart boş
+            # qalır, lakin düymə İŞLƏK olur: sorğu göndərmək balansı yaradır.
+            self._annual_leave_value.setText("—")
+            self._annual_leave_caption.setText("Balans məlumatı yoxdur")
+
+        chip_text, tone = self._carryover_chip(balance)
+        self._annual_leave_chip.setText(chip_text)
+        self._annual_leave_chip.set_tone(tone)
+        self._annual_leave_chip.setVisible(bool(chip_text))
+        self._annual_leave_carryover.setText(self._carryover_text(balance))
+
+    def _carryover_chip(self, balance: dict[str, str]) -> tuple[str, ChipTone]:
+        carried = balance.get("carried_over", "0")
+        if not balance.get("carryover_deadline") or not self._has_carryover(carried):
+            return "", "neutral"
+        if balance.get("carryover_expired") == "1":
+            return "Köçürmə müddəti bitib", "danger"
+        return f"{carried} gün köçürülüb", "warning"
+
+    def _carryover_text(self, balance: dict[str, str]) -> str:
+        deadline = balance.get("carryover_deadline", "")
+        carried = balance.get("carried_over", "0")
+        expired = balance.get("carryover_expired") == "1"
+
+        if not deadline:
+            return ""
+        if self._has_carryover(carried) and expired:
+            return f"Köçürülən {carried} günün müddəti bitib ({deadline}) — həmin günlər yanır."
+        if self._has_carryover(carried):
+            return f"Keçən ildən {carried} gün köçürülüb — {deadline} tarixinədək istifadə edin."
+        return f"Köçürülən gün yoxdur. Köçürmə son tarixi: {deadline}."
+
+    @staticmethod
+    def _has_carryover(carried: str) -> bool:
+        """ "0", "0.0", "0.00" və boş sətir — hamısı "köçürmə yoxdur" deməkdir.
+
+        Rəqəm `Decimal`-dan sətrə çevrilir və format ROOT parametrindən asılı
+        olaraq dəyişə bilər; `!= "0"` müqayisəsi "0.00" halında YALANÇI
+        xəbərdarlıq verərdi.
+        """
+        try:
+            return float(carried) > 0
+        except (TypeError, ValueError):
+            return False
+
+    def set_annual_leave_message(self, message: str) -> None:
+        """Sorğunun nəticəsi — kioskda İSTİSNA EKRANA ÇIXMIR (#28).
+
+        `set_open_shift_message` ilə eyni qərar: kiosk PAYLAŞILAN cihazdır və
+        orada modal xəta pəncərəsi bütün mağazanı bloklaya bilər. Mətn
+        kontrollerdən gəlir (`error.user_message`), ekran onu YENİDƏN yazmır.
+        """
+        self._annual_leave_message.setText(message)
+        self._annual_leave_message.setVisible(bool(message))
+
     # -------------------------------- elanlar (#19) ---------------------------- #
 
     def _build_announcements_card(self) -> Card:
@@ -777,6 +943,18 @@ class EmployeeHomeScreen(QWidget):
     @property
     def status(self) -> WorkerStatus:
         return self._status
+
+    @property
+    def theme(self) -> ThemeManager:
+        """Tema — dialoq quran kontroller üçün (#28).
+
+        `Screen.theme` ilə EYNİ müqavilə: kontroller `AnnualLeaveRequestDialog`
+        yaradarkən temanı ekrandan alır. Kiosk ekranı `Screen`-dən törəmir
+        (vəziyyət keçidi və kənar boşluqlar ona lazım deyil), ona görə xassə
+        burada ayrıca elan olunur — kontrollerə ikinci bir tema mənbəyi
+        ötürsəydik, tema dəyişəndə dialoq köhnə palitrada açılardı.
+        """
+        return self._theme
 
 
 __all__ = [

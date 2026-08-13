@@ -114,6 +114,103 @@ systemctl enable --now kompasos-scheduler.timer
 
 ---
 
+## Variant C — Tətbiqin ÖZ planlayıcısı (`--run-scheduled-jobs`)
+
+Yuxarıdakı iki variant **DB funksiyalarını** (SQL) işlədir. Lakin bir sıra
+qayda yalnız **Python qatında** yaşayır — onları `pg_cron` çağıra bilməz,
+çünki onlar `pg_dump` işə salır, bildiriş göndərir və domen hesablaması edir:
+
+| İş açarı | Nə edir | Ritm | Çəki |
+|---|---|---|---|
+| `BEHAVIOR_BASELINE_RECALC` | #8 işçi davranış baz xətti | gündəlik | yüngül |
+| `EXCEPTION_ENGINE_RUN` | #9 Vahid İstisna Motoru | gündəlik | yüngül |
+| `STAFFING_PATTERN_REFRESH` | #13 həftə-günü kadr ortaları (hər aktiv mağaza) | gündəlik | yüngül |
+| `EMPLOYEE_DOCUMENT_EXPIRY_NOTICE` | #17 sənəd bitmə xəbərdarlığı (30/14/7 gün) | gündəlik | yüngül |
+| `ATTRITION_RISK_RECALC` | #21 işdən çıxma riski balı | gündəlik | yüngül |
+| `FINE_EXPIRE_STALE` | cavabsız etirazların bağlanması (72 saat) | **saatlıq** | yüngül |
+| `NIGHTLY_BACKUP` | `pg_dump` + saxlama müddəti bitmiş faylların silinməsi | gündəlik | **AĞIR** |
+
+**Sıra qorunur:** `BEHAVIOR_BASELINE_RECALC` motordan ƏVVƏL işləyir — motor
+baz xəttini oxuyur, köhnəsi ilə işləsəydi hər anomaliya bir gün gecikərdi.
+
+`FINE_EXPIRE_STALE` **saatlıq**dır, çünki o, `cron_close_expired_appeals`
+işinin tətbiq qatındakı əkizidir və həmin cron `schema.sql`-da `'0 * * * *'`
+ilə qeydiyyatdan keçib — ritmlər eyni olmasa, etiraz pəncərəsinin bağlanma
+anı `pg_cron`-un olub-olmamasından asılı olardı.
+
+### İki giriş nöqtəsi
+
+| Yol | Nə işlədir | Nə vaxt |
+|---|---|---|
+| GUI (`QTimer`) | **yalnız yüngül** işlər | tətbiq açıq olduqca, `SCHEDULER_POLL_INTERVAL_MINUTES` ritmi ilə |
+| CLI (`--run-scheduled-jobs`) | **hamısı**, ağırlar daxil | Windows Task Scheduler / əl ilə |
+
+Gecəlik ehtiyat nüsxə (`pg_dump`) **GUI-dən heç vaxt işləmir** — o, interfeys
+axınını dəqiqələrlə dondurardı. Yəni **Task Scheduler qurulmazsa ehtiyat nüsxə
+alınmır**.
+
+### Windows Task Scheduler
+
+```powershell
+# `-Execute` yolu quraşdırma yerinizə görə dəyişir.
+$action = New-ScheduledTaskAction `
+    -Execute 'C:\Program Files\KompasOS\KompasOS.exe' `
+    -Argument '--run-scheduled-jobs'
+
+# Saat `SCHEDULER_NIGHTLY_HOUR` (defolt 3) dəyərindən BİR NEÇƏ DƏQİQƏ SONRA
+# seçilir: slot yerli 03:00-da açılır, tapşırıq 03:10-da onu hazır tapır.
+$trigger = New-ScheduledTaskTrigger -Daily -At 03:10
+
+# `-WakeToRun`: mağaza PC-si yuxu rejimindədirsə oyandırılır. Oyanmasa da
+# problem deyil — gecikmiş icra (catch-up) səhər ilk açılışda işi tutur.
+$settings = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable
+
+Register-ScheduledTask -TaskName 'KompasOS-App-Jobs' `
+    -Action $action -Trigger $trigger -Settings $settings -RunLevel Highest
+```
+
+> **Mühit dəyişənləri MƏCBURİDİR.** Proses `KOMPASOS_TENANT_ID` və
+> `DATABASE_URL` olmadan işə düşmür (çıxış kodu **2**). Task Scheduler
+> istifadəçi mühitini həmişə miras almır — dəyişənləri **Sistem** səviyyəsində
+> təyin edin (`setx /M`).
+
+**Çıxış kodları:** `0` — hər şey qaydasındadır; `1` — ən azı bir iş çökdü
+(Task Scheduler tarixçəsində qırmızı görünür); `2` — quraşdırma/baza xətası.
+
+### Çox terminal, bir icarə
+
+Planlayıcı **hər terminalda** işləyir. Təkrar icranı `app_scheduled_job_runs`
+cədvəlindəki `UNIQUE (tenant_id, job_key, scheduled_for)` bloklayır: işi
+yalnız icarəni ATOMİK götürən terminal icra edir. Ona görə **bütün
+terminallarda tapşırıq qurmaq təhlükəsizdir** — baz xətti yenə bir dəfə
+hesablanır.
+
+Terminalı `leased_by` sütunu göstərir (`MAĞAZA3-KASSA1#4212` formatında:
+maşın adı + proses nömrəsi).
+
+### Çox-kirayəçilik
+
+`--run-scheduled-jobs` **yalnız `KOMPASOS_TENANT_ID`-dəki kirayəçi** üçün
+işləyir. Bu, qərardır: `system_limits` RLS ilə kirayəçiyə bağlıdır (SEC-008),
+yəni bir quraşdırmadan «bütün müştərilər üçün» dövrə işlətmək bir müştərinin
+parametrini digərinin gecə işinə tətbiq etmək olardı. Hər quraşdırma öz
+işlərini icra edir.
+
+### Vəziyyət sorğusu
+
+```sql
+SELECT job_key, scheduled_for, status, leased_by, attempts, result_detail, last_error
+FROM kompasos.app_scheduled_job_runs
+WHERE tenant_id = '<TENANT_ID>'
+ORDER BY scheduled_for DESC
+LIMIT 30;
+```
+
+> `app_scheduled_job_runs` (tətbiq) ilə `scheduled_job_runs` (DB-nin öz cron
+> jurnalı, aşağıdakı «Monitorinq» bölməsi) **fərqli cədvəllərdir**.
+
+---
+
 ## Monitorinq
 
 System Health Monitor (bölmə 6) bu görünüşü oxuyur:

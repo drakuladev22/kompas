@@ -209,6 +209,17 @@ class UploadOwnerType(str, Enum):
     FINE = "FINE"
     #: `employee_documents.id` — sənəd/müqavilə skanı (#17, Faza 7).
     EMPLOYEE_DOCUMENT = "EMPLOYEE_DOCUMENT"
+    #: `field_reports.id` VƏ YA `field_report_checklist_items.id` — mağaza
+    #: auditi/insident foto-sübutu (#26+#27, kompas1.md Faza 3).
+    #:
+    #: İKİ CƏDVƏL, TƏK SAHİB TİPİ: hər iki İD `gen_random_uuid()`-dir, yəni
+    #: QLOBAL unikaldır — bir UUID hər iki cədvəldə eyni anda mövcud ola
+    #: bilməz və geri-çağırış sahibi birmənalı tapır
+    #: (`FieldReportUseCase.attach_uploaded_photo` başlığı). Ayrı tip
+    #: (`FIELD_REPORT_ITEM`) əlavə etmək uzantı ağ siyahısını, işçi
+    #: geri-çağırışını və miqrasiya tarixçəsini ikiqat artırardı — halbuki
+    #: hər ikisinin FORMAT qaydası və saxlanma yolu EYNİDİR.
+    FIELD_REPORT = "FIELD_REPORT"
 
 
 @dataclass(frozen=True)

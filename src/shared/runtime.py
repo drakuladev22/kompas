@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import socket
 import sys
 from pathlib import Path
 from typing import Final
@@ -146,11 +147,46 @@ def plugin_interpreter() -> str | None:
     return None
 
 
+def process_instance_id() -> str:
+    """BU prosesin identifikatoru — planlayıcı icarəsinin sahibi (Faza 11).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ MAŞIN ADI **VƏ** PID — BİRİ TƏK BAŞINA YETMİR
+    ──────────────────────────────────────────────────────────────────────────
+    `JobRunner` icarəni `leased_by` sütununda bu sətirlə imzalayır. İki fərqli
+    icra eyni identifikatoru daşısaydı, "icarə hələ MƏNDƏDİR" yoxlaması hər
+    ikisi üçün doğru olardı və `mark_succeeded`-in sahiblik şərti mənasını
+    itirərdi (bax `scheduled_job_repository._finish`).
+
+      * yalnız maşın adı → mağazada eyni PC-də açılan İKİ nüsxə (istifadəçi
+        ikonu iki dəfə kliklədi) eyni sahib kimi görünərdi;
+      * yalnız PID → 21 mağazanın terminallarında PID-lər asanlıqla üst-üstə
+        düşür (Windows onları təkrar işlədir), yəni fərqli maşınlar eyni
+        sahib adı ilə yazardı və diaqnostika «hansı terminal asdı?» sualına
+        yanlış cavab verərdi.
+
+    YENİ MAŞIN-İDENTİFİKATORU İCAD EDİLMİR: layihədə maşını adlandıran yeganə
+    mövcud yer `timekeeping/ntp.py`-dır və o da məhz `socket.gethostname()`
+    işlədir — burada eyni mənbə seçilir ki, NTP xəbərdarlığındakı ad ilə
+    planlayıcı jurnalındakı ad ÜST-ÜSTƏ DÜŞSÜN.
+
+    SABİTLİK TƏLƏB OLUNMUR (bax `JobRunner.__init__` docstring-i): yenidən
+    başlayan proses yeni PID alır, köhnə icarə isə onsuz da `leased_until`
+    ilə bitir.
+    """
+    # `gethostname()` konteynerdə/qeyri-adi şəbəkə konfiqurasiyasında boş
+    # sətir qaytara bilər; boş sahib DB `CHECK`-inə düşərdi (`leased_by`
+    # boşdan uzun olmalıdır), ona görə burada görünən əvəz qoyulur.
+    host = socket.gethostname().strip() or "TERMINAL"
+    return f"{host}#{os.getpid()}"
+
+
 __all__ = [
     "PLUGIN_PYTHON_ENV",
     "bundle_root",
     "deployment_root",
     "is_frozen",
     "plugin_interpreter",
+    "process_instance_id",
     "relaunch_command",
 ]

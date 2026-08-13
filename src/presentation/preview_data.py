@@ -24,6 +24,7 @@ from typing import Final, NamedTuple
 
 from src.domain.entities.employee import Employee
 from src.domain.entities.position import Position
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.authorization import (
     HardlockLevel,
     PermissionFlag,
@@ -79,6 +80,13 @@ _ADMIN_FLAGS: Final = (
     # (migrations/021, kateqoriya "HR"), burada isə yalnız ekranın maketlə
     # tutuşdurulması üçün verilir (bax funksiya docstring-i).
     "can_view_exceptions",
+    # #26+#27-nin GUI tərəfi (kompas1.md Faza 3). `can_report_incident` real
+    # sistemdə BÜTÜN rollardadır (migrations/038, "Tələ 3"),
+    # `can_conduct_store_audit` isə YALNIZ Root/CEO/Admin/HR_Admin-də —
+    # önizləmə Admin-i hər ikisini daşıyır ki, hər iki forma maketlə
+    # tutuşdurula bilsin.
+    "can_conduct_store_audit",
+    "can_report_incident",
 )
 
 
@@ -1092,5 +1100,183 @@ ATTRITION_RISK_SCORES: Final = [
         "band_text": "Normal",
         "is_high_risk": "0",
         "factors_text": "Son 3 ayın yarımlarında cərimə sayı 2 → 2 (artım: 0).",
+    },
+]
+
+# --------------------------------------------------------------------------- #
+# #26 Mağaza Auditi + #27 İnsident Bildirişi — kompas1.md Faza 3
+# --------------------------------------------------------------------------- #
+# Açarlar `controllers/field_reports.py`-dakı `_template_row` / `_category_row`
+# / `_report_row` funksiyalarının qaytardığı sözlüklərlə HƏRFİ-HƏRFİNƏ eynidir
+# (CLAUDE.md §6 — maket və canlı yol EYNİ açarları işlədir). Uyğunluğu
+# `tests/unit/test_field_report_screen.py` qoruyur.
+#
+# Şablon kodları və mətnlər `migrations/037`-nin seed sətirlərindəndir —
+# önizləmə uydurma ad məkanı qurmur.
+
+FIELD_REPORT_AUDIT_TEMPLATES: Final = [
+    {
+        "code": "STORE_AUDIT",
+        "name": "Mağaza ziyarəti / audit",
+        "description": (
+            "Strukturlaşdırılmış checklist üzrə mağaza yoxlaması. Uğursuz "
+            "bloklayıcı bənd Tapşırıq Mühərrikində düzəliş tapşırığı yaradır."
+        ),
+        "requires_checklist": "1",
+    }
+]
+
+FIELD_REPORT_INCIDENT_TEMPLATES: Final = [
+    {
+        "code": "INCIDENT",
+        "name": "İnsident bildirişi",
+        "description": (
+            "Baş vermiş hadisənin (oğurluq, qəza, avadanlıq nasazlığı, şikayət) "
+            "bildirilməsi. Checklist tələb etmir, foto istəyə bağlıdır."
+        ),
+        "requires_checklist": "0",
+    }
+]
+
+#: Audit kateqoriyaları MARŞRUTLANMIR — nəticə rola deyil, Tapşırıq
+#: Mühərrikinə gedir (migrations/037 `route_to_role` sütun şərhi).
+FIELD_REPORT_AUDIT_CATEGORIES: Final = [
+    {
+        "code": "TEMIZLIK",
+        "template": "STORE_AUDIT",
+        "name": "Təmizlik və gigiyena",
+        "route_text": "marşrutlanmır",
+    },
+    {
+        "code": "AVADANLIQ",
+        "template": "STORE_AUDIT",
+        "name": "Avadanlıq və təhlükəsizlik",
+        "route_text": "marşrutlanmır",
+    },
+]
+
+FIELD_REPORT_INCIDENT_CATEGORIES: Final = [
+    {
+        "code": "OGURLUQ",
+        "template": "INCIDENT",
+        "name": "Oğurluq şübhəsi",
+        "route_text": "TEHLUKESIZLIK",
+    },
+    {
+        "code": "SIKAYET",
+        "template": "INCIDENT",
+        "name": "Müştəri şikayəti",
+        "route_text": "HR_ADMIN",
+    },
+]
+
+#: (mağaza id, ad) — `set_stores()` `open_shift.OpenShiftPostDialog` ilə eyni
+#: cüt formasını gözləyir. ID-lər maketdə sabitdir; canlı yolda UUID gəlir.
+FIELD_REPORT_STORES: Final = [
+    ("11111111-1111-4111-8111-111111111111", "Bellona 28 May"),
+    ("22222222-2222-4222-8222-222222222222", "Yataş Xətai"),
+]
+
+FIELD_REPORT_OPEN_AUDITS: Final = [
+    {
+        "id": "fr-audit-1",
+        "type_name": "Mağaza ziyarəti / audit",
+        "category_name": "Təmizlik və gigiyena",
+        "store": "Bellona 28 May",
+        "detail": "Anbar arxasında qablaşdırma tullantısı yığılıb, çıxış yolu daralıb.",
+        "status": "SUBMITTED",
+        "status_text": "Təqdim edildi",
+        "score_text": "67%",
+        "date": "12.08.2026 09:20",
+    },
+    {
+        "id": "fr-audit-2",
+        "type_name": "Mağaza ziyarəti / audit",
+        "category_name": "Avadanlıq və təhlükəsizlik",
+        "store": "Yataş Xətai",
+        "detail": "Kassa yanındakı işıqlandırma bir həftədir işləmir.",
+        "status": "IN_PROGRESS",
+        "status_text": "İcradadır",
+        # Heç bir bənd cavablanmayıbsa «0%» YAZILMIR (bax `audit_score`).
+        "score_text": "—",
+        "date": "11.08.2026 16:05",
+    },
+]
+
+FIELD_REPORT_OPEN_INCIDENTS: Final = [
+    {
+        "id": "fr-inc-1",
+        "type_name": "İnsident bildirişi",
+        "category_name": "Oğurluq şübhəsi",
+        "store": "Bellona 28 May",
+        "detail": "Nümayiş masasından bir ədəd aksesuar itkin düşüb.",
+        "status": "SUBMITTED",
+        "status_text": "Təqdim edildi",
+        "score_text": "—",
+        "date": "12.08.2026 08:41",
+    }
+]
+
+#: ROOT parametrləri DƏYƏRİ İLƏ TƏKRARLANMIR — maket də `DEFAULT_LIMITS`-dən
+#: oxuyur, əks halda limit dəyişəndə önizləmə köhnə ədədi göstərərdi.
+FIELD_REPORT_MAX_PHOTOS: Final = int(DEFAULT_LIMITS[SystemLimitKey.FIELD_REPORT_MAX_PHOTOS])
+FIELD_REPORT_MIN_DETAIL: Final = int(DEFAULT_LIMITS[SystemLimitKey.FIELD_REPORT_MIN_DETAIL_LENGTH])
+
+# --------------------------------------------------------------------------- #
+# #28 İllik Məzuniyyət Balansı — kompas1.md Faza 4
+# --------------------------------------------------------------------------- #
+# Açarlar `controllers/annual_leave.py`-dakı `_to_balance_row` / `_to_inbox_row`
+# funksiyalarının qaytardığı sözlüklərlə HƏRFİ-HƏRFİNƏ eynidir (CLAUDE.md §6).
+# Uyğunluğu `tests/unit/test_annual_leave_screen.py` qoruyur.
+#
+# BU, GÜNDAXİLİ İCAZƏ MAKETİ DEYİL: yuxarıdakı `LEAVE_*` dəstləri STEP1/STEP2
+# axınına (DƏQİQƏ) aiddir, bu isə İLLİK haqqdır (GÜN) — üç ayrı mexanizmin
+# izahı `screens/annual_leave.py` başlığındadır.
+
+#: `total` ROOT DEFOLTUNDAN oxunur, ƏL İLƏ yazılmır — baza haqq dəyişəndə maket
+#: köhnə ədədi göstərməsin (`FIELD_REPORT_*` ilə eyni qərar). "14/21 gün qalıb"
+#: cümləsini EKRAN qurur, maket yalnız rəqəmləri verir.
+#:
+#: NİYƏ MAKETDƏ KÖÇÜRMƏ SIFIRDIR: köçürmə İSTİSNA haldır (yalnız keçən ildən
+#: gün qalan işçidə olur), maket isə ƏN ADİ vəziyyəti göstərməlidir — və
+#: `policies.py`-dakı `ANNUAL_LEAVE_ACCRUAL_PERIOD` şərhi məhz bu kartı
+#: "14/21" kimi təsvir edir. Köçürmə sətri yenə də GÖRÜNÜR (solğun tonda son
+#: tarixlə), yəni "istifadə et ya itir" qaydası maketdən də oxunur;
+#: xəbərdarlıq/xəta tonları `tests/unit/test_annual_leave_screen.py`-də
+#: yoxlanılır.
+_ANNUAL_LEAVE_BASE: Final = DEFAULT_LIMITS[SystemLimitKey.ANNUAL_LEAVE_BASE_ENTITLEMENT_DAYS]
+
+ANNUAL_LEAVE_BALANCE: Final = {
+    "year": "2026",
+    "available": "14",
+    "total": str(int(float(_ANNUAL_LEAVE_BASE))),
+    "used": "7",
+    "carried_over": "0",
+    # Son tarix ROOT açarlarından (`..._DEADLINE_MONTH`/`..._DAY`) qurulur:
+    # maketdə "31.03" yazsaydıq və Root onu dəyişsəydi, önizləmə yalan
+    # danışardı.
+    "carryover_deadline": (
+        f"{int(DEFAULT_LIMITS[SystemLimitKey.ANNUAL_LEAVE_CARRYOVER_DEADLINE_DAY]):02d}."
+        f"{int(DEFAULT_LIMITS[SystemLimitKey.ANNUAL_LEAVE_CARRYOVER_DEADLINE_MONTH]):02d}.2027"
+    ),
+    "carryover_expired": "0",
+}
+
+ANNUAL_LEAVE_PENDING: Final = [
+    {
+        "id": "al-1",
+        "employee": "Aysel Quliyeva",
+        "range_text": "14.09.2026 – 25.09.2026",
+        "days_text": "12 təqvim günü",
+        "submitted": "12.08.2026 09:30",
+    },
+    {
+        "id": "al-2",
+        "employee": "Kamran Hüseynov",
+        "range_text": "28.12.2026 – 05.01.2027",
+        # İL SƏRHƏDİNİ KƏSƏN sorğu maketdə QƏSDƏN var: `_charge_year`
+        # bütünlüklə BAŞLANĞIC ilinə yazır və HR bu halı ekranda görməlidir.
+        "days_text": "9 təqvim günü",
+        "submitted": "11.08.2026 17:12",
     },
 ]

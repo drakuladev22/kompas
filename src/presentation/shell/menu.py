@@ -112,6 +112,29 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         icon="refresh",
     ),
     MenuEntry(
+        key="annual_leave",
+        title_az="Məzuniyyət Sorğuları",
+        # #28 (kompas1.md Faza 4) — İLLİK məzuniyyətin təsdiq növbəsi.
+        #
+        # NİYƏ «Növbə Dəyişmə»DƏN DƏRHAL SONRA: hər ikisi eyni formada
+        # işləyən TƏSDİQ NÖVBƏSİDİR (`PENDING_APPROVAL → APPROVED/REJECTED`,
+        # məcburi rədd səbəbi) və HR onları eyni ritmdə gəzir. Ayrı-ayrı
+        # yerlərdə dursaydılar, "təsdiq gözləyən nə var?" sualının cavabı
+        # menyunun iki ucunda qalardı.
+        #
+        # NİYƏ «İcazə Növləri» (184) İLƏ QARIŞDIRILMIR: o, STEP1/STEP2
+        # GÜNDAXİLİ icazənin kataloqudur (DƏQİQƏ), bu isə İLLİK haqqdır (GÜN).
+        # Adların oxşarlığı mexanizmlərin eyniliyi demək deyil — üç ayrı
+        # mexanizmin izahı `screens/annual_leave.py` başlığındadır.
+        #
+        # FEATURE TOGGLE YOXDUR: illik məzuniyyət qanuni haqqdır və "modul"
+        # kimi söndürülə bilməz (`announcements` ilə eyni qərar — tək flag-lə
+        # qapılı funksiya).
+        required_flag="can_manage_leave_balances",
+        order=52,
+        icon="calendar",
+    ),
+    MenuEntry(
         key="fines",
         title_az="Cərimələr",
         required_flag="can_issue_fines",
@@ -134,6 +157,44 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         feature_module=MODULE_TASKS,
         order=80,
         icon="checklist",
+    ),
+    MenuEntry(
+        key="store_audit",
+        title_az="Mağaza Auditi",
+        # #26 (kompas1.md Faza 3) — checklist tələb edən şablon ailəsi.
+        # `can_conduct_store_audit` DEFOLT yalnız Root/CEO/Admin/HR_Admin-dədir
+        # (migrations/038): strukturlaşdırılmış yoxlama düzəliş tapşırığı
+        # yaradır və bal Dashboard-a düşür, yəni "hər kəs" səlahiyyəti deyil.
+        #
+        # «Tapşırıqlar»dan (80) DƏRHAL SONRA durur, təsadüfən yox: uğursuz
+        # bloklayıcı bənd məhz həmin ekranda görünən tapşırığı yaradır — iki
+        # maddəni bir-birindən ayırmaq səbəb-nəticə zəncirini gizlədərdi.
+        required_flag="can_conduct_store_audit",
+        order=82,
+        icon="checklist",
+    ),
+    MenuEntry(
+        key="incident_report",
+        title_az="İnsident Bildirişi",
+        # #27 (kompas1.md Faza 3) — checklist tələb ETMƏYƏN şablon ailəsi.
+        #
+        # BU MADDƏ QƏSDƏN "ADMIN-TIER" DEYİL. `can_report_incident`
+        # migrations/038-də BÜTÜN 7 rola verilib ("Tələ 3": hər kəs insident
+        # bildirə bilməlidir, YALNIZ həlli məhduddur) və menyu həmin qərarı
+        # OLDUĞU KİMİ güzgüləyir: flag-i olan `Satıcı` da bu maddəni görür.
+        # Flag-i universal edib menyunu admin-tier saxlasaydıq, 038-in Tələ 3
+        # qərarı sükutla ölü qalardı — verilmiş, lakin heç bir yolla
+        # işlədilə bilməyən səlahiyyət.
+        #
+        # AÇIQ SİYAHI YENƏ DƏ MƏHDUDDUR: `list_open` `can_conduct_store_audit`
+        # tələb edir, ona görə `Satıcı` yalnız FORMANI görür, başqalarının
+        # insidentlərini yox (`controllers/field_reports.py` başlığı).
+        required_flag="can_report_incident",
+        order=84,
+        # `"fine"` ADI tarixidir, QLİFİ isə nida işarəli XƏBƏRDARLIQ ÜÇBUCAĞIDIR
+        # (bax `widgets/icons.py`) — insident üçün düzgün formadır. Yeni ikon
+        # əlavə etmək dizayn dəstini eyni formanın ikinci nüsxəsi ilə şişirdərdi.
+        icon="fine",
     ),
     MenuEntry(
         key="sales_points",

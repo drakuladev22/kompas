@@ -71,6 +71,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from src.application.use_cases.announcements import AnnouncementUseCase
+    from src.application.use_cases.annual_leave import AnnualLeaveUseCase
     from src.application.use_cases.attrition_risk import AttritionRiskUseCase
     from src.application.use_cases.audit_query import AuditQueryUseCase
     from src.application.use_cases.backup_access import BackupAccessUseCase
@@ -87,6 +88,7 @@ if TYPE_CHECKING:
     from src.application.use_cases.employee_profile import EmployeeProfileAccessUseCase
     from src.application.use_cases.erp_connection import ErpConnectionWizardUseCase
     from src.application.use_cases.exception_engine import ExceptionEngineUseCase
+    from src.application.use_cases.field_reports import FieldReportUseCase
     from src.application.use_cases.fine_management import (
         FineAppealUseCase,
         ManualFineUseCase,
@@ -170,6 +172,118 @@ class _RootLimitReader:
         with self._database.unit_of_work(tenant_id) as uow:
             value: str = uow.repository("limits").get_str(tenant_id, key, default)
             return value
+
+
+class _StandaloneLimits:
+    """`SystemLimits` portunun SESSİYADAN-KƏNAR tam tətbiqi (Faza 11).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `_RootLimitReader` KİFAYƏT ETMİR
+    ──────────────────────────────────────────────────────────────────────────
+    Yuxarıdakı körpü `LimitReader`-dir: yalnız `get_str`. `JobRunner` isə
+    domenin `SystemLimits` PORTUNU gözləyir və dövrənin başında `all_for()`
+    ilə TAM nüsxə oxuyur — dörd planlayıcı parametrini bir sorğuda alsın deyə
+    (uzun icra ərzində Root dəyəri dəyişsə, eyni dövrənin işləri müxtəlif
+    icarə müddəti ilə işləyərdi, bax `JobRunner.run_due`).
+
+    Planlayıcı `Session`-dan UZUN yaşayır (GUI-də `QTimer`, CLI-da tək icra),
+    ona görə repo-nu saxlaya bilməz — repo bağlantıya bağlıdır. Naxış
+    `_RootLimitReader` ilə eynidir: `Database` saxlanılır, hər oxu üçün QISA
+    bir iş vahidi açılır.
+
+    PORTUN QALAN METODLARI DA TƏTBİQ OLUNUR (planlayıcı yalnız `all_for`
+    çağırsa da): natamam obyekt `# type: ignore` tələb edərdi və o susdurma
+    gələcəkdə port genişlənəndə ƏSL uyğunsuzluğu da gizlədərdi.
+    """
+
+    __slots__ = ("_database",)
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    def get_int(self, tenant_id: TenantId, key: str, default: int) -> int:
+        with self._database.unit_of_work(tenant_id) as uow:
+            value: int = uow.repository("limits").get_int(tenant_id, key, default)
+            return value
+
+    def get_str(self, tenant_id: TenantId, key: str, default: str) -> str:
+        with self._database.unit_of_work(tenant_id) as uow:
+            value: str = uow.repository("limits").get_str(tenant_id, key, default)
+            return value
+
+    def all_for(self, tenant_id: TenantId) -> dict[str, str]:
+        with self._database.unit_of_work(tenant_id) as uow:
+            snapshot: dict[str, str] = uow.repository("limits").all_for(tenant_id)
+            return snapshot
+
+    def describe(self, tenant_id: TenantId) -> list[dict[str, object]]:
+        with self._database.unit_of_work(tenant_id) as uow:
+            rows: list[dict[str, object]] = uow.repository("limits").describe(tenant_id)
+            return rows
+
+    def set_value(
+        self, tenant_id: TenantId, key: str, value: str, *, changed_by: EmployeeId
+    ) -> None:
+        # YAZI YOLU `commit` TƏLƏB EDİR — oxu metodlarında commit YOXDUR
+        # (çıxışda rollback olur, oxu üçün doğru davranış). Bu qol planlayıcı
+        # tərəfindən çağırılmır; portun tamlığı üçün var (bax sinif başlığı).
+        with self._database.unit_of_work(tenant_id, user_id=changed_by) as uow:
+            uow.repository("limits").set_value(tenant_id, key, value, changed_by=changed_by)
+            uow.commit()
+
+
+class _StandaloneAudit:
+    """`AuditTrail` portunun SESSİYADAN-KƏNAR tətbiqi — planlayıcı üçün.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AUDİT BURADA AYRI TRANZAKSİYADADIR
+    ──────────────────────────────────────────────────────────────────────────
+    Layihənin qaydası budur: audit sətri onu doğuran əməliyyatla EYNİ
+    tranzaksiyada yazılır (`connection.py`-dakı `"audit"` qeydiyyatı). Bura
+    həmin qaydanın istisnası DEYİL, ondan KƏNARDADIR: planlayıcının yazdığı
+    sətir bir aqreqatın dəyişməsini deyil, DÖVRƏNİN ÖZÜNÜ qeyd edir ("7 iş
+    icra olundu, biri uğursuz") və hər işin öz yazısı onsuz da öz sessiyasında
+    commit olunub.
+
+    Onu işlərin hər hansı birinin tranzaksiyasına bağlamaq mümkün deyil:
+    dövrənin hesabatı BÜTÜN işlər bitəndən sonra hazır olur, o vaxta qədər
+    həmin sessiyalar bağlanıb. Alternativ — dövrə boyu bir açıq tranzaksiya
+    saxlamaq — CLAUDE.md §6-nın açıq qadağasıdır (`pg_dump` dəqiqələrlə çəkir).
+
+    `AuditTrail.record()` İSTİSNA UDMUR (CLAUDE.md §5): burada da udulmur —
+    xəta yuxarı çıxır və `JobRunner.run_due` çağıranına (CLI çıxış kodu / GUI
+    log-u) çatır.
+    """
+
+    __slots__ = ("_database",)
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    def record(
+        self,
+        *,
+        tenant_id: TenantId,
+        actor_id: EmployeeId | None,
+        action: str,
+        entity_type: str,
+        entity_id: object | None = None,
+        before_state: dict[str, object] | None = None,
+        after_state: dict[str, object] | None = None,
+        reason: str | None = None,
+    ) -> None:
+        with self._database.unit_of_work(tenant_id, user_id=actor_id) as uow:
+            uow.audit.record(
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                action=action,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                before_state=before_state,
+                after_state=after_state,
+                reason=reason,
+            )
+            uow.commit()
 
 
 class _LazyBufferDrain:
@@ -306,6 +420,11 @@ class Session:
     # bax `_build_session`-dəki `register_rule(...)` çağırışı) — motorun ÖZÜ
     # (`exception_engine.py`) DƏYİŞMƏDƏN qaldı, rule-registry məhz bunun üçün
     # seçilmişdi.
+    #
+    # `run()` Faza 11-ə qədər HEÇ VAXT ÇAĞIRILMIRDI: motor yazılıb, test edilib
+    # və buraya qoşulub, lakin onu tətikləyən yol yox idi — nəticədə #9
+    # İstisnalar ekranı həmişə boş qalırdı. İndi `EXCEPTION_ENGINE_RUN`
+    # planlaşdırılmış işi onu gündəlik işlədir (`_register_scheduled_jobs`).
     exceptions: ExceptionEngineUseCase
 
     # --- #7 POS Səlahiyyət Siyasəti (sənədləşdirmə, kompasos11.md Faza 4) --- #
@@ -340,9 +459,10 @@ class Session:
     #
     # EKRANI YOXDUR — `recalculate_all()` planlaşdırılmış işdir
     # (`docs/scheduler_setup.md`, `fine_management.expire_stale` ilə eyni
-    # naxış). Sessiyaya qoşulması onu ROOT panelindəki gələcək "indi hesabla"
-    # düyməsi VƏ ya xarici planlayıcı skripti üçün əlçatan edir; qayda özü
-    # `exceptions` sahəsinə artıq qoşulub (yuxarı bax).
+    # naxış). Faza 11-dən etibarən onu `BEHAVIOR_BASELINE_RECALC` işi ÇAĞIRIR
+    # (bax `_register_scheduled_jobs`) və məhz ona görə `EXCEPTION_ENGINE_RUN`
+    # -dan ƏVVƏL qeydiyyatdan keçir; qayda özü `exceptions` sahəsinə artıq
+    # qoşulub (yuxarı bax).
     behavior_baselines: BehaviorBaselineUseCase
 
     # --- #15 Norma üstü iş saatları (kompasos11.md Faza 6) ------------------ #
@@ -357,7 +477,8 @@ class Session:
     # --- #13 Tarixi-nümunə kadr təklifi (kompasos11.md Faza 6) -------------- #
     #
     # İKİ YOLU VAR: `recalculate_for_store()` planlaşdırılmış işdir
-    # (`behavior_baselines` ilə eyni naxış), `suggestions_for()` isə Növbə
+    # (`STAFFING_PATTERN_REFRESH` — hər AKTİV mağaza üçün ayrıca çağırılır,
+    # bax `_job_staffing_pattern`), `suggestions_for()` isə Növbə
     # Matrisi ekranının məsləhət kartını doldurur. Təklif HEÇ NƏ bloklamır və
     # HEÇ NƏ təyin etmir — `shift_planning`-ə çağırışı YOXDUR və olmamalıdır
     # (kompasos11.md #13: "qeyri-məcburi göstərici").
@@ -366,7 +487,7 @@ class Session:
     # --- #21 İşdən Çıxma Riski Balı (kompasos11.md Faza 9) ------------------ #
     #
     # İKİ YOLU VAR: `recalculate_all()` planlaşdırılmış gecəlik iş
-    # (`behavior_baselines` ilə EYNİ naxış), `list_for_tenant()` isə
+    # (`ATTRITION_RISK_RECALC`), `list_for_tenant()` isə
     # `screens/attrition_risk.py`-in `can_view_attrition_risk` OXU yolu
     # (bax `controllers/attrition_risk.py`). Bildiriş zənciri (Store Manager
     # → HR_Admin) `recalculate_all()`-ın DAXİLİNDƏDİR — ekranın YOXDUR.
@@ -379,6 +500,35 @@ class Session:
     # metod (`ranking`/`store_vs_network`/`trend`/`outliers`) TƏK repo
     # (`multi_store_benchmark`) üzərində işləyir.
     multi_store_benchmark: MultiStoreBenchmarkUseCase
+
+    # --- #26+#27 Sahə hesabatları (kompas1.md Faza 3) ----------------------- #
+    #
+    # VAHİD NÜVƏ, İKİ ŞABLON (Struktur Qərar A): mağaza auditi və insident
+    # bildirişi EYNİ use case-dən keçir, fərq kataloqdadır. İKİNCİ sahə
+    # (`field_reports_incident` kimi) BURADA OLMAMALIDIR — o, qərarı
+    # kompozisiya kökünə sızdırardı.
+    #
+    # `TaskWorkflowUseCase`-i ASILILIQ kimi alır (Struktur Qərar B): uğursuz
+    # bloklayıcı bənd mövcud Tapşırıq Mühərrikini çağırır, yeni motor yazmır.
+    # `notify_overdue_audits()` isə `FIELD_REPORT_AUDIT_REMINDER` gecəlik
+    # işinin girişidir (bax `_register_scheduled_jobs`).
+    field_reports: FieldReportUseCase
+
+    # --- #28 İllik Məzuniyyət Balansı (kompas1.md Faza 4) ------------------- #
+    #
+    # ÜÇÜNCÜ, AYRI MEXANİZM. Sessiyada onsuz da olan `leave_verification`
+    # (STEP1/STEP2 gündaxili icazə, DƏQİQƏ) və `shift_planning` (Shift Matrix
+    # istirahət günü, PLAN) ilə QARIŞDIRILMAMALIDIR — bu, GÜN əsaslı illik
+    # haqqdır (bax `entities/annual_leave.py` başlığı). Hər üçü eyni sessiyada
+    # yaşayır, lakin bir-birini ÇAĞIRMIR.
+    #
+    # `shifts=repo("shifts")`: Shift Matrix YALNIZ OXUNUR — hansı günün
+    # istirahət olduğunu bilmək üçün. Təsdiqlənmiş məzuniyyət növbə planını
+    # DƏYİŞMİR (`ShiftSwapUseCase.approve`-dan qəsdən fərqli).
+    #
+    # `run_year_rollover()` isə `ANNUAL_LEAVE_YEAR_ROLLOVER` gecəlik işinin
+    # girişidir (bax `_register_scheduled_jobs`).
+    annual_leave: AnnualLeaveUseCase
 
     def commit(self) -> None:
         self.uow.commit()
@@ -457,6 +607,13 @@ class ApplicationContext:
         # jurnalı + sxem icrası). Hər sessiyada yeni bağlantı açmaq dəstək
         # tutumunu tükəndirərdi — halbuki bufer YALNIZ baza keçidində lazımdır.
         self._offline_drain: Any = None
+        # Planlayıcı da TƏNBƏLdir və eyni səbəbdəndir: reyestr qurulanda hər
+        # iş üçün bir log sətri yazılır və `PostgresScheduledJobRepository`
+        # `Database`-ə bağlanır. Önizləmə/dizayn rejimində və ilk dövrəyə
+        # qədər bunlara ehtiyac yoxdur. TƏK NÜSXƏ olması isə MƏCBURİDİR:
+        # ikinci `JobRunner` ikinci `instance_id` demək olardı və eyni proses
+        # öz icarəsini "başqasının" kimi görərdi.
+        self._job_runner: Any = None
         # İnfrastruktur pəncərəsi BİR DƏFƏ qurulur və paylaşılır: obyekt
         # vəziyyət saxlamır (nə keş, nə bağlantı), yalnız `Database` + tenant
         # daşıyır — hər istehlakçı üçün yenisini qurmaq eyni nəticəni verər,
@@ -769,11 +926,18 @@ class ApplicationContext:
     def _attach_evidence(self, owner_type: str, owner_id: str, reference: Any) -> None:
         """Yükləmə bitdikdən sonra sahib sətri yeniləyir — #17 ÜMUMİLƏŞDİRİLMİŞ növbə.
 
-        `EvidenceUploadWorker` artıq İKİ sahib növünü daşıyır (bax
+        `EvidenceUploadWorker` artıq ÜÇ sahib növünü daşıyır (bax
         `upload_queue.py` başlığı: `fine_id` → `owner_type`/`owner_id`). Geri-
-        çağırış `owner_type`-a görə sahibin CƏDVƏLİNİ seçir — hər iki qol AKTOR
+        çağırış `owner_type`-a görə sahibin CƏDVƏLİNİ seçir — hər üç qolda AKTOR
         YOXDUR (fon işçisindən gəlir), bax `_attach_fine_evidence`/
-        `_attach_employee_document_evidence` başlıqları.
+        `_attach_employee_document_evidence`/`_attach_field_report_evidence`
+        başlıqları.
+
+        `FINE` SON QOLDUR (şərtsiz `return`): növbədə `owner_type` sütunu
+        köhnə buraxılışdan BOŞ gələ bilər (`fine_id` dövründən qalma sətirlər,
+        bax `upload_queue.py` miqrasiya bölməsi) və o sətirlərin hamısı
+        cərimə şəklidir — defolt qolu dəyişsəydik, köhnə spool sükutla səhv
+        cədvələ yazılardı.
         """
         from src.infrastructure.storage.upload_queue import (  # noqa: PLC0415
             UploadOwnerType,
@@ -781,6 +945,9 @@ class ApplicationContext:
 
         if owner_type == UploadOwnerType.EMPLOYEE_DOCUMENT.value:
             self._attach_employee_document_evidence(owner_id, reference)
+            return
+        if owner_type == UploadOwnerType.FIELD_REPORT.value:
+            self._attach_field_report_evidence(owner_id, reference)
             return
         self._attach_fine_evidence(owner_id, reference)
 
@@ -822,6 +989,32 @@ class ApplicationContext:
                 tenant_id=session.tenant_id,
                 document_id=EmployeeDocumentId(uuid.UUID(document_id)),
                 file_ref=str(reference),
+            )
+            session.commit()
+
+    def _attach_field_report_evidence(self, owner_id: str, reference: Any) -> None:
+        """Sahə hesabatının VƏ YA checklist bəndinin foto istinadını yazır (#26+#27).
+
+        `str(reference)` (`StorageReference.__str__` → `cache_key`) YAZILIR:
+        `field_reports.photo_refs` və `field_report_checklist_items.photo_ref`
+        MƏTN sahələridir (migrations/037) — `fines`-dəki kimi ayrıca
+        `drive_file_id`/`connection_id` sütunları YOXDUR.
+
+        HESABAT/BƏND AYRIMI BURADA EDİLMİR: `owner_id` hər ikisi üçün eyni
+        formada gəlir və use case onu birmənalı həll edir (UUID qlobal
+        unikaldır — bax `FieldReportUseCase.attach_uploaded_photo` başlığı).
+        Kompozisiya kökündə ikinci `if` yazsaydıq, həmin qərar İKİ yerdə
+        yaşayardı.
+        """
+        import uuid  # noqa: PLC0415
+
+        from src.domain.value_objects.identifiers import FieldReportId  # noqa: PLC0415
+
+        with self.session() as session:
+            session.field_reports.attach_uploaded_photo(
+                tenant_id=session.tenant_id,
+                owner_id=FieldReportId(uuid.UUID(owner_id)),
+                photo_ref=str(reference),
             )
             session.commit()
 
@@ -904,6 +1097,313 @@ class ApplicationContext:
             checksum_reader=read_scalar,
         )
 
+    # ---------------------------- planlayıcı qatı ---------------------------- #
+
+    def job_runner(self) -> Any:
+        """`JobRunner` — işləri qeydiyyatdan keçmiş, TƏK nüsxə (bax konstruktor).
+
+        İKİ GİRİŞ NÖQTƏSİ EYNİ OBYEKTİ ALIR: GUI-dəki `QTimer`
+        (`include_heavy=False`) və CLI-dakı `--run-scheduled-jobs`
+        (`include_heavy=True`). Ayrı-ayrı nüsxələr qursaydıq, hər biri öz
+        `instance_id`-si ilə imzalayardı və eyni prosesin iki dövrəsi
+        bir-birini «başqa terminal» kimi görərdi.
+        """
+        if self._job_runner is None:
+            self._job_runner = self._build_job_runner()
+        return self._job_runner
+
+    def run_scheduled_jobs(self, *, include_heavy: bool) -> Any:
+        """Vaxtı çatmış işləri bir dəfə icra edir və hesabatı qaytarır.
+
+        İSTİSNA UDULMUR — `run_evidence_uploads`-dan FƏRQLİ olaraq. Səbəb:
+        orada verilməli cavab "şəkil göndərildimi" idi və göndərilməməsi
+        interfeysi maraqlandırmır; burada isə CLI çıxış kodu məhz bu çağırışın
+        nəticəsindən çıxır (`main.py --run-scheduled-jobs`) və sükutla udulmuş
+        nasazlıq Windows Task Scheduler-ə "uğurlu" kimi görünərdi — yəni gecə
+        işlərinin dayandığı HEÇ VAXT aşkarlanmazdı.
+
+        GUI tərəfi isə istisnanı ÖZÜ udur (`app.py::_run_scheduled_jobs`,
+        `_drain_upload_queue` naxışı) — fon dövrəsi pəncərəni çökdürməməlidir.
+        """
+        report: Any = self.job_runner().run_due(
+            tenant_id=self._tenant_id, include_heavy=include_heavy
+        )
+        return report
+
+    def _build_job_runner(self) -> Any:
+        """Planlayıcını qurur və işləri SIRA İLƏ qeydiyyatdan keçirir."""
+        from src.application.use_cases.job_runner import JobRunner  # noqa: PLC0415
+        from src.infrastructure.persistence.scheduled_job_repository import (  # noqa: PLC0415
+            PostgresScheduledJobRepository,
+        )
+        from src.shared.runtime import process_instance_id  # noqa: PLC0415
+
+        runner = JobRunner(
+            # Repo `PostgresUnitOfWork`-ə QOŞULMUR və bu qəsdəndir: icarə
+            # DƏRHAL commit olunmalıdır, əks halda digər terminal onu yalnız
+            # iş bitəndən sonra görərdi (bax repo modul başlığı).
+            runs=PostgresScheduledJobRepository(self._database),
+            # AÇAR SÖZLƏ: `limits` qəbul edən hər sinif `limits=` almalıdır
+            # (`test_root_control_parameter_parity` mövqeli ötürməni görmür).
+            limits=_StandaloneLimits(self._database),
+            audit=_StandaloneAudit(self._database),
+            clock=self._clock,
+            instance_id=process_instance_id(),
+        )
+        self._register_scheduled_jobs(runner)
+        return runner
+
+    def _register_scheduled_jobs(self, runner: Any) -> None:
+        """Reyestrin YEGANƏ doldurulma nöqtəsi — nüvə heç bir işi tanımır.
+
+        ──────────────────────────────────────────────────────────────────────
+        SIRA İŞ QAYDASIDIR, ZÖVQ MƏSƏLƏSİ DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        `BEHAVIOR_BASELINE_RECALC` `EXCEPTION_ENGINE_RUN`-dan ƏVVƏLDİR, çünki
+        motorun `BehaviorAnomalyRule`-u məhz baz xəttini oxuyur (bax
+        `_build_session`-dakı `register_rule(...)`). Tərsinə qeyd etsəydik,
+        motor həmişə DÜNƏNKİ baz xətti ilə müqayisə edərdi və hər anomaliya
+        bir gün gecikərdi — səhv görünməz olardı, çünki istisna YENƏ yaranır,
+        sadəcə bir gün sonra. `ScheduledJobRegistry` sırasını `dict` sırası
+        ilə qoruyur (bax `exception_rules.py` başlığı: "NİYƏ SIRA QORUNUR").
+
+        ──────────────────────────────────────────────────────────────────────
+        `EXCEPTION_ENGINE_RUN` İNDİYƏ QƏDƏR HEÇ VAXT ÇAĞIRILMAYIB
+        ──────────────────────────────────────────────────────────────────────
+        Motor Faza 3-dən bəri yazılıb və test edilib, `Session.exceptions`-a da
+        qoşulub — lakin onu ÇAĞIRAN heç bir yol yox idi. Nəticədə #9 İstisnalar
+        ekranı bu günə kimi HƏMİŞƏ boş qalırdı. Bu qeydiyyat həmin zənciri
+        bağlayır.
+
+        ──────────────────────────────────────────────────────────────────────
+        ÇƏKİ VƏ RİTM SEÇİMLƏRİ
+        ──────────────────────────────────────────────────────────────────────
+        Yeddi işdən altısı `DAILY`-dir: hamısı CARİ vəziyyəti yenidən hesablayan
+        gün-vahidli əməliyyatlardır (pəncərə DÜNƏNlə bitir). `FINE_EXPIRE_STALE`
+        isə `HOURLY`-dir — o, DB-dəki `cron_close_expired_appeals` işinin tətbiq
+        qatındakı əkizidir və həmin cron `schema.sql`-da `'0 * * * *'` ilə,
+        yəni saatda bir dəfə qeydiyyatdan keçib. Ritmi fərqli seçsəydik, eyni
+        qayda `pg_cron`-lu və `pg_cron`-suz quraşdırmada FƏRQLİ vaxtda işləyər
+        və 72 saatlıq etiraz pəncərəsinin bağlanma anı quraşdırmadan asılı
+        olardı (bax `fine_management.expire_stale` docstring-i, Variant B).
+
+        Yalnız `NIGHTLY_BACKUP` `HEAVY`-dir: `pg_dump` xarici prosesdir və
+        dəqiqələrlə çəkir — GUI axınında icra olunsaydı interfeys donardı.
+        """
+        from src.application.use_cases.job_runner import (  # noqa: PLC0415
+            JobCadence,
+            JobWeight,
+            ScheduledJob,
+        )
+
+        for key, handler, cadence, weight in (
+            # 1. Baz xətti — MOTORDAN ƏVVƏL (bax yuxarı).
+            (
+                "BEHAVIOR_BASELINE_RECALC",
+                self._job_behavior_baseline,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
+            # 2. Vahid İstisna Motoru — təzə baz xətti üzərində işləyir.
+            (
+                "EXCEPTION_ENGINE_RUN",
+                self._job_exception_engine,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
+            (
+                "STAFFING_PATTERN_REFRESH",
+                self._job_staffing_pattern,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
+            (
+                "EMPLOYEE_DOCUMENT_EXPIRY_NOTICE",
+                self._job_document_expiry,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
+            (
+                "ATTRITION_RISK_RECALC",
+                self._job_attrition_risk,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
+            # #26 — audit tezliyi xatırlatması (kompas1.md Faza 3). YENİ
+            # cron/taymer YAZILMIR: mövcud planlayıcıya BİR sətir qeydiyyat.
+            # `LIGHT`, çünki iş TƏK aqreqat sorğusu + filial sayı qədər
+            # bildiriş sətridir (21 filial) — GUI axınını dondurmur.
+            # `DAILY`, çünki interval GÜN vahidlidir: saatlıq icra eyni
+            # xəbərdarlığı gün ərzində 24 dəfə göndərərdi.
+            (
+                "FIELD_REPORT_AUDIT_REMINDER",
+                self._job_field_report_audit_reminder,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
+            # #28 — illik məzuniyyət accrual-ı, köçürməsi və "istifadə et ya
+            # itir" son tarixi (kompas1.md Faza 4). YENİ cron/taymer
+            # YAZILMIR: mövcud planlayıcıya BİR sətir qeydiyyat.
+            #
+            # `DAILY`, "hər 1 yanvar" DEYİL: terminal həmin gecə söndürülmüş
+            # ola bilər və şərt qoyulsaydı köçürmə BÜTÜN İL üçün itərdi
+            # (`job_runner.py`: "GECİKMİŞ İCRA"). Gündəlik icra zərərsizdir,
+            # çünki `run_year_rollover` İDEMPOTENTDİR — haqq TƏYİN edilir,
+            # ARTIRILMIR.
+            #
+            # `LIGHT`: iş bir aqreqasiya sorğusu + işçi sayı qədər UPSERT-dir
+            # (235 sətir) — GUI axınını dondurmur.
+            (
+                "ANNUAL_LEAVE_YEAR_ROLLOVER",
+                self._job_annual_leave_rollover,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
+            (
+                "FINE_EXPIRE_STALE",
+                self._job_expire_stale_appeals,
+                JobCadence.HOURLY,
+                JobWeight.LIGHT,
+            ),
+            ("NIGHTLY_BACKUP", self._job_nightly_backup, JobCadence.DAILY, JobWeight.HEAVY),
+        ):
+            runner.register(ScheduledJob(key=key, handler=handler, cadence=cadence, weight=weight))
+
+    # --------------------------- planlanmış işlər ---------------------------- #
+    #
+    # HƏR İŞ ÖZ SESSİYASINI AÇIR VƏ COMMIT EDİR — kontroller naxışının eynisi
+    # (CLAUDE.md §6): dövrə boyu tək tranzaksiya saxlamaq `pg_dump` müddətində
+    # kilid tutardı və bir işin çökməsi ARTIQ TAMAMLANMIŞ işlərin yazısını da
+    # geri qaytarardı, halbuki nüvənin qaydası qismən uğurdur.
+    #
+    # Hamısı `context.now`-u ötürür: vaxt `Clock` portundan gəlir və gecikmiş
+    # icrada (kompüter gecə söndürülüb) hesablama pəncərəsi FAKTİKİ ana görə
+    # qurulur — `datetime.now()` heç yerdə çağırılmır.
+
+    def _job_behavior_baseline(self, context: Any) -> str:
+        """#8 — işçi davranış baz xəttini yenidən hesablayır."""
+        with self.session() as session:
+            report = session.behavior_baselines.recalculate_all(context.tenant_id, now=context.now)
+            session.commit()
+        return f"{report.employees_updated} işçinin baz xətti yeniləndi"
+
+    def _job_exception_engine(self, context: Any) -> str:
+        """#9 — Vahid İstisna Motorunu işlədir (bax `_register_scheduled_jobs`)."""
+        with self.session() as session:
+            report = session.exceptions.run(tenant_id=context.tenant_id, now=context.now)
+            session.commit()
+        return (
+            f"{report.evaluated_rules} qayda, {report.created_total} yeni istisna, "
+            f"{report.duplicate_total} təkrar atlandı"
+        )
+
+    def _job_staffing_pattern(self, context: Any) -> str:
+        """#13 — hər AKTİV mağaza üçün həftə-günü ortalarını yeniləyir.
+
+        MAĞAZA SİYAHISI ÜÇÜN YENİ REPO YARADILMIR: `multi_store_benchmark`
+        repo-sunun `active_stores()` metodu artıq məhz bu sorğunu edir
+        (`SELECT id, name FROM stores WHERE tenant_id = %s AND is_active`).
+        İkinci bir siyahı mənbəyi qursaydıq, «aktiv mağaza» tərifi iki yerdə
+        yaşayar və biri dəyişəndə digəri sükutla köhnə qalardı.
+
+        BİR MAĞAZANIN XƏTASI DÖVRƏNİ DAYANDIRIR (burada təcrid YOXDUR) və bu
+        qəsdəndir: siyahı eyni sorğudan gəlir, yəni bir mağazada çöküş
+        məlumatın deyil, bağlantının problemidir — qalan mağazaları sınamaq
+        eyni xətanı təkrarlayardı. Nüvə onsuz da bu işi `FAILED` yazır və
+        digər İŞLƏR davam edir.
+        """
+        with self.session() as session:
+            stores = session.uow.repository("multi_store_benchmark").active_stores(
+                context.tenant_id
+            )
+            weekdays = 0
+            for store_id in stores:
+                report = session.staffing_pattern.recalculate_for_store(
+                    context.tenant_id, store_id=store_id, now=context.now
+                )
+                weekdays += report.weekdays_updated
+            session.commit()
+        return f"{len(stores)} mağaza, {weekdays} həftə-günü yeniləndi"
+
+    def _job_document_expiry(self, context: Any) -> str:
+        """#17 — bitmə tarixi yaxınlaşan sənədlər üçün xəbərdarlıq."""
+        with self.session() as session:
+            sent = session.employee_documents.notify_expiring_documents(context.tenant_id)
+            session.commit()
+        return f"{sent} sənəd xəbərdarlığı göndərildi"
+
+    def _job_attrition_risk(self, context: Any) -> str:
+        """#21 — işdən çıxma riski balını yenidən hesablayır."""
+        with self.session() as session:
+            report = session.attrition_risk.recalculate_all(context.tenant_id, now=context.now)
+            session.commit()
+        return (
+            f"{report.employees_updated} bal yeniləndi, "
+            f"{report.high_risk_count} yüksək risk, {report.notifications_sent} bildiriş"
+        )
+
+    def _job_field_report_audit_reminder(self, context: Any) -> str:
+        """#26 — audit intervalı keçmiş filiallar üçün xatırlatma.
+
+        `context.now` PLANLAYICIDAN gəlir və use case-in `Clock`-u ilə eyni
+        mənbədən qidalanır (`_StandaloneLimits`/`JobRunner` eyni `self._clock`
+        alır) — yəni "neçə gün keçib" hesablaması iki fərqli anla
+        aparılmır.
+        """
+        with self.session() as session:
+            result = session.field_reports.notify_overdue_audits(context.tenant_id)
+            session.commit()
+        return f"{result.checked} filialdan {result.overdue_count}-i audit intervalını keçib"
+
+    def _job_annual_leave_rollover(self, context: Any) -> str:
+        """#28 — illik haqq, köçürmə və "istifadə et ya itir" son tarixi.
+
+        `context.now` PLANLAYICIDAN gəlir: gecikmiş icrada (kompüter gecə
+        söndürülüb) hesablama FAKTİKİ ana görə aparılır və `datetime.now()`
+        heç yerdə çağırılmır.
+
+        İDEMPOTENTDİR — planlayıcı at-least-once icra edir və eyni il üçün
+        ikinci icra balansı ikiqat ARTIRMIR (bax `AnnualLeaveUseCase.
+        run_year_rollover` docstring-i).
+        """
+        with self.session() as session:
+            report = session.annual_leave.run_year_rollover(
+                tenant_id=context.tenant_id, now=context.now
+            )
+            session.commit()
+        return (
+            f"{report.year}: {report.balances_written} balans yazıldı, "
+            f"{report.carried_over_days} gün köçürüldü, "
+            f"{report.forfeited_days} gün itdi"
+        )
+
+    def _job_expire_stale_appeals(self, context: Any) -> str:
+        """Cavabsız qalmış cərimə etirazlarını bağlayır (72 saatlıq pəncərə)."""
+        with self.session() as session:
+            closed = session.fine_appeals.expire_stale(context.tenant_id)
+            session.commit()
+        return f"{closed} etiraz cavabsız bağlandı"
+
+    def _job_nightly_backup(self, context: Any) -> str:
+        """Gecəlik ehtiyat nüsxə + saxlama müddəti bitmiş faylların təmizliyi.
+
+        YEGANƏ `HEAVY` İŞ. `NightlyBackupService` `Session`-dan KƏNARDA
+        qurulur, çünki o, `Database` alıb öz iş vahidini açır (`pg_dump` xarici
+        prosesdir və dəqiqələrlə çəkir — açıq tranzaksiya saxlamaq CLAUDE.md
+        §6-nın qadağasıdır). Limit pəncərəsi ona görə UZUN ÖMÜRLÜ
+        `infrastructure_limits()`-dir, sessiya ömürlü `session_limits` yox.
+
+        `create()` və `prune()` BİR işdədir: təmizlik yalnız yeni nüsxə
+        UĞURLA yazıldıqdan sonra mənalıdır — əks sıra disk dolu olanda son
+        işlək nüsxəni silib yenisini yarada bilməmək riski yaradardı.
+        """
+        from src.infrastructure.backup.service import NightlyBackupService  # noqa: PLC0415
+
+        service = NightlyBackupService(self._database, limits=self._infrastructure_limits)
+        record = service.create(context.tenant_id)
+        removed = service.prune(context.tenant_id)
+        return f"nüsxə {record.size_bytes} bayt, {removed} köhnəlmiş fayl silindi"
+
     # ------------------------------- sessiya --------------------------------- #
 
     @contextmanager
@@ -929,6 +1429,9 @@ class ApplicationContext:
         """
         from src.application.use_cases.announcements import (  # noqa: PLC0415
             AnnouncementUseCase,
+        )
+        from src.application.use_cases.annual_leave import (  # noqa: PLC0415
+            AnnualLeaveUseCase,
         )
         from src.application.use_cases.attrition_risk import (  # noqa: PLC0415
             AttritionRiskUseCase,
@@ -972,6 +1475,9 @@ class ApplicationContext:
         )
         from src.application.use_cases.exception_engine import (  # noqa: PLC0415
             ExceptionEngineUseCase,
+        )
+        from src.application.use_cases.field_reports import (  # noqa: PLC0415
+            FieldReportUseCase,
         )
         from src.application.use_cases.fine_management import (  # noqa: PLC0415
             FineAppealUseCase,
@@ -1154,6 +1660,21 @@ class ApplicationContext:
             notifier=notifier,
             clock=clock,
         )
+        # TAPŞIRIQ MÜHƏRRİKİ YEREL DƏYİŞƏNDİR, çünki İKİ yerdə lazımdır: həm
+        # `Session.tasks` (Tapşırıq Paneli), həm də #26 auditinin uğursuz
+        # BLOKLAYICI bəndindən doğan avtomatik düzəliş tapşırığı (Struktur
+        # Qərar B: yeni motor yazılmır, MÖVCUDU çağırılır). İki nüsxə
+        # qursaydıq, avtomatik tapşırıq `TASK_ENGINE` toggle-ını və audit
+        # yazısını AYRI obyektdən keçirərdi — nəticə eyni olsa da, "hansı
+        # nüsxə doğrudur" sualı sonradan çaşdırır (`sales_points` və
+        # `overtime_tracking` ilə eyni əsaslandırma).
+        task_workflow = TaskWorkflowUseCase(
+            tasks=repo("tasks"),
+            audit=audit,
+            clock=clock,
+            notifier=notifier,
+            toggles=repo("toggles"),
+        )
 
         return Session(
             uow=uow,
@@ -1239,13 +1760,7 @@ class ApplicationContext:
                 clock=clock,
                 notifier=notifier,
             ),
-            tasks=TaskWorkflowUseCase(
-                tasks=repo("tasks"),
-                audit=audit,
-                clock=clock,
-                notifier=notifier,
-                toggles=repo("toggles"),
-            ),
+            tasks=task_workflow,
             sales_points=sales_points,
             reports=MonthlyReportUseCase(),
             audit_query=AuditQueryUseCase(
@@ -1479,6 +1994,41 @@ class ApplicationContext:
                 provider=repo("multi_store_benchmark"),
                 limits=repo("limits"),
                 clock=clock,
+            ),
+            # #26+#27 Sahə hesabatları (kompas1.md Faza 3) — VAHİD nüvə.
+            # `tasks=task_workflow`: MÖVCUD Tapşırıq Mühərriki ötürülür (yerli
+            # dəyişən, yuxarı bax) — audit EYNİ tranzaksiyada, `TASK_ENGINE`
+            # toggle-ı EYNİ obyektdən oxunur.
+            field_reports=FieldReportUseCase(
+                reports=repo("field_reports"),
+                catalog=repo("field_report_catalog"),
+                tasks=task_workflow,
+                limits=repo("limits"),
+                audit=audit,
+                clock=clock,
+                notifier=notifier,
+            ),
+            # #28 İllik Məzuniyyət Balansı (kompas1.md Faza 4) — ÜÇÜNCÜ, AYRI
+            # mexanizm (bax `Session.annual_leave` şərhi).
+            #
+            # `limits=repo("limits")` MƏCBURİDİR, "yaxşı olardı" DEYİL: on ROOT
+            # parametrinin HAMISI bu portdan oxunur və port ötürülməsəydi,
+            # `AnnualLeavePolicy.defaults()` işə düşərdi — yəni Root 21 günü
+            # 28-ə qaldırar, ekran təsdiqləyər, sistem isə 21 ilə işləməyə
+            # davam edərdi ("görünür, dəyişdirilir, təsirsiz" qüsuru —
+            # `test_root_control_parameter_parity.py` bunu qapıya çevirib).
+            #
+            # `shifts=repo("shifts")`: EYNİ repo `shift_planning`-in də
+            # mənbəyidir, yəni hələ commit olunmamış növbə dəyişikliyi
+            # məzuniyyət gününün hesablanmasında dərhal görünür.
+            annual_leave=AnnualLeaveUseCase(
+                balances=repo("annual_leave_balances"),
+                requests=repo("annual_leave_requests"),
+                shifts=repo("shifts"),
+                limits=repo("limits"),
+                audit=audit,
+                clock=clock,
+                notifier=notifier,
             ),
         )
 

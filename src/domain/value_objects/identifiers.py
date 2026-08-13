@@ -65,6 +65,32 @@ AnnouncementId = NewType("AnnouncementId", uuid.UUID)
 #: (qiymətləndirən) daşıyır — üçüncü, sətir-səviyyəli ID olmasaydı, audit
 #: "hansı QİYMƏTLƏNDİRMƏ dəyişdi?" sualı işçi ID-si ilə qarışa bilərdi.
 PerformanceReviewId = NewType("PerformanceReviewId", uuid.UUID)
+#: Sahə hesabatı — mağaza auditi VƏ insident bildirişi (#26+#27, kompas1.md
+#: Faza 3). VAHİD tip, şablon başına ayrı tip YOX: `field_reports` bir
+#: cədvəldir və hesabatın şablonu `type` sütununda yaşayır (Struktur Qərar A).
+#: İki tip yaratmaq həmin qərarı KODA sızdırardı — funksiya imzaları
+#: "audit ID-si" ilə "insident ID-si" arasında seçim etməli olardı, halbuki
+#: hər ikisi eyni cədvəlin eyni sətridir.
+FieldReportId = NewType("FieldReportId", uuid.UUID)
+#: Sahə hesabatının checklist bəndi (#26). Ayrıca tip: bənd ID-si valideyn
+#: hesabatın ID-si ilə EYNİ çağırışda gəzir (foto istinadı bəndə, mətn isə
+#: hesabata bağlanır) və birini digərinin yerinə ötürmək səhv bəndi
+#: "keçdi" işarələmək demək olardı.
+FieldReportItemId = NewType("FieldReportItemId", uuid.UUID)
+#: İLLİK məzuniyyət sorğusu (#28, kompas1.md Faza 4). `LeaveRequestId` İLƏ
+#: QARIŞDIRILMAMALIDIR VƏ MƏHZ ONA GÖRƏ AYRICA TİPDİR: `LeaveRequestId`
+#: GÜNDAXİLİ icazənin (STEP1/STEP2, dəqiqə əsaslı, cərimə doğuran) sətridir,
+#: bu isə uzun-müddətli illik haqqın GÜN əsaslı sətri. İkisi eyni ekranda,
+#: eyni işçi üçün yan-yana gəzir; `uuid.UUID` kimi eyni tip olsaydılar, birini
+#: digərinin yerinə ötürmək gündaxili icazəni "təsdiqlənmiş məzuniyyət" kimi
+#: göstərmək və ya balansdan səhv gün çıxmaq demək olardı — mypy bunu tuta
+#: bilməzdi (bax `entities/annual_leave.py` başlığı: ÜÇ AYRI KONSEPT).
+AnnualLeaveRequestId = NewType("AnnualLeaveRequestId", uuid.UUID)
+#: İllik məzuniyyət balansı sətri (#28). İşçi + il üçün BİR sətir olsa da
+#: (`UNIQUE (tenant_id, employee_id, year)`), sətrin öz İD-si var və audit
+#: `entity_id`-si məhz odur: `EmployeeId` yazılsaydı, "2025-ci ilin balansı"
+#: ilə "2026-cı ilin balansı" audit izində fərqlənməzdi.
+AnnualLeaveBalanceId = NewType("AnnualLeaveBalanceId", uuid.UUID)
 
 # --- Dəstək (bölmə 8) ------------------------------------------------------- #
 SupportTicketId = NewType("SupportTicketId", uuid.UUID)
@@ -178,8 +204,26 @@ def new_performance_review_id() -> PerformanceReviewId:
     return PerformanceReviewId(uuid.uuid4())
 
 
+def new_field_report_id() -> FieldReportId:
+    return FieldReportId(uuid.uuid4())
+
+
+def new_field_report_item_id() -> FieldReportItemId:
+    return FieldReportItemId(uuid.uuid4())
+
+
+def new_annual_leave_request_id() -> AnnualLeaveRequestId:
+    return AnnualLeaveRequestId(uuid.uuid4())
+
+
+def new_annual_leave_balance_id() -> AnnualLeaveBalanceId:
+    return AnnualLeaveBalanceId(uuid.uuid4())
+
+
 __all__ = [
     "AnnouncementId",
+    "AnnualLeaveBalanceId",
+    "AnnualLeaveRequestId",
     "AppealId",
     "AttendanceRecordId",
     "DailySheetId",
@@ -187,6 +231,8 @@ __all__ = [
     "EmployeeId",
     "ErpServerId",
     "ExceptionId",
+    "FieldReportId",
+    "FieldReportItemId",
     "FineId",
     "FineTypeId",
     "LeaveRequestId",
@@ -211,12 +257,16 @@ __all__ = [
     "TenantId",
     "WorkModeId",
     "new_announcement_id",
+    "new_annual_leave_balance_id",
+    "new_annual_leave_request_id",
     "new_appeal_id",
     "new_attendance_record_id",
     "new_daily_sheet_id",
     "new_employee_document_id",
     "new_employee_id",
     "new_exception_id",
+    "new_field_report_id",
+    "new_field_report_item_id",
     "new_fine_id",
     "new_leave_request_id",
     "new_open_shift_posting_id",

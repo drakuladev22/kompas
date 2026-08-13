@@ -197,6 +197,27 @@ TENANT_NOTIFICATION_AUDIENCE: Final[dict[str, tuple[str, ...]]] = {
     # süzgəcdən deyil, şəxsi bildiriş qaydasından gəlir (bax fayl başlığı
     # "ŞƏXSİ SƏTİR").
     "ATTRITION_RISK_HIGH": ("can_view_attrition_risk",),
+    # `FieldReportUseCase.submit`: insident kateqoriyası `field_report_
+    # categories.route_to_role`-a görə marşrutlanır (#27). Marşrut ROLA
+    # göstərir və həmin roldakı işçilərə ŞƏXSİ sətir gedir — o, bu cədvəldən
+    # ASILI DEYİL (bax fayl başlığı "ŞƏXSİ SƏTİR"). Bu sətir yalnız EHTİYAT
+    # yolu qapayır: marşrut boşdursa və ya həmin rolda AKTİV işçi yoxdursa,
+    # bildiriş tenant-broadcast kimi gedir və süzgəcsiz qalsaydı `Satıcı`
+    # "mağazada oğurluq şübhəsi var" sətrini görərdi.
+    #
+    # AUDİTORİYA `can_report_incident` DEYİL — o, BÜTÜN rollara verilib
+    # (migrations/038, Tələ 3), yəni süzgəc kimi heç nə etməzdi. Hesabatı
+    # HƏLL EDƏN tərəf lazımdır: `can_conduct_store_audit` migrations/038-də
+    # DƏQİQ Root/CEO/Admin/HR_Admin-ə verilir — seed edilmiş marşrut
+    # dəyərləri (`ADMIN`, `HR_ADMIN`) məhz bu dördlüyün içindədir.
+    # `MAGAZA_MENECERI` bilərəkdən kənardadır (038: öz mağazasını özü auditə
+    # çəkməsi maraq ziddiyyətidir) və eyni səbəb insidentə də aiddir.
+    "FIELD_REPORT_ROUTED": ("can_conduct_store_audit",),
+    # `FieldReportUseCase.notify_overdue_audits`: gecəlik iş — audit intervalı
+    # keçmiş filiallar (#26). Konkret alıcısı yoxdur (planlayıcı çağırır),
+    # ona görə tenant-broadcast-dır və auditoriyası auditi APARA BİLƏN
+    # roldur — bildirişin tələb etdiyi əməliyyatı qoruyan flag-in ÖZÜ.
+    "FIELD_REPORT_AUDIT_DUE": ("can_conduct_store_audit",),
     # ─────────────────────────────────────────────────────────────────────
     # `MONTHLY_FINES_PUBLISHED` BURAYA QƏSDƏN SALINMIR — ONU SÜZMƏYİN.
     # ─────────────────────────────────────────────────────────────────────

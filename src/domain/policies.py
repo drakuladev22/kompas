@@ -536,6 +536,120 @@ class SystemLimitKey(str, Enum):
     # "panel pəncərəsinə neçə sətir sığır" — biri analiz, digəri düzülüş.
     DEVELOPER_CRASH_ROW_LIMIT = "DEVELOPER_CRASH_ROW_LIMIT"
     DEVELOPER_TICKET_ROW_LIMIT = "DEVELOPER_TICKET_ROW_LIMIT"
+    # --- Faza 11 — PLANLANMIŞ İŞ PLANLAYICISI (seed: migrations/036) --------- #
+    #
+    # DÖRDÜ DƏ ƏMƏLİYYAT PARAMETRİDİR, struktur zəmanət DEYİL (CLAUDE.md §5):
+    # nə anti-fraud, nə hardlock, nə guard qaydası. Hamısı quraşdırmanın
+    # RİTMİNƏ aiddir və 21 filialda eyni ola bilməz — gecə bağlanan mağazada
+    # ağır iş 03:00-da, 24 saat işləyəndə isə səhərə yaxın planlaşdırıla bilər.
+    #
+    # Planlayıcı dövrəsinin YOXLAMA aralığı. Bu, işin nə vaxt işlədiyini
+    # DEYİL, "vaxtı çatıbmı?" sualının nə tezliklə verildiyini təyin edir:
+    # kiçik dəyər gecikmiş işi tez tutur, böyük dəyər bataryaya/şəbəkəyə
+    # qənaət edir.
+    SCHEDULER_POLL_INTERVAL_MINUTES = "SCHEDULER_POLL_INTERVAL_MINUTES"
+    # Gecə işlərinin MAĞAZA YERLİ saatı (0–23). Dəqiqə YOXDUR və bu qəsdəndir:
+    # slot sərhədi hər gün eyni yerdə olmalıdır ki, `scheduled_for` unikal
+    # açarı sabit qalsın; "03:17" kimi dəyər heç bir əməliyyat faydası
+    # vermir, lakin yay/qış və miqrasiya hesablarını çətinləşdirərdi.
+    SCHEDULER_NIGHTLY_HOUR = "SCHEDULER_NIGHTLY_HOUR"
+    # İcarənin ömrü (dəqiqə). SEÇİM QAYDASI: ƏN UZUN işin gözlənilən icra
+    # müddətindən BÖYÜK olmalıdır. Kiçik olsa, hələ işləyən instansiyanın
+    # icarəsi bitər və ikinci terminal EYNİ işi paralel başladar — yəni
+    # parametr yanlış seçiləndə qoruma özü yarış yaradır. Ona görə
+    # migrations/036 alt hüdudu 5 dəqiqədə saxlayır və `COMMENT` bu riski
+    # açıq yazır.
+    SCHEDULER_LEASE_MINUTES = "SCHEDULER_LEASE_MINUTES"
+    # Uğursuz (və ya icraçısı çökmüş) işin ümumi cəhd tavanı. Tavan
+    # MƏCBURİDİR: tətbiqi öldürən iş hər dəfə `RUNNING` qalıb icarəsi bitəcək
+    # və tavansız planlayıcı terminalı sonsuz yenidən-başlatma döngəsinə
+    # salardı (bax `ScheduledJobRun.is_reclaimable`).
+    SCHEDULER_MAX_ATTEMPTS = "SCHEDULER_MAX_ATTEMPTS"
+    # --- #26+#27 SAHƏ HESABATLARI (seed: migrations/039) --------------------- #
+    #
+    # DÖRDÜ DƏ ƏMƏLİYYAT PARAMETRİDİR, struktur zəmanət DEYİL (CLAUDE.md §5):
+    # nə anti-fraud, nə hardlock, nə vəzifə ayrılığı. Hər biri şəbəkənin öz
+    # iş ritmindən asılıdır — 21 filialı olan kirayəçi ilə tək mağazalı
+    # kirayəçinin audit tezliyi eyni ola bilməz.
+    #
+    # Mağazanın NEÇƏ GÜNDƏN BİR auditə çəkilməli olduğu. Bu ədəd auditi
+    # BLOKLAMIR (gec qalmış mağazada iş dayanmır) — yalnız `FIELD_REPORT_
+    # AUDIT_REMINDER` gecəlik işinin "hansı filial gözdən qaçıb?" sualına
+    # cavabıdır. Bloklayıcı olsaydı, bayram/inventar dövründə normal iş
+    # dayanardı; xatırlatma isə heç nəyi dayandırmır, yalnız görünən edir.
+    FIELD_REPORT_AUDIT_INTERVAL_DAYS = "FIELD_REPORT_AUDIT_INTERVAL_DAYS"
+    # Bir hesabata əlavə edilə bilən maksimum foto sayı. `photo_refs` `TEXT[]`
+    # massivdir və hər element Drive-da BİR fayl deməkdir — tavansız massiv
+    # səhvən dövrəyə düşmüş yükləmə ilə kvotanı tək hesabatla yandırardı.
+    FIELD_REPORT_MAX_PHOTOS = "FIELD_REPORT_MAX_PHOTOS"
+    # Hesabatın təsvirinin (və bağlanma qeydinin) minimum uzunluğu.
+    # `migrations/037`-dəki `CHECK (... >= 5)` bu dəyəri ƏVƏZ ETMİR: o,
+    # ABSURD sətri kəsən döşəmədir (miqrasiya başlığı bunu açıq yazır),
+    # siyasət isə buradadır. İKİ SAHƏ ÜÇÜN TƏK AÇAR qəsdəndir: hər ikisi
+    # "nə baş verdi / nə edildi" sualını cavablandırır və Root panelində iki
+    # ayrı ədəd saxlamaq eyni qərarı iki yerdə soruşmaq olardı.
+    FIELD_REPORT_MIN_DETAIL_LENGTH = "FIELD_REPORT_MIN_DETAIL_LENGTH"
+    # Uğursuz BLOKLAYICI bənddən doğan düzəliş tapşırığının son tarixi (gün).
+    # Tapşırıq mövcud Tapşırıq Mühərrikində yaranır (Struktur Qərar B) və
+    # `Task.deadline` MƏCBURİDİR — yəni bu ədəd olmadan avtomatik tapşırıq
+    # ÜMUMİYYƏTLƏ yaradıla bilməz. Sinifdə sabit kimi yazılsaydı, "vitrin
+    # düzümü" ilə "yanğın çıxışının bağlı olması" eyni möhləti alardı.
+    FIELD_REPORT_TASK_DEADLINE_DAYS = "FIELD_REPORT_TASK_DEADLINE_DAYS"
+    # Düzəliş tapşırığının hansı ROLA təyin edildiyi (`positions.code`).
+    # `migrations/038` başlığı qaydanı yazır: "uğursuz bloklayıcı bənd mağaza
+    # rəhbərinə qarşı tapşırıq yaradır". Rol adı KODDA sabit olsaydı, öz
+    # struktura (məs. "Filial Direktoru", "Rayon Meneceri") uyğunlaşdırmaq
+    # buraxılış tələb edərdi — halbuki `positions` kataloqu onsuz da
+    # kirayəçi-spesifik rollara açıqdır. Boş dəyər = tapşırıq hesabatı
+    # YAZAN şəxsə qalır (tapşırıqsız qalmaq ən pis haldır).
+    FIELD_REPORT_TASK_ASSIGNEE_ROLE = "FIELD_REPORT_TASK_ASSIGNEE_ROLE"
+    # --- #28 İLLİK MƏZUNİYYƏT BALANSI (seed: migrations/040) ----------------- #
+    #
+    # ON AÇAR DA ƏMƏLİYYAT PARAMETRİDİR, struktur zəmanət DEYİL (CLAUDE.md §5):
+    # heç biri anti-fraud, hardlock və ya vəzifə ayrılığı qaydası deyil. İllik
+    # məzuniyyət siyasəti ölkə qanunundan, kollektiv müqavilədən və şirkət
+    # praktikasından asılıdır — bir kirayəçinin 21 günü digərinin 28 günüdür.
+    #
+    # DİQQƏT — BU AÇARLAR GÜNDAXİLİ İCAZƏYƏ AİD DEYİL: `MONTHLY_LEAVE_MINUTES_
+    # LIMIT` (240 dəq.) STEP1/STEP2 axınının aylıq DƏQİQƏ tavanıdır və bura
+    # heç bir əlaqəsi yoxdur. Üç ayrı mexanizmin izahı üçün bax
+    # `domain/entities/annual_leave.py` başlığı.
+    #
+    # İşçinin bir təqvim ilində qazandığı BAZA haqq (gün). Azərbaycan Əmək
+    # Məcəlləsinin minimumu 21 təqvim günüdür — defolt qanunun ÖZÜNÜ
+    # təkrarlayır, lakin qanun dəyişəndə (və ya kollektiv müqavilə daha
+    # səxavətli olduqda) kod deyil, ROOT sətri dəyişir.
+    ANNUAL_LEAVE_BASE_ENTITLEMENT_DAYS = "ANNUAL_LEAVE_BASE_ENTITLEMENT_DAYS"
+    # Staj əlavəsinin QAYDA FORMASI üç açarla ifadə olunur — məhz ona görə ki,
+    # "hər 5 ildə 1 gün, ən çoxu 5 gün" cümləsinin HƏR ÜÇ ədədi şirkətdən
+    # şirkətə dəyişir. Tək açar (məs. "bonus_days") formanı kodda dondurardı.
+    # Düstur: `min(maks, floor(staj_ili / dövr) * dövr_başına_gün)`.
+    ANNUAL_LEAVE_SENIORITY_PERIOD_YEARS = "ANNUAL_LEAVE_SENIORITY_PERIOD_YEARS"
+    ANNUAL_LEAVE_SENIORITY_BONUS_DAYS = "ANNUAL_LEAVE_SENIORITY_BONUS_DAYS"
+    ANNUAL_LEAVE_SENIORITY_BONUS_MAX_DAYS = "ANNUAL_LEAVE_SENIORITY_BONUS_MAX_DAYS"
+    # Keçən ildən növbəti ilə KÖÇÜRÜLƏ bilən maksimum gün. Tavanı aşan hissə
+    # İTİR — mənfi balans YARANMIR (bax `AnnualLeavePolicy.carry_over`).
+    ANNUAL_LEAVE_CARRYOVER_MAX_DAYS = "ANNUAL_LEAVE_CARRYOVER_MAX_DAYS"
+    # "İSTİFADƏ ET YA İTİR" SON TARİXİ — ay + gün kimi İKİ açar, çünki HR
+    # siyasəti həmişə təqvim tarixi kimi ifadə olunur ("31 mart"), gün sayı
+    # kimi yox. Ayın uzunluğundan artıq gün nömrəsi (məs. fevralın 31-i)
+    # həmin ayın SON gününə sıxılır (bax `AnnualLeavePolicy.carryover_deadline`).
+    ANNUAL_LEAVE_CARRYOVER_DEADLINE_MONTH = "ANNUAL_LEAVE_CARRYOVER_DEADLINE_MONTH"
+    ANNUAL_LEAVE_CARRYOVER_DEADLINE_DAY = "ANNUAL_LEAVE_CARRYOVER_DEADLINE_DAY"
+    # Haqqın QAZANILMA (accrual) dövrü: `ANNUAL` = ilin əvvəlində tam verilir
+    # (işə yeni düşəndə işə qəbul tarixinə görə proporsional), `MONTHLY` /
+    # `QUARTERLY` = tamamlanmış dövr başına toplanır.
+    ANNUAL_LEAVE_ACCRUAL_PERIOD = "ANNUAL_LEAVE_ACCRUAL_PERIOD"
+    # Bir accrual dövrünə düşən gün (DƏRƏCƏ). `0` = AVTOMATİK: illik haqq ÷
+    # dövr sayı. Sentinel qəsdəndir və sənədləşdirilib: defolt halda dərəcə
+    # baza haqqla HƏMİŞƏ uzlaşır (Root 21-i 24-ə qaldıranda dərəcə də özü
+    # dəyişir), lakin qeyri-standart cədvəl lazım olarsa açıq dəyər yazılır.
+    ANNUAL_LEAVE_ACCRUAL_RATE_DAYS_PER_PERIOD = "ANNUAL_LEAVE_ACCRUAL_RATE_DAYS_PER_PERIOD"
+    # Sorğunun neçə gün SAYILDIĞI: `WORKING_DAYS` (defolt) = Shift Matrix-də
+    # istirahət günü olmayan günlər, `CALENDAR_DAYS` = aralıqdakı bütün günlər.
+    # Defolt seçimin əsaslandırması `migrations/037`-dəki `deducted_days`
+    # şərhindədir və `AnnualLeaveUseCase._deducted_days`-də təkrarlanır.
+    ANNUAL_LEAVE_DAY_COUNT_MODE = "ANNUAL_LEAVE_DAY_COUNT_MODE"
 
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
@@ -838,6 +952,83 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # `developer_panel/ui.py`: hər iki diaqnostika cədvəli 12 sətir göstərir.
     SystemLimitKey.DEVELOPER_CRASH_ROW_LIMIT: "12",
     SystemLimitKey.DEVELOPER_TICKET_ROW_LIMIT: "12",
+    # --- Faza 11 — planlanmış iş planlayıcısı (seed: 036) ------------------- #
+    #
+    # `job_runner.py` HEÇ BİR SABİT ƏDƏD saxlamır: fallback məhz bu sətirlərdir
+    # (`JobRunner._limit_int` → `DEFAULT_LIMITS[key]`). Yəni parametrin tək
+    # mənbəyi `system_limits`, tək ehtiyatı isə bu lüğətdir.
+    #
+    # 15 dəqiqə: gecikmiş gecə işi ən pis halda 15 dəqiqə gec tutulur —
+    # masaüstü tətbiq üçün görünməz gecikmə, lakin dövrə hər gün cəmi ~96
+    # yüngül yoxlama edir.
+    SystemLimitKey.SCHEDULER_POLL_INTERVAL_MINUTES: "15",
+    # 03: mağazalar bağlıdır, 1C sinxronizasiyası bitib — ehtiyat nüsxə və
+    # yenidən-hesablama üçün ən sakit saat. DB-nin ÖZ cron işləri ilə
+    # (`docs/scheduler_setup.md`, hər 5 dəqiqə) qarışdırılmamalıdır: onlar
+    # eskalasiya/təmizlik işləridir və bu parametrə TABE DEYİL.
+    SystemLimitKey.SCHEDULER_NIGHTLY_HOUR: "3",
+    # 30 dəqiqə: ən uzun işin (`pg_dump`) taymautu 1 saatdır, lakin normal
+    # icrası dəqiqələrlədir. 30 dəqiqə çökmüş terminalın işini eyni gecə
+    # içində geri qaytarmağa imkan verir və normal icranı kəsmir.
+    SystemLimitKey.SCHEDULER_LEASE_MINUTES: "30",
+    # 3 cəhd: müvəqqəti nasazlıq (şəbəkə, kilid) adətən ikinci cəhddə keçir;
+    # üçüncüdən sonra problem struktur olur və təkrar yalnız log doldurur.
+    SystemLimitKey.SCHEDULER_MAX_ATTEMPTS: "3",
+    # --- #26+#27 sahə hesabatları (seed: 039) ------------------------------- #
+    #
+    # 30 gün: aylıq mağaza ziyarəti pərakəndə şəbəkələrin standart ritmidir və
+    # təqvim ayı ilə üst-üstə düşür — menecer "bu ay getdimmi?" sualını
+    # təqvimə baxaraq cavablandıra bilir.
+    SystemLimitKey.FIELD_REPORT_AUDIT_INTERVAL_DAYS: "30",
+    # 10 şəkil: bir mağaza ziyarətində problemli nöqtələrin sayı praktikada
+    # birrəqəmlidir; 10 rahat başlıqdır, lakin dövrəyə düşmüş yükləməni kəsir.
+    SystemLimitKey.FIELD_REPORT_MAX_PHOTOS: "10",
+    # 10 simvol: "ok"/"pisdir" kimi cavab nə tapşırıq mətni qura bilər, nə də
+    # mübahisədə əsas olar. Sxem döşəməsi (5) qəsdən daha aşağıdır — o, yalnız
+    # absurd sətri kəsir (bax `FieldReport.__init__`).
+    SystemLimitKey.FIELD_REPORT_MIN_DETAIL_LENGTH: "10",
+    # 3 gün: uğursuz BLOKLAYICI bənd (yanğın çıxışı, kassa intizamı) dərhal
+    # düzəldilməlidir; 3 gün həftəsonu düşən auditə də real möhlət verir.
+    SystemLimitKey.FIELD_REPORT_TASK_DEADLINE_DAYS: "3",
+    # `MAGAZA_MENECERI`: sistem rol kataloqundakı (`schema.sql` §21) mağaza
+    # rəhbəri. O, `can_assign_tasks`/`can_approve_task_evidence` daşıyır
+    # (§23), yəni tapşırıq axını onun üçün onsuz da açıqdır.
+    SystemLimitKey.FIELD_REPORT_TASK_ASSIGNEE_ROLE: "MAGAZA_MENECERI",
+    # --- #28 illik məzuniyyət balansı (seed: 040) --------------------------- #
+    #
+    # `domain/annual_leave_rules.py` HEÇ BİR SABİT ƏDƏD saxlamır: `AnnualLeave
+    # Policy.defaults()` məhz bu sətirləri oxuyur (`AttritionWeights.defaults()`
+    # ilə eyni naxış). Yəni parametrin tək mənbəyi `system_limits`, tək
+    # ehtiyatı isə bu lüğətdir.
+    #
+    # 21 gün: Azərbaycan Əmək Məcəlləsinin əsas məzuniyyət minimumu. Defolt
+    # qanunun ÖZÜ seçilib ki, konfiqurasiya edilməmiş quraşdırma da hüquqi
+    # cəhətdən düzgün rəqəm göstərsin.
+    SystemLimitKey.ANNUAL_LEAVE_BASE_ENTITLEMENT_DAYS: "21.00",
+    # "Hər 5 ildə 1 əlavə gün, ən çoxu 5 gün" — yayılmış staj cədvəli. Üç ədəd
+    # də ROOT-dadır, çünki qaydanın FORMASI (dövrün uzunluğu, addımın böyüklüyü,
+    # tavan) şirkətdən şirkətə dəyişir.
+    SystemLimitKey.ANNUAL_LEAVE_SENIORITY_PERIOD_YEARS: "5",
+    SystemLimitKey.ANNUAL_LEAVE_SENIORITY_BONUS_DAYS: "1.00",
+    SystemLimitKey.ANNUAL_LEAVE_SENIORITY_BONUS_MAX_DAYS: "5.00",
+    # 5 gün köçürmə: işçinin ilin sonunda "yandırmaq üçün" məzuniyyət götürmək
+    # məcburiyyətini yumşaldır, lakin illərlə yığılan öhdəlik (istifadə
+    # edilməmiş gün PUL dəyəri daşıyır) yaratmır.
+    SystemLimitKey.ANNUAL_LEAVE_CARRYOVER_MAX_DAYS: "5.00",
+    # 31 mart: köçürülmüş günlərin son istifadə tarixi — birinci rübün sonu.
+    # Ay və gün AYRI açardır (bax `SystemLimitKey` şərhi).
+    SystemLimitKey.ANNUAL_LEAVE_CARRYOVER_DEADLINE_MONTH: "3",
+    SystemLimitKey.ANNUAL_LEAVE_CARRYOVER_DEADLINE_DAY: "31",
+    # `ANNUAL`: haqq ilin əvvəlində TAM verilir (işə yeni düşən üçün işə qəbul
+    # tarixinə görə proporsional). Bu, İşçi Ana Ekranındakı "14/21 gün qalıb"
+    # kartının gözlədiyi modeldir — aylıq toplanan modeldə həmin kart ilin
+    # əvvəlində "0/1.75" göstərərdi və işçi məzuniyyət planlaya bilməzdi.
+    SystemLimitKey.ANNUAL_LEAVE_ACCRUAL_PERIOD: "ANNUAL",
+    # `0` = dərəcəni illik haqqdan törət (bax `SystemLimitKey` şərhi).
+    SystemLimitKey.ANNUAL_LEAVE_ACCRUAL_RATE_DAYS_PER_PERIOD: "0.00",
+    # `WORKING_DAYS`: balansdan yalnız İŞ günləri çıxılır — istirahət günü
+    # Shift Matrix-dən oxunur (migrations/037 `deducted_days` şərhi).
+    SystemLimitKey.ANNUAL_LEAVE_DAY_COUNT_MODE: "WORKING_DAYS",
 }
 
 

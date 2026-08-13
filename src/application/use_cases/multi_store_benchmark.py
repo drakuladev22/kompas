@@ -14,11 +14,12 @@ YARATMA").
 `attrition_risk.py`/`staffing_pattern.py` ilə EYNİ naxışdadır: bu modulda və
 `infrastructure.persistence.benchmark_repository`-də nə `erp`/`sales` idxalı,
 nə də `SalesDataConnector`/`OneCSaleRecord` kimi 1C identifikatoru ola bilməz.
-Beş metrik YALNIZ cərimə (`fines`), davamiyyət (`daily_attendance_sheet_
+Metriklər YALNIZ cərimə (`fines`), davamiyyət (`daily_attendance_sheet_
 lines`), xal (`points_ledger` — mövcud, icazəli 1C-bal-kanalı, YENİ bağlantı
-DEYİL), overtime (`overtime_log`) və turnover riski (`attrition_risk_scores`,
-#21-in NATİV nəticəsi) cədvəllərindən qidalanır. Xam satış rəqəmi/marja
-BURAYA DAXİL EDİLMİR.
+DEYİL), overtime (`overtime_log`), turnover riski (`attrition_risk_scores`,
+#21-in NATİV nəticəsi) və audit balı (`field_reports` +
+`field_report_checklist_items`, #26-nın NATİV nəticəsi) cədvəllərindən
+qidalanır. Xam satış rəqəmi/marja BURAYA DAXİL EDİLMİR.
 
 ──────────────────────────────────────────────────────────────────────────────
 NİYƏ YENİ FLAG YOX — `can_export_reports` TƏKRAR İSTİFADƏ OLUNUR
@@ -103,13 +104,22 @@ _FALLBACK_SIGMA_MULTIPLIER: Final = float(
 
 
 class BenchmarkMetric(str, Enum):
-    """5 native metrik (bax modul başlığı — 1C xam satış BURADA YOXDUR)."""
+    """Native metriklər (bax modul başlığı — 1C xam satış BURADA YOXDUR).
+
+    `AUDIT_SCORE` (#26, kompas1.md Faza 3) Struktur Qərar C ilə BURAYA əlavə
+    olundu — AYRI ekran/widget YARADILMADI. Səbəb: audit balı da digər beşi
+    kimi "filialı filialla müqayisə et" sualının cavabıdır; onun üçün ayrı
+    panel qurmaq eyni reytinq/trend/outlier məntiqini ikinci nüsxədə
+    saxlamaq olardı. Yeni metrik dörd widget-in HAMISINDA avtomatik işləyir,
+    çünki hər biri metriki arqument kimi alır.
+    """
 
     FINE_COUNT = "FINE_COUNT"
     ATTENDANCE_RATE = "ATTENDANCE_RATE"
     POINTS_BALANCE = "POINTS_BALANCE"
     OVERTIME_HOURS = "OVERTIME_HOURS"
     TURNOVER_RISK = "TURNOVER_RISK"
+    AUDIT_SCORE = "AUDIT_SCORE"
 
     @property
     def label_az(self) -> str:
@@ -143,6 +153,7 @@ _METRIC_LABELS: Final[dict[BenchmarkMetric, str]] = {
     BenchmarkMetric.POINTS_BALANCE: "Xal balansı",
     BenchmarkMetric.OVERTIME_HOURS: "Overtime saatı",
     BenchmarkMetric.TURNOVER_RISK: "Turnover riski",
+    BenchmarkMetric.AUDIT_SCORE: "Audit balı",
 }
 _METRIC_UNITS: Final[dict[BenchmarkMetric, str]] = {
     BenchmarkMetric.FINE_COUNT: "",
@@ -150,14 +161,24 @@ _METRIC_UNITS: Final[dict[BenchmarkMetric, str]] = {
     BenchmarkMetric.POINTS_BALANCE: " xal",
     BenchmarkMetric.OVERTIME_HOURS: " saat",
     BenchmarkMetric.TURNOVER_RISK: " bal",
+    # Faiz: "keçən bəndlərin cavablanmışlara nisbəti" (bax
+    # `FieldReport.audit_score`). Xam bənd sayı OLSAYDI, 10 bəndlik audit ilə
+    # 40 bəndlik audit müqayisə edilə bilməzdi.
+    BenchmarkMetric.AUDIT_SCORE: "%",
 }
-#: Cərimə/overtime/turnover — AZ yaxşıdır. Davamiyyət/xal — ÇOX yaxşıdır.
+#: Cərimə/overtime/turnover — AZ yaxşıdır. Davamiyyət/xal/audit — ÇOX yaxşıdır.
 _METRIC_LOWER_IS_BETTER: Final[dict[BenchmarkMetric, bool]] = {
     BenchmarkMetric.FINE_COUNT: True,
     BenchmarkMetric.ATTENDANCE_RATE: False,
     BenchmarkMetric.POINTS_BALANCE: False,
     BenchmarkMetric.OVERTIME_HOURS: True,
     BenchmarkMetric.TURNOVER_RISK: True,
+    # `False` — audit balında ÇOX yaxşıdır: bal keçən checklist bəndlərinin
+    # faizidir, uğursuzluq sayı DEYİL. İstiqamət metrikin TƏRİFİNİN bir
+    # hissəsidir (bax modul başlığı): səhv seçilsəydi, reytinq cədvəlində ən
+    # pis filial birinci sırada "ən yaxşı" kimi görünərdi və outlier kartı
+    # yüksək balı problem kimi göstərərdi.
+    BenchmarkMetric.AUDIT_SCORE: False,
 }
 _METRIC_NETWORK_AGGREGATION: Final[dict[BenchmarkMetric, _NetworkAggregation]] = {
     BenchmarkMetric.FINE_COUNT: _NetworkAggregation.SUM,
@@ -165,6 +186,9 @@ _METRIC_NETWORK_AGGREGATION: Final[dict[BenchmarkMetric, _NetworkAggregation]] =
     BenchmarkMetric.POINTS_BALANCE: _NetworkAggregation.SUM,
     BenchmarkMetric.OVERTIME_HOURS: _NetworkAggregation.SUM,
     BenchmarkMetric.TURNOVER_RISK: _NetworkAggregation.AVERAGE,
+    # ORTALAMA, CƏM YOX: faizlərin cəmi mənasızdır (üç filialın 90%+80%+70%-i
+    # "240%" verərdi) — `ATTENDANCE_RATE` ilə eyni səbəb.
+    BenchmarkMetric.AUDIT_SCORE: _NetworkAggregation.AVERAGE,
 }
 
 

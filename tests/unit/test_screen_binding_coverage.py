@@ -69,6 +69,17 @@ CONTROLLER_BOUND: Final[dict[str, str]] = {
     # `AttritionRiskUseCase.list_for_tenant`-də AUDİT-lənir və icazə yoxlaması
     # use case-in ÖZÜNDƏDİR (bax `controllers/attrition_risk.py` başlığı).
     "attrition_risk": "_attach_attrition_risk",
+    # #28 İllik Məzuniyyət Balansı (kompas1.md Faza 4) — təsdiq növbəsi HƏM
+    # oxuyur, HƏM yazır (təsdiqlə / rədd et) və hər qərardan sonra siyahı
+    # yenidən oxunur, çünki qərar verilmiş sorğu `list_pending`-dən çıxır
+    # (bax `controllers/annual_leave.py` başlığı).
+    "annual_leave": "_attach_annual_leave",
+    # #26+#27 Sahə hesabatları (kompas1.md Faza 3) — İKİ açar, BİR ekran sinfi
+    # və BİR `_attach_*` metodu (üç kataloq ekranı ilə eyni naxış): forma HƏM
+    # oxuyur (açıq hesabatlar, kataloq, ROOT limitləri), HƏM yazır (təqdim et /
+    # icraya götür / bağla) və hər yazıdan sonra siyahını yenidən oxuyur.
+    "store_audit": "_attach_field_reports",
+    "incident_report": "_attach_field_reports",
 }
 
 #: Həm `_binders()`-də, HƏM DƏ `_attach_*` ilə bağlanan açarlar.

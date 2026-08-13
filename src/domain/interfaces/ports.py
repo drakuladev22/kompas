@@ -12,16 +12,20 @@ təqdim edir (structural typing).
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Protocol, runtime_checkable
 
+from src.domain.annual_leave_rules import AnnualLeaveRolloverInput
 from src.domain.attrition_rules import AttritionRiskScore
 from src.domain.entities.announcement import Announcement
+from src.domain.entities.annual_leave import AnnualLeaveBalance, AnnualLeaveRequest
 from src.domain.entities.appeal import FineAppeal
 from src.domain.entities.attendance_record import AttendanceRecord
 from src.domain.entities.attendance_sheet import AttendanceFact, DailyAttendanceSheet
 from src.domain.entities.employee import Employee
 from src.domain.entities.employee_document import EmployeeDocument
 from src.domain.entities.exception_record import ExceptionRecord
+from src.domain.entities.field_report import FieldReport
 from src.domain.entities.fine import Fine
 from src.domain.entities.leave_request import LeaveRequest
 from src.domain.entities.open_shift import OpenShiftPosting, OpenShiftSlot
@@ -48,15 +52,23 @@ from src.domain.value_objects.exception_signals import (
     ExceptionSource,
     RuleEvaluationContext,
 )
+from src.domain.value_objects.field_reports import (
+    FieldReportCategory,
+    FieldReportTemplate,
+    StoreAuditGap,
+)
 from src.domain.value_objects.gamification import PointsPeriod, RewardItem
 from src.domain.value_objects.identifiers import (
     AnnouncementId,
+    AnnualLeaveRequestId,
     AppealId,
     AttendanceRecordId,
     EmployeeDocumentId,
     EmployeeId,
     ErpServerId,
     ExceptionId,
+    FieldReportId,
+    FieldReportItemId,
     FineId,
     FineTypeId,
     LeaveRequestId,
@@ -77,6 +89,7 @@ from src.domain.value_objects.infrastructure import (
     DatabaseTarget,
     MigrationStatus,
 )
+from src.domain.value_objects.job_runs import ScheduledJobRun
 from src.domain.value_objects.licensing import (
     CheckInRequest,
     CrashReport,
@@ -1031,6 +1044,300 @@ class EmployeeDocumentRepository(Protocol):
 
 
 # --------------------------------------------------------------------------- #
+# #26+#27 Sahə hesabatları (kompas1.md Faza 3)
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class FieldReportCatalog(Protocol):
+    """`field_report_types` + `field_report_categories` — genişlənmə nöqtəsi.
+
+    İKİ CƏDVƏL, TƏK PORT: hər ikisi EYNİ suala xidmət edir ("forma açılanda
+    nə göstərilsin?") və hər ikisi eyni tranzaksiyada, eyni sətir tərəfindən
+    oxunur. Ayrı portlar `composition.py`-da iki qeydiyyat, use case-də iki
+    arqument yaradardı — halbuki heç bir çağıran birini digərisiz işlətmir
+    (`ExceptionSourceCatalog`-un tək port olması ilə eyni əsaslandırma).
+
+    `save()`/`delete()` YOXDUR: kataloq sətirləri `migrations/037` ilə seed
+    edilir və Root onları GUI-dan deyil, sətir səviyyəsində idarə edir
+    (`ExceptionSourceCatalog` ilə eyni sərhəd). Söndürmə `is_active = FALSE`
+    ilədir — keçmiş hesabatlar hansı formadan doğduğunu göstərə bilməlidir.
+    """
+
+    def get_template(self, tenant_id: TenantId, code: str) -> FieldReportTemplate | None:
+        """Şablon (`STORE_AUDIT`, `INCIDENT`, ...) — `None` = naməlum kod."""
+        ...
+
+    def list_templates(
+        self, tenant_id: TenantId, *, include_inactive: bool = False
+    ) -> list[FieldReportTemplate]:
+        """Forma seçicisinin siyahısı. Defolt YALNIZ aktivlər."""
+        ...
+
+    def get_category(self, tenant_id: TenantId, code: str) -> FieldReportCategory | None:
+        """Kateqoriya — marşrutlama qaydası (`route_to_role`) buradan oxunur."""
+        ...
+
+    def list_categories(
+        self,
+        tenant_id: TenantId,
+        *,
+        report_type: str | None = None,
+        include_inactive: bool = False,
+    ) -> list[FieldReportCategory]:
+        """`idx_field_report_categories_type` indeksinin sorğusu.
+
+        `report_type=None` = bütün şablonların kateqoriyaları (Root/hesabat
+        ekranı üçün); dolu dəyər isə forma açılışının sorğusudur.
+        """
+        ...
+
+
+@runtime_checkable
+class FieldReportRepository(Protocol):
+    """`field_reports` + `field_report_checklist_items` — VAHİD aqreqat.
+
+    Checklist bəndləri üçün AYRI port YOXDUR: bənd valideyn hesabatsız
+    mənasızdır (birləşmiş FK `(tenant_id, report_id)`, `ON DELETE CASCADE`)
+    və `save()` hesabatı bəndləri ilə birlikdə yazır — aqreqat sərhədi
+    məhz budur.
+
+    `delete()` YOXDUR: DB-də `REVOKE DELETE` var (migrations/037) — insident
+    hesabatı mübahisədə SÜBUTDUR, rədd edilmiş (`DISMISSED`) olsa belə.
+    """
+
+    def get(self, report_id: FieldReportId) -> FieldReport | None: ...
+
+    def find_by_item(self, tenant_id: TenantId, item_id: FieldReportItemId) -> FieldReport | None:
+        """Checklist bəndinin İD-si ilə VALİDEYN hesabatı tapır.
+
+        Asinxron yükləmə geri-çağırışı üçün: növbə yalnız `owner_id` daşıyır
+        və bəndə aid foto üçün o, bəndin İD-sidir. Aqreqat sərhədi
+        pozulmasın deyə bənd TƏK BAŞINA qaytarılmır — bütün hesabat
+        yüklənir, dəyişiklik `save()` ilə birlikdə yazılır.
+        """
+        ...
+
+    def list_open(
+        self,
+        tenant_id: TenantId,
+        *,
+        store_ids: list[StoreId] | None = None,
+        report_type: str | None = None,
+        limit: int = 200,
+    ) -> list[FieldReport]:
+        """`idx_field_reports_open` sorğusu — ən yenisi əvvəldə.
+
+        `store_ids` mağaza-əhatəli görünmə üçündür (Mağaza Meneceri yalnız
+        öz filialını görür). `None` = süzgəc yoxdur; BOŞ siyahı isə "heç bir
+        mağazaya çıxışı yoxdur" deməkdir və heç nə qaytarmır (fail-safe,
+        `ExceptionRepository.list_open` ilə eyni qərar).
+        """
+        ...
+
+    def save(self, report: FieldReport) -> None:
+        """UPSERT — hesabat `ON CONFLICT (id)`, bəndlər isə ayrı-ayrılıqda."""
+        ...
+
+    def list_route_recipients(
+        self, tenant_id: TenantId, *, role_code: str, store_id: StoreId | None = None
+    ) -> list[EmployeeId]:
+        """Rol kodunu AKTİV işçilərə çevirir (#27 marşrutu + düzəliş tapşırığı).
+
+        FK YOXDUR (migrations/037: `positions.code` yalnız kirayəçi daxilində
+        unikaldır), ona görə mövcudluğu MƏHZ BU sorğu yoxlayır: naməlum rol
+        BOŞ siyahı qaytarır — istisna ATMIR. Səbəb: Root kataloqda rol adını
+        səhv yazsa, insident bildirişi ÜMUMİYYƏTLƏ yazıla bilməzdi; boş
+        siyahı isə use case-i ehtiyat yoluna salır.
+
+        `store_id` düzəliş tapşırığı üçündür: mağaza rəhbəri ŞƏBƏKƏ üzrə
+        deyil, HƏMİN filial üzrə axtarılır — əks halda 21 filialın bütün
+        menecerləri bir mağazanın uğursuz bəndi üçün tapşırıq alardı.
+        """
+        ...
+
+    def stores_missing_audit(
+        self, tenant_id: TenantId, *, now: datetime, interval_days: int
+    ) -> list[StoreAuditGap]:
+        """Sonuncu auditi `interval_days`-dən köhnə (və ya HEÇ OLMAYAN) filiallar.
+
+        Şablon süzgəci KODA YAZILMIR: sorğu `field_report_types.
+        requires_checklist` sütununa baxır — yəni gələcəkdə əlavə edilən
+        checklist-li şablon (məs. "Təchizat yoxlaması") də avtomatik "audit"
+        sayılır və bu metod dəyişmir (Struktur Qərar A).
+
+        `now` ARQUMENTDİR, DB-nin `now()` funksiyası DEYİL: vaxt mənbəyi
+        `Clock` portudur (CLAUDE.md §4) — əks halda gecəlik iş determinstik
+        test edilə bilməzdi. `days_since` də həmin ana görə hesablanır.
+        """
+        ...
+
+
+# --------------------------------------------------------------------------- #
+# #28 İllik Məzuniyyət Balansı (kompas1.md Faza 4)
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class AnnualLeaveBalanceRepository(Protocol):
+    """`annual_leave_balances` — İLLİK haqq (migrations/037).
+
+    ──────────────────────────────────────────────────────────────────────────
+    `LeaveRequestRepository` İLƏ QARIŞDIRILMAMALIDIR
+    ──────────────────────────────────────────────────────────────────────────
+    O port GÜNDAXİLİ icazənin (STEP1/STEP2, dəqiqə əsaslı) sətirlərini idarə
+    edir və `monthly_used_minutes()` metodu aylıq 240 dəqiqəlik tavana aiddir.
+    Bu port isə GÜN əsaslı illik haqqı idarə edir və həmin tavanla heç bir
+    əlaqəsi yoxdur (bax `entities/annual_leave.py` başlığı).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ ÜMUMİ `save()` YOXDUR
+    ──────────────────────────────────────────────────────────────────────────
+    `OpenShiftPostingRepository` ilə EYNİ qərar və eyni səbəb: `save(balance)`
+    imzası çağıran tərəfi "oxu → dəyiş → yaz" naxışına dəvət edərdi və məhz
+    bu naxış yarışı UDUZUR — iki paralel təsdiq eyni `used_days` dəyərini
+    oxuyub hər ikisi "kifayətdir" deyərdi, ikinci yazı isə birincinin
+    çıxdığı günü üstündən yazardı. Ona görə balansı dəyişdirən hər əməliyyat
+    ŞƏRTLİ `UPDATE`-dir və uğur/uğursuzluq qaytarır.
+    """
+
+    def get(self, employee_id: EmployeeId, *, year: int) -> AnnualLeaveBalance | None: ...
+
+    def list_for_year(
+        self, tenant_id: TenantId, *, year: int, limit: int = 500
+    ) -> list[AnnualLeaveBalance]:
+        """HR panelinin "bu ilin balansları" siyahısı (`idx_..._year` sorğusu)."""
+        ...
+
+    def set_entitlement(
+        self,
+        *,
+        tenant_id: TenantId,
+        employee_id: EmployeeId,
+        year: int,
+        entitled_days: Decimal,
+        carried_over_days: Decimal,
+        updated_by: EmployeeId | None,
+    ) -> bool:
+        """İDEMPOTENT UPSERT — haqqı TƏYİN edir, ARTIRMIR.
+
+        `ON CONFLICT (tenant_id, employee_id, year) DO UPDATE SET ... = EXCLUDED
+        ...` naxışı: il dönümü işi at-least-once icra olunur (bax `job_runner.py`
+        başlığı) və `+=` yazılsaydı ikinci icra balansı ikiqat artırardı.
+
+        `updated_by is None` = SİSTEM (planlaşdırılmış iş). Bu, sadəcə boş
+        sütun deyil — ƏL İLƏ edilmiş düzəlişi qorumaq üçün şərtdir: sistem
+        yazısı yalnız `updated_by IS NULL` olan sətri yeniləyir, yəni HR-ın
+        düzəltdiyi rəqəm gecə işi tərəfindən sükutla geri qaytarılmır.
+
+        Returns:
+            Sətir yaradıldı/yeniləndimi. `False` = əl ilə düzəlişə toxunulmadı.
+        """
+        ...
+
+    def consume(self, *, employee_id: EmployeeId, year: int, days: Decimal) -> bool:
+        """ŞƏRTLİ `UPDATE` — balans mənfiyə DÜŞƏ BİLMƏZ (yarış qapağı).
+
+        Şərt (`used_days + %s <= entitled_days + carried_over_days`) SORĞUNUN
+        İÇİNDƏDİR: onu Python-da yoxlamaq oxu ilə yazı arasında pəncərə
+        qoyardı və iki paralel təsdiqin HƏR İKİSİ keçərdi
+        (`open_shift_repository.claim` ilə hərfən eyni naxış).
+
+        Returns:
+            `True` = bir sətir yeniləndi. `False` = balans çatmır VƏ YA sətir
+            yoxdur — çağıran tərəf ikisini fərqləndirmək üçün `get()` edir.
+        """
+        ...
+
+    def release(self, *, employee_id: EmployeeId, year: int, days: Decimal) -> bool:
+        """Ləğv edilmiş məzuniyyətin gününü geri qaytarır (şərti `UPDATE`).
+
+        `GREATEST(0, used_days - %s)` işlədilir: təkrar ləğv (və ya
+        planlayıcının təkrar icrası) `used_days`-i mənfiyə salmamalıdır.
+        """
+        ...
+
+    def expire_carryover(self, *, tenant_id: TenantId, year: int) -> int:
+        """ "İstifadə et ya itir" — istifadə olunmamış köçürməni sıfırlayır.
+
+        `SET carried_over_days = LEAST(carried_over_days, used_days)` —
+        İDEMPOTENTDİR (ikinci icrada heç nə dəyişmir) və `used_days <=
+        entitled_days + carried_over_days` `CHECK`-ini poza bilmir.
+
+        Returns:
+            Toxunulan sətir sayı (`rowcount`) — iş hesabatının rəqəmi.
+        """
+        ...
+
+    def list_rollover_inputs(
+        self, tenant_id: TenantId, *, year: int
+    ) -> list[AnnualLeaveRolloverInput]:
+        """İl dönümü işinin girişi: AKTİV işçi + işə qəbul + KEÇƏN ilin qalığı.
+
+        Aqreqasiya SQL-dədir (`entitled + carried_over - used`), çünki 235
+        işçinin sətrini yaddaşa gətirib Python-da çıxmaq gecə işi üçün
+        mənasız yükdür (`count_claims_in_month` ilə eyni qərar).
+
+        KEÇƏN İL SƏTRİ OLMAYAN işçi də qayıdır (qalığı sıfır) — əks halda
+        yeni işə düşən işçinin bu il üçün balansı HEÇ VAXT yaranmazdı.
+        """
+        ...
+
+
+@runtime_checkable
+class AnnualLeaveRequestRepository(Protocol):
+    """`annual_leave_requests` — sorğu və təsdiqi (migrations/037).
+
+    `save()` UPSERT-dir (`ShiftSwapRepository` naxışı), çünki sorğunun
+    statusu bir aqreqat daxilində dəyişir və yarış nöqtəsi burada DEYİL —
+    o, balansdadır. Üst-üstə düşən TƏSDİQLƏNMİŞ aralıqları isə DB `EXCLUDE
+    USING gist` qapağı kəsir; repo həmin pozuntunu tutub AZƏRBAYCAN DİLİNDƏ
+    izaha çevirməlidir, xam `psycopg` xətası ekrana çıxmamalıdır.
+    """
+
+    def get(self, request_id: AnnualLeaveRequestId) -> AnnualLeaveRequest | None: ...
+
+    def get_for_update(self, request_id: AnnualLeaveRequestId) -> AnnualLeaveRequest | None:
+        """`SELECT ... FOR UPDATE` — YALNIZ yazma axını üçün.
+
+        `get()` siyahı/ekran yollarında işlədilir; ona kilid qoymaq hər
+        baxışı yazı-kilidinə çevirərdi (`RowLockingLeaveRequests` ilə eyni
+        qərar).
+        """
+        ...
+
+    def list_pending(self, tenant_id: TenantId, *, limit: int = 200) -> list[AnnualLeaveRequest]:
+        """`idx_annual_leave_requests_pending` sorğusu — ən erkən başlayan əvvəldə."""
+        ...
+
+    def list_for_employee(
+        self, employee_id: EmployeeId, *, limit: int = 50
+    ) -> list[AnnualLeaveRequest]:
+        """İşçi profilindəki "məzuniyyət tarixçəsi" (`idx_..._employee`)."""
+        ...
+
+    def find_overlapping_approved(
+        self, employee_id: EmployeeId, *, start: date, end: date
+    ) -> AnnualLeaveRequest | None:
+        """`EXCLUDE` qapağının OXU tərəfi — istifadəçiyə erkən xəbərdarlıq.
+
+        Qapağı ƏVƏZ ETMİR: paralel iki təsdiqdə bu yoxlama uduzur və qərarı
+        DB verir (bax `save()`). Məqsədi yalnız odur ki, normal halda
+        istifadəçi səbəbi FORMANI DOLDURMAZDAN ƏVVƏL görsün.
+        """
+        ...
+
+    def save(self, request: AnnualLeaveRequest) -> None:
+        """UPSERT (`ON CONFLICT (id) DO UPDATE`).
+
+        Raises:
+            KompasOSError: `excl_annual_leave_no_overlap` pozulduqda — xam
+                DB xətası deyil, izah edilmiş Azərbaycan dilində mesaj.
+        """
+        ...
+
+
+# --------------------------------------------------------------------------- #
 # #19 Elan (Broadcast) (kompasos11.md Faza 8)
 # --------------------------------------------------------------------------- #
 
@@ -1419,6 +1726,95 @@ class MigrationEventLog(Protocol):
 
 
 @runtime_checkable
+class ScheduledJobRepository(Protocol):
+    """`app_scheduled_job_runs` — planlanmış işin İCARƏSİ və nəticəsi (Faza 11).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `get()` + `save()` NAXIŞI YOXDUR
+    ──────────────────────────────────────────────────────────────────────────
+    Digər repo-larda naxış `save(aqreqat)` UPSERT-idir. Burada QƏSDƏN
+    fərqlidir və səbəb `OpenShiftPostingRepository`-dəki ilə eynidir: sistem
+    21 mağazada, hər mağazada bir neçə terminalda işləyir və hamısı EYNİ
+    gecə işini görməyə çalışır.
+
+    `get()` → yoxla → `save()` ardıcıllığı bu şəraitdə UDUZUR: iki terminal
+    eyni anda "qeyd yoxdur" görüb hər ikisi işi icra edər — baz xətti iki
+    dəfə hesablanar, HR eyni sənəd üçün iki e-poçt alar. Ona görə götürmə
+    TƏK atomik metoddur (`acquire`) və qərarı DB verir, Python yox.
+
+    ──────────────────────────────────────────────────────────────────────────
+    HƏR METOD ÖZ TRANZAKSİYASINDA COMMIT OLUNUR
+    ──────────────────────────────────────────────────────────────────────────
+    `acquire()` çağıranın tranzaksiyasında qalsaydı, icarə yalnız İŞ BİTDİKDƏN
+    sonra görünərdi — yəni bütün müdafiə mənasını itirərdi (digər terminal
+    icarəni GÖRMƏDƏN eyni işi başlayardı). Üstəlik ağır iş (`pg_dump`)
+    dəqiqələrlə çəkir və o müddət boyu açıq tranzaksiya saxlamaq CLAUDE.md
+    §6-nın açıq şəkildə qadağan etdiyi naxışdır.
+    """
+
+    def acquire(
+        self,
+        *,
+        tenant_id: TenantId,
+        job_key: str,
+        scheduled_for: datetime,
+        instance_id: str,
+        now: datetime,
+        leased_until: datetime,
+        max_attempts: int,
+    ) -> bool:
+        """İcarəni ATOMİK götürür. `True` = bu instansiya icra etməlidir.
+
+        `False` üç halın hər hansı biridir və onlar QƏSDƏN ayrılmır: slot
+        artıq uğurla tamamlanıb, başqa instansiya onu indi icra edir, və ya
+        cəhd tavanı dolub. Çağıran tərəf üçün nəticə eynidir — "sən icra
+        etmirsən" — və ayırmaq üçün əlavə sorğu atmaq yarışın özünü geri
+        gətirərdi (oxunan cavab yazı anında artıq köhnə olardı).
+        """
+        ...
+
+    def mark_succeeded(
+        self,
+        *,
+        tenant_id: TenantId,
+        job_key: str,
+        scheduled_for: datetime,
+        instance_id: str,
+        finished_at: datetime,
+        result_detail: str | None = None,
+    ) -> bool:
+        """Uğurlu bitişi yazır. `False` = icarə artıq bu instansiyada deyil.
+
+        `instance_id` şərti MƏCBURİDİR: icarəsi bitmiş, lakin hələ işləyən
+        instansiya nəticəsini YENİ sahibin üstünə yazmamalıdır.
+        """
+        ...
+
+    def mark_failed(
+        self,
+        *,
+        tenant_id: TenantId,
+        job_key: str,
+        scheduled_for: datetime,
+        instance_id: str,
+        finished_at: datetime,
+        error: str,
+    ) -> bool:
+        """Uğursuzluğu və səbəbini yazır. `False` = icarə artıq bu instansiyada deyil."""
+        ...
+
+    def get(
+        self, *, tenant_id: TenantId, job_key: str, scheduled_for: datetime
+    ) -> ScheduledJobRun | None:
+        """Bir slotun qeydi — diaqnostika və sağlamlıq ekranı üçün.
+
+        İCRA YOLUNDA İŞLƏDİLMİR: "əvvəlcə oxu, sonra götür" naxışı məhz
+        bağlanmaq istənən qüsurdur (bax sinif başlığı).
+        """
+        ...
+
+
+@runtime_checkable
 class UnitOfWork(Protocol):
     """Tranzaksiya sərhədi.
 
@@ -1438,6 +1834,8 @@ class UnitOfWork(Protocol):
 
 __all__ = [
     "AnnouncementRepository",
+    "AnnualLeaveBalanceRepository",
+    "AnnualLeaveRequestRepository",
     "AttendanceFactProvider",
     "AttendanceRepository",
     "AttritionRiskScoreRepository",
@@ -1457,6 +1855,8 @@ __all__ = [
     "ExceptionRule",
     "ExceptionSourceCatalog",
     "FeatureToggles",
+    "FieldReportCatalog",
+    "FieldReportRepository",
     "FineAppealRepository",
     "FineRepository",
     "FineTypeRepository",
@@ -1480,6 +1880,7 @@ __all__ = [
     "RowLockingLeaveRequests",
     "SalesDataConnector",
     "SalesPointsRepository",
+    "ScheduledJobRepository",
     "ShiftRepository",
     "ShiftSwapRepository",
     "SystemLimits",

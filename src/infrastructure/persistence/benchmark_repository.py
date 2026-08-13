@@ -1,7 +1,7 @@
 """Çox-Mağaza Benchmark Dashboard-un aqreqasiya qatı — #24, kompasos11.md Faza 9A.
 
 `application.use_cases.multi_store_benchmark.MultiStoreMetricProvider`-in
-Postgres tətbiqi. Beş metrik BEŞ AYRI, TAM statik SQL sətrindən oxunur —
+Postgres tətbiqi. Hər metrik ÖZ, TAM statik SQL sətrindən oxunur —
 dinamik `WHERE` şərti YOXDUR, metrik seçimi `_METRIC_QUERIES` sabit lüğətindən
 gəlir (CLAUDE.md bölmə 4: "dinamik metrik seçimi SQL-ə sətir-birləşdirmə ilə
 GİRMƏSİN"). Hər sorğu tam literal mətndir — heç bir f-string/`.format()`/`%`
@@ -12,10 +12,10 @@ VAR və `noqa: S608` ORADADIR).
 ──────────────────────────────────────────────────────────────────────────────
 1C SƏRHƏDİ
 ──────────────────────────────────────────────────────────────────────────────
-Beş sorğu YALNIZ `fines`, `daily_attendance_sheets`/`_lines`, `points_ledger`,
-`overtime_log`, `attrition_risk_scores` və `employees`/`stores` cədvəllərinə
-toxunur. `sales_transactions`/`erp_servers` HEÇ YERDƏ görünmür (statik `ast`
-qapısı: `tests/unit/test_benchmark_widgets.py`).
+Sorğular YALNIZ `fines`, `daily_attendance_sheets`/`_lines`, `points_ledger`,
+`overtime_log`, `attrition_risk_scores`, `field_reports`/`field_report_*` və
+`employees`/`stores` cədvəllərinə toxunur. `sales_transactions`/`erp_servers`
+HEÇ YERDƏ görünmür (statik `ast` qapısı: `tests/unit/test_benchmark_widgets.py`).
 
 ──────────────────────────────────────────────────────────────────────────────
 NİYƏ HƏR SORĞU `store_id`-Sİ OLMAYAN SƏTRİ ATIR
@@ -108,6 +108,30 @@ _METRIC_QUERIES: Final[dict[BenchmarkMetric, str]] = {
                ORDER BY ars.employee_id, ars.score_date DESC
           ) AS latest
          GROUP BY latest.store_id
+    """,
+    # Audit balı — #26-nın NATİV nəticəsi (Struktur Qərar C: AYRI ekran YOX).
+    # `FieldReport.audit_score` domen tərifinin SQL güzgüsüdür: keçən
+    # bəndlərin CAVABLANMIŞ bəndlərə nisbəti.
+    #
+    # ŞABLON KODU SQL-Ə YAZILMIR (`fr.type = 'STORE_AUDIT'` YOXDUR): "audit"
+    # tərifi kataloqdadır (`field_report_types.requires_checklist`), yəni
+    # gələcəkdə əlavə edilən checklist-li şablon BİR `INSERT` ilə bu metrikə
+    # daxil olur və bu sətir DƏYİŞMİR (Struktur Qərar A).
+    #
+    # `fri.passed IS NOT NULL` süzgəci HƏM MƏNA, HƏM TƏHLÜKƏSİZLİK daşıyır:
+    # cavabsız bənd nə uğur, nə uğursuzluqdur (037: üç vəziyyət) və eyni
+    # zamanda məxrəci sıfırlaya bilməz — süzgəcdən sonra qrup YALNIZ ən azı
+    # bir cavablanmış bənd olduqda mövcuddur, yəni SIFIRA BÖLMƏ BAŞ VERMİR
+    # (`ATTENDANCE_RATE`-dəki `HAVING` bu səbəbdən burada LAZIM DEYİL).
+    BenchmarkMetric.AUDIT_SCORE: """
+        SELECT fr.store_id AS store_id,
+               100.0 * COUNT(*) FILTER (WHERE fri.passed) / COUNT(*) AS value
+          FROM field_reports fr
+          JOIN field_report_types frt ON frt.code = fr.type AND frt.requires_checklist
+          JOIN field_report_checklist_items fri ON fri.report_id = fr.id
+         WHERE fr.tenant_id = %s AND fr.created_at >= %s AND fr.created_at < %s
+           AND fri.passed IS NOT NULL
+         GROUP BY fr.store_id
     """,
 }
 

@@ -563,10 +563,56 @@ def _performance_reviews(screen: Any) -> None:
     screen.set_history(list(data.PERFORMANCE_REVIEW_HISTORY))
 
 
+def _annual_leave(screen: Any) -> None:
+    """#28 (kompas1.md Faza 4) — açarlar `controllers/annual_leave.py::
+    _to_inbox_row` ilə EYNİDİR (CLAUDE.md §6)."""
+    screen.set_requests(list(data.ANNUAL_LEAVE_PENDING))
+
+
 def _attrition_risk(screen: Any) -> None:
     """#21 (kompasos11.md Faza 9) — açarlar `controllers/attrition_risk.py::
     _to_row` ilə EYNİDİR (CLAUDE.md §6)."""
     screen.set_scores(list(data.ATTRITION_RISK_SCORES))
+
+
+def _field_report(
+    screen: Any,
+    *,
+    templates: list[dict[str, str]],
+    categories: list[dict[str, str]],
+    reports: list[dict[str, str]],
+) -> None:
+    """#26+#27 (kompas1.md Faza 3) — açarlar `controllers/field_reports.py`-dakı
+    `_template_row` / `_category_row` / `_report_row` ilə EYNİDİR (CLAUDE.md §6).
+
+    İKİ AÇAR, TƏK DOLDURUCU: forma sinfi eynidir, fərq yalnız KATALOQ
+    məzmunundadır — maket bunu iki funksiya ilə təkrarlasaydı, sabahkı üçüncü
+    şablon üçüncü nüsxə tələb edərdi.
+    """
+    screen.set_templates(templates)
+    screen.set_categories(categories)
+    screen.set_stores(list(data.FIELD_REPORT_STORES))
+    screen.set_detail_min_length(data.FIELD_REPORT_MIN_DETAIL)
+    screen.set_photo_limit(data.FIELD_REPORT_MAX_PHOTOS)
+    screen.set_open_reports(reports)
+
+
+def _store_audit(screen: Any) -> None:
+    _field_report(
+        screen,
+        templates=list(data.FIELD_REPORT_AUDIT_TEMPLATES),
+        categories=list(data.FIELD_REPORT_AUDIT_CATEGORIES),
+        reports=list(data.FIELD_REPORT_OPEN_AUDITS),
+    )
+
+
+def _incident_report(screen: Any) -> None:
+    _field_report(
+        screen,
+        templates=list(data.FIELD_REPORT_INCIDENT_TEMPLATES),
+        categories=list(data.FIELD_REPORT_INCIDENT_CATEGORIES),
+        reports=list(data.FIELD_REPORT_OPEN_INCIDENTS),
+    )
 
 
 def _dashboard_builder(screen: Any) -> None:
@@ -615,9 +661,12 @@ _POPULATORS: dict[str, Callable[[Any], None]] = {
     "plugins": _plugins,
     "dashboard_builder": _dashboard_builder,
     "exceptions": _exceptions,
+    "store_audit": _store_audit,
+    "incident_report": _incident_report,
     "announcements": _announcements,
     "performance_reviews": _performance_reviews,
     "attrition_risk": _attrition_risk,
+    "annual_leave": _annual_leave,
 }
 
 

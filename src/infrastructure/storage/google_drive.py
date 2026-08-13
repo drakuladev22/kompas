@@ -90,6 +90,7 @@ FALLBACK_JPEG_QUALITY: Final[int] = fallback_int(SystemLimitKey.EVIDENCE_JPEG_QU
 #: Sürüşmə testlə bağlanır: `test_owner_type_keys_match_the_queue_enum`.
 FINE_OWNER_TYPE: Final[str] = "FINE"
 EMPLOYEE_DOCUMENT_OWNER_TYPE: Final[str] = "EMPLOYEE_DOCUMENT"
+FIELD_REPORT_OWNER_TYPE: Final[str] = "FIELD_REPORT"
 
 PDF_EXTENSION: Final[str] = ".pdf"
 PDF_MIME_TYPE: Final[str] = "application/pdf"
@@ -115,9 +116,24 @@ ALLOWED_EXTENSIONS: Final[frozenset[str]] = IMAGE_EXTENSIONS
 #: edərdi. Bu, "struktur zəmanət" tərifinə düşür (CLAUDE.md §5), ona görə
 #: siyahı KODDA qalır. Formatın həqiqətən artması lazım olsa, o, yeni imza
 #: yoxlaması + yeni test tələb edən KOD dəyişikliyidir.
+#: SAHƏ HESABATI (#26+#27) — YALNIZ ŞƏKİL, PDF YOX. "Seç və əsaslandır":
+#:
+#:   * Sahə hesabatının sübutu MÜŞAHİDƏDİR — vitrinin, kassanın, sınmış
+#:     avadanlığın həmin andakı VƏZİYYƏTİ. Onu təsdiqləyən şey kameranın
+#:     çəkdiyi kadrdır; PDF isə HAZIRLANMIŞ sənəddir (hesabat, akt, faktura)
+#:     və o, `EMPLOYEE_DOCUMENT` sahibinin işidir. Sütun adları da bunu
+#:     yazır: `photo_refs`, `photo_ref`, `photo_required` (migrations/037).
+#:   * SEC-018 qaydası: ağ siyahını genişləndirmək HÜCUM SƏTHİNİ genişləndirir
+#:     və yalnız həqiqi tələblə edilir. "Bəlkə lazım olar" kifayət etmir —
+#:     PDF üçün `%PDF-` imza yoxlaması var, lakin yoxlanmayan hər əlavə
+#:     format (`.svg`, `.html`) məhz bu siyahıya bir sətir kimi girərdi.
+#:   * `allowed_extensions_for` onsuz da naməlum tipə ŞƏKİL dəsti qaytarır
+#:     (fail-closed), yəni bu sətir davranışı DƏYİŞMİR — QƏRARI GÖRÜNƏN edir.
+#:     Qeyd olmasaydı, növbəti oxucu "unudulub?" deyə düşünərdi.
 _ALLOWED_BY_OWNER: Final[dict[str, frozenset[str]]] = {
     FINE_OWNER_TYPE: IMAGE_EXTENSIONS,
     EMPLOYEE_DOCUMENT_OWNER_TYPE: DOCUMENT_EXTENSIONS,
+    FIELD_REPORT_OWNER_TYPE: IMAGE_EXTENSIONS,
 }
 
 #: Rədd mətnləri sahib tipinə görə seçilir və HƏRFİ SABİTDİR (formatlanmır):
@@ -126,6 +142,7 @@ _ALLOWED_BY_OWNER: Final[dict[str, frozenset[str]]] = {
 _FORMAT_MESSAGES: Final[dict[str, str]] = {
     FINE_OWNER_TYPE: "Yalnız .jpg, .png və .webp formatları qəbul olunur.",
     EMPLOYEE_DOCUMENT_OWNER_TYPE: "Yalnız .jpg, .png, .webp və .pdf formatları qəbul olunur.",
+    FIELD_REPORT_OWNER_TYPE: "Yalnız .jpg, .png və .webp formatları qəbul olunur.",
 }
 #: Bölmə 6: maksimum 5 MB — DEFOLT dəyər.
 #:

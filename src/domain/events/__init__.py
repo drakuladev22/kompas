@@ -220,6 +220,55 @@ class ShiftSwapDecidedEvent(DomainEvent):
 
 
 @dataclass(frozen=True, kw_only=True)
+class AnnualLeaveRequestedEvent(DomainEvent):
+    """#28: işçi İLLİK məzuniyyət sorğusu göndərdi.
+
+    `LeaveRequestedEvent` İLƏ QARIŞDIRILMAMALIDIR: o, GÜNDAXİLİ icazənin
+    (STEP1) hadisəsidir və dinləyiciləri dəqiqə/cərimə məntiqinə bağlıdır.
+    Bu isə GÜN əsaslı, balansdan çıxan uzun-müddətli haqqdır. İki hadisə bir
+    sinifdə birləşsəydi, nahar fasiləsi ilə iki həftəlik məzuniyyət eyni
+    dinləyiciyə düşərdi (bax `entities/annual_leave.py` başlığı).
+    """
+
+    request_id: uuid.UUID
+    employee_id: uuid.UUID
+    start_date: date
+    end_date: date
+
+
+@dataclass(frozen=True, kw_only=True)
+class AnnualLeaveDecidedEvent(DomainEvent):
+    """#28: sorğu təsdiqləndi və ya rədd edildi (Shift Swap naxışı).
+
+    `deducted_days` YALNIZ təsdiqdə doludur və TƏSDİQ ANINDA dondurulmuş
+    dəyərdir — dinləyici onu yenidən hesablamamalıdır, çünki Shift Matrix
+    sonradan dəyişə bilər (migrations/037 `deducted_days` şərhi).
+    """
+
+    request_id: uuid.UUID
+    approver_id: uuid.UUID
+    approved: bool
+    reason: str | None
+    deducted_days: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class AnnualLeaveCancelledEvent(DomainEvent):
+    """#28: TƏSDİQLƏNMİŞ məzuniyyət ləğv edildi, balans geri qaytarıldı.
+
+    AYRICA HADİSƏDİR, `AnnualLeaveDecidedEvent(approved=False)` DEYİL:
+    "menecer rədd etdi" ilə "təsdiq edilmiş plan ləğv olundu" işçi üçün
+    tamamilə fərqli hadisələrdir — birincisində plan heç vaxt qurulmayıb,
+    ikincisində isə işçi bilet almış ola bilər.
+    """
+
+    request_id: uuid.UUID
+    employee_id: uuid.UUID
+    cancelled_by: uuid.UUID
+    restored_days: str
+
+
+@dataclass(frozen=True, kw_only=True)
 class OpenShiftPostedEvent(DomainEvent):
     """#16: admin doldurulmamış slotu "açıq" elan etdi.
 
@@ -382,6 +431,40 @@ class EmployeeDocumentRecordedEvent(DomainEvent):
 
 
 # --------------------------------------------------------------------------- #
+# Sahə hesabatları (#26+#27, kompas1.md Faza 3)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, kw_only=True)
+class FieldReportSubmittedEvent(DomainEvent):
+    """Sahə hesabatı (mağaza auditi VƏ YA insident) təqdim edildi.
+
+    ŞABLON BAŞINA AYRI HADİSƏ YOXDUR — `report_type` sahə kimi daşınır.
+    İki hadisə sinfi (`StoreAuditSubmittedEvent` + `IncidentReportedEvent`)
+    Struktur Qərar A-nı pozardı: üçüncü şablon əlavə edən adam həm kataloqa
+    `INSERT` etməli, həm də YENİ hadisə sinfi yazıb bütün abunəçiləri
+    yeniləməli olardı — halbuki kataloq dizaynının bütün məqsədi məhz bunun
+    qarşısını almaqdır.
+
+    YALNIZ TƏQDİMAT hadisə yaradır — bağlanma (`resolve`/`dismiss`) AYRI
+    hadisə DEYİL: audit izi ondan asılı olmadan `audit_logs`-dadır
+    (`EmployeeDocumentRecordedEvent` ilə eyni qərar, CLAUDE.md §5).
+
+    `blocking_failures` sayı hadisədə daşınır, çünki abunəçi üçün "bu
+    hesabat düzəliş tapşırığı doğurdumu?" sualı hesabatın ÖZÜNDƏN daha
+    vacibdir — cavabı almaq üçün checklist bəndlərini yenidən oxumaq
+    lazım gəlməsin.
+    """
+
+    report_id: uuid.UUID
+    report_type: str
+    category: str
+    store_id: uuid.UUID
+    reported_by: uuid.UUID
+    blocking_failures: int
+
+
+# --------------------------------------------------------------------------- #
 # Ünsiyyət və Performans (#19, #20, kompasos11.md Faza 8)
 # --------------------------------------------------------------------------- #
 
@@ -448,6 +531,9 @@ class LicenseStatusChangedEvent(DomainEvent):
 
 __all__ = [
     "AnnouncementBroadcastEvent",
+    "AnnualLeaveCancelledEvent",
+    "AnnualLeaveDecidedEvent",
+    "AnnualLeaveRequestedEvent",
     "DailyAttendanceSheetConfirmedEvent",
     "DualControlApprovalRequestedEvent",
     "DualControlDecisionEvent",
@@ -455,6 +541,7 @@ __all__ = [
     "ExceptionRaisedEvent",
     "ExceptionReviewDecidedEvent",
     "FeatureToggleChangedEvent",
+    "FieldReportSubmittedEvent",
     "FineAppealSubmittedEvent",
     "FineIssuedEvent",
     "FineReversedEvent",

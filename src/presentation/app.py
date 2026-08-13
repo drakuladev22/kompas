@@ -78,6 +78,17 @@ FALLBACK_UPLOAD_POLL_INTERVAL_MS: Final = (
 #: SQL ilə düşən dəyər üçün son müdafiə xətti buradadır.
 MIN_UPLOAD_POLL_INTERVAL_SECONDS: Final = 10
 
+#: Planlaşdırılmış işlərin yoxlanma tezliyi (15 dəqiqə).
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`SCHEDULER_POLL_INTERVAL_MINUTES`, seed: migrations/036) və o, adətən
+#: `JobRunner.poll_interval()` vasitəsilə oxunur. Bu sabit YALNIZ kontekst
+#: olmayanda (önizləmə/dizayn rejimi) və ya limit oxunmayanda işə düşür —
+#: dövrənin ritmsiz qalması gecə işlərini tamamilə dayandırardı.
+FALLBACK_SCHEDULER_POLL_INTERVAL_MS: Final = (
+    int(DEFAULT_LIMITS[SystemLimitKey.SCHEDULER_POLL_INTERVAL_MINUTES]) * 60 * 1000
+)
+
 #: Brend ikonu — pəncərə başlığı, Windows Taskbar və Alt-Tab (bölmə 9, 296).
 ICON_RELATIVE_PATH: Final = "assets/kompasos.ico"
 
@@ -151,6 +162,11 @@ class KompasApplication:
         self._sales_review: SalesReviewController | None = None
         #: Sübut şəkillərini arxa planda Drive-a köçürən taymer.
         self._upload_timer: QTimer | None = None
+        #: Planlaşdırılmış YÜNGÜL fon işlərini işlədən taymer (Faza 11).
+        #: Sübut taymeri ilə YAN-YANA dayanır, onu ƏVƏZ ETMİR: ritmləri ayrı
+        #: Root parametrlərindən gəlir (biri şəbəkəyə, digəri gecə işlərinə
+        #: kökləndiyi üçün eyni intervalı paylaşa bilməzlər).
+        self._scheduler_timer: QTimer | None = None
 
     # ------------------------------- pəncərə --------------------------------- #
 
@@ -342,6 +358,7 @@ class KompasApplication:
             # onu doldurmaq mümkün deyil.
             self._sales_review = SalesReviewController(self._context, employee)
             self._start_upload_timer()
+            self._start_scheduler_timer()
         shell = AdminShell(
             theme=self._theme,
             registry=self._registry,
@@ -433,6 +450,82 @@ class KompasApplication:
         uploaded = self._context.run_evidence_uploads()
         if uploaded:
             _log.info("EVIDENCE_UPLOADED", extra={"count": uploaded})
+
+    # --------------------------- planlaşdırılmış işlər ------------------------ #
+
+    def _start_scheduler_timer(self) -> None:
+        """Planlaşdırılmış YÜNGÜL işləri dövri işlədir (Faza 11).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ AYRICA TAYMER — SÜBUT TAYMERİNƏ QOŞULMUR
+        ──────────────────────────────────────────────────────────────────────
+        İki dövrənin ritmi FƏRQLİ suallara cavab verir: sübut növbəsi filialın
+        internetindən (`EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS`, dəqiqələr),
+        planlayıcı isə gecə işlərinin gecikmə dözümündən
+        (`SCHEDULER_POLL_INTERVAL_MINUTES`, 15 dəq.) asılıdır. Birinə
+        qoşsaydıq, Root iki parametrdən birini dəyişəndə digəri də sükutla
+        sürüşərdi. Mövcud `_upload_timer` OLDUĞU KİMİ QALIR.
+
+        `include_heavy=False` — GUI axını `pg_dump` çağıran işi icra ETMİR
+        (interfeys dəqiqələrlə donardı). Ağır iş yalnız CLI-dan işləyir:
+        `main.py --run-scheduled-jobs` (bax `docs/scheduler_setup.md`).
+
+        İNTERVAL SABİT DEYİL — `JobRunner.poll_interval()`-dan, yəni ROOT
+        parametrindən oxunur. Dəyər taymer qurularkən bir dəfə alınır (eyni
+        qərar `_start_upload_timer`-dədir: Qt taymerinin intervalını hər
+        dövrədə yenidən soruşmaq üçün ikinci taymer lazım olardı; yeni ritm
+        növbəti girişdə qüvvəyə minir).
+        """
+        if self._context is None or self._scheduler_timer is not None:
+            return
+        timer = QTimer(self._window)
+        timer.setInterval(self._scheduler_poll_interval_ms())
+        timer.timeout.connect(self._run_scheduled_jobs)
+        timer.start()
+        self._scheduler_timer = timer
+
+    def _scheduler_poll_interval_ms(self) -> int:
+        """Planlayıcı dövrəsinin ritmi — ROOT-dan, oxuna bilmirsə fallback.
+
+        Baza əlçatmazlığı BURADA istisna atmır (eyni əsaslandırma
+        `_upload_poll_interval_ms`-dədir): verilməli cavab "işlər icra
+        olunsunmu" deyil, "hansı ritmlə" idi. Cavabsız qaldıqda `DEFAULT_LIMITS`
+        ritmi işləyir və gecə işləri yenə də icra olunur.
+        """
+        if self._context is None:
+            return FALLBACK_SCHEDULER_POLL_INTERVAL_MS
+        try:
+            interval = self._context.job_runner().poll_interval(self._context.tenant_id)
+        except Exception:
+            _log.exception("SCHEDULER_POLL_INTERVAL_READ_FAILED")
+            return FALLBACK_SCHEDULER_POLL_INTERVAL_MS
+        milliseconds: int = int(interval.total_seconds() * 1000)
+        return milliseconds
+
+    def _run_scheduled_jobs(self) -> None:
+        """Bir dövrə — YALNIZ yüngül işlər. İstisna GUI-ni çökdürMÜR.
+
+        `composition.run_scheduled_jobs` istisnanı QƏSDƏN udmur (CLI çıxış
+        kodu ondan çıxır), ona görə udma məhz BURADADIR — `_drain_upload_queue`
+        ilə eyni prinsip: fon işinin nasazlığı pəncərəni bağlamamalıdır, lakin
+        jurnalda görünməlidir.
+        """
+        if self._context is None:
+            return
+        try:
+            report = self._context.run_scheduled_jobs(include_heavy=False)
+        except Exception:
+            _log.exception("SCHEDULED_JOBS_CYCLE_FAILED")
+            return
+        if report.executed:
+            _log.info(
+                "SCHEDULED_JOBS_CYCLE",
+                extra={
+                    "icra_edilen": report.executed,
+                    "ugurlu": report.succeeded,
+                    "ugursuz": list(report.failed_jobs),
+                },
+            )
 
     def _attach_fine_entry(self, screen: QWidget) -> None:
         """Cərimə formasını use case-ə və sübut növbəsinə bağlayır (bölmə 4)."""
@@ -545,8 +638,14 @@ class KompasApplication:
         from src.presentation.screens.announcements import (  # noqa: PLC0415
             AnnouncementsScreen,
         )
+        from src.presentation.screens.annual_leave import (  # noqa: PLC0415
+            AnnualLeaveInboxScreen,
+        )
         from src.presentation.screens.attrition_risk import (  # noqa: PLC0415
             AttritionRiskScreen,
+        )
+        from src.presentation.screens.field_reports import (  # noqa: PLC0415
+            FieldReportScreen,
         )
         from src.presentation.screens.performance_review import (  # noqa: PLC0415
             PerformanceReviewScreen,
@@ -589,10 +688,19 @@ class KompasApplication:
             # `controllers/performance_review.py` başlıqları).
             (AnnouncementsScreen, self._attach_announcements),
             (PerformanceReviewScreen, self._attach_performance_review),
+            # #28 İllik Məzuniyyət Balansı (kompas1.md Faza 4) — təsdiq
+            # növbəsi HƏM oxuyur, HƏM yazır və hər qərardan sonra siyahını
+            # yenidən oxuyur (bax `controllers/annual_leave.py` başlığı).
+            (AnnualLeaveInboxScreen, self._attach_annual_leave),
             # #21 İşdən Çıxma Riski (kompasos11.md Faza 9) — TAMAMİLƏ oxu
             # ekranıdır, lakin baxış audit-ləndiyi üçün ÖZ kontrolleri var
             # (bax `controllers/attrition_risk.py` başlığı).
             (AttritionRiskScreen, self._attach_attrition_risk),
+            # #26+#27 Sahə hesabatları (kompas1.md Faza 3) — İKİ menyu açarı,
+            # BİR ekran sinfi. `key` ötürülür, çünki `isinstance` «Mağaza
+            # Auditi» ilə «İnsident Bildirişi»ni ayırd edə bilmir — üç kataloq
+            # ekranındakı (`_attach_catalog_admin`) EYNİ vəziyyət.
+            (FieldReportScreen, lambda widget: self._attach_field_reports(key, widget)),
             (group_g.ProfileScreen, self._attach_profile),
             # Faza 3 yekunu: ERP, ehtiyat nüsxə, baza keçidi və diaqnostika.
             (group_d.ErpServersScreen, self._attach_erp_servers),
@@ -690,6 +798,26 @@ class KompasApplication:
             return
         PerformanceReviewController(self._context, self._current_employee).attach(screen)
 
+    def _attach_annual_leave(self, screen: QWidget) -> None:
+        """«Məzuniyyət Sorğuları» ekranını `AnnualLeaveUseCase`-ə bağlayır (#28).
+
+        Ekran `can_manage_leave_balances` ilə qapılıdır (menyu maddəsi), lakin
+        FAKTİKİ qapı use case-dədir (`pending_inbox` → `_require_manager`) —
+        menyunun görünməsi əməliyyat icazəsi DEYİL (bax `menu.py` başlığı).
+        """
+        from src.presentation.controllers.annual_leave import (  # noqa: PLC0415
+            AnnualLeaveInboxController,
+        )
+        from src.presentation.screens.annual_leave import (  # noqa: PLC0415
+            AnnualLeaveInboxScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, AnnualLeaveInboxScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        AnnualLeaveInboxController(self._context, self._current_employee).attach(screen)
+
     def _attach_attrition_risk(self, screen: QWidget) -> None:
         """ "İşdən Çıxma Riski" ekranını use case-ə bağlayır (#21, Faza 9)."""
         from src.presentation.controllers.attrition_risk import (  # noqa: PLC0415
@@ -704,6 +832,33 @@ class KompasApplication:
         if not isinstance(screen, AttritionRiskScreen):  # pragma: no cover - tip qoruyucusu
             return
         AttritionRiskController(self._context, self._current_employee).attach(screen)
+
+    def _attach_field_reports(self, key: str, screen: QWidget) -> None:
+        """Sahə hesabatı formasını `FieldReportUseCase`-ə bağlayır (#26+#27).
+
+        Ekran açarı şablon AİLƏSİNİ seçir (`SCREEN_TEMPLATE_FAMILY`) — şablon
+        KODUNU yox. Naməlum açar bağlanmır: yeni ekran əlavə edən adam ailəni
+        də qeyd etməlidir, əks halda forma sükutla BOŞ qalardı.
+        """
+        from src.presentation.controllers.field_reports import (  # noqa: PLC0415
+            SCREEN_TEMPLATE_FAMILY,
+            FieldReportsController,
+        )
+        from src.presentation.screens.field_reports import (  # noqa: PLC0415
+            FieldReportScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, FieldReportScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        family = SCREEN_TEMPLATE_FAMILY.get(key)
+        if family is None:  # pragma: no cover - müdafiə xətti
+            _log.warning("FIELD_REPORT_SCREEN_FAMILY_MISSING", extra={"screen": key})
+            return
+        FieldReportsController(
+            self._context, self._current_employee, requires_checklist=family
+        ).attach(screen)
 
     def _attach_dashboard_builder(self, screen: QWidget) -> None:
         """Dashboard qurucusunu `DashboardLayoutUseCase`-ə bağlayır (bölmə 6)."""
@@ -999,8 +1154,14 @@ class KompasApplication:
         from src.presentation.screens.announcements import (  # noqa: PLC0415
             AnnouncementsScreen,
         )
+        from src.presentation.screens.annual_leave import (  # noqa: PLC0415
+            AnnualLeaveInboxScreen,
+        )
         from src.presentation.screens.attrition_risk import (  # noqa: PLC0415
             AttritionRiskScreen,
+        )
+        from src.presentation.screens.field_reports import (  # noqa: PLC0415
+            FieldReportScreen,
         )
         from src.presentation.screens.performance_review import (  # noqa: PLC0415
             PerformanceReviewScreen,
@@ -1090,9 +1251,13 @@ class KompasApplication:
             "plugins": lambda: group_i.PluginScreen(theme),
             "dashboard_builder": lambda: group_i.DashboardBuilderScreen(theme),
             "exceptions": lambda: group_i.ExceptionsScreen(theme),
+            # #26+#27 — EYNİ sinif, İKİ açar (bax `_attach_field_reports`).
+            "store_audit": lambda: FieldReportScreen(theme),
+            "incident_report": lambda: FieldReportScreen(theme),
             "announcements": lambda: AnnouncementsScreen(theme),
             "performance_reviews": lambda: PerformanceReviewScreen(theme),
             "attrition_risk": lambda: AttritionRiskScreen(theme),
+            "annual_leave": lambda: AnnualLeaveInboxScreen(theme),
             "settings": lambda: group_d.SettingsScreen(theme),
             "profile": lambda: group_g.ProfileScreen(
                 theme,
@@ -1117,9 +1282,12 @@ class KompasApplication:
             "infrastructure": "Baza keçidi · texniki fasilə",
             "plugins": "Sandbox-da işləyən genişləndirmələr",
             "exceptions": "Davranış anomaliyaları · avtomatik aşkarlanır",
+            "store_audit": "Checklist üzrə yoxlama · uğursuz bənd tapşırıq yaradır",
+            "incident_report": "Baş vermiş hadisə · kateqoriyaya görə marşrutlanır",
             "announcements": "Bütün mağazalar · bir-tərəfli yayım",
             "performance_reviews": "Dövri qiymətləndirmə · KPI + qeyd",
             "attrition_risk": "Gecəlik hesablanır · yalnız məsləhət xarakterlidir",
+            "annual_leave": "İllik haqq · gündaxili icazədən AYRI mexanizm",
         }
 
         for key, factory in factories.items():
@@ -1376,11 +1544,24 @@ class KompasApplication:
 
             EmployeeAnnouncementController(self._context, employee).attach(home)
 
+            # #28 İllik Məzuniyyət (kompas1.md Faza 4) — "İllik Məzuniyyət"
+            # kartının ÖZ kontrolleri var: kart həm oxuyur (balans), həm
+            # yazır (sorğu) və hər sorğudan sonra balans yenidən oxunur.
+            # `KioskController`-ə əlavə EDİLMƏDİ — o, GÜNÜN AXINI üçündür
+            # (giriş/gündaxili icazə/qayıdış), illik haqq isə ayrı mexanizmdir
+            # (bax `controllers/annual_leave.py` başlığı).
+            from src.presentation.controllers.annual_leave import (  # noqa: PLC0415
+                EmployeeAnnualLeaveController,
+            )
+
+            EmployeeAnnualLeaveController(self._context, employee).attach(home)
+
         refresh(outcome)
         return home
 
     def start_kiosk(self) -> KioskWindow:
         """Kiosk axını — PIN klaviaturası ilə başlayır."""
+        from src.presentation import preview_data  # noqa: PLC0415
         from src.presentation.screens.group_a_kiosk import (  # noqa: PLC0415
             EmployeeHomeScreen,
             PinPadScreen,
@@ -1443,6 +1624,11 @@ class KompasApplication:
                     }
                 ]
             )
+            # #28 — maket və canlı yol EYNİ açarları işlədir. Burada sözlük
+            # ƏL İLƏ yazılmır, `preview_data`-dan gəlir: yeddi açarlı bir
+            # sözlüyün iki yerdə təkrarı məhz `menu.py` başlığındakı tarixi
+            # qüsurun (ad məkanı sürüşməsi) yaranma yoludur.
+            home.set_annual_leave_balance(dict(preview_data.ANNUAL_LEAVE_BALANCE))
             home.logout_requested.connect(lambda: kiosk.set_content(pin_pad))
             kiosk.set_content(home)
 

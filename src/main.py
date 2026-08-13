@@ -431,6 +431,75 @@ def _run_gui(args: argparse.Namespace) -> int:
     )
 
 
+def _run_scheduled_jobs() -> int:
+    """Planlaşdırılmış işləri BAŞSIZ icra edir (Faza 11, `--run-scheduled-jobs`).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AYRICA GİRİŞ NÖQTƏSİ — GUI TAYMERİ KİFAYƏT ETMİR
+    ──────────────────────────────────────────────────────────────────────────
+    GUI dövrəsi YALNIZ yüngül işləri icra edir (`include_heavy=False`), çünki
+    `pg_dump` interfeysi dəqiqələrlə dondurardı. Yəni gecəlik ehtiyat nüsxə
+    HEÇ VAXT GUI-dən işləyə bilməz. Bu yol onu işlədir və işləyir ki, mağaza
+    PC-si gecə açıq olmasa belə (Windows Task Scheduler oyandırma və ya səhər
+    ilk açılış), iş gecikmiş icra (catch-up) ilə tutulsun.
+
+    ──────────────────────────────────────────────────────────────────────────
+    ÇOX-KİRAYƏÇİLİK: BU YOL BİR KİRAYƏÇİ ÜÇÜNDÜR (SEC-008)
+    ──────────────────────────────────────────────────────────────────────────
+    `run_due(tenant_id=...)` tək kirayəçi qəbul edir və burada kirayəçi
+    `KOMPASOS_TENANT_ID`-dən gəlir (`build_context()`), yəni HƏMİŞƏ məhz bu
+    quraşdırmanın sahibi.
+
+    `DeveloperTenantDirectory` bütün müştərilərin siyahısını verə bilər, lakin
+    ONDAN İSTİFADƏ EDİLMİR və səbəb `_build_release_publisher`-dəki ilə
+    eynidir: o siyahı LİSENZİYA bazasındadır və `KOMPASOS_DEVELOPER_MODE` +
+    `service_role` açarı tələb edir — müştəri maşınında həmin dəyişənlər
+    ümumiyyətlə yoxdur. Üstəlik `system_limits` RLS ilə kirayəçiyə bağlıdır
+    (SEC-008): hazırlayıcının maşınından "bütün kirayəçilər üçün" dövrə
+    işlətmək bir müştərinin `SCHEDULER_NIGHTLY_HOUR` dəyərini digərinin gecə
+    işinə tətbiq etmək olardı. Hər quraşdırma ÖZ işlərini icra edir; bu, həm
+    icarə modelinə (hər terminal öz `instance_id`-si ilə), həm də RLS-ə
+    uyğun yeganə variantdır.
+
+    Çıxış kodu:
+        0 — bütün işlər uğurlu (və ya vaxtı çatan iş yox idi);
+        1 — ən azı bir iş çökdü (`FAILED`) — nasazlıq Task Scheduler-də
+            görünməlidir, əks halda gecə işlərinin dayandığı aşkarlanmazdı;
+        2 — quraşdırma/baza xətası (`main`-dəki ümumi `KompasOSError` qolu).
+    """
+    from src.presentation.composition import build_context  # noqa: PLC0415
+
+    log = get_logger(__name__)
+    context = build_context()
+    report = context.run_scheduled_jobs(include_heavy=True)
+
+    lines = [
+        f"Planlaşdırılmış işlər: {report.executed} icra, {report.succeeded} uğurlu.",
+        *(
+            f"  • {outcome.job_key}: {outcome.state.value}"
+            f"{' — ' + outcome.detail if outcome.detail else ''}"
+            f"{' — ' + outcome.error_az if outcome.error_az else ''}"
+            for outcome in report.outcomes
+        ),
+    ]
+    if report.failed_jobs:
+        lines.append(f"UĞURSUZ: {', '.join(report.failed_jobs)}")
+    # STDOUT XÜLASƏSİ **VƏ** STRUKTUR LOG: birincisi əməliyyatçının Task
+    # Scheduler tarixçəsində gördüyüdür, ikincisi isə mərkəzi jurnala düşür.
+    # Yalnız log yazsaydıq, əmri əl ilə işə salan admin ekranda heç nə görməz
+    # və "işlədimi?" sualı cavabsız qalardı.
+    sys.stdout.write("\n".join(lines) + "\n")
+    log.info(
+        "SCHEDULED_JOBS_CLI_FINISHED",
+        extra={
+            "icra_edilen": report.executed,
+            "ugurlu": report.succeeded,
+            "ugursuz": list(report.failed_jobs),
+        },
+    )
+    return 1 if report.failed_jobs else 0
+
+
 def _run_watchdog(args: argparse.Namespace) -> int:
     """Kiosk nəzarətçisini işə salır (bölmə 5).
 
@@ -542,6 +611,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="ekranları maketdəki nümunə məzmunla doldur (dizayn yoxlaması)",
     )
+    # ---------------------------------------------------------------------
+    # PLANLAŞDIRILMIŞ İŞLƏR (Faza 11). Bu rejim interfeys AÇMIR: Windows Task
+    # Scheduler onu gecə çağırır (bax `docs/scheduler_setup.md`, Variant C).
+    # AĞIR işlər (`pg_dump`) YALNIZ burada icra olunur — GUI taymeri onları
+    # atlayır, çünki interfeys axınında dəqiqələrlə donma yaradardılar.
+    # ---------------------------------------------------------------------
+    parser.add_argument(
+        "--run-scheduled-jobs",
+        action="store_true",
+        help=(
+            "planlaşdırılmış fon işlərini bir dəfə icra et və çıx "
+            "(başsız; ağır işlər daxil — gecəlik ehtiyat nüsxə)"
+        ),
+    )
     parser.add_argument(
         "--theme",
         choices=("light", "dark", "system"),
@@ -649,6 +732,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.developer_mode:
             return _run_developer_panel(args)
+        # Planlayıcı GUI qollarından ƏVVƏL yoxlanılır: paketlənmiş rejimdə
+        # arqumentsiz işə düşmə DEFOLTU GUI-dir (aşağıdakı `is_frozen()`
+        # şərti) və yoxlama sonra gəlsəydi, Task Scheduler-in çağırdığı
+        # `KompasOS.exe --run-scheduled-jobs` mağaza PC-sində PƏNCƏRƏ AÇARDI.
+        if args.run_scheduled_jobs:
+            return _run_scheduled_jobs()
         # Nəzarətçi GUI-dən ƏVVƏL yoxlanılır: `--watchdog --kiosk` çağırışında
         # bu proses interfeysi ÖZÜ açmamalıdır, alt-prosesi idarə etməlidir.
         if args.watchdog:
