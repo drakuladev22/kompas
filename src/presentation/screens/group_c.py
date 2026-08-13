@@ -12,7 +12,7 @@ Maket: "KompasOS - Qrup C.dc.html", ekranlar 09–14.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, NamedTuple
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -42,7 +42,7 @@ from src.presentation.widgets.charts import (
     StatTile,
 )
 from src.presentation.widgets.data_table import Column, DataTable
-from src.presentation.widgets.forms import FormField
+from src.presentation.widgets.forms import FormField, field_label
 from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
@@ -70,12 +70,46 @@ if TYPE_CHECKING:
 # --------------------------------------------------------------------------- #
 
 
+class RankingEntry(NamedTuple):
+    """Çox-Mağaza Reytinq Cədvəlinin bir sətri (#24, kompasos11.md Faza 9A).
+
+    Sıra nömrəsi BURADA YOXDUR — siyahının ÖZÜ artıq sıralanmış gəlir (bax
+    `MultiStoreBenchmarkUseCase.ranking`), ekran yalnız mövqeyə görə 1-dən
+    nömrələyir. Trend OXU mətnlə birgə gəlir — kompasos11.md #24: "yalnız
+    rənglə fərqlənməsin, işarə/mətn də daşısın".
+    """
+
+    store_id: str
+    store_name: str
+    value_display: str
+    trend_arrow: str
+    trend_label: str
+
+
 class DashboardScreen(Screen):
     """Konfiqurasiya edilə bilən widget şəbəkəsi.
 
     Maketdəki düzülüş: üstdə dörd rəqəm kartı, altda qrafik + limit ölçəni,
     sonra liderlik lövhəsi + server sağlamlığı.
+
+    ──────────────────────────────────────────────────────────────────────
+    #24 ÇOX-MAĞAZA BENCHMARK BÖLMƏSİ NİYƏ DEFOLT GİZLİDİR
+    ──────────────────────────────────────────────────────────────────────
+    Dörd yeni bölmə (`set_ranking_table`/`set_store_vs_network`/
+    `set_metric_trend`/`set_outliers`) `Card.setVisible(False)` ilə BAŞLAYIR
+    və yalnız müvafiq `set_*` çağırılanda görünür. Kontroller
+    (`screen_data.py::_dashboard`) bu çağırışı YALNIZ `can_export_reports`
+    sahibi üçün edir — Mağaza_Meneceri üçün bölmələr sadəcə HEÇ VAXT
+    doldurulmur, ekranın özü "GÖRMƏK = SƏLAHİYYƏTİN OLMASI" prinsipini bu
+    yolla qoruyur (bölmə 3).
+
+    Signals:
+        ranking_metric_changed: Reytinq cədvəlinin dropdown-u dəyişdi (metrik açarı).
+        ranking_row_selected: Reytinq sətrinə klik (mağaza ID) — DRILL-DOWN.
     """
+
+    ranking_metric_changed = Signal(str)
+    ranking_row_selected = Signal(str)
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(theme, parent=parent)
@@ -144,6 +178,90 @@ class DashboardScreen(Screen):
         bottom_layout.addWidget(self._health, 1)
         self.add(bottom)
 
+        # ------------------ #24 Çox-Mağaza Benchmark (Faza 9A) --------------- #
+        # Dördü də defolt GİZLİDİR (bax sinif başlığı) — yalnız müvafiq
+        # `set_*` çağırılanda görünür.
+        self._ranking_store_ids: list[str] = []
+        self._ranking_card = self._build_ranking_card()
+        self.add(self._ranking_card)
+
+        store_vs_network = self._build_store_vs_network_card(theme)
+        self._store_vs_network_card = store_vs_network[0]
+        self._store_vs_network_subtitle = store_vs_network[1]
+        self._store_vs_network_chart = store_vs_network[2]
+        self.add(self._store_vs_network_card)
+
+        self._trend_card, self._trend_title, self._trend_chart = self._build_trend_card(theme)
+        self.add(self._trend_card)
+
+        self._outlier_card, self._outlier_summary, self._outlier_rows = self._build_outlier_card()
+        self.add(self._outlier_card)
+
+    def _build_ranking_card(self) -> Card:
+        card = Card(padding=18, spacing=12)
+        head = QWidget()
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(0, 0, 0, 0)
+        head_layout.setSpacing(10)
+        head_layout.addWidget(title_label("Çox-Mağaza Reytinq Cədvəli", size=15))
+        head_layout.addWidget(stretch())
+        self._ranking_metric_combo = QComboBox()
+        self._ranking_metric_combo.setProperty("variant", "form")
+        self._ranking_metric_combo.setFixedWidth(220)
+        self._ranking_metric_combo.currentIndexChanged.connect(self._on_ranking_metric_changed)
+        head_layout.addWidget(self._ranking_metric_combo)
+        card.add(head)
+
+        self._ranking_table = DataTable(
+            [
+                Column("Sıra", 50, mono=True),
+                Column("Mağaza", 220),
+                Column("Dəyər", 110, mono=True),
+                Column("Trend"),
+            ],
+            self.theme,
+            footnote="Sətrə klik — mağazanın Gündəlik Tabelinə keçir.",
+        )
+        self._ranking_table.row_selected.connect(self._on_ranking_row_selected)
+        card.add(self._ranking_table)
+        card.setVisible(False)
+        return card
+
+    def _build_store_vs_network_card(self, theme: ThemeManager) -> tuple[Card, QLabel, BarChart]:
+        card = Card(padding=18, spacing=12)
+        card.add(title_label("Mağaza — Şəbəkə Ortalaması", size=15))
+        subtitle = muted_label("")
+        card.add(subtitle)
+        # `highlight_max=False`: iki sütun BƏRABƏR əhəmiyyətlidir (mağaza VƏ
+        # şəbəkə), amber vurğusu birini digərindən "daha yaxşı" göstərərdi.
+        chart = BarChart(theme, highlight_max=False)
+        card.add(chart)
+        card.setVisible(False)
+        return card, subtitle, chart
+
+    def _build_trend_card(self, theme: ThemeManager) -> tuple[Card, QLabel, BarChart]:
+        card = Card(padding=18, spacing=12)
+        title = title_label("Zaman-üzrə Trend", size=15)
+        card.add(title)
+        chart = BarChart(theme)
+        card.add(chart)
+        card.setVisible(False)
+        return card, title, chart
+
+    def _build_outlier_card(self) -> tuple[Card, QLabel, QVBoxLayout]:
+        card = Card(padding=18, spacing=10)
+        card.add(title_label("Kritik-Kənar (Outlier) Kartı", size=15))
+        summary = body_label("", size=13)
+        summary.setWordWrap(True)
+        card.add(summary)
+        rows_layout = QVBoxLayout()
+        rows_layout.setSpacing(8)
+        holder = QWidget()
+        holder.setLayout(rows_layout)
+        card.add(holder)
+        card.setVisible(False)
+        return card, summary, rows_layout
+
     # ------------------------------- doldurma -------------------------------- #
 
     def set_summary(
@@ -193,6 +311,101 @@ class DashboardScreen(Screen):
             layout.addWidget(stretch())
             layout.addWidget(mono_label(latency))
             self._health_rows.addWidget(row)
+
+    # -------------------- #24 Çox-Mağaza Benchmark (Faza 9A) ----------------- #
+
+    def set_ranking_table(
+        self,
+        entries: list[RankingEntry],
+        *,
+        metric_options: list[tuple[str, str]],
+        selected_metric: str,
+    ) -> None:
+        """Reytinq cədvəlini doldurur və bölməni GÖSTƏRİR.
+
+        Args:
+            entries: ARTIQ sıralanmış (ən yaxşıdan ən pisə) siyahı.
+            metric_options: dropdown-un tam siyahısı — `(metrik-açarı, ad)`.
+            selected_metric: hazırda seçili metrik açarı.
+        """
+        self._ranking_metric_combo.blockSignals(True)
+        if self._ranking_metric_combo.count() == 0:
+            for key, label in metric_options:
+                self._ranking_metric_combo.addItem(label, key)
+        index = self._ranking_metric_combo.findData(selected_metric)
+        if index >= 0:
+            self._ranking_metric_combo.setCurrentIndex(index)
+        self._ranking_metric_combo.blockSignals(False)
+
+        self._ranking_table.clear()
+        self._ranking_store_ids = [entry.store_id for entry in entries]
+        for rank, entry in enumerate(entries, start=1):
+            self._ranking_table.add_row(
+                [
+                    str(rank),
+                    entry.store_name,
+                    entry.value_display,
+                    f"{entry.trend_arrow} {entry.trend_label}",
+                ]
+            )
+        self._ranking_card.setVisible(True)
+        self.show_content()
+
+    def _on_ranking_metric_changed(self, _index: int) -> None:
+        key = self._ranking_metric_combo.currentData()
+        if key:
+            self.ranking_metric_changed.emit(str(key))
+
+    def _on_ranking_row_selected(self, index: int) -> None:
+        """DRILL-DOWN mənbəyi — kontroller bunu `AdminShell.show_screen`-ə bağlayır."""
+        if 0 <= index < len(self._ranking_store_ids):
+            self.ranking_row_selected.emit(self._ranking_store_ids[index])
+
+    def set_store_vs_network(
+        self,
+        *,
+        metric_label: str,
+        store_label: str,
+        store_value: float,
+        store_display: str,
+        network_label: str,
+        network_value: float,
+        network_display: str,
+    ) -> None:
+        self._store_vs_network_subtitle.setText(metric_label)
+        self._store_vs_network_chart.set_data(
+            [
+                BarDatum(store_label, store_value, store_display),
+                BarDatum(network_label, network_value, network_display),
+            ]
+        )
+        self._store_vs_network_card.setVisible(True)
+        self.show_content()
+
+    def set_metric_trend(self, *, metric_label: str, points: list[tuple[str, float, str]]) -> None:
+        """`points`: (dövr etiketi, dəyər, göstəriləcək mətn) — ay-ay ardıcıllıqla."""
+        self._trend_title.setText(f"Zaman-üzrə Trend — {metric_label}")
+        self._trend_chart.set_data(
+            [BarDatum(label, value, display) for label, value, display in points]
+        )
+        self._trend_card.setVisible(True)
+        self.show_content()
+
+    def set_outliers(self, *, summary_text: str, rows: list[tuple[str, str]]) -> None:
+        """`rows`: (mağaza adı, "X.Xσ ortalamadan yuxarı/aşağı" mətni)."""
+        self._outlier_summary.setText(summary_text)
+        clear_layout(self._outlier_rows)
+        for name, detail in rows:
+            row = QWidget()
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(10)
+            layout.addWidget(body_label(name, size=13, wrap=False))
+            layout.addWidget(stretch())
+            layout.addWidget(Chip(detail, "warning"))
+            self._outlier_rows.addWidget(row)
+        self._outlier_card.setVisible(True)
+        self.show_content()
 
 
 # --------------------------------------------------------------------------- #
@@ -578,10 +791,20 @@ class UsersScreen(Screen):
     search_changed = Signal(str)
 
     #: Maketdəki ··· menyusu.
+    #:
+    #: `"pos_threshold"` — #7 POS Səlahiyyət Siyasəti (kompasos11.md Faza 4,
+    #: sənədləşdirmə). Mövcud dörd maddə TOXUNULMADAN, əlavə kimi qoşulub —
+    #: "Deaktiv Et"-dən ƏVVƏL, çünki geri dönməz əməliyyat menyunun sonunda
+    #: qalmalıdır (UX konvensiyası).
+    #: `"employee_documents"` — #17 İşçi Sənədləri (kompasos11.md Faza 7).
+    #: EYNİ naxışla, `pos_threshold`-dan SONRA əlavə olunub — mövcud beş
+    #: maddə TOXUNULMADAN qalır.
     ACTIONS: Final = (
         ("reset_pin", "PIN Sıfırla"),
         ("reset_password", "Şifrəni Yenilə"),
         ("change_role", "Rolu Dəyiş"),
+        ("pos_threshold", "POS Səlahiyyəti"),
+        ("employee_documents", "Sənədlər"),
         ("deactivate", "Deaktiv Et"),
     )
 
@@ -628,7 +851,7 @@ class UsersScreen(Screen):
             theme,
             footnote=(
                 "Sağ-klik və ya ··· menyusu ilə: PIN Sıfırla, Şifrəni Yenilə, "
-                "Rolu Dəyiş, Deaktiv Et."
+                "Rolu Dəyiş, POS Səlahiyyəti, Sənədlər, Deaktiv Et."
             ),
         )
         self.add(self._table)
@@ -682,6 +905,369 @@ class UsersScreen(Screen):
         return self._table
 
 
+class PosThresholdDialog(QDialog):
+    """ "POS Səlahiyyəti" modalı — işçinin endirim/void/refund həddini göstərir/dəyişir.
+
+    kompasos11.md struktur qərar A: bu, YALNIZ sənədləşdirmə formasıdır — heç
+    bir POS əməliyyatını yoxlamır, 1C-yə heç nə göndərmir. `UsersScreen`-in
+    "···" menyusundakı "POS Səlahiyyəti" bəndi ilə açılır (mövcud ekran
+    SİLİNMİR, əlavə əməliyyat kimi qoşulur).
+
+    Signals:
+        submitted: (endirim faizi mətni, void, refund, qeyd).
+        revoke_requested: "Geri Al" — mövcud səlahiyyəti soft-delete edir.
+    """
+
+    submitted = Signal(str, bool, bool, str)
+    revoke_requested = Signal()
+
+    def __init__(
+        self,
+        theme: ThemeManager,
+        *,
+        employee_name: str,
+        max_discount_pct: str,
+        can_void: bool,
+        can_refund: bool,
+        note: str,
+        ceiling_pct: str,
+        has_existing: bool,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._theme = theme
+        self.setWindowTitle("POS Səlahiyyəti")
+        self.setModal(True)
+        self.setMinimumWidth(470)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        card = Card(padding=26, spacing=18)
+        layout.addWidget(card)
+        card.add(title_label("POS Səlahiyyəti", size=19))
+        card.add(muted_label(employee_name))
+        card.add(Divider())
+        card.add(
+            muted_label(
+                "Bu, YALNIZ rəsmi siyasət qeydidir — heç bir kassa əməliyyatını "
+                "yoxlamır və 1C-yə bağlı deyil (kompasos11.md struktur qərarı A).",
+                size=12,
+            )
+        )
+
+        self._pct = FormField(
+            "Maksimum endirim faizi (%)",
+            placeholder="məsələn 15",
+            hint=f"0–{ceiling_pct} arası (Root həddi: {ceiling_pct}%).",
+        )
+        self._pct.set_text(max_discount_pct)
+        card.add(self._pct)
+
+        self._void = QCheckBox("Satışı ləğv etmə səlahiyyəti (Void)")
+        self._void.setChecked(can_void)
+        card.add(self._void)
+
+        self._refund = QCheckBox("Geri-qaytarma səlahiyyəti (Refund)")
+        self._refund.setChecked(can_refund)
+        card.add(self._refund)
+
+        note_box = QWidget()
+        note_layout = QVBoxLayout(note_box)
+        note_layout.setContentsMargins(0, 0, 0, 0)
+        note_layout.setSpacing(7)
+        note_layout.addWidget(field_label("Qeyd (səbəb)"))
+        self._note = QPlainTextEdit()
+        self._note.setPlainText(note)
+        self._note.setPlaceholderText(
+            "Bu səlahiyyət niyə verilir? Səbəbsiz hədd mübahisədə müdafiə olunmur."
+        )
+        self._note.setFixedHeight(80)
+        note_layout.addWidget(self._note)
+        card.add(note_box)
+
+        buttons = QWidget()
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(12)
+
+        # "Geri Al" YALNIZ mövcud, aktiv sətir varsa görünür — olmayan bir
+        # səlahiyyəti "geri almaq" istifadəçini çaşdırardı.
+        if has_existing:
+            revoke = secondary_button("Geri Al")
+            revoke.setProperty("variant", "danger")
+            revoke.clicked.connect(self._on_revoke)
+            buttons_layout.addWidget(revoke)
+
+        buttons_layout.addWidget(stretch())
+
+        cancel = secondary_button("İmtina")
+        cancel.clicked.connect(self.reject)
+        buttons_layout.addWidget(cancel)
+
+        save = action_button("Yadda Saxla")
+        save.clicked.connect(self._on_submit)
+        buttons_layout.addWidget(save)
+        card.add(buttons)
+
+        save.setDefault(True)
+        save.setAutoDefault(True)
+        cancel.setAutoDefault(False)
+
+        # Fokus sırası vizual sıra ilə: faiz → void → refund → qeyd → düymələr.
+        QWidget.setTabOrder(self._pct.input_widget(), self._void)
+        QWidget.setTabOrder(self._void, self._refund)
+        QWidget.setTabOrder(self._refund, self._note)
+        QWidget.setTabOrder(self._note, cancel)
+        QWidget.setTabOrder(cancel, save)
+
+        self._pct.focus_input()
+
+    def _on_submit(self) -> None:
+        text = self._pct.text().strip()
+        self._pct.clear_error()
+        if not text:
+            self._pct.set_error("Endirim faizi məcburidir")
+            return
+        self.submitted.emit(
+            text,
+            self._void.isChecked(),
+            self._refund.isChecked(),
+            self._note.toPlainText().strip(),
+        )
+        self.accept()
+
+    def _on_revoke(self) -> None:
+        self.revoke_requested.emit()
+        self.accept()
+
+
+class EmployeeDocumentDialog(QDialog):
+    """ "Sənədlər" modalı — işçinin sənəd/müqavilə siyahısı + yeni sənəd forması.
+
+    #17 (kompasos11.md Faza 7). `PosThresholdDialog` ilə EYNİ naxış: `UsersScreen`-in
+    "···" menyusundakı "Sənədlər" bəndi ilə açılır, mövcud ekran SİLİNMİR.
+
+    TARİX SAHƏSİ NİYƏ `FormField` (sadə mətn), `QDateEdit` DEYİL: `open_shift.py`
+    başlığındakı EYNİ səbəb — `qss.py`-də `QDateEdit` üçün kontrast-yoxlanılmış
+    rəng cütü YOXDUR, onu əlavə etmək `scripts/check_contrast.py`-a yeni cüt
+    gətirərdi. `FormField`-in `QLineEdit[variant="form"]` cütü ARTIQ yoxlanılıb.
+
+    Signals:
+        document_added: (sənəd növü, nömrə, bitmə tarixi mətni, bloklayıcı,
+            seçilmiş faylın YEREL yolu — boş sətir ola bilər, fayl SEÇİLMƏSƏ
+            belə qeyd yaradılmalıdır, bax `_file_path` başlığı).
+        deactivate_requested: sətrin `document_id`-si (mətn) — səbəb
+            kontrollerdə `QInputDialog` ilə soruşulur (`controllers/open_shift.py`
+            `_ask_reason` ilə eyni naxış).
+    """
+
+    document_added = Signal(str, str, str, bool, str)
+    deactivate_requested = Signal(str)
+
+    _STATUS_TONES: Final[dict[str, ChipTone]] = {
+        "Aktiv": "success",
+        "Bitib": "danger",
+        "Deaktiv": "neutral",
+    }
+
+    def __init__(
+        self,
+        theme: ThemeManager,
+        *,
+        employee_name: str,
+        documents: list[dict[str, str]],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._theme = theme
+        #: Seçilmiş faylın YEREL (disk üstü) yolu — `""` = seçilməyib.
+        #: `set_file()` naxışı (`fine_entry.py`-dəki `PhotoDropZone` ilə eyni)
+        #: bir addım sadələşib: burada sürüklə-burax YOXDUR, çünki sənəd forması
+        #: modaldır və drag-drop səthi əlavə mürəkkəblik gətirərdi.
+        self._file_path = ""
+        self.setWindowTitle("Sənədlər")
+        self.setModal(True)
+        self.setMinimumWidth(560)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        card = Card(padding=26, spacing=18)
+        layout.addWidget(card)
+        card.add(title_label("Sənədlər", size=19))
+        card.add(muted_label(employee_name))
+        card.add(Divider())
+
+        self._table = DataTable(
+            [
+                Column("Növ", 150),
+                Column("Nömrə", 110),
+                Column("Bitmə tarixi", 120),
+                Column("Bloklayıcı", 100),
+                Column("Vəziyyət", 100),
+                Column("Əməliyyat"),
+            ],
+            theme,
+            footnote=(
+                "Bloklayıcı sənəd bitibsə Növbə Matrisində təyinat zamanı "
+                "xəbərdarlıq göstərilir — təyinat BLOKLANMIR."
+            ),
+        )
+        self.set_documents(documents)
+        card.add(self._table)
+
+        card.add(Divider())
+        card.add(body_label("Yeni sənəd əlavə et", size=14))
+
+        self._doc_type = FormField("Sənəd növü", placeholder="məsələn MUQAVILE, SANITAR_KITABCA")
+        card.add(self._doc_type)
+
+        self._doc_number = FormField("Sənəd nömrəsi (könüllü)")
+        card.add(self._doc_number)
+
+        self._expiry = FormField(
+            "Bitmə tarixi",
+            placeholder="YYYY-AA-GG",
+            hint="Boş buraxılsa sənəd müddətsiz sayılır.",
+        )
+        card.add(self._expiry)
+
+        self._blocking = QCheckBox(
+            "Bu sənəd bitəndə növbə təyinatında xəbərdarlıq göstərilsin (bloklayıcı)"
+        )
+        card.add(self._blocking)
+
+        # ──────────────────────────────────────────────────────────────────
+        # FAYL SEÇİCİSİ — #17 (Faza 7), sübut yükləmə növbəsinin YAZI yolu
+        # ──────────────────────────────────────────────────────────────────
+        # `file_ref` NULL qala bilər (DB qaydası, `EmployeeDocument.file_ref`
+        # başlığı) — fayl seçilməzsə də qeyd yaradılmalıdır, ona görə bu sahə
+        # MƏCBURİ DEYİL. Seçilmiş yol `_file_path`-də saxlanır və
+        # `document_added` siqnalı ilə kontrollerə ötürülür; faktiki YÜKLƏMƏ
+        # (spool + Drive növbəsi) burada BAŞLAMIR — o, kontrollerin işidir
+        # (`controllers/employee_documents.py` başlığı, `fine_entry.py` ilə
+        # EYNİ "əvvəlcə diskə, sonra bazaya" sırası).
+        # Etiket qəbul edilən formatı ADLA sayır: istifadəçi "şəkil" sözünü
+        # oxuyub PDF müqaviləsini seçməkdən çəkinməsin (SEC-018 sənəd tərəfində
+        # PDF-i AÇIQ şəkildə icazəli edir).
+        card.add(field_label("Skan/sənəd — PDF və ya şəkil (könüllü)"))
+        file_row = QWidget()
+        file_row_layout = QHBoxLayout(file_row)
+        file_row_layout.setContentsMargins(0, 0, 0, 0)
+        file_row_layout.setSpacing(10)
+        self._file_label = muted_label("Fayl seçilməyib")
+        file_row_layout.addWidget(self._file_label, stretch=1)
+        pick_button = secondary_button("Fayl Seç")
+        pick_button.clicked.connect(self._pick_file)
+        file_row_layout.addWidget(pick_button)
+        card.add(file_row)
+
+        buttons = QWidget()
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(12)
+        buttons_layout.addWidget(stretch())
+
+        close_button = secondary_button("Bağla")
+        close_button.clicked.connect(self.accept)
+        buttons_layout.addWidget(close_button)
+
+        add_button = action_button("Sənəd Əlavə Et")
+        add_button.clicked.connect(self._on_add)
+        buttons_layout.addWidget(add_button)
+        card.add(buttons)
+
+        add_button.setDefault(True)
+        add_button.setAutoDefault(True)
+        close_button.setAutoDefault(False)
+
+        self._doc_type.focus_input()
+
+    def set_documents(self, documents: list[dict[str, str]]) -> None:
+        """Cədvəli yeniləyir — kontroller əlavə/deaktivasiya sonrası çağırır."""
+        self._table.clear()
+        if not documents:
+            self._table.add_row([muted_label("Hələ sənəd əlavə edilməyib"), "", "", "", "", ""])
+            return
+        for document in documents:
+            status = document.get("status", "Aktiv")
+            row_actions: QWidget | str = ""
+            if status == "Aktiv":
+                deactivate = secondary_button("Deaktiv Et")
+                deactivate.setProperty("variant", "danger")
+                document_id = document["id"]
+                deactivate.clicked.connect(
+                    lambda _checked=False, doc_id=document_id: self.deactivate_requested.emit(
+                        doc_id
+                    )
+                )
+                row_actions = deactivate
+            self._table.add_row(
+                [
+                    document.get("doc_type", ""),
+                    document.get("doc_number", "") or "—",
+                    document.get("expiry_date", "") or "Müddətsiz",
+                    "Bəli" if document.get("is_blocking") == "true" else "Xeyr",
+                    Chip(status, self._STATUS_TONES.get(status, "neutral")),
+                    row_actions,
+                ]
+            )
+
+    def _pick_file(self) -> None:
+        """Fayl seçimini açır — siçan üçün YEGANƏ yol (drag-drop YOXDUR, bax konstruktor).
+
+        SÜZGƏC PDF-İ DƏ GÖSTƏRİR: müqavilə praktikada PDF-dir (SEC-018), süzgəc
+        isə yalnız şəkilləri saydığı üçün istifadəçi öz sənədini pəncərədə
+        GÖRMÜRDÜ — yəni modul əsas istifadə halında işləmirdi. Süzgəcin ÖZÜ
+        qoruma DEYİL (istifadəçi "Bütün fayllar"a keçə bilər və Qt-nin süzgəci
+        məzmuna baxmır); həqiqi qapı `validate_evidence_payload`-dadır.
+
+        Birləşmiş bənd BİRİNCİDİR — defolt seçim odur; ayrıca "PDF"/"Şəkillər"
+        bəndləri isə çoxlu faylı olan qovluqda axtarışı daraltmaq üçündür.
+        """
+        from PySide6.QtWidgets import QFileDialog  # noqa: PLC0415
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Sənəd skanı seçin",
+            "",
+            "Sənəd faylları (*.pdf *.png *.jpg *.jpeg *.webp)"
+            ";;PDF sənədləri (*.pdf)"
+            ";;Şəkillər (*.png *.jpg *.jpeg *.webp)",
+        )
+        if not path:
+            return
+        self._file_path = path
+        self._file_label.setText(path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1])
+
+    def _on_add(self) -> None:
+        self._doc_type.clear_error()
+        doc_type = self._doc_type.text().strip()
+        if not doc_type:
+            self._doc_type.set_error("Sənəd növü məcburidir")
+            return
+        self.document_added.emit(
+            doc_type,
+            self._doc_number.text().strip(),
+            self._expiry.text().strip(),
+            self._blocking.isChecked(),
+            self._file_path,
+        )
+
+    def clear_form(self) -> None:
+        """Uğurlu əlavədən sonra formu boşaldır — kontroller çağırır."""
+        self._doc_type.set_text("")
+        self._doc_number.set_text("")
+        self._expiry.set_text("")
+        self._blocking.setChecked(False)
+        self._file_path = ""
+        self._file_label.setText("Fayl seçilməyib")
+        self._doc_type.focus_input()
+
+
 # --------------------------------------------------------------------------- #
 # 12 — Növbə Planlama
 # --------------------------------------------------------------------------- #
@@ -694,11 +1280,19 @@ class ShiftPlanningScreen(Screen):
         template_selected: İş rejimi şablonu ("5/2", "6/1", "2/2", "custom").
         publish_requested: "Planı Yayımla".
         month_changed: (-1 və ya +1).
+        open_shift_post_requested: "Açıq Növbə Elan Et" (#16).
+        open_shift_cancel_requested: Elanın "Ləğv Et" düyməsi (#16, elan id-si).
+
+    #16 (AÇIQ NÖVBƏ BAZARI) MATRİSƏ TOXUNMUR: kart matrisin ALTINA əlavə
+    olunur, `set_matrix`/`LEGEND`/şablon məntiqi olduğu kimi qalır. Kartın
+    ÖZÜ ayrı moduldadır (`screens/open_shift.py`) — səbəb orada yazılıb.
     """
 
     template_selected = Signal(str)
     publish_requested = Signal()
     month_changed = Signal(int)
+    open_shift_post_requested = Signal()
+    open_shift_cancel_requested = Signal(str)
 
     #: Növbə kodları (maketdəki izah sətri).
     LEGEND: Final = (
@@ -727,6 +1321,16 @@ class ShiftPlanningScreen(Screen):
         self._matrix_scroll.setWidget(self._matrix_host)
         self._matrix_card.add(self._matrix_scroll)
         self.add(self._matrix_card)
+
+        # #16 — açıq növbə bazarı matrisin ALTINDA: admin əvvəlcə planı görür,
+        # boşluğu MÜƏYYƏN EDİR, sonra elan edir. Kart yuxarıda olsaydı, qərarın
+        # əsası (matris) ekrandan sürüşərdi.
+        from src.presentation.screens.open_shift import OpenShiftMarketCard  # noqa: PLC0415
+
+        self._open_shift_card = OpenShiftMarketCard(theme)
+        self._open_shift_card.post_requested.connect(self.open_shift_post_requested)
+        self._open_shift_card.cancel_requested.connect(self.open_shift_cancel_requested)
+        self.add(self._open_shift_card)
 
         self.add(self._build_footer())
 
@@ -819,7 +1423,35 @@ class ShiftPlanningScreen(Screen):
         holder.setLayout(self._summary_rows)
         self._summary.add(holder)
         layout.addWidget(self._summary, 1)
+
+        layout.addWidget(self._build_staffing_card(), 1)
         return footer
+
+    def _build_staffing_card(self) -> QWidget:
+        """#13 — tarixi nümunə kartı (QEYRİ-MƏCBURİ göstərici).
+
+        AYRI KART, «Ayın xülasəsi»NİN İÇİNDƏ DEYİL — bu, dizayn qərarıdır:
+        xülasə FAKTdır (planlaşdırılmış saat, açıq növbə), bu isə TƏXMİNdir.
+        İkisini eyni kartda göstərmək təxmini fakt kimi oxutdurardı; #13-ün
+        açıq tələbi isə istifadəçinin onu proqnoz sanmamasıdır.
+        """
+        self._staffing_card = Card(padding=16, spacing=10)
+        self._staffing_card.add(title_label("Tarixi nümunə (məsləhət)", size=14))
+        self._staffing_rows = QVBoxLayout()
+        self._staffing_rows.setSpacing(6)
+        holder = QWidget()
+        holder.setLayout(self._staffing_rows)
+        self._staffing_card.add(holder)
+
+        # XƏBƏRDARLIQ MƏTNİ SABİTDİR və məlumatdan ƏVVƏL qurulur: siyahı boş
+        # olsa belə görünür, çünki göstəricinin NƏ OLMADIĞI onun nə olduğu
+        # qədər vacibdir (kompasos11.md #13 — "GUI-də bu açıq bildirilməlidir").
+        self._staffing_note = muted_label(
+            "Bu, tələb proqnozu DEYİL: keçmiş davamiyyət tarixçəsinin ortasıdır "
+            "və heç nəyi avtomatik təyin etmir. Nəzərə almaq qərarı sizindir."
+        )
+        self._staffing_card.add(self._staffing_note)
+        return self._staffing_card
 
     def set_month(self, label: str, *, stores: list[str], mode: str) -> None:
         self._month_label.setText(label)
@@ -899,6 +1531,61 @@ class ShiftPlanningScreen(Screen):
             layout.addWidget(stretch())
             layout.addWidget(title_label(value, size=15))
             self._summary_rows.addWidget(row)
+
+    def set_open_shift_postings(self, rows: list[dict[str, str]]) -> None:
+        """#16 — açıq elanlar. Açarlar: `id`, `date`, `work_mode`, `store`.
+
+        Ekran yalnız ÖTÜRÜR: kartın öz `set_postings()`-i sətirləri qurur.
+        Bu, matrisin kodu ilə bazarın kodunu qarışdırmamaq üçündür.
+        """
+        self._open_shift_card.set_postings(rows)
+
+    def set_staffing_pattern(
+        self,
+        items: list[tuple[str, str]],
+        *,
+        store_name: str,
+        based_on_weeks: int,
+        calculated_label: str,
+    ) -> None:
+        """#13 — həftə günü üzrə tarixi kadr nümunəsi (məsləhət xarakterli).
+
+        Args:
+            items: (həftə günü adı, "2.6 nəfər") cütləri — SIRALAMA çağıranın
+                məsuliyyətidir (`StaffingPatternUseCase.suggestions_for`
+                B.e→Bazar sıralayır), çünki maket və canlı yol eyni ardıcıllığı
+                göstərməlidir.
+            store_name: Rəqəmlərin AİD OLDUĞU mağaza. Adsız göstərici 21
+                filiallı şəbəkədə mənasızdır — admin hansı mağazanın nümunəsinə
+                baxdığını bilməlidir.
+            based_on_weeks: Pəncərənin uzunluğu (ROOT parametri).
+            calculated_label: Sonuncu hesablamanın tarixi. YAŞ GÖSTƏRİLİR,
+                çünki "8 həftəlik nümunə" yazısı hesablama 3 ay əvvəl
+                aparılıbsa yanıldıcıdır (migrations/019 `calculated_at` şərhi).
+
+        BOŞ SİYAHI GİZLƏTMİR: kart görünür və "tarixçə yoxdur" yazır. Kartı
+        yox etmək istifadəçidə "bu funksiya işləmir" təəssüratı yaradardı,
+        halbuki cavab "hələ kifayət qədər məlumat yığılmayıb"dır.
+        """
+        clear_layout(self._staffing_rows)
+
+        header = muted_label(f"{store_name} · son {based_on_weeks} həftə · {calculated_label}")
+        self._staffing_rows.addWidget(header)
+
+        if not items:
+            self._staffing_rows.addWidget(
+                body_label("Bu mağaza üçün kifayət qədər tarixçə yoxdur.", size=13, wrap=True)
+            )
+            return
+
+        for weekday, value in items:
+            row = QWidget()
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(muted_label(weekday))
+            layout.addWidget(stretch())
+            layout.addWidget(body_label(value, size=13, wrap=False))
+            self._staffing_rows.addWidget(row)
 
 
 # --------------------------------------------------------------------------- #
@@ -1197,6 +1884,8 @@ __all__ = [
     "DailyRosterScreen",
     "DashboardScreen",
     "PermissionMatrixScreen",
+    "PosThresholdDialog",
+    "RankingEntry",
     "RoleCreateDialog",
     "ShiftPlanningScreen",
     "ShiftSwapScreen",

@@ -30,10 +30,13 @@ from src.domain.entities.attendance_sheet import (
     DailyAttendanceSheet,
     SheetLine,
 )
+from src.domain.entities.exception_record import ExceptionRecord
 from src.domain.entities.shift import ShiftSwapRequest
+from src.domain.value_objects.exception_signals import ExceptionSeverity
 from src.domain.value_objects.identifiers import (
     AppealId,
     EmployeeId,
+    ExceptionId,
     FineId,
     ShiftSwapRequestId,
     SupportMessageId,
@@ -42,6 +45,10 @@ from src.domain.value_objects.identifiers import (
     new_daily_sheet_id,
 )
 from src.domain.value_objects.money import Money
+from src.infrastructure.persistence.exception_repositories import (
+    PostgresExceptionRepository,
+    PostgresExceptionSourceCatalog,
+)
 from src.infrastructure.persistence.platform_repositories import (
     PostgresBackupCatalog,
     PostgresPluginRegistry,
@@ -979,3 +986,193 @@ def test_reversed_points_are_excluded_by_the_query_itself() -> None:
     repo.sales_facts(TENANT, start=date(2026, 8, 1), end=date(2026, 8, 31))
 
     assert "pl.status = 'ACTIVE'" in conn.executed[-1][0]
+
+
+# --------------------------------------------------------------------------- #
+# Vahid İstisna Jurnalı (`exception_repositories.py`)
+# --------------------------------------------------------------------------- #
+
+
+def _exception_row(**overrides: Any) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "id": uuid.uuid4(),
+        "tenant_id": TENANT,
+        "source": "BEHAVIOR_ANOMALY",
+        "employee_id": ACTOR,
+        "store_id": uuid.uuid4(),
+        "detail": "Check-in vaxtı baz xəttindən kənarlaşıb",
+        "context_json": {"kenarlasma": 42},
+        "severity": "MEDIUM",
+        "status": "OPEN",
+        "dedupe_key": "BEHAVIOR_ANOMALY:2026-08-10",
+        "reviewed_by": None,
+        "reviewed_at": None,
+        "review_note": None,
+        "created_at": NOW,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_an_exception_row_is_restored_without_emitting_an_event() -> None:
+    """Repo-dan bərpa hadisə YAYSAYDI, hər oxu "yeni anomaliya" bildirişi olardı."""
+    repo, _ = _build(PostgresExceptionRepository, [("FROM exceptions", [_exception_row()])])
+
+    record = repo.get(ExceptionId(uuid.uuid4()))
+
+    assert record is not None
+    assert not record.has_pending_events
+    assert record.severity is ExceptionSeverity.MEDIUM
+    assert record.context["kenarlasma"] == 42
+
+
+def test_a_jsonb_column_stored_as_text_is_still_readable() -> None:
+    """Sürücü `jsonb`-i obyekt qaytarır, köhnə yazı sətir ola bilər — hər ikisi."""
+    repo, _ = _build(
+        PostgresExceptionRepository,
+        [("FROM exceptions", [_exception_row(context_json='{"a": 1}')])],
+    )
+
+    record = repo.get(ExceptionId(uuid.uuid4()))
+
+    assert record is not None
+    assert record.context == {"a": 1}
+
+
+@pytest.mark.parametrize("raw", [None, "[]", "salam", 7])
+def test_a_broken_context_column_becomes_an_empty_dict(raw: Any) -> None:
+    """Yararsız `context_json` ekranı çökdürməməlidir — sətir yenə göstərilir."""
+    repo, _ = _build(
+        PostgresExceptionRepository,
+        [("FROM exceptions", [_exception_row(context_json=raw)])],
+    )
+
+    record = repo.get(ExceptionId(uuid.uuid4()))
+
+    assert record is not None
+    assert record.context == {}
+
+
+def test_the_dedupe_lookup_does_not_filter_by_status() -> None:
+    """Rədd edilmiş tapıntı da "artıq mövcuddur" sayılmalıdır."""
+    repo, conn = _build(PostgresExceptionRepository, [("FROM exceptions", [])])
+
+    repo.find_by_dedupe(TENANT, source="BEHAVIOR_ANOMALY", dedupe_key="K-1")
+
+    sql, params = conn.executed[-1]
+    assert "status" not in sql.split("WHERE")[-1]
+    assert params == (TENANT, "BEHAVIOR_ANOMALY", "K-1")
+
+
+def test_an_empty_store_scope_never_reaches_the_database() -> None:
+    """FAIL-SAFE: "heç bir mağazaya çıxış yoxdur" halında sorğu göndərilmir."""
+    repo, conn = _build(PostgresExceptionRepository, [("FROM exceptions", [])])
+
+    assert repo.list_open(TENANT, store_ids=[]) == []
+    assert conn.executed == []
+
+
+def test_the_open_queue_filters_by_tenant_status_and_store() -> None:
+    store_id = uuid.uuid4()
+    repo, conn = _build(PostgresExceptionRepository, [("FROM exceptions", [])])
+
+    repo.list_open(TENANT, store_ids=[store_id], limit=25)  # type: ignore[list-item]
+
+    sql, params = conn.executed[-1]
+    assert "tenant_id = %s" in sql
+    assert "status = 'OPEN'" in sql
+    assert "store_id = ANY(%s)" in sql
+    assert params == (TENANT, [store_id], 25)
+
+
+def test_the_upsert_never_rewrites_the_detection_facts() -> None:
+    """`detail`/`created_at` dəyişsəydi, qərar verənin gördüyü mətn itərdi."""
+    record = ExceptionRecord(
+        exception_id=ExceptionId(uuid.uuid4()),
+        tenant_id=TENANT,
+        source="BEHAVIOR_ANOMALY",
+        employee_id=ACTOR,
+        store_id=uuid.uuid4(),  # type: ignore[arg-type]
+        detail="Check-in vaxtı baz xəttindən kənarlaşıb",
+        created_at=NOW,
+        context={"kenarlasma": 42},
+        emit_created_event=False,
+    )
+    repo, conn = _build(PostgresExceptionRepository)
+
+    repo.save(record)
+
+    sql, params = conn.executed[-1]
+    updated = sql.split("DO UPDATE")[-1]
+    assert "status" in updated
+    assert "review_note" in updated
+    assert "detail" not in updated
+    assert "created_at" not in updated
+    assert json.loads(params[6]) == {"kenarlasma": 42}
+
+
+def test_system_sources_are_visible_to_every_tenant() -> None:
+    """`tenant_id IS NULL` şərti olmasa `BEHAVIOR_ANOMALY` heç kimə görünməzdi."""
+    repo, conn = _build(
+        PostgresExceptionSourceCatalog,
+        [
+            (
+                "FROM exception_sources",
+                [
+                    {
+                        "code": "BEHAVIOR_ANOMALY",
+                        "name_az": "Davranış anomaliyası",
+                        "description_az": None,
+                        "default_severity": "HIGH",
+                        "is_active": True,
+                    }
+                ],
+            )
+        ],
+    )
+
+    source = repo.get(TENANT, " behavior_anomaly ")
+
+    sql, params = conn.executed[-1]
+    assert "tenant_id IS NULL" in sql
+    assert params == ("BEHAVIOR_ANOMALY", TENANT)
+    assert source is not None
+    assert source.default_severity is ExceptionSeverity.HIGH
+
+
+def test_the_catalog_hides_deactivated_sources_by_default() -> None:
+    repo, conn = _build(PostgresExceptionSourceCatalog, [("FROM exception_sources", [])])
+
+    repo.list_all(TENANT)
+    active_only = conn.executed[-1][0]
+    repo.list_all(TENANT, include_inactive=True)
+    everything = conn.executed[-1][0]
+
+    assert "is_active" in active_only
+    assert "is_active" not in everything.split("WHERE")[-1]
+
+
+def test_an_unknown_severity_in_the_catalog_falls_back() -> None:
+    """Root sətri əl ilə redaktə etsə, ekran çökmür — MEDIUM göstərilir."""
+    repo, _ = _build(
+        PostgresExceptionSourceCatalog,
+        [
+            (
+                "FROM exception_sources",
+                [
+                    {
+                        "code": "BEHAVIOR_ANOMALY",
+                        "name_az": "Davranış anomaliyası",
+                        "description_az": "İzah",
+                        "default_severity": "ÇOX_PİS",
+                        "is_active": False,
+                    }
+                ],
+            )
+        ],
+    )
+
+    (source,) = repo.list_all(TENANT, include_inactive=True)
+
+    assert source.default_severity is ExceptionSeverity.MEDIUM
+    assert source.is_active is False

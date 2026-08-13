@@ -28,6 +28,12 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+from src.domain.policies import SystemLimitKey
+from src.infrastructure.config.limits import (
+    InfrastructureLimits,
+    fallback_float,
+    fallback_int,
+)
 from src.shared.logger import get_logger
 
 if TYPE_CHECKING:
@@ -36,12 +42,20 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-#: Boş yer bu faizdən aşağı düşərsə xəbərdarlıq, kritikdən aşağı düşərsə xəta.
-DISK_WARNING_PERCENT: Final[float] = 85.0
-DISK_CRITICAL_PERCENT: Final[float] = 95.0
-
-#: DB ping bu müddətdən uzun çəkərsə "yavaş" sayılır (millisaniyə).
-DB_PING_SLOW_MS: Final[int] = 500
+#: DÖRDÜ DƏ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`HEALTH_DISK_WARNING_PERCENT`, `HEALTH_DISK_CRITICAL_PERCENT`,
+#: `HEALTH_DB_PING_SLOW_MS`, `NTP_MAX_DRIFT_SECONDS`; seed: migrations/032,
+#: sonuncu `schema.sql`-dədir). Hədlər quraşdırmadan asılıdır: 128 GB SSD-li
+#: kioskda "85% doludur" ilə 2 TB serverdə eyni faiz tamamilə fərqli qalıq
+#: yer deməkdir, DB ping həddi isə şəbəkə məsafəsi ilə dəyişir.
+FALLBACK_DISK_WARNING_PERCENT: Final[float] = fallback_float(
+    SystemLimitKey.HEALTH_DISK_WARNING_PERCENT
+)
+FALLBACK_DISK_CRITICAL_PERCENT: Final[float] = fallback_float(
+    SystemLimitKey.HEALTH_DISK_CRITICAL_PERCENT
+)
+FALLBACK_DB_PING_SLOW_MS: Final[int] = fallback_int(SystemLimitKey.HEALTH_DB_PING_SLOW_MS)
+FALLBACK_MAX_DRIFT_SECONDS: Final[int] = fallback_int(SystemLimitKey.NTP_MAX_DRIFT_SECONDS)
 
 
 class HealthLevel(str, Enum):
@@ -97,13 +111,22 @@ class SystemHealthSnapshot:
         )
 
 
-def disk_metric(path: Path | None = None) -> HealthMetric:
+def disk_metric(
+    path: Path | None = None, *, limits: InfrastructureLimits | None = None
+) -> HealthMetric:
     """Disk istifadəsi — tətbiqin yazdığı diskə görə.
 
     Ölçmə `Path.cwd()`-dən aparılır (və ya verilmiş yoldan), çünki bizi
     maraqlandıran məhz TƏTBİQİN yazdığı disk-dir, sistem diski deyil —
     mağaza PC-lərində bunlar fərqli ola bilər.
+
+    `limits` verilməzsə fallback hədlər işləyir: monitorun ÖZÜ baza
+    əlçatmazlığında da cavab verməlidir — əks halda "baza cavab vermir"
+    diaqnozunu göstərəcək ekran həmin bazadan asılı olardı.
     """
+    resolved = limits or InfrastructureLimits()
+    warning_percent = resolved.float_of(SystemLimitKey.HEALTH_DISK_WARNING_PERCENT)
+    critical_percent = resolved.float_of(SystemLimitKey.HEALTH_DISK_CRITICAL_PERCENT)
     target = path or Path.cwd()
     try:
         usage = shutil.disk_usage(target)
@@ -120,13 +143,13 @@ def disk_metric(path: Path | None = None) -> HealthMetric:
     used_percent = (usage.used / usage.total * 100) if usage.total else 0.0
     free_gb = usage.free / (1024**3)
 
-    if used_percent >= DISK_CRITICAL_PERCENT:
+    if used_percent >= critical_percent:
         level = HealthLevel.CRITICAL
         detail = (
             "Disk demək olar ki, doludur. Offline bufer, loglar və şəkil "
             "növbəsi yazıla bilməyəcək — yer boşaldın."
         )
-    elif used_percent >= DISK_WARNING_PERCENT:
+    elif used_percent >= warning_percent:
         level = HealthLevel.WARNING
         detail = "Disk dolmağa yaxındır — köhnə log və nüsxələri təmizləyin."
     else:
@@ -142,10 +165,13 @@ def disk_metric(path: Path | None = None) -> HealthMetric:
     )
 
 
-def database_metric(database: Database) -> HealthMetric:
+def database_metric(
+    database: Database, *, limits: InfrastructureLimits | None = None
+) -> HealthMetric:
     """DB ping — bağlantı canlıdırmı və nə qədər gecikir."""
     from time import perf_counter  # noqa: PLC0415 — yalnız ölçmə anında lazımdır
 
+    slow_ms = (limits or InfrastructureLimits()).int_of(SystemLimitKey.HEALTH_DB_PING_SLOW_MS)
     started = perf_counter()
     try:
         healthy = database.health_check()
@@ -168,7 +194,7 @@ def database_metric(database: Database) -> HealthMetric:
             value_az="Cavab vermir",
             detail_az="Bağlantı var, lakin sorğu uğursuz oldu.",
         )
-    if elapsed_ms >= DB_PING_SLOW_MS:
+    if elapsed_ms >= slow_ms:
         return HealthMetric(
             key="database",
             title_az="Baza bağlantısı",
@@ -184,8 +210,24 @@ def database_metric(database: Database) -> HealthMetric:
     )
 
 
-def ntp_metric(drift_seconds: float | None, *, max_drift: int = 60) -> HealthMetric:
-    """NTP sürüşməsi — bölmə 2-dəki `TIME_DRIFT_DETECTED` həddi ilə eyni."""
+def ntp_metric(
+    drift_seconds: float | None,
+    *,
+    max_drift: int | None = None,
+    limits: InfrastructureLimits | None = None,
+) -> HealthMetric:
+    """NTP sürüşməsi — bölmə 2-dəki `TIME_DRIFT_DETECTED` həddi ilə eyni.
+
+    `max_drift` AÇIQ verilməzsə `NTP_MAX_DRIFT_SECONDS` ROOT açarından oxunur
+    — həmin açarı `timekeeping/ntp.py` və `leave_verification` da işlədir,
+    yəni monitorun göstərdiyi hədd bloklamanın FAKTİKİ həddi ilə eynidir.
+    Ayrı ədəd saxlasaydıq, ekran "normaldır" deyəndə axın bloklana bilərdi.
+    """
+    threshold = (
+        max_drift
+        if max_drift is not None
+        else (limits or InfrastructureLimits()).int_of(SystemLimitKey.NTP_MAX_DRIFT_SECONDS)
+    )
     if drift_seconds is None:
         return HealthMetric(
             key="ntp",
@@ -196,7 +238,7 @@ def ntp_metric(drift_seconds: float | None, *, max_drift: int = 60) -> HealthMet
         )
 
     drift = abs(drift_seconds)
-    if drift > max_drift:
+    if drift > threshold:
         return HealthMetric(
             key="ntp",
             title_az="Saat sinxronizasiyası",
@@ -207,7 +249,7 @@ def ntp_metric(drift_seconds: float | None, *, max_drift: int = 60) -> HealthMet
                 "Kompüterin saatını NTP ilə sinxronlaşdırın."
             ),
         )
-    if drift > max_drift / 2:
+    if drift > threshold / 2:
         return HealthMetric(
             key="ntp",
             title_az="Saat sinxronizasiyası",
@@ -228,15 +270,22 @@ def build_snapshot(
     database: Database,
     servers: list[ServerHealthRow],
     drift_seconds: float | None,
-    max_drift: int = 60,
+    max_drift: int | None = None,
     disk_path: Path | None = None,
+    limits: InfrastructureLimits | None = None,
 ) -> SystemHealthSnapshot:
-    """Dörd göstəricini bir mənzərədə birləşdirir (bölmə 6)."""
+    """Dörd göstəricini bir mənzərədə birləşdirir (bölmə 6).
+
+    `limits` BİR DƏFƏ həll olunur və üç göstəriciyə ötürülür: eyni anlıq
+    mənzərənin sətirləri EYNİ konfiqurasiyanı görməlidir (Root ölçmə
+    ortasında dəyəri dəyişsə, ekranda yarısı köhnə hədlə hesablanardı).
+    """
+    resolved = limits or InfrastructureLimits()
     return SystemHealthSnapshot(
         metrics=[
-            database_metric(database),
-            ntp_metric(drift_seconds, max_drift=max_drift),
-            disk_metric(disk_path),
+            database_metric(database, limits=resolved),
+            ntp_metric(drift_seconds, max_drift=max_drift, limits=resolved),
+            disk_metric(disk_path, limits=resolved),
             _sync_summary(servers),
         ],
         servers=servers,
@@ -272,9 +321,10 @@ def _sync_summary(servers: list[ServerHealthRow]) -> HealthMetric:
 
 
 __all__ = [
-    "DB_PING_SLOW_MS",
-    "DISK_CRITICAL_PERCENT",
-    "DISK_WARNING_PERCENT",
+    "FALLBACK_DB_PING_SLOW_MS",
+    "FALLBACK_DISK_CRITICAL_PERCENT",
+    "FALLBACK_DISK_WARNING_PERCENT",
+    "FALLBACK_MAX_DRIFT_SECONDS",
     "HealthLevel",
     "HealthMetric",
     "SystemHealthSnapshot",

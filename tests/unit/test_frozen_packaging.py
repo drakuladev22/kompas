@@ -47,6 +47,7 @@ import src.infrastructure.plugins.sandbox as sandbox_module
 import src.infrastructure.security.encryption as encryption_module
 import src.main as main_module
 import src.presentation.composition as composition_module
+from src.infrastructure.config.limits import InfrastructureLimits
 from src.infrastructure.kiosk.watchdog import KioskWatchdog
 from src.infrastructure.plugins import (
     PluginCapability,
@@ -365,10 +366,14 @@ def test_offline_buffer_default_lands_in_the_user_data_dir(
 ) -> None:
     """Kompozisiya kökü həqiqətən yeni yolu ötürürmü (bağlantı yoxlanışı)."""
     captured: list[Path] = []
+    #: Bufer artıq ROOT pəncərəsini də alır (Faza 10.2 wiring) — sahtə onu
+    #: QƏBUL ETMƏLİDİR, əks halda test yolu deyil, imzanı yoxlamış olardı.
+    limits_seen: list[object] = []
 
     class _FakeBuffer:
-        def __init__(self, path: Path, *, encryption: object) -> None:
+        def __init__(self, path: Path, *, encryption: object, limits: object = None) -> None:
             captured.append(path)
+            limits_seen.append(limits)
 
     class _FakeEncryption:
         """Şifrələmə açarı testin mövzusu deyil — konstruktoru sadəcə boş qalır."""
@@ -378,9 +383,11 @@ def test_offline_buffer_default_lands_in_the_user_data_dir(
     monkeypatch.setattr(migration_module, "BufferDrainAdapter", lambda buffer: buffer)
     monkeypatch.chdir(_workdir(tmp_path, "System32"))
 
-    composition_module._LazyBufferDrain()._ensure()
+    window = InfrastructureLimits()
+    composition_module._LazyBufferDrain(window)._ensure()
 
     assert captured == [user_data_root / "offline_buffer.db"]
+    assert limits_seen == [window], "ROOT pəncərəsi bufere ötürülməlidir"
 
 
 class _UnreachableDatabase:

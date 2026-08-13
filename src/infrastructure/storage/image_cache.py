@@ -29,13 +29,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.storage import ImageSize, StorageReference
+from src.infrastructure.config.limits import InfrastructureLimits, fallback_int
 from src.shared.logger import get_logger
 
 _log = get_logger(__name__)
 
-DEFAULT_TTL_SECONDS: Final[int] = 30 * 24 * 3600  # 30 gün
-DEFAULT_MAX_BYTES: Final[int] = 256 * 1024 * 1024  # 256 MB
+#: HƏR İKİSİ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`IMAGE_CACHE_TTL_SECONDS`, `IMAGE_CACHE_MAX_BYTES`; seed: migrations/032).
+#: Kiosk PC-sinin diski 128 GB da ola bilər, 2 TB da — 256 MB birinci halda
+#: nəzərəçarpan pay, ikincisində isə lazımsız dar tavandır.
+FALLBACK_TTL_SECONDS: Final[int] = fallback_int(SystemLimitKey.IMAGE_CACHE_TTL_SECONDS)
+FALLBACK_MAX_BYTES: Final[int] = fallback_int(SystemLimitKey.IMAGE_CACHE_MAX_BYTES)
 
 
 def default_cache_dir() -> Path:
@@ -63,16 +69,35 @@ class ImageCache:
         self,
         directory: Path | str | None = None,
         *,
-        ttl_seconds: int = DEFAULT_TTL_SECONDS,
-        max_bytes: int = DEFAULT_MAX_BYTES,
+        ttl_seconds: int | None = None,
+        max_bytes: int | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
         self._dir = Path(directory) if directory is not None else default_cache_dir()
         self._dir.mkdir(parents=True, exist_ok=True)
-        self._ttl = ttl_seconds
-        self._max_bytes = max_bytes
+        self._explicit_ttl = ttl_seconds
+        self._explicit_max_bytes = max_bytes
+        self._limits = limits or InfrastructureLimits()
         self._lock = threading.Lock()
         self._hits = 0
         self._misses = 0
+
+    def _ttl(self) -> int:
+        """Keş faylının ömrü — HƏR OXUDA/TƏMİZLƏMƏDƏ həll olunur.
+
+        Keş tətbiqin bütün sessiyası boyu yaşayır; dəyəri konstruktorda
+        dondursaydıq, Root-un yeni tavanı yalnız yenidən başlatmadan sonra
+        qüvvəyə minərdi — halbuki dəyişiklik məhz disk dolduqda edilir.
+        """
+        if self._explicit_ttl is not None:
+            return self._explicit_ttl
+        return self._limits.int_of(SystemLimitKey.IMAGE_CACHE_TTL_SECONDS)
+
+    def _max_bytes(self) -> int:
+        """Keşin disk tavanı — hər `store()`-dan sonrakı budamada oxunur."""
+        if self._explicit_max_bytes is not None:
+            return self._explicit_max_bytes
+        return self._limits.int_of(SystemLimitKey.IMAGE_CACHE_MAX_BYTES)
 
     # ------------------------------- açar ------------------------------------ #
 
@@ -92,7 +117,7 @@ class ImageCache:
                 self._misses += 1
                 return None
             age = time.time() - path.stat().st_mtime
-            if age > self._ttl:
+            if age > self._ttl():
                 path.unlink(missing_ok=True)
                 self._misses += 1
                 return None
@@ -137,13 +162,16 @@ class ImageCache:
     def _evict_if_needed_locked(self) -> None:
         files = [(f, f.stat()) for f in self._dir.glob("*.bin")]
         total = sum(stat.st_size for _, stat in files)
-        if total <= self._max_bytes:
+        # Tavan BİR DƏFƏ oxunur: budama dövrünün ortasında dəyişən hədd
+        # "nə qədər sildik?" sualını cavabsız qoyardı.
+        max_bytes = self._max_bytes()
+        if total <= max_bytes:
             return
         # Ən köhnə istifadə olunan əvvəl silinir.
         files.sort(key=lambda item: item[1].st_atime)
         removed = 0
         for path, stat in files:
-            if total <= self._max_bytes:
+            if total <= max_bytes:
                 break
             path.unlink(missing_ok=True)
             total -= stat.st_size
@@ -155,8 +183,8 @@ class ImageCache:
 
 
 __all__ = [
-    "DEFAULT_MAX_BYTES",
-    "DEFAULT_TTL_SECONDS",
+    "FALLBACK_MAX_BYTES",
+    "FALLBACK_TTL_SECONDS",
     "CacheStats",
     "ImageCache",
     "default_cache_dir",

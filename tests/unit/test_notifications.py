@@ -44,8 +44,8 @@ from src.infrastructure.notifications.email import (
     SmtpEmailSender,
 )
 from src.infrastructure.notifications.notifier import (
-    BACKOFF_MINUTES,
-    MAX_ATTEMPTS,
+    FALLBACK_BACKOFF_MINUTES,
+    FALLBACK_MAX_ATTEMPTS,
     EmailFallbackDispatcher,
     PostgresNotifier,
 )
@@ -131,7 +131,7 @@ class FakeCursor:
                 for row in self._db.rows.values()
                 if row["is_critical"]
                 and not row["email_sent"]
-                and row["email_attempts"] < MAX_ATTEMPTS
+                and row["email_attempts"] < FALLBACK_MAX_ATTEMPTS
             ]
         elif "SET EMAIL_SENT = TRUE" in normalized:
             self._db.rows[params[0]]["email_sent"] = True
@@ -299,14 +299,21 @@ class TestTenantAudience:
         `has_permission()` naməlum ad üçün sadəcə `False` qaytarır — nə xəta,
         nə jurnal. Menyu maddələri üçün eyni qapı `test_menu_registry.py`-da
         qoyulub; burada bildiriş marşrutu üçün təkrarlanır.
+
+        SXEM + MİQRASİYALAR: `test_menu_registry.py::_schema_flags()` ilə EYNİ
+        genişlənmə — bazis flag-lər (34-ü) `schema.sql`-dadır, lakin sonrakı
+        fazalarda əlavə olunan flag-lər (məs. #17-nin `can_manage_employee_
+        documents`-i, migrations/021) YALNIZ miqrasiya faylındadır. Yoxlamanı
+        `schema.sql`-la məhdudlaşdırmaq belə flag-lərə istinad edən HƏR YENİ
+        auditoriya sətrini yalançı-mənfi ilə rədd edərdi.
         """
-        schema = (Path(__file__).resolve().parents[2] / "database" / "schema.sql").read_text(
-            encoding="utf-8"
-        )
+        root = Path(__file__).resolve().parents[2] / "database"
+        sources = [root / "schema.sql", *sorted((root / "migrations").glob("*.sql"))]
+        registry = "\n".join(path.read_text(encoding="utf-8") for path in sources if path.exists())
         for category, flags in TENANT_NOTIFICATION_AUDIENCE.items():
             for flag in flags:
-                assert f"'{flag}'" in schema, (
-                    f"'{category}' auditoriyası sxemdə olmayan '{flag}' flag-inə istinad edir"
+                assert f"'{flag}'" in registry, (
+                    f"'{category}' auditoriyası reyestrdə olmayan '{flag}' flag-inə istinad edir"
                 )
 
 
@@ -585,7 +592,7 @@ class TestDispatcher:
             "body_az": "Mətn",
             "is_critical": True,
             "email_sent": False,
-            "email_attempts": MAX_ATTEMPTS,
+            "email_attempts": FALLBACK_MAX_ATTEMPTS,
         }
         dispatcher = EmailFallbackDispatcher(
             database,  # type: ignore[arg-type]
@@ -615,8 +622,8 @@ class TestDispatcher:
         assert dispatcher.dispatch_once(TENANT) == 0
 
     def test_gozleme_muddeti_artir(self) -> None:
-        assert BACKOFF_MINUTES[0] < BACKOFF_MINUTES[-1]
-        assert len(BACKOFF_MINUTES) == MAX_ATTEMPTS
+        assert FALLBACK_BACKOFF_MINUTES[0] < FALLBACK_BACKOFF_MINUTES[-1]
+        assert len(FALLBACK_BACKOFF_MINUTES) == FALLBACK_MAX_ATTEMPTS
 
 
 # --------------------------------------------------------------------------- #

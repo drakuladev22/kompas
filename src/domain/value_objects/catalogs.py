@@ -38,10 +38,11 @@ məcburidir. Kataloq həmin siyahının YEGANƏ mənbəyidir.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from datetime import datetime
 from typing import Final
 
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.identifiers import (
     FineTypeId,
     LeaveTypeId,
@@ -53,11 +54,46 @@ from src.domain.value_objects.scheduling import TimeRange, require_aware
 from src.shared.exceptions import KompasOSError
 
 #: Kataloq adının minimum/maksimum uzunluğu — DB `VARCHAR(120)` ilə uyğun.
+#: ROOT PARAMETRİ DEYİL: sxem sərhədinin güzgüsüdür. Root onu böyütsəydi,
+#: yazma anında `VARCHAR(120)` xətası verərdi — yəni "idarə olunan" görünüb
+#: faktiki işləməyən parametr olardı.
 MIN_NAME_LENGTH: Final[int] = 2
 MAX_NAME_LENGTH: Final[int] = 120
 
-#: İcazə növünün tövsiyə olunan müddəti üçün ağlabatan yuxarı hədd (bir iş günü).
-MAX_LEAVE_DURATION_MINUTES: Final[int] = 12 * 60
+#: İcazə növünün tövsiyə olunan müddəti üçün yuxarı hədd (defolt bir iş günü).
+#: FALLBACK — HƏQİQİ MƏNBƏ `system_limits.LEAVE_TYPE_MAX_DURATION_MINUTES`
+#: (seed: migrations/033). Ad uzunluqlarından FƏRQLİ olaraq bu, sxem sərhədi
+#: DEYİL — `leave_types.default_duration_minutes` yalnız `> 0` CHECK-i daşıyır,
+#: YUXARI hədd sxemdə YOXDUR, yəni bu tavan sırf biznes siyasətidir və
+#: müəssisə onu öz iş rejiminə (məs. 24 saatlıq növbə) görə seçir.
+MAX_LEAVE_DURATION_MINUTES: Final[int] = int(
+    DEFAULT_LIMITS[SystemLimitKey.LEAVE_TYPE_MAX_DURATION_MINUTES]
+)
+
+
+def _leave_duration_ceiling(requested: int | None) -> int:
+    """Tətbiq olunacaq tavan: Root dəyəri, yoxdursa modul fallback-ı.
+
+    ────────────────────────────────────────────────────────────────────────
+    NİYƏ TAVAN `system_limits`-DƏN GƏLİR, LAKİN DOMEN DB-YƏ TOXUNMUR
+    ────────────────────────────────────────────────────────────────────────
+    `LeaveType` domen tipidir və `psycopg` görmür (CLAUDE.md §3). Ona görə
+    dəyəri ÖZÜ oxumur — PARAMETR kimi qəbul edir; oxunu çağıran tərəf
+    (repository / kontroller) edir. Naxış `labor_rules.LaborLimits.defaults()`
+    ilə eynidir.
+
+    ────────────────────────────────────────────────────────────────────────
+    NİYƏ MƏNASIZ TAVAN FALLBACK-A DÜŞÜR
+    ────────────────────────────────────────────────────────────────────────
+    ROOT ekranı `min_value = 1` ilə qoruyur, lakin ekranı yan keçən skript
+    `0` və ya mənfi yaza bilər. O halda HƏR icazə növü (45 dəq nahar da daxil)
+    rədd edilər və kataloq ekranı bütövlükdə açılmaz olardı — yəni bir yanlış
+    sətir bütün modulu bağlayardı. Fail-safe seçim: yararsız tavan görməzdən
+    gəlinir (`PostgresSystemLimits.get_int` ilə eyni fəlsəfə).
+    """
+    if requested is None or requested <= 0:
+        return MAX_LEAVE_DURATION_MINUTES
+    return requested
 
 
 class InvalidCatalogEntryError(KompasOSError):
@@ -187,17 +223,30 @@ class LeaveType(CatalogEntry):
 
     leave_type_id: LeaveTypeId | None = None
     default_duration_minutes: int = 0
+    #: ROOT tavanı (`system_limits.LEAVE_TYPE_MAX_DURATION_MINUTES`).
+    #:
+    #: `InitVar`-dır, SAHƏ DEYİL: tavan icazə növünün XÜSUSİYYƏTİ deyil,
+    #: yoxlama parametridir. Sahə olsaydı `==` müqayisəsinə, audit
+    #: `after_state`-inə və hər serializasiyaya düşərdi — yəni eyni kataloq
+    #: sətri Root tavanı dəyişdikdən sonra "fərqli" görünərdi.
+    #:
+    #: `None` = tavan verilməyib → modul fallback-ı işləyir. Bütün mövcud
+    #: çağırış nöqtələri üçün davranış DƏYİŞMİR.
+    max_duration_minutes: InitVar[int | None] = None
 
-    def __post_init__(self) -> None:
+    # `max_duration_minutes` DEFOLTSUZDUR (RUF033): defolt `InitVar` sahəsinin
+    # ÖZÜNDƏDİR (`= None`) və onu burada təkrarlamaq iki mənbə yaradardı.
+    def __post_init__(self, max_duration_minutes: int | None) -> None:
         super().__post_init__()
+        ceiling = _leave_duration_ceiling(max_duration_minutes)
         if self.default_duration_minutes < 0:
             raise InvalidCatalogEntryError(
                 "Tövsiyə olunan müddət mənfi ola bilməz",
                 user_message="Müddət mənfi ola bilməz.",
             )
-        if self.default_duration_minutes > MAX_LEAVE_DURATION_MINUTES:
+        if self.default_duration_minutes > ceiling:
             raise InvalidCatalogEntryError(
-                f"Tövsiyə olunan müddət {MAX_LEAVE_DURATION_MINUTES} dəqiqəni aşa bilməz",
+                f"Tövsiyə olunan müddət {ceiling} dəqiqəni aşa bilməz",
                 user_message="Müddət həddindən artıq uzundur.",
             )
 

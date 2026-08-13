@@ -32,15 +32,26 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Final
 
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.scheduling import require_aware
 from src.shared.exceptions import KompasOSError
 
 #: Bufer boşalmasını gözləmək üçün yuxarı hədd. Aşılarsa keçid BAŞLAMIR —
 #: sinxronlaşmamış yazı ilə miqrasiya məlumat itkisi deməkdir.
-DEFAULT_DRAIN_TIMEOUT_SECONDS: Final[int] = 300
+#: FALLBACK — HƏQİQİ MƏNBƏ `system_limits.DB_MIGRATION_DRAIN_TIMEOUT_SECONDS`
+#: (seed: migrations/033). KEÇİDİN ÖZ SIRASI (`MigrationPhase`) və checksum
+#: bərabərliyi şərti PARAMETR DEYİL — onlar struktur qaydalardır; konfiqurasiya
+#: edilən yalnız "nə qədər gözləyək".
+DEFAULT_DRAIN_TIMEOUT_SECONDS: Final[int] = int(
+    DEFAULT_LIMITS[SystemLimitKey.DB_MIGRATION_DRAIN_TIMEOUT_SECONDS]
+)
 #: Maintenance window-un ağlabatan yuxarı həddi. Uzun pəncərə = uzun kəsinti.
-MAX_WINDOW_MINUTES: Final[int] = 120
+#: FALLBACK — HƏQİQİ MƏNBƏ `system_limits.DB_MIGRATION_MAX_WINDOW_MINUTES`.
+MAX_WINDOW_MINUTES: Final[int] = int(DEFAULT_LIMITS[SystemLimitKey.DB_MIGRATION_MAX_WINDOW_MINUTES])
 #: Geri qaytarma səbəbi üçün minimum uzunluq (audit modeli ilə eyni).
+#: ROOT PARAMETRİ DEYİL: audit mətn qaydasının güzgüsüdür (`FineAppeal`,
+#: `EXCEPTION_REVIEW_NOTE_MIN_LENGTH` ilə eyni ailə) — mətn uzunluğu biznes
+#: siyasəti deyil, sənədləşdirmə minimumudur.
 MIN_ROLLBACK_REASON_LENGTH: Final[int] = 10
 
 

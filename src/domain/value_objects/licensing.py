@@ -69,6 +69,7 @@ from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final
 
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.shared.exceptions import KompasOSError
 
 if TYPE_CHECKING:
@@ -76,13 +77,31 @@ if TYPE_CHECKING:
 
     from src.domain.value_objects.identifiers import TenantId
 
+# --------------------------------------------------------------------------- #
+# ROOT PARAMETRLƏRİNİN FALLBACK DƏYƏRLƏRİ (Faza 10.2)
+# --------------------------------------------------------------------------- #
+# Aşağıdakı doqquz sabitin HƏQİQİ MƏNBƏYİ `system_limits` cədvəlidir
+# (`SystemLimitKey.LICENSE_*`, seed: migrations/033) — burada yalnız DB sətri
+# oxunmadıqda (ilk işə düşmə, bağlantı yoxdur, sətir hələ seed edilməyib) işə
+# düşən fallback saxlanılır və ədəd `DEFAULT_LIMITS`-dən gəlir, bu faylda
+# YAZILMIR. Naxış `domain.labor_rules.LaborLimits.defaults()` ilə eynidir.
+#
+# NİYƏ LİSENZİYA RİTMİ KONFİQURASİYA EDİLİR, LAKİN İNVARİANT YOX: yoxlama
+# TEZLİYİ kommersiya/şəbəkə qərarıdır; "nə vaxt bloklanır" qaydası (status
+# DEAKTIV və ya `expires_at` keçib) isə yuxarıdakı əsas invariantdır və HEÇ
+# BİR limitlə söndürülə bilməz.
+
 #: Dövri yoxlama aralığı — spesifikasiya bölmə 8: "məs. hər 24 saatda".
-DEFAULT_CHECK_IN_INTERVAL_SECONDS: Final[float] = 24 * 60 * 60
+DEFAULT_CHECK_IN_INTERVAL_SECONDS: Final[float] = float(
+    DEFAULT_LIMITS[SystemLimitKey.LICENSE_CHECK_IN_INTERVAL_SECONDS]
+)
 
 #: Bazaya çatılmadıqda növbəti cəhdə qədər gözləmə. Sutkalıq intervaldan
 #: KİÇİKDİR: qrace sayğacı işləyərkən hər saat yenidən cəhd etmək məntiqlidir,
 #: 24 saat gözləmək isə bərpa olunmuş şəbəkəni bir gün gec görmək deməkdir.
-RETRY_INTERVAL_SECONDS: Final[float] = 60 * 60
+RETRY_INTERVAL_SECONDS: Final[float] = float(
+    DEFAULT_LIMITS[SystemLimitKey.LICENSE_RETRY_INTERVAL_SECONDS]
+)
 
 #: TƏTBİQ BLOKLANMIŞ vəziyyətdə yoxlama aralığı — "Force Sync"in serversiz
 #: qarşılığı (bölmə 8).
@@ -93,23 +112,109 @@ RETRY_INTERVAL_SECONDS: Final[float] = 60 * 60
 #: deməkdir. Ona görə BLOKLANMIŞ vəziyyətdə ritm sıxlaşır: sorğu ucuzdur (bir
 #: sətir oxunur) və yalnız artıq işləməyən quraşdırmalarda baş verir — yəni
 #: normal iş rejiminə heç bir əlavə yük düşmür.
-BLOCKED_RECHECK_INTERVAL_SECONDS: Final[float] = 15 * 60
+BLOCKED_RECHECK_INTERVAL_SECONDS: Final[float] = float(
+    DEFAULT_LIMITS[SystemLimitKey.LICENSE_BLOCKED_RECHECK_INTERVAL_SECONDS]
+)
 
 #: `license_tenants.offline_grace_days` CHECK-i 7–14 aralığındadır (bölmə 8).
-MIN_OFFLINE_GRACE_DAYS: Final[int] = 7
-MAX_OFFLINE_GRACE_DAYS: Final[int] = 14
-DEFAULT_OFFLINE_GRACE_DAYS: Final[int] = 14
+#: Root bandı YALNIZ DARALDA bilər — migrations/033-dəki `max_value` 14-də
+#: kilidlidir, çünki sütunun öz CHECK-i onsuz da 14-dən böyüyünü qəbul etmir
+#: və iki mənbənin fərqlənməsi "niyə saxlanmadı?" sualını doğurardı.
+MIN_OFFLINE_GRACE_DAYS: Final[int] = int(
+    DEFAULT_LIMITS[SystemLimitKey.LICENSE_MIN_OFFLINE_GRACE_DAYS]
+)
+MAX_OFFLINE_GRACE_DAYS: Final[int] = int(
+    DEFAULT_LIMITS[SystemLimitKey.LICENSE_MAX_OFFLINE_GRACE_DAYS]
+)
+DEFAULT_OFFLINE_GRACE_DAYS: Final[int] = int(
+    DEFAULT_LIMITS[SystemLimitKey.LICENSE_DEFAULT_OFFLINE_GRACE_DAYS]
+)
 
 #: "[1 Ay Uzat]" düyməsinin əlavə etdiyi gün sayı (Developer Paneli).
-EXTENSION_DAYS: Final[int] = 30
+EXTENSION_DAYS: Final[int] = int(DEFAULT_LIMITS[SystemLimitKey.LICENSE_EXTENSION_DAYS])
 
 #: Saatın geri çəkilməsi bu qədər fərqdən sonra "manipulyasiya" sayılır.
 #: NTP düzəlişi, yay/qış saatı və ya adi sinxronizasiya bir neçə saniyə
 #: geri sıçraya bilər — bunu manipulyasiya kimi qeyd etmək yalançı həyəcandır.
-CLOCK_ROLLBACK_TOLERANCE_SECONDS: Final[float] = 300.0
+#:
+#: BU AÇARIN TAVANI SƏRTDİR (migrations/033: 30–900 san). Səbəb: tolerantlıq
+#: müddət bitməsinin yeganə ölçü qoruyucusudur — "6 saat" yazılsaydı, saatı
+#: hər gün 6 saat geri çəkməklə bitmiş lisenziya süründürülə bilərdi, yəni
+#: Root parametri qorumanı FAKTİKİ söndürərdi. 15 dəqiqəlik tavan yalançı
+#: həyəcanı (NTP sıçrayışı saniyələrlə ölçülür) örtməyə kifayətdir.
+CLOCK_ROLLBACK_TOLERANCE_SECONDS: Final[float] = float(
+    DEFAULT_LIMITS[SystemLimitKey.LICENSE_CLOCK_ROLLBACK_TOLERANCE_SECONDS]
+)
 
 #: Müddətin bitməsinə bu qədər gün qalanda istifadəçiyə xatırladılır.
-EXPIRY_WARNING_DAYS: Final[int] = 7
+EXPIRY_WARNING_DAYS: Final[int] = int(DEFAULT_LIMITS[SystemLimitKey.LICENSE_EXPIRY_WARNING_DAYS])
+
+
+@dataclass(frozen=True)
+class LicenseLimits:
+    """Lisenziya qaydalarının BEŞ ROOT parametri, bir dəfə oxunmuş halda.
+
+    ────────────────────────────────────────────────────────────────────────
+    NİYƏ PARAMETR OBYEKTİ, NİYƏ MODUL SABİTİ DEYİL
+    ────────────────────────────────────────────────────────────────────────
+    Yuxarıdakı sabitlər `DEFAULT_LIMITS`-dən qidalanır, yəni ROOT ekranında
+    açar GÖRÜNÜR — lakin `evaluate()`/`payment_warning()` onları BİRBAŞA
+    oxuduğu üçün Root dəyəri dəyişdirsə də heç nə baş vermirdi ("görünür,
+    dəyişdirilir, təsirsiz" qüsuru). İndi funksiyalar dəyəri PARAMETR kimi
+    alır; oxunu çağıran tərəf (infrastruktur klienti) edir, domen isə DB-yə
+    toxunmur (CLAUDE.md §3). Naxış `labor_rules.LaborLimits.defaults()` və
+    `attrition_rules.AttritionWeights.defaults()` ilə eynidir.
+
+    ────────────────────────────────────────────────────────────────────────
+    NİYƏ YARARSIZ DƏYƏR SƏSSİZCƏ DÜZƏLDİLİR
+    ────────────────────────────────────────────────────────────────────────
+    ROOT ekranı bandları ilə qoruyur, lakin ekranı yan keçən skript `0` və ya
+    tərs aralıq (`min > max`) yaza bilər. Belə dəyər qrace hesabını sıfıra
+    endirib bütün quraşdırmaları "lisenziya təsdiqlənməyib" xəbərdarlığına
+    salardı — yəni bir səhv sətir bütün şəbəkəyə banner asardı. Ona görə
+    dəyərlər burada normallaşdırılır (`LaborLimits.__post_init__` fəlsəfəsi).
+    """
+
+    min_offline_grace_days: int
+    max_offline_grace_days: int
+    default_offline_grace_days: int
+    expiry_warning_days: int
+    extension_days: int
+
+    def __post_init__(self) -> None:
+        low = max(1, self.min_offline_grace_days)
+        # Tərs aralıqda tavan dibə çəkilir — `min(max, x)` sonra `max(min, ·)`
+        # ardıcıllığı olmasaydı nəticə min-dən KİÇİK ola bilərdi.
+        high = max(low, self.max_offline_grace_days)
+        object.__setattr__(self, "min_offline_grace_days", low)
+        object.__setattr__(self, "max_offline_grace_days", high)
+        object.__setattr__(
+            self, "default_offline_grace_days", max(low, min(high, self.default_offline_grace_days))
+        )
+        # SIFIR QƏBUL EDİLİR: "xəbərdarlıq istəmirəm" real seçimdir və onun
+        # üçün ayrıca Feature Toggle yaratmaq lazım deyil (`LaborLimits`-də
+        # "SIFIR = QAYDA SUSUR" ilə eyni əsaslandırma). Mənfi isə mənasızdır.
+        object.__setattr__(self, "expiry_warning_days", max(0, self.expiry_warning_days))
+        # Uzatma isə sıfır OLA BİLMƏZ: «[1 Ay Uzat]» düyməsi basılıb heç nə
+        # etməsəydi, ödənişi edən müştəri hələ də bağlı qalar və dərhal zəng
+        # gələrdi (bax `extend_by_month` başlığı).
+        object.__setattr__(self, "extension_days", max(1, self.extension_days))
+
+    @classmethod
+    def defaults(cls) -> LicenseLimits:
+        """`DEFAULT_LIMITS` dəyərləri — YALNIZ fallback.
+
+        HƏQİQİ MƏNBƏ `system_limits`-dir (migrations/033 seed edir); bu metod
+        limit portu olmayan çağırış yollarında (ilk işə düşmə, offline, saf
+        qayda testi) işlədilir.
+        """
+        return cls(
+            min_offline_grace_days=MIN_OFFLINE_GRACE_DAYS,
+            max_offline_grace_days=MAX_OFFLINE_GRACE_DAYS,
+            default_offline_grace_days=DEFAULT_OFFLINE_GRACE_DAYS,
+            expiry_warning_days=EXPIRY_WARNING_DAYS,
+            extension_days=EXTENSION_DAYS,
+        )
 
 
 class LicenseError(KompasOSError):
@@ -278,10 +383,21 @@ class LicenseSnapshot:
             msg = "expires_at tz-aware olmalıdır (UTC)."
             raise ValueError(msg)
 
+    def offline_grace_days_within(self, limits: LicenseLimits) -> int:
+        """ROOT bandına sıxılmış qrace — həqiqi mənbə `system_limits`."""
+        return max(
+            limits.min_offline_grace_days,
+            min(limits.max_offline_grace_days, self.offline_grace_days),
+        )
+
     @property
     def effective_offline_grace_days(self) -> int:
-        """DB CHECK-i (7–14) ilə eyni aralığa sıxılmış qrace."""
-        return max(MIN_OFFLINE_GRACE_DAYS, min(MAX_OFFLINE_GRACE_DAYS, self.offline_grace_days))
+        """FALLBACK yolu: DB CHECK-i (7–14) ilə eyni aralığa sıxılmış qrace.
+
+        Limit portu olmayan çağırışlar üçün qalır; Root bandını nəzərə alan
+        yol `offline_grace_days_within(...)`-dir.
+        """
+        return self.offline_grace_days_within(LicenseLimits.defaults())
 
     def has_expired(self, now: datetime) -> bool:
         """Müddət bitibmi. Müddət yoxdursa HEÇ VAXT bitmir."""
@@ -417,8 +533,13 @@ def anonymous_tenant_ref(tenant_id: TenantId) -> str:
     return hashlib.sha256(f"kompasos-tenant:{tenant_id}".encode()).hexdigest()[:32]
 
 
-def extend_by_month(current_expires_at: datetime | None, *, now: datetime) -> datetime:
-    """ "[1 Ay Uzat]" düyməsinin hesablaması — 30 gün.
+def extend_by_month(
+    current_expires_at: datetime | None,
+    *,
+    now: datetime,
+    limits: LicenseLimits | None = None,
+) -> datetime:
+    """ "[1 Ay Uzat]" düyməsinin hesablaması — defolt 30 gün.
 
     ────────────────────────────────────────────────────────────────────────
     NİYƏ SADƏCƏ `expires_at + 30` DEYİL
@@ -427,9 +548,13 @@ def extend_by_month(current_expires_at: datetime | None, *, now: datetime) -> da
     yığardı: 40 gün gecikmiş tenant-a 30 gün əlavə etmək onu HƏLƏ DƏ bağlı
     saxlayardı və düymə "işləmirmiş" kimi görünərdi — sizə dərhal zəng gələrdi.
     Ona görə başlanğıc nöqtəsi `max(indi, cari müddət)`-dir.
+
+    `limits` `None` olduqda `LICENSE_EXTENSION_DAYS`-in fallback dəyəri
+    işləyir — davranış köçürmədən ƏVVƏLKİ ilə eynidir.
     """
+    window = limits or LicenseLimits.defaults()
     base = current_expires_at if current_expires_at and current_expires_at > now else now
-    return base + timedelta(days=EXTENSION_DAYS)
+    return base + timedelta(days=window.extension_days)
 
 
 # --------------------------------------------------------------------------- #
@@ -446,6 +571,7 @@ def evaluate(
     clock_rollback: bool = False,
     time_drift_seconds: float | None = None,
     dev_mode: bool = False,
+    limits: LicenseLimits | None = None,
 ) -> LicenseState:
     """Keşlənmiş sətirdən + saat vəziyyətindən cari məhdudiyyətləri hesablayır.
 
@@ -464,7 +590,10 @@ def evaluate(
         time_drift_seconds: NTP sürüşməsi hədd aşıbsa dəyəri, əks halda `None`.
         dev_mode: `KOMPASOS_ENV=DEV` — seed tenant (Faza 1) üçün lisenziya
             yoxlaması testləri dayandırmamalıdır.
+        limits: ROOT-un offline qrace bandı. `None` = fallback (`DEFAULT_LIMITS`),
+            yəni köçürmədən ƏVVƏLKİ davranışın eynisi.
     """
+    window = limits or LicenseLimits.defaults()
     restrictions: list[Restriction] = []
     # Saat geri çəkilsə də "görülmüş" an geri qayıtmır (bax modul başlığı).
     effective_now = max(now, clock_high_water) if clock_high_water else now
@@ -480,7 +609,11 @@ def evaluate(
 
     if snapshot is None:
         return _never_checked_in(
-            restrictions, now=now, first_run_at=first_run_at, clock_rollback=clock_rollback
+            restrictions,
+            now=now,
+            first_run_at=first_run_at,
+            clock_rollback=clock_rollback,
+            limits=window,
         )
 
     days_left = snapshot.days_remaining(effective_now)
@@ -495,7 +628,7 @@ def evaluate(
             clock_rollback_detected=clock_rollback,
         )
 
-    grace = timedelta(days=snapshot.effective_offline_grace_days)
+    grace = timedelta(days=snapshot.offline_grace_days_within(window))
     age = snapshot.age_at(now)
     expired_grace = clock_rollback or age < timedelta(0) or age > grace
 
@@ -520,13 +653,17 @@ def _never_checked_in(
     now: datetime,
     first_run_at: datetime | None,
     clock_rollback: bool,
+    limits: LicenseLimits,
 ) -> LicenseState:
     """Heç vaxt uğurlu oxunuş olmayıb — quraşdırma günü və ya sınıq şəbəkə.
 
     Bloklamır (əsas invariant), lakin qrace ilk işə düşmə anından sayılır ki,
     "heç vaxt qoşulmamış" quraşdırma sonsuza qədər səssiz qalmasın.
+
+    Burada `default_offline_grace_days` işlədilir, `min/max` bandı YOX:
+    snapshot olmadığı üçün sıxılacaq dəyər də yoxdur.
     """
-    grace = timedelta(days=DEFAULT_OFFLINE_GRACE_DAYS)
+    grace = timedelta(days=limits.default_offline_grace_days)
     age = (now - first_run_at) if first_run_at is not None else timedelta(0)
     if clock_rollback or age > grace:
         restrictions.append(
@@ -607,18 +744,28 @@ def _inactive_restriction(snapshot: LicenseSnapshot, *, now: datetime) -> Restri
     )
 
 
-def payment_warning(snapshot: LicenseSnapshot | None, *, now: datetime) -> str:
+def payment_warning(
+    snapshot: LicenseSnapshot | None,
+    *,
+    now: datetime,
+    limits: LicenseLimits | None = None,
+) -> str:
     """ "ÖDƏNİŞ TƏLƏB OLUNUR" xəbərdarlığı — bloklamır (bölmə 8).
 
     Müddət bitməzdən ƏVVƏL istifadəçi xəbərdar edilir ki, bağlanma
     "birdən-birə" görünməsin. Müddət artıq bitibsə bu funksiya boş qaytarır —
     o hal artıq `LICENSE_INACTIVE` ekranıdır, banner deyil.
+
+    Neçə gün əvvəldən xəbərdarlıq veriləcəyi (`LICENSE_EXPIRY_WARNING_DAYS`)
+    Root parametridir: mühasibatı bir həftə əvvəldən xəbərdar etmək istəyən
+    şəbəkə ilə ödənişi son gün edən şəbəkə eyni ritmi istəmir.
     """
     if snapshot is None:
         return ""
 
+    window = limits or LicenseLimits.defaults()
     days_left = snapshot.days_remaining(now)
-    if days_left is not None and 0 <= days_left <= EXPIRY_WARNING_DAYS:
+    if days_left is not None and 0 <= days_left <= window.expiry_warning_days:
         assert snapshot.expires_at is not None
         if days_left == 0:
             return "Lisenziyanın müddəti bu gün bitir. Fasiləsiz iş üçün ödənişi tamamlayın."
@@ -677,6 +824,7 @@ __all__ = [
     "CheckInRequest",
     "CrashReport",
     "LicenseError",
+    "LicenseLimits",
     "LicenseNotFoundError",
     "LicenseSnapshot",
     "LicenseState",

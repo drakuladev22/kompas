@@ -56,7 +56,9 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.storage import StorageError
+from src.infrastructure.config.limits import fallback_float
 from src.infrastructure.storage.drive_api import TOKEN_ENDPOINT, DriveApiError
 from src.shared.logger import LogChannel, get_logger
 
@@ -83,7 +85,16 @@ POLL_TIMEOUT_SECONDS: Final[float] = 0.05
 
 #: Razılıq bu müddətdən çox çəkərsə axın ləğv edilir (server bağlanır).
 #: Açıq qalan lokal port müddətsiz dinləməməlidir.
-FLOW_TIMEOUT_SECONDS: Final[float] = 300.0
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`DRIVE_OAUTH_FLOW_TIMEOUT_SECONDS`, seed: migrations/032). 5 dəqiqə
+#: Google hesabına ilk dəfə daxil olan (2FA, hesab seçimi) admin üçün az ola
+#: bilər; müddət uzadıla bilməsə razılıq axını təkrar-təkrar başladılardı.
+#:
+#: AD SAXLANILIB (`FALLBACK_*` prefiksi ƏLAVƏ EDİLMƏYİB): sabiti
+#: `presentation/controllers/drive_connection.py` idxal edir və təqdimat qatı
+#: bu köçürmədə TOXUNULMUR — adı dəyişmək orada idxal xətası verərdi.
+FLOW_TIMEOUT_SECONDS: Final[float] = fallback_float(SystemLimitKey.DRIVE_OAUTH_FLOW_TIMEOUT_SECONDS)
 
 _HTML_OK: Final[str] = (
     "<html><head><meta charset='utf-8'><title>KompasOS</title></head>"

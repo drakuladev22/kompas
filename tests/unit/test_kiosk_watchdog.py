@@ -13,7 +13,7 @@ import pytest
 
 from src.infrastructure.kiosk.watchdog import (
     CLEAN_EXIT_CODE,
-    DEFAULT_RESTART_BACKOFF_SECONDS,
+    FALLBACK_RESTART_BACKOFF_SECONDS,
     KioskWatchdog,
 )
 
@@ -114,7 +114,7 @@ def test_backoff_grows_between_restarts() -> None:
 
     watchdog.run()
 
-    assert sleeper.waits == list(DEFAULT_RESTART_BACKOFF_SECONDS)[: len(sleeper.waits)]
+    assert sleeper.waits == list(FALLBACK_RESTART_BACKOFF_SECONDS)[: len(sleeper.waits)]
     assert sleeper.waits == sorted(sleeper.waits)
 
 
@@ -123,7 +123,7 @@ def test_backoff_repeats_the_last_value_instead_of_growing_forever() -> None:
 
     watchdog.run()
 
-    longest = DEFAULT_RESTART_BACKOFF_SECONDS[-1]
+    longest = FALLBACK_RESTART_BACKOFF_SECONDS[-1]
     assert all(wait <= longest for wait in sleeper.waits)
     assert sleeper.waits[-1] == longest
 

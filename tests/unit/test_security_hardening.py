@@ -44,6 +44,7 @@ from src.infrastructure.storage.image_cache import ImageCache
 from src.infrastructure.storage.upload_queue import (
     EvidenceUploadQueue,
     EvidenceUploadWorker,
+    UploadOwnerType,
     UploadStatus,
 )
 from src.presentation.widgets.safe_text import plain_tooltip
@@ -181,10 +182,18 @@ def _provider(tmp_path: Path, *, max_upload_bytes: int) -> GoogleDriveStoragePro
     )
 
 
-def _enqueue(queue: EvidenceUploadQueue, *, content: bytes, filename: str) -> str:
+def _enqueue(
+    queue: EvidenceUploadQueue,
+    *,
+    content: bytes,
+    filename: str,
+    owner_type: UploadOwnerType = UploadOwnerType.FINE,
+) -> str:
+    """`owner_type` DEFOLTU `FINE`-dır — mövcud çağırışların davranışı dəyişmir."""
     return queue.enqueue(
         tenant_id=TENANT,
-        fine_id=uuid.uuid4(),  # type: ignore[arg-type]
+        owner_type=owner_type,
+        owner_id=str(uuid.uuid4()),
         store_id=STORE,
         filename=filename,
         content=content,
@@ -254,6 +263,75 @@ def test_content_check_does_not_depend_on_pillow() -> None:
         validate_evidence_payload(b"%PDF-1.7 sened", "sekil.png")
 
     validate_evidence_payload(b"\xff\xd8\xff" + b"\x00" * 32, "sekil.jpg")
+
+
+# --------------------------------------------------------------------------- #
+# SEC-018 — icazəli format SAHİB TİPİNƏ görə ayrılır (PDF yalnız sənəddə)
+# --------------------------------------------------------------------------- #
+
+#: Minimal, lakin QANUNİ başlıqlı PDF. Məzmun yoxlaması yalnız imzaya baxır
+#: (bax `google_drive._PDF_MAGIC` şərhi), ona görə tam sənəd qurmaq artıqdır.
+TINY_PDF = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n"
+
+
+def test_employee_document_pdf_is_accepted(queue: EvidenceUploadQueue) -> None:
+    """Əsas istifadə halı: müqavilə PDF-dir və növbəyə DÜŞMƏLİDİR."""
+    entry_id = _enqueue(
+        queue,
+        content=TINY_PDF,
+        filename="müqavilə.pdf",
+        owner_type=UploadOwnerType.EMPLOYEE_DOCUMENT,
+    )
+
+    assert [item.id for item in queue.pending(now=AUGUST)] == [entry_id]
+
+
+def test_pdf_named_file_with_foreign_content_is_rejected(
+    queue: EvidenceUploadQueue, tmp_path: Path
+) -> None:
+    """HÜCUM: `.pdf` adı ilə göndərilən `.exe` — məzmun imzası onu tutur."""
+    with pytest.raises(EvidenceValidationError, match="PDF"):
+        _enqueue(
+            queue,
+            content=FAKE_IMAGE,
+            filename="müqavilə.pdf",
+            owner_type=UploadOwnerType.EMPLOYEE_DOCUMENT,
+        )
+
+    assert list((tmp_path / "spool").iterdir()) == [], "saxta PDF diskə yazıldı"
+    assert queue.pending(now=AUGUST) == []
+
+
+def test_fine_evidence_still_refuses_pdf(queue: EvidenceUploadQueue, tmp_path: Path) -> None:
+    """Cərimə sübutu FOTO-dur: qanuni PDF belə ora düşmür (hücum səthi dar qalır)."""
+    with pytest.raises(EvidenceValidationError, match="format"):
+        _enqueue(queue, content=TINY_PDF, filename="sübut.pdf")
+
+    assert list((tmp_path / "spool").iterdir()) == []
+    assert queue.pending(now=AUGUST) == []
+
+
+def test_pdf_rejection_message_names_the_allowed_formats() -> None:
+    """Rədd səssiz deyil — operator hansı formatın qəbul edildiyini oxuyur."""
+    with pytest.raises(EvidenceValidationError) as error:
+        validate_evidence_payload(TINY_PDF, "sübut.pdf")
+
+    assert ".pdf" not in error.value.user_message, "cərimə mətni PDF vəd etməməlidir"
+
+    with pytest.raises(EvidenceValidationError) as document_error:
+        validate_evidence_payload(
+            TINY_PDF, "müqavilə.docx", owner_type=UploadOwnerType.EMPLOYEE_DOCUMENT.value
+        )
+
+    assert ".pdf" in document_error.value.user_message
+
+
+def test_unknown_owner_type_falls_back_to_the_narrowest_list() -> None:
+    """Fail-closed: siyahıda olmayan sahib tipi PDF-i AÇMIR."""
+    with pytest.raises(EvidenceValidationError, match="format"):
+        validate_evidence_payload(TINY_PDF, "sənəd.pdf", owner_type="TASK_PROOF")
+
+    validate_evidence_payload(TINY_PNG, "şəkil.png", owner_type="TASK_PROOF")
 
 
 def test_permanently_invalid_item_leaves_the_retry_loop(

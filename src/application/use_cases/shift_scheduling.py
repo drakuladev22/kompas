@@ -37,6 +37,31 @@ GÖRÜNMƏ SCOPİNQİ (bölmə 3, "CANLI GÖRÜNMƏ SCOPİNQİ")
 Redaktə hüququ `can_manage_shifts`-dədir; baxış hüququ isə rola görə
 scoping-lə verilir. İkisini bir flag-ə bağlamaq olmazdı: işçinin öz növbəsini
 görməsi üçün ona planlama səlahiyyəti vermək lazım gələrdi.
+
+──────────────────────────────────────────────────────────────────────────────
+#14 ƏMƏK QANUNU XƏBƏRDARLIĞI — NİYƏ YENİ KANAL YARADILMADI (Faza 6 əlavəsi)
+──────────────────────────────────────────────────────────────────────────────
+`ScheduleConflict` + `ShiftChangeResult.conflicts` ARTIQ mövcud xəbərdarlıq
+kanalıdır və o, dəqiq bu məqsədlə qurulub: "BLOKLAYICI DEYİL — admin
+dəyişikliyi yenə edə bilər" (bax `ScheduleConflict` docstring-i). #14-ün
+tələbi eynidir, ona görə əmək qanunu pozuntuları YENİ mexanizmlə yox, HƏMİN
+siyahıya ƏLAVƏ `kind` dəyərləri kimi gəlir (`LaborRuleKind.*`).
+
+Bunun üç praktik nəticəsi var:
+
+    1. Ekran tərəfi DƏYİŞMİR — `has_conflicts` və `conflicts` onsuz da
+       göstərilir; yeni xəbərdarlıq növü avtomatik görünür.
+    2. Audit izi DƏYİŞMİR — `after_state["conflicts"]` siyahısı artıq
+       yazılırdı, indi əmək xəbərdarlıqları da oraya düşür, yəni "admin
+       xəbərdarlıq edildi, buna baxmayaraq təyin etdi" faktı sübutludur.
+    3. Faza 7 (#17 sənəd bloklaması) EYNİ kanalı təkrar istifadə edə bilər —
+       kanal `kind` sətri ilə genişlənir, struktur dəyişikliyi tələb etmir.
+
+Qayda MƏNTİQİ burada YAZILMIR: o, `domain/labor_rules.py`-dadır (saf, I/O-suz)
+və məlumat yığımı `application/use_cases/labor_compliance.py`-da. Bu fayla
+əlavə olunan yeganə şey `LaborComplianceAdvisor`-un İSTƏYƏ BAĞLI asılılığı və
+onun nəticəsini mövcud siyahıya çevirən bir köməkçidir — mövcud təyinetmə
+məntiqinin heç bir sətri dəyişmir.
 """
 
 from __future__ import annotations
@@ -45,13 +70,14 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import TYPE_CHECKING
 
+from src.application.root_limits import fallback_int, limit_int
 from src.domain.entities.shift import (
     ShiftAssignment,
     ShiftSource,
     ShiftSwapRequest,
     SwapStatus,
 )
-from src.domain.policies import FeatureModule
+from src.domain.policies import FeatureModule, SystemLimitKey
 from src.domain.value_objects.identifiers import (
     new_shift_assignment_id,
     new_shift_swap_request_id,
@@ -60,6 +86,9 @@ from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
+    from src.application.use_cases.document_compliance import DocumentComplianceAdvisor
+    from src.application.use_cases.labor_compliance import LaborComplianceAdvisor
+    from src.domain.document_rules import DocumentRuleFinding
     from src.domain.entities.employee import Employee
     from src.domain.interfaces.ports import (
         AuditTrail,
@@ -69,7 +98,9 @@ if TYPE_CHECKING:
         Notifier,
         ShiftRepository,
         ShiftSwapRepository,
+        SystemLimits,
     )
+    from src.domain.labor_rules import LaborRuleFinding
     from src.domain.value_objects.identifiers import (
         EmployeeId,
         ShiftSwapRequestId,
@@ -84,7 +115,13 @@ MANAGE_SHIFTS_FLAG = "can_manage_shifts"
 APPROVE_SWAP_FLAG = "can_approve_shift_swap"
 
 #: Sorğu neçə gün irəli üçün göndərilə bilər — keçmişə sorğu mənasızdır.
-MAX_SWAP_LEAD_DAYS = 90
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`SystemLimitKey.SHIFT_SWAP_MAX_LEAD_DAYS`, seed: migrations/034). Pəncərənin
+#: uzunluğu planlaşdırma üfüqü ilə bağlı BİZNES qərarıdır: rüblük qrafik quran
+#: müəssisə 90 günü qısa, aylıq planlayan isə uzun sayır. Sinifdəki ədəd yalnız
+#: ROOT sətri oxunmadıqda (port bağlanmayıb, baza əlçatmaz) işə düşür.
+MAX_SWAP_LEAD_DAYS = fallback_int(SystemLimitKey.SHIFT_SWAP_MAX_LEAD_DAYS)
 
 
 class ShiftPermissionError(KompasOSError):
@@ -141,12 +178,27 @@ class ShiftPlanningUseCase:
         audit: AuditTrail,
         clock: Clock,
         notifier: Notifier,
+        labor: LaborComplianceAdvisor | None = None,
+        documents: DocumentComplianceAdvisor | None = None,
     ) -> None:
+        """
+        Args:
+            labor: #14 əmək qanunu məsləhətçisi. İSTƏYƏ BAĞLIDIR və defolt
+                `None`-dur — mövcud çağırış yerləri (Faza 5 testləri daxil)
+                imzada heç nə dəyişmədən işləməyə davam edir. `None` olduqda
+                xəbərdarlıq sadəcə üretilmir; təyinat AXINI DƏYİŞMİR, çünki
+                bu qaydalar onsuz da bloklamır (fail-open — susan qayda
+                admin-in işini dayandırmamalıdır).
+            documents: #17 sənəd bloklama məsləhətçisi (Faza 7). EYNİ İSTƏYƏ
+                BAĞLI naxış — `labor`-la eyni səbəb.
+        """
         self._shifts = shifts
         self._leave_requests = leave_requests
         self._audit = audit
         self._clock = clock
         self._notifier = notifier
+        self._labor = labor
+        self._documents = documents
 
     # ------------------------------- baxış ----------------------------------- #
 
@@ -342,6 +394,26 @@ class ShiftPlanningUseCase:
             shift_date=shift_date,
             is_off_day=is_off_day,
         )
+        # #14: əmək qanunu xəbərdarlıqları MÖVCUD siyahıya qoşulur (bax modul
+        # başlığı). Auditdən ƏVVƏL əlavə olunur ki, `after_state["conflicts"]`
+        # admin-in nə ilə xəbərdar edildiyini tam göstərsin.
+        conflicts.extend(
+            self._labor_conflicts(
+                tenant_id=tenant_id,
+                employee_id=employee_id,
+                shift_date=shift_date,
+                is_off_day=is_off_day,
+                work_mode_id=work_mode_id,
+            )
+        )
+        # #17: bloklayıcı sənəd bitibsə xəbərdarlıq — EYNİ kanal, EYNİ yer
+        # (auditdən ƏVVƏL, `_labor_conflicts` ilə eyni əsaslandırma). BLOKLAMIR
+        # (bax `document_compliance.py` başlığı) — son qərar admindədir.
+        conflicts.extend(
+            self._document_conflicts(
+                tenant_id=tenant_id, employee_id=employee_id, shift_date=shift_date
+            )
+        )
 
         self._audit.record(
             tenant_id=tenant_id,
@@ -399,6 +471,79 @@ class ShiftPlanningUseCase:
             )
         return conflicts
 
+    def _labor_conflicts(
+        self,
+        *,
+        tenant_id: TenantId,
+        employee_id: EmployeeId,
+        shift_date: date,
+        is_off_day: bool,
+        work_mode_id: WorkModeId | None,
+    ) -> list[ScheduleConflict]:
+        """#14 — əmək qanunu xəbərdarlıqlarını `ScheduleConflict`-ə çevirir.
+
+        BİLDİRİŞ GÖNDƏRİLMİR (icazə konfliktindən fərqli olaraq): bu
+        xəbərdarlıq məhz həmin an ekran qarşısında dayanan admin üçündür və
+        onu bir də e-poçtla təkrarlamaq bildiriş kanalını hər növbə
+        redaktəsində doldurardı. İcazə konflikti isə ÜÇÜNCÜ tərəfi (icazəni
+        təsdiqləyəcək operatoru) maraqlandırır — ona görə orada bildiriş var,
+        burada yox.
+
+        MƏSLƏHƏTÇİ QOŞULMAYIBSA BOŞ SİYAHI: bax konstruktor şərhi (fail-open).
+        """
+        if self._labor is None:
+            return []
+
+        findings: list[LaborRuleFinding] = self._labor.review(
+            tenant_id=tenant_id,
+            employee_id=employee_id,
+            shift_date=shift_date,
+            is_off_day=is_off_day,
+            work_mode_id=work_mode_id,
+        )
+        return [
+            ScheduleConflict(
+                employee_id=employee_id,
+                shift_date=finding.shift_date,
+                kind=finding.kind.value,
+                message_az=finding.message_az,
+            )
+            for finding in findings
+        ]
+
+    def _document_conflicts(
+        self, *, tenant_id: TenantId, employee_id: EmployeeId, shift_date: date
+    ) -> list[ScheduleConflict]:
+        """#17 — bloklayıcı sənəd xəbərdarlıqlarını `ScheduleConflict`-ə çevirir.
+
+        `shift_date` YALNIZ YARLIQLAMA üçündür (bu konfliktin HANSI təyinatla
+        birlikdə göstərildiyi) — qaydanın ÖZÜ isə `document_compliance.py`
+        başlığında izah edildiyi kimi HAZIRKI günə (`Clock.now().date()`)
+        istinad edir, `shift_date`-ə deyil.
+
+        BİLDİRİŞ GÖNDƏRİLMİR: `_labor_conflicts`-lə EYNİ səbəb — bu, ekran
+        qarşısında dayanan admin üçündür, üçüncü tərəf üçün deyil (sənədin
+        bitmə xəbərdarlığı ARTIQ `notify_expiring_documents` gecəlik işi ilə
+        gedir, bax `employee_documents.py`).
+
+        MƏSLƏHƏTÇİ QOŞULMAYIBSA BOŞ SİYAHI: bax konstruktor şərhi (fail-open).
+        """
+        if self._documents is None:
+            return []
+
+        findings: list[DocumentRuleFinding] = self._documents.review(
+            tenant_id=tenant_id, employee_id=employee_id
+        )
+        return [
+            ScheduleConflict(
+                employee_id=employee_id,
+                shift_date=shift_date,
+                kind=finding.kind.value,
+                message_az=finding.message_az,
+            )
+            for finding in findings
+        ]
+
     def _require_manage(self, actor: Employee) -> None:
         if not actor.has_permission(MANAGE_SHIFTS_FLAG, now=self._clock.now()):
             _audit_log.warning(
@@ -423,13 +568,25 @@ class ShiftSwapUseCase:
         audit: AuditTrail,
         clock: Clock,
         notifier: Notifier,
+        limits: SystemLimits | None = None,
     ) -> None:
+        """
+        Args:
+            limits: ROOT parametrlərinə (`SHIFT_SWAP_MAX_LEAD_DAYS`) açılan
+                pəncərə. İSTƏYƏ BAĞLIDIR və defolt `None`-dur — `labor`/
+                `documents` məsləhətçiləri ilə eyni naxış (bax
+                `ShiftPlanningUseCase.__init__`): mövcud qurulma nöqtələri
+                imzada heç nə dəyişmədən işləməyə davam edir və `None` halında
+                davranış köçürmədən ƏVVƏLKİ ilə HƏRFƏN eynidir (fallback
+                `DEFAULT_LIMITS`-dən gəlir).
+        """
         self._swaps = swaps
         self._planning = planning
         self._toggles = toggles
         self._audit = audit
         self._clock = clock
         self._notifier = notifier
+        self._limits = limits
 
     # ------------------------------- göndər ---------------------------------- #
 
@@ -456,10 +613,14 @@ class ShiftSwapUseCase:
                 user_message="Keçmiş tarixə sorğu göndərmək olmaz.",
                 context={"target_date": target_date.isoformat()},
             )
-        if (target_date - now.date()).days > MAX_SWAP_LEAD_DAYS:
+        # ÇAĞIRIŞ ANINDA oxunur: Root pəncərəni dəyişən kimi növbəti sorğu yeni
+        # hədlə yoxlanmalıdır — proses yenidən başladılması tələb etmək
+        # parametri faktiki olaraq buraxılışa bağlayardı.
+        max_lead_days = limit_int(self._limits, tenant_id, SystemLimitKey.SHIFT_SWAP_MAX_LEAD_DAYS)
+        if (target_date - now.date()).days > max_lead_days:
             raise ShiftRequestError(
-                f"Sorğu ən çox {MAX_SWAP_LEAD_DAYS} gün irəli üçün göndərilə bilər",
-                user_message=f"Ən çox {MAX_SWAP_LEAD_DAYS} gün irəli üçün sorğu göndərin.",
+                f"Sorğu ən çox {max_lead_days} gün irəli üçün göndərilə bilər",
+                user_message=f"Ən çox {max_lead_days} gün irəli üçün sorğu göndərin.",
                 context={"target_date": target_date.isoformat()},
             )
         if self._swaps.find_open_for_date(employee.id, target_date) is not None:

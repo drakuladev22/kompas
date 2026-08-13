@@ -2,7 +2,7 @@
 
 from src.infrastructure.offline.buffer import (
     AUDIT_CRITICAL_TABLES,
-    BACKOFF_SCHEDULE_SECONDS,
+    FALLBACK_BACKOFF_SCHEDULE_SECONDS,
     BufferedWrite,
     OfflineBuffer,
     Operation,
@@ -17,7 +17,7 @@ from src.infrastructure.offline.sync import (
 
 __all__ = [
     "AUDIT_CRITICAL_TABLES",
-    "BACKOFF_SCHEDULE_SECONDS",
+    "FALLBACK_BACKOFF_SCHEDULE_SECONDS",
     "SYNCABLE_TABLES",
     "BufferedWrite",
     "OfflineBuffer",

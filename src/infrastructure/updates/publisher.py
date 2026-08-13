@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.updates import (
     DEFAULT_PACKAGE_FILENAME,
     MAX_PACKAGE_BYTES,
@@ -54,6 +55,7 @@ from src.domain.value_objects.updates import (
     Version,
     storage_path_for,
 )
+from src.infrastructure.config.limits import InfrastructureLimits, fallback_float
 from src.infrastructure.updates.catalog import (
     DEFAULT_BUCKET,
     SUPABASE_URL_ENV,
@@ -76,7 +78,13 @@ _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
 #: işləyərdi: tenant siyahısı açılar, yayım isə anlaşılmaz xəta verərdi.
 SERVICE_ROLE_ENV: Final[str] = "KOMPASOS_SUPABASE_SERVICE_ROLE_KEY"
 
-UPLOAD_TIMEOUT_SECONDS: Final[float] = 600.0
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`UPDATE_UPLOAD_TIMEOUT_SECONDS`, seed: migrations/032). Quraşdırıcı fayl
+#: 100 MB-dan böyük ola bilər və hazırlayıcının kanalı simmetrik deyil —
+#: sabit 10 dəqiqə yükləməni sonuna yaxın kəsə bilər.
+FALLBACK_UPLOAD_TIMEOUT_SECONDS: Final[float] = fallback_float(
+    SystemLimitKey.UPDATE_UPLOAD_TIMEOUT_SECONDS
+)
 #: Quraşdırıcının MIME tipi — Supabase Storage `Content-Type`-ı saxlayır.
 PACKAGE_CONTENT_TYPE: Final[str] = "application/octet-stream"
 
@@ -149,6 +157,7 @@ class ReleasePublisher:
         bucket: str = "",
         client: httpx.Client | None = None,
         verifier: AuthenticodeVerifier | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
         self._database = database
         self._base_url = (base_url or os.environ.get(SUPABASE_URL_ENV, "")).rstrip("/")
@@ -156,6 +165,17 @@ class ReleasePublisher:
         self._bucket = bucket or os.environ.get(UPDATE_BUCKET_ENV, "") or DEFAULT_BUCKET
         self._http = client
         self._verifier = verifier
+        self._limits = limits or InfrastructureLimits()
+
+    def _max_package_bytes(self) -> int:
+        """Yayımlana bilən paketin yuxarı həddi — mənbə `system_limits`.
+
+        `SupabaseReleaseCatalog._max_package_bytes()` ilə EYNİ açarı oxuyur:
+        yayımçı və yükləyici eyni həddi görməlidir, əks halda yayımlanan
+        paket müştəridə yüklənə bilməzdi.
+        """
+        limit = self._limits.int_of(SystemLimitKey.UPDATE_MAX_PACKAGE_BYTES)
+        return limit if limit > 0 else MAX_PACKAGE_BYTES
 
     # ------------------------------- yoxlama ---------------------------------- #
 
@@ -177,12 +197,13 @@ class ReleasePublisher:
             raise PublishError(
                 "Fayl boşdur", user_message="Seçilmiş fayl boşdur.", context={"path": str(package)}
             )
-        if size > MAX_PACKAGE_BYTES:
+        max_bytes = self._max_package_bytes()
+        if size > max_bytes:
             raise PublishError(
-                f"Fayl limitdən böyükdür: {size} > {MAX_PACKAGE_BYTES}",
+                f"Fayl limitdən böyükdür: {size} > {max_bytes}",
                 user_message=(
                     f"Fayl çox böyükdür ({round(size / (1024 * 1024))} MB). "
-                    f"Limit: {MAX_PACKAGE_BYTES // (1024 * 1024)} MB."
+                    f"Limit: {max_bytes // (1024 * 1024)} MB."
                 ),
                 context={"size_bytes": size},
             )
@@ -337,7 +358,11 @@ class ReleasePublisher:
             # Kataloqdakı sətir onsuz da unikaldır — həqiqi qoruma odur.
             "x-upsert": "true",
         }
-        client = self._http or httpx.Client(timeout=UPLOAD_TIMEOUT_SECONDS)
+        # Taymaut YÜKLƏMƏ ANINDA oxunur: klient hər yayımda yenidən qurulur,
+        # yəni Root-un dəyişikliyi növbəti yayımda dərhal qüvvədədir.
+        client = self._http or httpx.Client(
+            timeout=self._limits.float_of(SystemLimitKey.UPDATE_UPLOAD_TIMEOUT_SECONDS)
+        )
         try:
             with package.open("rb") as handle:
                 response = client.post(url, headers=headers, content=handle)

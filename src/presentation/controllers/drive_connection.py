@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QTimer
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.storage import StorageError
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
@@ -167,16 +168,12 @@ class DriveConnectionController:
         self._timer = timer
 
     def _poll(self, screen: DriveConnectionScreen) -> None:
-        from src.infrastructure.storage.oauth_flow import (  # noqa: PLC0415
-            FLOW_TIMEOUT_SECONDS,
-        )
-
         if self._flow is None:
             self._stop_timer()
             return
 
         self._elapsed_ms += POLL_INTERVAL_MS
-        if self._elapsed_ms > FLOW_TIMEOUT_SECONDS * 1000:
+        if self._elapsed_ms > self._flow_timeout_seconds() * 1000:
             self._finish(screen)
             screen.show_error(
                 title="Razılıq vaxtı bitdi",
@@ -331,6 +328,33 @@ class DriveConnectionController:
             _error_log.exception("DRIVE_AUDIT_WRITE_FAILED", extra={"account": account})
             return False
         return True
+
+    def _flow_timeout_seconds(self) -> float:
+        """Razılıq axınının ömrü — CANLI ROOT dəyəri, fallback modul sabiti.
+
+        ƏVVƏL SABİT OXUNURDU: `oauth_flow.FLOW_TIMEOUT_SECONDS` idxal edilirdi
+        və o, `DEFAULT_LIMITS`-dən doğulan FALLBACK-dır — yəni Root
+        `DRIVE_OAUTH_FLOW_TIMEOUT_SECONDS`-i uzatsa da, razılıq pəncərəsi
+        köhnə müddətdə bağlanırdı (Google hesabına 2FA ilə girən admin üçün
+        məhz bu müddət azlıq edir). Sabitin ADI DƏYİŞMİR — o, hələ də
+        fallback mənbəyidir (bax `oauth_flow` başlığı).
+
+        Oxu HƏR tıqqıltıda deyil, hər dəfə çağırılanda edilir; axın onsuz da
+        200 ms-lik taymerlədir və dəyər dəyişsə növbəti tıqqıltı onu görür.
+        """
+        from src.infrastructure.storage.oauth_flow import (  # noqa: PLC0415
+            FLOW_TIMEOUT_SECONDS,
+        )
+
+        try:
+            return float(
+                self._context.infrastructure_limits().float_of(
+                    SystemLimitKey.DRIVE_OAUTH_FLOW_TIMEOUT_SECONDS
+                )
+            )
+        except Exception:
+            _error_log.warning("DRIVE_OAUTH_TIMEOUT_FALLBACK")
+            return float(FLOW_TIMEOUT_SECONDS)
 
     def _repository(self) -> Any:
         from src.infrastructure.storage.connections import (  # noqa: PLC0415

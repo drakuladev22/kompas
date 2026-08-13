@@ -28,7 +28,13 @@ from typing import Any, Final
 
 import httpx
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.storage import QuotaStatus, StorageError
+from src.infrastructure.config.limits import (
+    InfrastructureLimits,
+    fallback_float,
+    fallback_int,
+)
 from src.shared.logger import LogChannel, get_logger
 
 _log = get_logger(__name__)
@@ -40,13 +46,25 @@ DRIVE_API: Final[str] = "https://www.googleapis.com/drive/v3"
 DRIVE_UPLOAD_API: Final[str] = "https://www.googleapis.com/upload/drive/v3"
 FOLDER_MIME: Final[str] = "application/vnd.google-apps.folder"
 
+#: ÜÇÜ DƏ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`DRIVE_TOKEN_REFRESH_MARGIN_SECONDS`, `DRIVE_REQUEST_TIMEOUT_SECONDS`,
+#: `DRIVE_MAX_RETRIES`; seed: migrations/032). Mağazanın internet kanalı
+#: (ADSL, mobil modem, korporativ proxy) bu üç dəyərin doğru seçimini təyin
+#: edir — sabit ədədlər zəif kanalda hər sübut şəklinin yüklənməsini
+#: uğursuz edərdi.
+#:
 #: Access token bitməmişdən bu qədər əvvəl yenilənir.
-TOKEN_REFRESH_MARGIN_SECONDS: Final[int] = 60
-DEFAULT_TIMEOUT_SECONDS: Final[float] = 30.0
+FALLBACK_TOKEN_REFRESH_MARGIN_SECONDS: Final[int] = fallback_int(
+    SystemLimitKey.DRIVE_TOKEN_REFRESH_MARGIN_SECONDS
+)
+FALLBACK_TIMEOUT_SECONDS: Final[float] = fallback_float(
+    SystemLimitKey.DRIVE_REQUEST_TIMEOUT_SECONDS
+)
 #: Drive API istifadəçi başına ~100 sorğu/100 saniyə verir; 429/5xx-də
-#: eksponensial gözləmə ilə təkrar cəhd olunur.
+#: eksponensial gözləmə ilə təkrar cəhd olunur. STATUS SİYAHISI KÖÇÜRÜLMÜR:
+#: bunlar HTTP standart kodlarıdır, siyasət deyil.
 RETRY_STATUS: Final[frozenset[int]] = frozenset({429, 500, 502, 503, 504})
-MAX_RETRIES: Final[int] = 3
+FALLBACK_MAX_RETRIES: Final[int] = fallback_int(SystemLimitKey.DRIVE_MAX_RETRIES)
 HTTP_UNAUTHORIZED: Final[int] = 401
 HTTP_NOT_FOUND: Final[int] = 404
 
@@ -83,11 +101,28 @@ class DriveApiClient:
         oauth: OAuthClient,
         refresh_token: str,
         transport: httpx.Client | None = None,
-        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        timeout: float | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
+        """
+        Args:
+            timeout: AÇIQ üstünlük — verilərsə ROOT dəyəri OXUNMUR.
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback-lar.
+
+        HTTP taymautu BURADA həll olunur, çünki `httpx.Client` onu sonradan
+        qəbul etmir. Klient Drive bağlantısı ilə birlikdə yenidən qurulur
+        (`composition.drive_providers` dəyər dəyişəndə fabriki atır), yəni
+        ROOT dəyişikliyi növbəti fabrikdə qüvvəyə minir. Token marjası və
+        təkrar cəhd sayı isə HƏR SORĞUDA oxunur.
+        """
         self._oauth = oauth
         self._refresh_token = refresh_token
-        self._http = transport or httpx.Client(timeout=timeout)
+        self._limits = limits or InfrastructureLimits()
+        self._http = transport or httpx.Client(
+            timeout=timeout
+            if timeout is not None
+            else self._limits.float_of(SystemLimitKey.DRIVE_REQUEST_TIMEOUT_SECONDS)
+        )
         self._owns_transport = transport is None
         self._lock = threading.Lock()
         self._access_token: str | None = None
@@ -127,7 +162,7 @@ class DriveApiClient:
             self._expires_at = (
                 time.monotonic()
                 + int(payload.get("expires_in", 3600))
-                - TOKEN_REFRESH_MARGIN_SECONDS
+                - self._limits.int_of(SystemLimitKey.DRIVE_TOKEN_REFRESH_MARGIN_SECONDS)
             )
             return self._access_token
 
@@ -137,7 +172,8 @@ class DriveApiClient:
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         """Token yeniləmə + 429/5xx üçün təkrar cəhd."""
         last_error = ""
-        for attempt in range(MAX_RETRIES):
+        max_retries = self._limits.int_of(SystemLimitKey.DRIVE_MAX_RETRIES)
+        for attempt in range(max_retries):
             headers = {**self._headers(), **kwargs.pop("headers", {})}
             response = self._http.request(method, url, headers=headers, **kwargs)
 

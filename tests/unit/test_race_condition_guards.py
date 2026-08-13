@@ -31,9 +31,10 @@ import pytest
 from src.domain.value_objects.identifiers import StoreId
 from src.domain.value_objects.storage import StorageProviderKind, StorageReference
 from src.infrastructure.storage.upload_queue import (
-    CLAIM_STALE_AFTER_SECONDS,
+    FALLBACK_CLAIM_STALE_AFTER_SECONDS,
     EvidenceUploadQueue,
     EvidenceUploadWorker,
+    UploadOwnerType,
     UploadStatus,
 )
 
@@ -106,7 +107,8 @@ def queue(tmp_path: Path) -> Iterator[EvidenceUploadQueue]:
 def _enqueue(queue: EvidenceUploadQueue, *, now: datetime = AUGUST) -> str:
     return queue.enqueue(
         tenant_id=str(uuid.uuid4()),
-        fine_id=uuid.uuid4(),  # type: ignore[arg-type]
+        owner_type=UploadOwnerType.FINE,
+        owner_id=str(uuid.uuid4()),
         store_id=STORE,
         filename="sübut.png",
         content=_png(),
@@ -120,10 +122,20 @@ class _CountingProvider:
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.owner_types: list[str] = []
 
     def upload(
-        self, _content: bytes, filename: str, _store_id: uuid.UUID, _taken_at: datetime
+        self,
+        _content: bytes,
+        filename: str,
+        _store_id: uuid.UUID,
+        _taken_at: datetime,
+        *,
+        owner_type: str = "FINE",
     ) -> StorageReference:
+        # `owner_type` real provider-in imzasını təkrarlayır (SEC-018): işçi
+        # onu HƏMİŞƏ açar söz kimi ötürür, sahtə isə yalnız qəbul edir.
+        self.owner_types.append(owner_type)
         self.calls.append(filename)
         return StorageReference(
             provider=StorageProviderKind.GOOGLE_DRIVE,
@@ -199,10 +211,10 @@ def test_stuck_claim_is_recovered_after_the_stale_window(queue: EvidenceUploadQu
     entry_id = _enqueue(queue)
     queue.claim_pending(now=AUGUST)  # "çökmüş" işçi — heç vaxt tamamlamır
 
-    just_before = AUGUST + timedelta(seconds=CLAIM_STALE_AFTER_SECONDS - 1)
+    just_before = AUGUST + timedelta(seconds=FALLBACK_CLAIM_STALE_AFTER_SECONDS - 1)
     assert queue.claim_pending(now=just_before) == [], "köhnəlmə vaxtından əvvəl geri alındı"
 
-    at_stale = AUGUST + timedelta(seconds=CLAIM_STALE_AFTER_SECONDS)
+    at_stale = AUGUST + timedelta(seconds=FALLBACK_CLAIM_STALE_AFTER_SECONDS)
     recovered = queue.claim_pending(now=at_stale)
 
     assert [item.id for item in recovered] == [entry_id]
@@ -279,6 +291,69 @@ def test_legacy_queue_file_gets_the_processing_status(tmp_path: Path) -> None:
         entry = queue.get("köhnə-1")
         assert entry is not None
         assert entry.status is UploadStatus.PROCESSING
+    finally:
+        queue.close()
+
+
+def test_legacy_queue_file_without_owner_columns_is_backfilled(tmp_path: Path) -> None:
+    """#17: `fine_id` → `owner_type`/`owner_id` köçürməsi məlumat İTİRMİR.
+
+    Bu, `_ensure_owner_columns()` üçün MƏCBURİ ssenaridir (Faza 7 tapşırığı):
+    istifadəçinin diskində artıq gözləyən (hələ Drive-a yüklənməmiş) sübut
+    şəkilləri OLA BİLƏR — sxem köçürülərkən onların sətri İTMƏMƏLİDİR və
+    köhnə `fine_id`-dən `owner_type='FINE'` DÜZGÜN çıxarılmalıdır.
+    """
+    import sqlite3
+
+    db_path = tmp_path / "legacy_no_owner.db"
+    fine_id = str(uuid.uuid4())
+    legacy = sqlite3.connect(db_path)
+    # Bu, #17-dən DƏRHAL ƏVVƏLKİ sxemdir — 5 statuslu `CHECK`, lakin
+    # `owner_type`/`owner_id` sütunları HƏLƏ YOXDUR.
+    legacy.executescript(
+        """
+        CREATE TABLE evidence_uploads (
+            id TEXT PRIMARY KEY, seq INTEGER NOT NULL, tenant_id TEXT NOT NULL,
+            fine_id TEXT NOT NULL, store_id TEXT NOT NULL, filename TEXT NOT NULL,
+            spool_path TEXT NOT NULL, taken_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING'
+                CHECK (status IN ('PENDING', 'PROCESSING', 'UPLOADED',
+                                  'FAILED', 'REJECTED')),
+            attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+            queued_at TEXT NOT NULL, next_attempt_at TEXT NOT NULL,
+            uploaded_at TEXT, drive_file_id TEXT, connection_id TEXT
+        );
+        CREATE INDEX idx_evidence_ready
+            ON evidence_uploads (status, next_attempt_at, seq);
+        """
+    )
+    spool_path = tmp_path / "spool" / "köhnə-2.bin"
+    legacy.execute(
+        "INSERT INTO evidence_uploads (id, seq, tenant_id, fine_id, store_id, filename,"
+        " spool_path, taken_at, queued_at, next_attempt_at)"
+        " VALUES ('köhnə-2', 1, ?, ?, ?, 'a.png', ?, ?, ?, ?)",
+        (
+            str(uuid.uuid4()),
+            fine_id,
+            str(STORE),
+            str(spool_path),
+            AUGUST.isoformat(),
+            AUGUST.isoformat(),
+            AUGUST.isoformat(),
+        ),
+    )
+    legacy.commit()
+    legacy.close()
+
+    queue = EvidenceUploadQueue(db_path, spool_dir=tmp_path / "spool")
+    try:
+        entry = queue.get("köhnə-2")
+        assert entry is not None, "köçürmə sətri itirdi"
+        assert entry.owner_type is UploadOwnerType.FINE
+        assert entry.owner_id == fine_id
+        # Oxu yolları (`pending`/`claim_pending`) da köçürülmüş sətri normal
+        # görməlidir — backfill YALNIZ sütunları doldurur, statusu POZMUR.
+        assert [item.id for item in queue.pending(now=AUGUST)] == ["köhnə-2"]
     finally:
         queue.close()
 

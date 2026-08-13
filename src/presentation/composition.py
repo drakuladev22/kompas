@@ -22,6 +22,30 @@ Ona görə naxış belədir::
 struktur olaraq təmin edir.
 
 ──────────────────────────────────────────────────────────────────────────────
+İNFRASTRUKTUR LİMİTLƏRİ BURADAN QOŞULUR (Faza 10.2, ikinci dalğa)
+──────────────────────────────────────────────────────────────────────────────
+`src/infrastructure/` altındakı 20 sinif `limits: InfrastructureLimits | None`
+parametri qəbul edir, lakin onu QURAN yalnız BU fayldır. Qurulmasaydı hər sinif
+`InfrastructureLimits()` (portsuz) ilə işləyərdi — yəni 51 parametr ROOT
+ekranında GÖRÜNƏR, Root onları dəyişər və HEÇ NƏ baş verməzdi. Faza 10-un
+bağlamaq istədiyi qüsur məhz budur.
+
+İKİ QURAŞDIRMA YOLU VAR və fərq qəsdəndir:
+
+  1. `ApplicationContext.infrastructure_limits()` — UZUN ÖMÜRLÜ obyektlər üçün
+     (sübut növbəsi, Drive fabriki, offline bufer, DB hovuzu). Onlar sessiyadan
+     uzun yaşayır, ona görə arxasında `_RootLimitReader` durur: hər oxu üçün
+     QISA, yalnız-oxu bir iş vahidi açılır.
+  2. `_build_session` daxilindəki `session_limits` — SESSİYA ÖMÜRLÜ obyektlər
+     üçün (`PostgresNotifier`, `NightlyBackupService`, `OneCConnectorFactory`).
+     Onlar onsuz da açıq tranzaksiyanın içindədir və `repo("limits")` EYNİ
+     bağlantını işlədir: hər ekran əməliyyatında ikinci bağlantı açmaq hovuzdan
+     lazımsız tutum tələb edərdi.
+
+KEŞ YOXDUR (bax `InfrastructureLimits` başlığı): Root sürüşdürücünü tərpədən
+kimi növbəti çağırış yeni dəyəri görməlidir.
+
+──────────────────────────────────────────────────────────────────────────────
 LİSENZİYA QAPISI
 ──────────────────────────────────────────────────────────────────────────────
 Bölmə 8: `LICENSE_INACTIVE` vəziyyətində "tətbiq tam bağlanır (heç bir modul,
@@ -37,6 +61,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
+from src.infrastructure.config.limits import InfrastructureLimits
 from src.infrastructure.timekeeping.clock import SystemClock
 from src.shared.data_paths import resolve_data_file
 from src.shared.exceptions import KompasOSError
@@ -45,8 +70,11 @@ from src.shared.logger import LogChannel, get_logger
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from src.application.use_cases.announcements import AnnouncementUseCase
+    from src.application.use_cases.attrition_risk import AttritionRiskUseCase
     from src.application.use_cases.audit_query import AuditQueryUseCase
     from src.application.use_cases.backup_access import BackupAccessUseCase
+    from src.application.use_cases.behavior_baseline import BehaviorBaselineUseCase
     from src.application.use_cases.catalog_management import (
         FineTypeCatalogUseCase,
         LeaveTypeCatalogUseCase,
@@ -55,8 +83,10 @@ if TYPE_CHECKING:
     from src.application.use_cases.daily_attendance import DailyAttendanceSheetUseCase
     from src.application.use_cases.dashboard_layout import DashboardLayoutUseCase
     from src.application.use_cases.db_switch import DatabaseSwitchUseCase
+    from src.application.use_cases.employee_documents import EmployeeDocumentUseCase
     from src.application.use_cases.employee_profile import EmployeeProfileAccessUseCase
     from src.application.use_cases.erp_connection import ErpConnectionWizardUseCase
+    from src.application.use_cases.exception_engine import ExceptionEngineUseCase
     from src.application.use_cases.fine_management import (
         FineAppealUseCase,
         ManualFineUseCase,
@@ -64,10 +94,15 @@ if TYPE_CHECKING:
     from src.application.use_cases.first_run_setup import FirstRunSetupUseCase
     from src.application.use_cases.leave_verification import LeaveVerificationUseCase
     from src.application.use_cases.morning_check_in import MorningCheckInUseCase
+    from src.application.use_cases.multi_store_benchmark import MultiStoreBenchmarkUseCase
+    from src.application.use_cases.open_shift_market import OpenShiftMarketUseCase
+    from src.application.use_cases.overtime_tracking import OvertimeTrackingUseCase
+    from src.application.use_cases.performance_reviews import PerformanceReviewUseCase
     from src.application.use_cases.permission_guards import (
         PermissionHierarchyGuardUseCase,
     )
     from src.application.use_cases.plugin_management import PluginManagementUseCase
+    from src.application.use_cases.pos_threshold import POSThresholdUseCase
     from src.application.use_cases.position_management import PositionManagementUseCase
     from src.application.use_cases.reporting import MonthlyReportUseCase
     from src.application.use_cases.root_control import RootControlUseCase
@@ -77,6 +112,7 @@ if TYPE_CHECKING:
         ShiftPlanningUseCase,
         ShiftSwapUseCase,
     )
+    from src.application.use_cases.staffing_pattern import StaffingPatternUseCase
     from src.application.use_cases.support_chat import SupportChatUseCase
     from src.application.use_cases.sync_conflicts import SyncConflictUseCase
     from src.application.use_cases.task_workflow import TaskWorkflowUseCase
@@ -100,6 +136,42 @@ class _NullNtp:
         return None
 
 
+class _RootLimitReader:
+    """`system_limits`-in SESSİYADAN-KƏNAR oxu körpüsü (`LimitReader`).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AYRICA KÖRPÜ — REPO-NU BİRBAŞA SAXLAMAQ OLMAZDI
+    ──────────────────────────────────────────────────────────────────────────
+    `uow.repository("limits")` BAĞLANTIYA bağlıdır və tranzaksiya bitəndə ölür.
+    Sübut növbəsi, Drive fabriki və offline bufer isə tətbiq işlədikcə yaşayır
+    və limiti ÇAĞIRIŞ ANINDA oxuyur — həmin an artıq başqa bir sessiyadır.
+    Ona görə burada repo DEYİL, `Database` saxlanılır və hər oxu üçün qısa,
+    yalnız-oxu bir iş vahidi açılır (`commit` YOXDUR — çıxışda rollback olur,
+    oxu üçün doğru davranış).
+
+    ──────────────────────────────────────────────────────────────────────────
+    İKİNCİ BAĞLANTI KİLİD YARADIRMI — XEYR
+    ──────────────────────────────────────────────────────────────────────────
+    Oxu açıq bir tranzaksiyanın İÇİNDƏN də çağırıla bilər (məs. bildiriş
+    göndərilərkən). Sadə `SELECT` PostgreSQL-də təsdiqlənməmiş `UPDATE`-i
+    GÖZLƏMİR (MVCC) — köhnə versiyanı oxuyur, yəni öz-özünə kilidlənmə
+    mümkün deyil. Ən pis hal: dəyər həmin an bir tranzaksiya köhnədir.
+
+    Xəta ATILMIR: uğursuzluq `InfrastructureLimits._raw` tərəfindən tutulur və
+    fallback işə düşür (bax orada — "cavabsız qaldıqda fallback").
+    """
+
+    __slots__ = ("_database",)
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    def get_str(self, tenant_id: TenantId, key: str, default: str) -> str:
+        with self._database.unit_of_work(tenant_id) as uow:
+            value: str = uow.repository("limits").get_str(tenant_id, key, default)
+            return value
+
+
 class _LazyBufferDrain:
     """`OfflineBufferDrain` — SQLite buferini YALNIZ ilk sorğuda açır.
 
@@ -120,8 +192,11 @@ class _LazyBufferDrain:
     sinxronlaşmamış məlumat üzərində başladardı və həmin yazılar itərdi.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, limits: InfrastructureLimits) -> None:
         self._adapter: Any = None
+        # Bufer `OFFLINE_RETRY_BACKOFF_SECONDS`/`OFFLINE_SQLITE_TIMEOUT_SECONDS`
+        # oxuyur; pəncərə İNDİ ötürülür ki, Root dəyəri faktiki işləsin.
+        self._limits = limits
 
     def _ensure(self) -> Any:
         if self._adapter is None:
@@ -146,7 +221,9 @@ class _LazyBufferDrain:
             # işlədilməyə davam edir (göndərilməmiş yazı itməsin) — səbəb və
             # niyə köçürmə edilmədiyi `shared/data_paths.py` başlığındadır.
             path = resolve_data_file("KOMPASOS_SQLITE_PATH", "offline_buffer.db")
-            self._adapter = BufferDrainAdapter(OfflineBuffer(path, encryption=EncryptionService()))
+            self._adapter = BufferDrainAdapter(
+                OfflineBuffer(path, encryption=EncryptionService(), limits=self._limits)
+            )
         return self._adapter
 
     def pending_count(self, tenant_id: TenantId) -> int:
@@ -185,6 +262,12 @@ class Session:
     morning_check_in: MorningCheckInUseCase
     shift_planning: ShiftPlanningUseCase
     shift_swaps: ShiftSwapUseCase
+    # --- #16 Açıq Növbə Bazarı (kompasos11.md Faza 6) ----------------------- #
+    #
+    # `shift_swaps` ilə YAN-YANA dayanır, lakin ONDAN ASILI DEYİL: bu, ayrı
+    # axındır (admin elan edir → ilk basan işçi tutur). Ortaq olan yeganə şey
+    # `shift_planning`-dir — təqvimin yeganə yazma nöqtəsi.
+    open_shifts: OpenShiftMarketUseCase
     daily_attendance: DailyAttendanceSheetUseCase
     manual_fines: ManualFineUseCase
     fine_appeals: FineAppealUseCase
@@ -216,6 +299,86 @@ class Session:
     sales_review: SalesReviewQueueUseCase
     employee_profile: EmployeeProfileAccessUseCase
     erp_connections: ErpConnectionWizardUseCase
+
+    # --- Vahid İstisna Motoru (#9, Faza 3) ---------------------------------- #
+    #
+    # Motor İNDİ #8-in `BehaviorAnomalyRule`-u ilə qeydiyyatlı qurulur (Faza 5,
+    # bax `_build_session`-dəki `register_rule(...)` çağırışı) — motorun ÖZÜ
+    # (`exception_engine.py`) DƏYİŞMƏDƏN qaldı, rule-registry məhz bunun üçün
+    # seçilmişdi.
+    exceptions: ExceptionEngineUseCase
+
+    # --- #7 POS Səlahiyyət Siyasəti (sənədləşdirmə, kompasos11.md Faza 4) --- #
+    #
+    # YALNIZ statik siyasət qeydi: 1C-yə bağlantı yoxdur, Vahid İstisna
+    # Motoruna heç nə göndərmir (struktur qərar A). `UsersScreen`-in "POS
+    # Səlahiyyəti" bəndi bunu çağırır (bax `controllers/pos_threshold.py`).
+    pos_threshold: POSThresholdUseCase
+
+    # --- #17 İşçi Sənədləri (kompasos11.md Faza 7) --------------------------- #
+    #
+    # `UsersScreen`-in "Sənədlər" bəndi bunu çağırır (bax
+    # `controllers/employee_documents.py`). `shift_planning`-in `documents`
+    # asılılığı (`DocumentComplianceAdvisor`) da EYNİ repo-nu işlədir — bax
+    # aşağıdakı `planning = ShiftPlanningUseCase(...)` qurulması.
+    employee_documents: EmployeeDocumentUseCase
+
+    # --- #19 Elan (Broadcast) (kompasos11.md Faza 8) ------------------------- #
+    #
+    # `screens/announcements.py`-in YAZI (yayımla/geri çək) VƏ OXU (admin
+    # siyahısı) yolu; İşçi Ana Ekranının kart oxuşu da EYNİ obyektdəndir
+    # (`controllers/announcements.py::EmployeeAnnouncementController`).
+    announcements: AnnouncementUseCase
+
+    # --- #20 Performans Qiymətləndirməsi (kompasos11.md Faza 8) -------------- #
+    #
+    # `screens/performance_review.py`-in YAZI yolu; işçinin ÖZ tarixçəsi
+    # (`group_g.ProfileScreen`) da EYNİ obyektin `list_own()` metodundan gəlir.
+    performance_reviews: PerformanceReviewUseCase
+
+    # --- #8 İşçi Davranış Baz Xətti (kompasos11.md Faza 5) ------------------ #
+    #
+    # EKRANI YOXDUR — `recalculate_all()` planlaşdırılmış işdir
+    # (`docs/scheduler_setup.md`, `fine_management.expire_stale` ilə eyni
+    # naxış). Sessiyaya qoşulması onu ROOT panelindəki gələcək "indi hesabla"
+    # düyməsi VƏ ya xarici planlayıcı skripti üçün əlçatan edir; qayda özü
+    # `exceptions` sahəsinə artıq qoşulub (yuxarı bax).
+    behavior_baselines: BehaviorBaselineUseCase
+
+    # --- #15 Norma üstü iş saatları (kompasos11.md Faza 6) ------------------ #
+    #
+    # ƏSAS YOLU `daily_attendance`-dır: tabel təsdiqləndikdə aşım avtomatik
+    # yazılır (bax `daily_attendance.py` başlığı). Sahə isə OXU yolunu açır —
+    # `overtime_for_period()` HR hesabatı üçün `can_view_employee_reports`
+    # tələb edir. İkisi ayrı olmasaydı, hesabata baxmaq istəyən HR təsadüfən
+    # yenidən-hesablamanı işə salardı.
+    overtime: OvertimeTrackingUseCase
+
+    # --- #13 Tarixi-nümunə kadr təklifi (kompasos11.md Faza 6) -------------- #
+    #
+    # İKİ YOLU VAR: `recalculate_for_store()` planlaşdırılmış işdir
+    # (`behavior_baselines` ilə eyni naxış), `suggestions_for()` isə Növbə
+    # Matrisi ekranının məsləhət kartını doldurur. Təklif HEÇ NƏ bloklamır və
+    # HEÇ NƏ təyin etmir — `shift_planning`-ə çağırışı YOXDUR və olmamalıdır
+    # (kompasos11.md #13: "qeyri-məcburi göstərici").
+    staffing_pattern: StaffingPatternUseCase
+
+    # --- #21 İşdən Çıxma Riski Balı (kompasos11.md Faza 9) ------------------ #
+    #
+    # İKİ YOLU VAR: `recalculate_all()` planlaşdırılmış gecəlik iş
+    # (`behavior_baselines` ilə EYNİ naxış), `list_for_tenant()` isə
+    # `screens/attrition_risk.py`-in `can_view_attrition_risk` OXU yolu
+    # (bax `controllers/attrition_risk.py`). Bildiriş zənciri (Store Manager
+    # → HR_Admin) `recalculate_all()`-ın DAXİLİNDƏDİR — ekranın YOXDUR.
+    attrition_risk: AttritionRiskUseCase
+
+    # --- #24 Çox-Mağaza Benchmark Dashboard (kompasos11.md Faza 9A) --------- #
+    #
+    # YALNIZ OXU YOLU — bu widget-lər `controllers/screen_data.py`-dan
+    # bağlanır, ÖZ kontrolleri YOXDUR (bax use case modul başlığı). Dörd
+    # metod (`ranking`/`store_vs_network`/`trend`/`outliers`) TƏK repo
+    # (`multi_store_benchmark`) üzərində işləyir.
+    multi_store_benchmark: MultiStoreBenchmarkUseCase
 
     def commit(self) -> None:
         self.uow.commit()
@@ -294,10 +457,26 @@ class ApplicationContext:
         # jurnalı + sxem icrası). Hər sessiyada yeni bağlantı açmaq dəstək
         # tutumunu tükəndirərdi — halbuki bufer YALNIZ baza keçidində lazımdır.
         self._offline_drain: Any = None
+        # İnfrastruktur pəncərəsi BİR DƏFƏ qurulur və paylaşılır: obyekt
+        # vəziyyət saxlamır (nə keş, nə bağlantı), yalnız `Database` + tenant
+        # daşıyır — hər istehlakçı üçün yenisini qurmaq eyni nəticəni verər,
+        # lakin "hansı nüsxə doğrudur" sualını yaradardı.
+        self._infrastructure_limits = InfrastructureLimits(
+            limits=_RootLimitReader(database), tenant_id=tenant_id
+        )
 
     @property
     def database(self) -> Database:
         return self._database
+
+    def infrastructure_limits(self) -> InfrastructureLimits:
+        """`src/infrastructure/` siniflərinin ROOT pəncərəsi (bax modul başlığı).
+
+        UZUN ÖMÜRLÜ istehlakçılar üçündür. Sessiyanın içində qurulan obyektlər
+        `_build_session`-dakı `session_limits`-i alır — orada açıq bağlantı
+        onsuz da var və ikinci bağlantı açmaq lazımsızdır.
+        """
+        return self._infrastructure_limits
 
     @property
     def tenant_id(self) -> TenantId:
@@ -470,7 +649,14 @@ class ApplicationContext:
             path = resolve_data_file("KOMPASOS_EVIDENCE_QUEUE_PATH", "evidence_uploads.db")
             # Növbə faylı diskə YAZMAZDAN ƏVVƏL ölçünü yoxlayır, hədd isə
             # Root-dan idarə olunur — provider ilə eyni mənbə (bölmə 3).
-            self._evidence_queue = EvidenceUploadQueue(path, max_upload_bytes=self._upload_limit())
+            # `limits` növbənin İKİNCİ ROOT parametrini açır
+            # (`UPLOAD_CLAIM_STALE_AFTER_SECONDS`): "claim" edilmiş element
+            # nə vaxt yenidən götürülə bilər.
+            self._evidence_queue = EvidenceUploadQueue(
+                path,
+                max_upload_bytes=self._upload_limit(),
+                limits=self._infrastructure_limits,
+            )
         return self._evidence_queue
 
     def _upload_limit(self) -> int:
@@ -520,13 +706,18 @@ class ApplicationContext:
         from src.infrastructure.storage.drive_api import OAuthClient  # noqa: PLC0415
         from src.infrastructure.storage.image_cache import ImageCache  # noqa: PLC0415
 
+        # `limits` fabrikdən provider-ə və HTTP klientinə ÖTÜRÜLÜR (bax
+        # `DriveProviderFactory.for_connection`): JPEG keyfiyyəti, Drive
+        # taymautu, token marjası və təkrar cəhd sayı Root-dan gəlir. Keş də
+        # ayrıca alır — TTL/disk tavanı onun öz parametrləridir.
         self._drive_factory = DriveProviderFactory(
             repository=DriveConnectionRepository(self._database, self._tenant_id),
             encryption=EncryptionService(),
             oauth=OAuthClient(client_id=client_id, client_secret=client_secret),
-            cache=ImageCache(),
+            cache=ImageCache(limits=self._infrastructure_limits),
             store_names=self._store_names(),
             max_upload_bytes=max_upload_bytes,
+            limits=self._infrastructure_limits,
         )
         self._drive_limit = max_upload_bytes
         return self._drive_factory
@@ -575,8 +766,26 @@ class ApplicationContext:
             _error_log.exception("EVIDENCE_UPLOAD_RUN_FAILED")
             return 0
 
-    def _attach_evidence(self, fine_id: str, reference: Any) -> None:
-        """Yükləmə bitdikdən sonra `fines` sətrini yeniləyir."""
+    def _attach_evidence(self, owner_type: str, owner_id: str, reference: Any) -> None:
+        """Yükləmə bitdikdən sonra sahib sətri yeniləyir — #17 ÜMUMİLƏŞDİRİLMİŞ növbə.
+
+        `EvidenceUploadWorker` artıq İKİ sahib növünü daşıyır (bax
+        `upload_queue.py` başlığı: `fine_id` → `owner_type`/`owner_id`). Geri-
+        çağırış `owner_type`-a görə sahibin CƏDVƏLİNİ seçir — hər iki qol AKTOR
+        YOXDUR (fon işçisindən gəlir), bax `_attach_fine_evidence`/
+        `_attach_employee_document_evidence` başlıqları.
+        """
+        from src.infrastructure.storage.upload_queue import (  # noqa: PLC0415
+            UploadOwnerType,
+        )
+
+        if owner_type == UploadOwnerType.EMPLOYEE_DOCUMENT.value:
+            self._attach_employee_document_evidence(owner_id, reference)
+            return
+        self._attach_fine_evidence(owner_id, reference)
+
+    def _attach_fine_evidence(self, fine_id: str, reference: Any) -> None:
+        """`fines` sətrini yeniləyir — köçürmədən ƏVVƏLKİ `_attach_evidence`-in ÖZÜ."""
         import uuid  # noqa: PLC0415
 
         from src.domain.value_objects.identifiers import FineId  # noqa: PLC0415
@@ -586,6 +795,33 @@ class ApplicationContext:
                 FineId(uuid.UUID(fine_id)),
                 file_id=reference.file_id,
                 connection_id=reference.connection_id,
+            )
+            session.commit()
+
+    def _attach_employee_document_evidence(self, document_id: str, reference: Any) -> None:
+        """`employee_documents.file_ref`-i yeniləyir (#17, Faza 7).
+
+        `str(reference)` (`StorageReference.__str__` → `cache_key`) YAZILIR:
+        sənəd cədvəlində `fines`-dəki kimi AYRICA `drive_file_id`/
+        `connection_id` sütunları YOXDUR — tək `file_ref TEXT` sahəsi var, ona
+        görə üç dəyəri (provider, bağlantı, fayl ID-si) BİR mətndə saxlamaq
+        yeni miqrasiya tələb etmədən kifayət edir.
+
+        Səlahiyyət/domen qaydası TƏKRARLANMIR —
+        `EmployeeDocumentUseCase.attach_uploaded_file` bunu artıq edir (bax
+        onun başlığı: aktor yoxdur, domen qaydası isə entity-də qalır).
+        """
+        import uuid  # noqa: PLC0415
+
+        from src.domain.value_objects.identifiers import (  # noqa: PLC0415
+            EmployeeDocumentId,
+        )
+
+        with self.session() as session:
+            session.employee_documents.attach_uploaded_file(
+                tenant_id=session.tenant_id,
+                document_id=EmployeeDocumentId(uuid.UUID(document_id)),
+                file_ref=str(reference),
             )
             session.commit()
 
@@ -629,7 +865,10 @@ class ApplicationContext:
     def offline_drain(self) -> Any:
         """`OfflineBufferDrain` — bufer ilk SORĞUDA açılır (bax konstruktor)."""
         if self._offline_drain is None:
-            self._offline_drain = _LazyBufferDrain()
+            # AÇAR SÖZLƏ ötürülür (mövqe ilə YOX): "limits qəbul edən hər sinif
+            # `limits=` almalıdır" statik yoxlaması mövqeli arqumenti görmür və
+            # bu sətri yalançı-boşluq kimi bildirərdi.
+            self._offline_drain = _LazyBufferDrain(limits=self._infrastructure_limits)
         return self._offline_drain
 
     def migrator(self) -> Any:
@@ -673,11 +912,34 @@ class ApplicationContext:
         with self._database.unit_of_work(self._tenant_id, user_id=user_id) as uow:
             yield self._build_session(uow)
 
-    def _build_session(self, uow: PostgresUnitOfWork) -> Session:
-        """Use case qrafını cari `UnitOfWork`-un repo-ları ilə qurur."""
+    def _build_session(self, uow: PostgresUnitOfWork) -> Session:  # noqa: PLR0915
+        """Use case qrafını cari `UnitOfWork`-un repo-ları ilə qurur.
+
+        `PLR0915` (çox ifadə) BURADA SUSDURULUB — səbəb `pyproject.toml`-dakı
+        ekran qurucuları istisnası ilə eynidir: bu, mürəkkəb MƏNTİQ deyil,
+        BUDAQSIZ quraşdırma ardıcıllığıdır — hər use case üçün bir yerli
+        idxal və bir konstruktor çağırışı. Faza 6 ona üç yeni use case əlavə
+        etdi və hədd (50) keçildi.
+
+        Onu `_build_session_part_1/2()`-yə bölmək oxunaqlığı ARTIRMAZDI:
+        `Session` dataclass-ının sahələri bir yerdə qurulmalıdır, əks halda
+        "bu use case hansı repo-nu alır?" sualının cavabı iki metod arasında
+        parçalanardı. Əsl məntiq (lisenziya qapısı, tenant konteksti) ayrıca
+        kiçik metodlardadır və bu istisnadan KƏNARDADIR.
+        """
+        from src.application.use_cases.announcements import (  # noqa: PLC0415
+            AnnouncementUseCase,
+        )
+        from src.application.use_cases.attrition_risk import (  # noqa: PLC0415
+            AttritionRiskUseCase,
+        )
         from src.application.use_cases.audit_query import AuditQueryUseCase  # noqa: PLC0415
         from src.application.use_cases.backup_access import (  # noqa: PLC0415
             BackupAccessUseCase,
+        )
+        from src.application.use_cases.behavior_baseline import (  # noqa: PLC0415
+            BehaviorAnomalyRule,
+            BehaviorBaselineUseCase,
         )
         from src.application.use_cases.catalog_management import (  # noqa: PLC0415
             FineTypeCatalogUseCase,
@@ -693,14 +955,23 @@ class ApplicationContext:
         from src.application.use_cases.db_switch import (  # noqa: PLC0415
             DatabaseSwitchUseCase,
         )
+        from src.application.use_cases.document_compliance import (  # noqa: PLC0415
+            DocumentComplianceAdvisor,
+        )
         from src.application.use_cases.dual_control_guard import (  # noqa: PLC0415
             DualControlDeadlockGuardUseCase,
+        )
+        from src.application.use_cases.employee_documents import (  # noqa: PLC0415
+            EmployeeDocumentUseCase,
         )
         from src.application.use_cases.employee_profile import (  # noqa: PLC0415
             EmployeeProfileAccessUseCase,
         )
         from src.application.use_cases.erp_connection import (  # noqa: PLC0415
             ErpConnectionWizardUseCase,
+        )
+        from src.application.use_cases.exception_engine import (  # noqa: PLC0415
+            ExceptionEngineUseCase,
         )
         from src.application.use_cases.fine_management import (  # noqa: PLC0415
             FineAppealUseCase,
@@ -709,17 +980,35 @@ class ApplicationContext:
         from src.application.use_cases.first_run_setup import (  # noqa: PLC0415
             FirstRunSetupUseCase,
         )
+        from src.application.use_cases.labor_compliance import (  # noqa: PLC0415
+            LaborComplianceAdvisor,
+        )
         from src.application.use_cases.leave_verification import (  # noqa: PLC0415
             LeaveVerificationUseCase,
         )
         from src.application.use_cases.morning_check_in import (  # noqa: PLC0415
             MorningCheckInUseCase,
         )
+        from src.application.use_cases.multi_store_benchmark import (  # noqa: PLC0415
+            MultiStoreBenchmarkUseCase,
+        )
+        from src.application.use_cases.open_shift_market import (  # noqa: PLC0415
+            OpenShiftMarketUseCase,
+        )
+        from src.application.use_cases.overtime_tracking import (  # noqa: PLC0415
+            OvertimeTrackingUseCase,
+        )
+        from src.application.use_cases.performance_reviews import (  # noqa: PLC0415
+            PerformanceReviewUseCase,
+        )
         from src.application.use_cases.permission_guards import (  # noqa: PLC0415
             PermissionHierarchyGuardUseCase,
         )
         from src.application.use_cases.plugin_management import (  # noqa: PLC0415
             PluginManagementUseCase,
+        )
+        from src.application.use_cases.pos_threshold import (  # noqa: PLC0415
+            POSThresholdUseCase,
         )
         from src.application.use_cases.position_management import (  # noqa: PLC0415
             PositionManagementUseCase,
@@ -736,6 +1025,9 @@ class ApplicationContext:
             ShiftPlanningUseCase,
             ShiftSwapUseCase,
         )
+        from src.application.use_cases.staffing_pattern import (  # noqa: PLC0415
+            StaffingPatternUseCase,
+        )
         from src.application.use_cases.support_chat import SupportChatUseCase  # noqa: PLC0415
         from src.application.use_cases.sync_conflicts import (  # noqa: PLC0415
             SyncConflictUseCase,
@@ -746,6 +1038,7 @@ class ApplicationContext:
         from src.application.use_cases.user_management import (  # noqa: PLC0415
             UserManagementUseCase,
         )
+        from src.domain.exception_rules import ExceptionRuleRegistry  # noqa: PLC0415
         from src.infrastructure.backup.service import NightlyBackupService  # noqa: PLC0415
         from src.infrastructure.erp.one_c_connector import (  # noqa: PLC0415
             OneCConnectorFactory,
@@ -769,7 +1062,13 @@ class ApplicationContext:
         clock = self._clock
         ntp = self._ntp
         audit = uow.audit
-        notifier = PostgresNotifier(self._database)
+        # SESSİYA ÖMÜRLÜ ROOT pəncərəsi: aşağıdakı üç infrastruktur obyekti
+        # (bildirişçi, ehtiyat nüsxə xidməti, 1C konnektor fabriki) YALNIZ bu
+        # tranzaksiya ərzində yaşayır, ona görə AÇIQ bağlantının repo-sundan
+        # oxuyur — `_RootLimitReader` hər oxu üçün ikinci bağlantı açardı və
+        # bu, hər ekran əməliyyatında təkrarlanardı (bax modul başlığı).
+        session_limits = InfrastructureLimits(limits=repo("limits"), tenant_id=self._tenant_id)
+        notifier = PostgresNotifier(self._database, limits=session_limits)
 
         # 1C REPO-LARI `uow.repository`-DƏ DEYİL — bu, qəsdəndir: onlar
         # `Database` alır və öz iş vahidini açır (bax `ErpServerRepository`),
@@ -784,6 +1083,21 @@ class ApplicationContext:
             audit=audit,
             clock=clock,
             notifier=notifier,
+            # #14 — əmək qanunu məsləhətçisi. EYNİ `shifts` repo-su ötürülür:
+            # xəbərdarlıq təyinatın YAZILDIĞI andakı planı görməlidir, ikinci
+            # bağlantı isə hələ commit olunmamış sətri görməzdi.
+            labor=LaborComplianceAdvisor(
+                shifts=repo("shifts"),
+                work_modes=repo("work_modes"),
+                limits=repo("limits"),
+            ),
+            # #17 — sənəd bloklama məsləhətçisi. EYNİ bağlantıdakı repo:
+            # hələ commit olunmamış sənəd dəyişikliyi (məs. eyni tranzaksiyada
+            # `is_blocking` söndürülübsə) də nəzərə alınmalıdır.
+            documents=DocumentComplianceAdvisor(
+                documents=repo("employee_documents"),
+                clock=clock,
+            ),
         )
 
         # XAL USE CASE-i YEREL DƏYİŞƏNDİR, çünki İKİ yerdə lazımdır: həm
@@ -799,6 +1113,46 @@ class ApplicationContext:
             clock=clock,
             notifier=notifier,
             toggles=repo("toggles"),
+            # AÇIQ BAĞLANTININ repo-su ötürülür (ikinci bağlantı YOX): xal
+            # kursu (`SALES_POINTS_CURRENCY_PER_POINT`) mükafat yazısı ilə EYNİ
+            # tranzaksiyada oxunmalıdır — Root kursu həmin an dəyişsəydi, ikinci
+            # bağlantıdan oxunan dəyər yazılan sətirlə uyğunsuz olardı.
+            limits=repo("limits"),
+        )
+
+        # VAHİD İSTİSNA MOTORU YEREL DƏYİŞƏNDİR, çünki qurulduqdan SONRA
+        # #8-in qaydası ona `register_rule(...)` ilə qoşulur — motorun ÖZÜ
+        # (`exception_engine.py`) buna görə DƏYİŞMİR, yalnız BU fayl (Faza 5-in
+        # tək bağlantı nöqtəsi) yeni bir sətir alır (bax `exception_rules.py`
+        # başlığı: reyestr məhz bu genişlənməni DDL-siz etmək üçün seçilib).
+        exception_engine = ExceptionEngineUseCase(
+            exceptions=repo("exceptions"),
+            sources=repo("exception_sources"),
+            registry=ExceptionRuleRegistry(),
+            limits=repo("limits"),
+            audit=audit,
+            clock=clock,
+            notifier=notifier,
+        )
+        exception_engine.register_rule(
+            BehaviorAnomalyRule(
+                baselines=repo("behavior_baselines"),
+                checkins=repo("checkin_history"),
+            )
+        )
+
+        # #15 AŞIM İZLƏYİCİSİ YEREL DƏYİŞƏNDİR, çünki İKİ yerdə lazımdır: həm
+        # `Session.overtime` (HR-ın oxu yolu), həm də tabel təsdiqinin yan
+        # təsiri (`daily_attendance`). İki nüsxə qursaydıq, eyni günün aşımı
+        # iki fərqli obyektdən keçərdi və Root limitləri iki dəfə oxunardı —
+        # nəticə eyni olsa da, "hansı nüsxə doğrudur" sualı sonradan çaşdırır
+        # (`sales_points` ilə eyni əsaslandırma).
+        overtime_tracking = OvertimeTrackingUseCase(
+            overtime_log=repo("overtime_log"),
+            worked_hours=repo("worked_hours"),
+            limits=repo("limits"),
+            notifier=notifier,
+            clock=clock,
         )
 
         return Session(
@@ -838,6 +1192,25 @@ class ApplicationContext:
                 audit=audit,
                 clock=clock,
                 notifier=notifier,
+                # `SHIFT_SWAP_MAX_LEAD_DAYS` — dəyişmə sorğusunun neçə gün
+                # əvvəldən verilə biləcəyi. Port ötürülmədən açar ROOT ekranında
+                # görünür, lakin modul fallback-ı işləməyə davam edərdi.
+                limits=repo("limits"),
+            ),
+            open_shifts=OpenShiftMarketUseCase(
+                postings=repo("open_shifts"),
+                # EYNİ `planning` obyekti: elan tutulanda təqvim məhz Shift
+                # Matrix-in yazma funksiyası ilə yenilənir (bölmə 3 "məntiq
+                # təkrarlanmır"), ikinci bir yazma yolu YARANMIR.
+                planning=planning,
+                # Uyğunluq yoxlaması üçün YALNIZ oxu: işçinin həmin gün artıq
+                # iş növbəsi varmı.
+                shifts=repo("shifts"),
+                limits=repo("limits"),
+                toggles=repo("toggles"),
+                audit=audit,
+                clock=clock,
+                notifier=notifier,
             ),
             daily_attendance=DailyAttendanceSheetUseCase(
                 sheets=repo("sheets"),
@@ -845,6 +1218,9 @@ class ApplicationContext:
                 audit=audit,
                 clock=clock,
                 notifier=notifier,
+                # #15 — təsdiqdən sonra norma üstü saatlar jurnala yazılır.
+                # Tabelin öz axını (ön-doldurma → müqayisə → təsdiq) DƏYİŞMİR.
+                overtime=overtime_tracking,
             ),
             manual_fines=ManualFineUseCase(
                 fines=uow.fines,
@@ -876,6 +1252,10 @@ class ApplicationContext:
                 reader=repo("audit_reader"),
                 audit=audit,
                 clock=clock,
+                # Səhifə ölçüsü (`AUDIT_LOG_DEFAULT/MAX_PAGE_SIZE`) Root-dandır:
+                # audit cədvəli ən sürətli böyüyən cədvəldir və hansı sayın
+                # şəbəkəyə/GUI-yə uyğun olduğu quraşdırmadan asılıdır.
+                limits=repo("limits"),
             ),
             users=UserManagementUseCase(
                 employees=uow.employees,
@@ -901,11 +1281,15 @@ class ApplicationContext:
                 tickets=repo("support"),
                 toggles=repo("toggles"),
                 clock=clock,
+                # `SUPPORT_THREAD_PAGE_SIZE` — mesaj lentinin uzunluğu.
+                limits=repo("limits"),
             ),
             sync_conflicts=SyncConflictUseCase(
                 repository=repo("sync_conflicts"),
                 audit=audit,
                 clock=clock,
+                # `SYNC_CONFLICT_PAGE_SIZE` — konflikt növbəsinin səhifəsi.
+                limits=repo("limits"),
             ),
             setup=FirstRunSetupUseCase(
                 employees=uow.employees,
@@ -914,6 +1298,12 @@ class ApplicationContext:
                 credentials=uow.employees,
                 audit=audit,
                 clock=clock,
+                # `SETUP_RECOMMENDED_ADMIN_COUNT` — sihirbazın "neçə admin
+                # tövsiyə olunur" xəbərdarlığı. Sihirbaz ƏN ERKƏN axındır,
+                # lakin BURADA bağlantı artıq var (sessiya açılıb), ona görə
+                # port ötürülür; bağlantısız yol (`limits=None`) use case-in
+                # öz defoltu kimi qalır — bax `first_run_setup.py` başlığı.
+                limits=repo("limits"),
             ),
             root_control=RootControlUseCase(
                 limits=repo("limits"),
@@ -948,9 +1338,17 @@ class ApplicationContext:
                 # `NightlyBackupService` gecə planlayıcısının da işlətdiyi
                 # SİNİFdir — `BackupAccessUseCase` yalnız onun üzərinə
                 # `can_manage_backups` qapısını qoyur (bax use case başlığı).
-                operations=NightlyBackupService(self._database),
+                # `limits`: saxlama müddəti və `pg_dump` taymautu Root-dan.
+                operations=NightlyBackupService(self._database, limits=session_limits),
                 audit=audit,
                 clock=clock,
+                # İKİ AYRI PƏNCƏRƏ, QƏSDƏN: `operations` xidməti `Database`
+                # alır və öz iş vahidini açır, ona görə ona `session_limits`
+                # (sessiya ömürlü örtük) gedir; use case-in ÖZÜ isə domen
+                # portunu (`SystemLimits`) gözləyir və AÇIQ bağlantının
+                # repo-sundan oxuyur — `BACKUP_HISTORY_PAGE_SIZE` məhz burada
+                # işlənir. Birini digərinin yerinə vermək tip səhvi olardı.
+                limits=repo("limits"),
             ),
             plugins=PluginManagementUseCase(
                 registry=repo("plugins"),
@@ -979,15 +1377,108 @@ class ApplicationContext:
                 points=sales_points,
                 audit=audit,
                 clock=clock,
+                # `SALES_REVIEW_QUEUE_PAGE_SIZE` — şübhəli satış növbəsinin
+                # səhifəsi. `repository` öz iş vahidini açsa da, limit oxusu
+                # AÇIQ bağlantıdan gedir: səhifə ölçüsü ekranın parametridir,
+                # növbənin deyil.
+                limits=repo("limits"),
             ),
             # Profil ekranı YALNIZ `Clock` alır: o, məlumat OXUMUR, verilmiş
             # profilə kimin baxa biləcəyini həll edir (bax use case başlığı).
             employee_profile=EmployeeProfileAccessUseCase(clock=clock),
             erp_connections=ErpConnectionWizardUseCase(
                 servers=erp_servers,
-                connectors=OneCConnectorFactory(erp_servers.credentials_for),
+                # `limits`: 1C sorğusunun taymautu və təkrar cəhd sayı Root-dan
+                # gəlir — fabrik onu qurduğu HƏR `OneCConnector`-a ötürür.
+                connectors=OneCConnectorFactory(erp_servers.credentials_for, limits=session_limits),
                 audit=audit,
                 mappings=PostgresStoreServerMappingRepository(self._database, self._tenant_id),
+            ),
+            # REYESTR HƏR SESSİYADA YENİDƏN QURULUR — qəsdən: use case-lər
+            # bağlantıya bağlıdır və sessiyadan uzun yaşamır (bax bu faylın
+            # başlığı). Qaydanın özü isə vəziyyətsizdir; onu qlobal saxlamaq
+            # sessiyalar arasında paylaşılan dəyişkən vəziyyət yaradardı.
+            exceptions=exception_engine,
+            # #7 POS Səlahiyyət Siyasəti (sənədləşdirmə, Faza 4) — audit EYNİ
+            # tranzaksiyada, çünki yazı və audit sətri birlikdə commit olmalıdır.
+            pos_threshold=POSThresholdUseCase(
+                thresholds=repo("pos_thresholds"),
+                limits=repo("limits"),
+                audit=audit,
+                clock=clock,
+            ),
+            # #17 İşçi Sənədləri (Faza 7) — audit EYNİ tranzaksiyada.
+            # `notify_expiring_documents` gecəlik iş üçün ELƏCƏ DƏ əlçatandır
+            # (`behavior_baselines`/`overtime` ilə eyni naxış, yuxarı bax).
+            employee_documents=EmployeeDocumentUseCase(
+                documents=repo("employee_documents"),
+                employees=repo("employees"),
+                limits=repo("limits"),
+                audit=audit,
+                clock=clock,
+                notifier=notifier,
+            ),
+            # #19 Elan (Broadcast, Faza 8) — `Notifier` QƏSDƏN ÖTÜRÜLMÜR (bax
+            # use case başlığı: çatdırılma store-scoping sorğusu ÜZƏRİNDƏN
+            # gedir, `notifications` cədvəlinin mağaza süzgəci yoxdur).
+            announcements=AnnouncementUseCase(
+                announcements=repo("announcements"),
+                limits=repo("limits"),
+                audit=audit,
+                clock=clock,
+            ),
+            # #20 Performans Qiymətləndirməsi (Faza 8) — audit EYNİ
+            # tranzaksiyada (CLAUDE.md §5), bildiriş işçiyə ŞƏXSİ sətirlədir.
+            performance_reviews=PerformanceReviewUseCase(
+                reviews=repo("performance_reviews"),
+                employees=repo("employees"),
+                limits=repo("limits"),
+                audit=audit,
+                clock=clock,
+                notifier=notifier,
+            ),
+            # #8 İşçi Davranış Baz Xətti (Faza 5) — gecəlik yenidən-hesablama.
+            # Eyni iki repo-nu (`behavior_baselines`, `checkin_history`)
+            # `BehaviorAnomalyRule` ilə PAYLAŞIR — hər ikisi EYNİ tranzaksiyada
+            # olduğu üçün hesablama və qaydanın gördüyü məlumat UYĞUNDUR.
+            behavior_baselines=BehaviorBaselineUseCase(
+                checkins=repo("checkin_history"),
+                baselines=repo("behavior_baselines"),
+                limits=repo("limits"),
+                clock=clock,
+            ),
+            # #13 Tarixi-nümunə kadr təklifi (Faza 6) — 1C-yə TOXUNMUR.
+            # `planning` ilə eyni sessiyada qurulur, lakin BİR-BİRİNƏ
+            # BAĞLANMIR: təklif heç vaxt təyinat yaratmır (kompasos11.md #13).
+            staffing_pattern=StaffingPatternUseCase(
+                history=repo("staffing_history"),
+                suggestions=repo("staffing_patterns"),
+                limits=repo("limits"),
+                clock=clock,
+            ),
+            # #15 Norma üstü iş saatları (Faza 6) — `daily_attendance` ilə EYNİ
+            # nüsxə (yuxarıdakı yerli dəyişən), yəni təsdiqin yazdığı sətirlə
+            # hesabatın oxuduğu sətir eyni tranzaksiyadan görünür.
+            overtime=overtime_tracking,
+            # #21 İşdən Çıxma Riski Balı (Faza 9) — `attrition_signals`/
+            # `attrition_scores` EYNİ obyektdir (bax `connection.py`-dakı
+            # `PostgresAttritionRepository` qeydiyyatı), yəni gecəlik iş
+            # oxuduğu siqnalla yazdığı nəticəni EYNİ tranzaksiyada görür.
+            attrition_risk=AttritionRiskUseCase(
+                signals=repo("attrition_signals"),
+                scores=repo("attrition_scores"),
+                employees=repo("employees"),
+                limits=repo("limits"),
+                audit=audit,
+                clock=clock,
+                notifier=notifier,
+            ),
+            # #24 Çox-Mağaza Benchmark Dashboard (Faza 9A) — YALNIZ-OXU, bax
+            # use case modul başlığı.
+            multi_store_benchmark=MultiStoreBenchmarkUseCase(
+                provider=repo("multi_store_benchmark"),
+                limits=repo("limits"),
+                clock=clock,
             ),
         )
 
@@ -1039,8 +1530,36 @@ def build_context(*, tenant_id_env: str = "KOMPASOS_TENANT_ID") -> ApplicationCo
             ),
         ) from exc
 
+    context = ApplicationContext(database=database, tenant_id=tenant_id)
+    _apply_root_pool_limits(context)
     _log.info("APPLICATION_CONTEXT_BUILT", extra={"tenant_id": str(tenant_id)})
-    return ApplicationContext(database=database, tenant_id=tenant_id)
+    return context
+
+
+def _apply_root_pool_limits(context: ApplicationContext) -> None:
+    """Hovuz ölçüsünü ROOT dəyərinə gətirir — BOOTSTRAP PARADOKSUNUN həlli.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ HOVUZ ÖZ LİMİTİNİ QURULARKƏN OXUYA BİLMİR
+    ──────────────────────────────────────────────────────────────────────────
+    `DB_POOL_MIN_SIZE`/`DB_POOL_MAX_SIZE` `system_limits` cədvəlindədir, o
+    cədvəli oxumaq üçün isə HOVUZ lazımdır. Yəni hovuz öz ölçüsünü qurularkən
+    bilə bilməz. Həll: hovuz `DEFAULT_LIMITS` fallback-ları ilə qalxır, bağlantı
+    işlədikdən və tenant məlum olduqdan SONRA `resize()` ilə ROOT dəyərinə
+    gətirilir (bax `Database.apply_root_pool_limits`).
+
+    XƏTA UDULUR: limit oxuna bilmirsə tətbiq İŞLƏMƏYƏ DAVAM ETMƏLİDİR —
+    fallback hovuzu onsuz da işlək ölçüdədir və "hovuz ölçüsünü oxuya
+    bilmədim" səbəbi ilə mağazanı bağlamaq mütənasib olmayan reaksiyadır.
+    """
+    try:
+        min_size, max_size = context.database.apply_root_pool_limits(
+            context.infrastructure_limits()
+        )
+    except Exception:
+        _error_log.exception("DB_POOL_ROOT_LIMITS_NOT_APPLIED")
+        return
+    _log.info("DB_POOL_ROOT_LIMITS_APPLIED", extra={"min_size": min_size, "max_size": max_size})
 
 
 def _as_mapping(raw: object) -> dict[str, Any]:

@@ -31,13 +31,15 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from src.application.root_limits import fallback_int, limit_int
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.erp import MatchConfidence
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
-    from src.domain.interfaces.ports import AuditTrail, Clock
+    from src.domain.interfaces.ports import AuditTrail, Clock, SystemLimits
     from src.domain.value_objects.identifiers import (
         EmployeeId,
         SalesTransactionId,
@@ -51,7 +53,14 @@ _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
 MANAGE_POINTS_FLAG = "can_manage_sales_points"
 
 MIN_REASON_LENGTH = 5
-DEFAULT_QUEUE_LIMIT = 200
+
+#: Növbənin bir oxunuşda gətirdiyi sətir sayı.
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`SystemLimitKey.SALES_REVIEW_QUEUE_PAGE_SIZE`, seed: migrations/034).
+#: 21 filialın şübhəli uyğunlaşma növbəsi mövsümdən asılı olaraq böyüyür;
+#: ekranın nə qədər sətir çəkəcəyi mağaza PC-sinin gücündən asılı qərardır.
+DEFAULT_QUEUE_LIMIT = fallback_int(SystemLimitKey.SALES_REVIEW_QUEUE_PAGE_SIZE)
 
 
 class ReviewQueueError(KompasOSError):
@@ -171,7 +180,12 @@ class SalesReviewQueueUseCase:
         points: PointsAdjuster | None,
         audit: AuditTrail,
         clock: Clock,
+        limits: SystemLimits | None = None,
     ) -> None:
+        # `limits` İSTƏYƏ BAĞLIDIR (`points` ilə eyni naxış): `None` halında
+        # səhifə ölçüsü `DEFAULT_QUEUE_LIMIT` fallback-ıdır, yəni davranış
+        # köçürmədən ƏVVƏLKİ ilə HƏRFƏN eynidir.
+        self._limits = limits
         self._repository = repository
         # `None` ola bilər: xal modulu Feature Toggle ilə söndürülübsə növbə
         # yenə işləməlidir — satış uyğunlaşması xaldan ASILI DEYİL.
@@ -187,11 +201,21 @@ class SalesReviewQueueUseCase:
         tenant_id: TenantId,
         actor: Employee,
         server_id: object | None = None,
-        limit: int = DEFAULT_QUEUE_LIMIT,
+        limit: int | None = None,
     ) -> list[ReviewQueueItem]:
-        """Növbə siyahısı — server üzrə süzülə bilər (Faza 6.2: "per-server aware")."""
+        """Növbə siyahısı — server üzrə süzülə bilər (Faza 6.2: "per-server aware").
+
+        `limit=None` → ROOT parametri (`SALES_REVIEW_QUEUE_PAGE_SIZE`). Açıq
+        arqument onu ƏVƏZ EDİR: "daha 50 sətir göstər" düyməsi ekranın öz
+        vəziyyətidir və Root parametri ilə mübahisə etməməlidir.
+        """
         self._require_permission(actor)
-        return self._repository.list_queue(tenant_id, server_id=server_id, limit=limit)
+        applied = (
+            limit_int(self._limits, tenant_id, SystemLimitKey.SALES_REVIEW_QUEUE_PAGE_SIZE)
+            if limit is None
+            else limit
+        )
+        return self._repository.list_queue(tenant_id, server_id=server_id, limit=applied)
 
     def queue_size(self, *, tenant_id: TenantId, actor: Employee) -> int:
         """Menyu nişanı üçün sayğac."""

@@ -44,7 +44,14 @@ from psycopg import Connection
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.identifiers import EmployeeId, TenantId
+from src.infrastructure.config.limits import (
+    INFRA_LIMIT_BOUNDS,
+    InfrastructureLimits,
+    fallback_float,
+    fallback_int,
+)
 from src.shared.exceptions import ConfigurationError, KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
@@ -55,12 +62,52 @@ _log = get_logger(__name__)
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 
 SCHEMA: Final[str] = "kompasos"
-DEFAULT_POOL_MIN: Final[int] = 1
-DEFAULT_POOL_MAX: Final[int] = 8
-DEFAULT_TIMEOUT_SECONDS: Final[float] = 15.0
+
+#: ÜÇÜ DƏ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits` (`DB_POOL_MIN_SIZE`,
+#: `DB_POOL_MAX_SIZE`, `DB_CONNECT_TIMEOUT_SECONDS`; seed: migrations/032).
+#:
+#: BOOTSTRAP PARADOKSU — NİYƏ FALLBACK BURADA XÜSUSİ ƏHƏMİYYƏTLİDİR:
+#: hovuz `system_limits`-i OXUMAQ ÜÇÜN LAZIMDIR, yəni ilk açılışda dəyəri
+#: bazadan almaq mümkün deyil. Ona görə hovuz həmişə fallback ilə qalxır və
+#: ROOT dəyəri SONRA — bağlantı işlədikdən sonra — `apply_root_pool_limits()`
+#: ilə tətbiq olunur (`ConnectionPool.resize`). Alternativ (dəyəri mühit
+#: dəyişənindən oxumaq) rədd edildi: onda parametrin İKİ mənbəyi olardı və
+#: ROOT ekranındakı rəqəm real vəziyyəti göstərməzdi.
+FALLBACK_POOL_MIN: Final[int] = fallback_int(SystemLimitKey.DB_POOL_MIN_SIZE)
+FALLBACK_POOL_MAX: Final[int] = fallback_int(SystemLimitKey.DB_POOL_MAX_SIZE)
+FALLBACK_TIMEOUT_SECONDS: Final[float] = fallback_float(SystemLimitKey.DB_CONNECT_TIMEOUT_SECONDS)
 
 #: Owner rolları — bunlarla qoşulmaq RLS-i yan keçir (yalnız miqrasiya üçün).
 OWNER_ROLE_PREFIXES: Final[tuple[str, ...]] = ("postgres", "supabase_admin")
+
+
+def _clamped_pool_settings(min_size: int, max_size: int, timeout: float) -> tuple[int, int, float]:
+    """Hovuz parametrlərini SƏRT aralığa sıxır və uyğunluğu bərpa edir.
+
+    İki mərhələ var, çünki tək-tək klamp kifayət etmir: `min_size` və
+    `max_size` ayrı-ayrılıqda hüdud daxilində olub bir-birinə ZİDD ola bilər
+    (məs. min=32, max=4). `psycopg_pool` belə cütdə istisna atır və tətbiq
+    ÜMUMİYYƏTLƏ açılmazdı — ona görə `max_size` minimumdan aşağı düşəndə
+    yuxarı qaldırılır.
+    """
+    min_bounds = INFRA_LIMIT_BOUNDS[SystemLimitKey.DB_POOL_MIN_SIZE]
+    max_bounds = INFRA_LIMIT_BOUNDS[SystemLimitKey.DB_POOL_MAX_SIZE]
+    timeout_bounds = INFRA_LIMIT_BOUNDS[SystemLimitKey.DB_CONNECT_TIMEOUT_SECONDS]
+
+    safe_min = min(max(min_size, int(min_bounds[0])), int(min_bounds[1]))
+    safe_max = min(max(max_size, int(max_bounds[0])), int(max_bounds[1]))
+    safe_max = max(safe_max, safe_min)
+    safe_timeout = min(max(timeout, float(timeout_bounds[0])), float(timeout_bounds[1]))
+
+    if (safe_min, safe_max, safe_timeout) != (min_size, max_size, timeout):
+        _log.warning(
+            "DB_POOL_SETTINGS_CLAMPED",
+            extra={
+                "requested": {"min": min_size, "max": max_size, "timeout": timeout},
+                "applied": {"min": safe_min, "max": safe_max, "timeout": safe_timeout},
+            },
+        )
+    return safe_min, safe_max, safe_timeout
 
 
 class DatabaseError(KompasOSError):
@@ -131,9 +178,9 @@ class Database:
         dsn: str | None = None,
         *,
         admin_dsn: str | None = None,
-        min_size: int = DEFAULT_POOL_MIN,
-        max_size: int = DEFAULT_POOL_MAX,
-        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        min_size: int = FALLBACK_POOL_MIN,
+        max_size: int = FALLBACK_POOL_MAX,
+        timeout: float = FALLBACK_TIMEOUT_SECONDS,
         open_pool: bool = True,
     ) -> None:
         """
@@ -148,12 +195,52 @@ class Database:
         """
         self._dsn = dsn or build_dsn_from_env()
         self._admin_dsn = admin_dsn or os.environ.get("DATABASE_ADMIN_URL") or None
-        self._pool = self._make_pool(self._dsn, min_size, max_size, timeout)
+        # Verilən dəyərlər DƏRHAL klamp edilir: hovuz ölçüsü `0` və ya mənfi
+        # olsa tətbiq heç bir sorğu edə bilməzdi və səbəbi yalnız DSN/limit
+        # sətrinə baxmaqla tapılardı (bax `config/limits.py` başlığı).
+        self._min_size, self._max_size, self._timeout = _clamped_pool_settings(
+            min_size, max_size, timeout
+        )
+        self._pool = self._make_pool(self._dsn, self._min_size, self._max_size, self._timeout)
         self._admin_pool = (
-            self._make_pool(self._admin_dsn, 1, 2, timeout) if self._admin_dsn else None
+            self._make_pool(self._admin_dsn, 1, 2, self._timeout) if self._admin_dsn else None
         )
         if open_pool:
             self.open()
+
+    def apply_root_pool_limits(self, limits: InfrastructureLimits) -> tuple[int, int]:
+        """ROOT-dakı hovuz ölçüsünü CANLI hovuza tətbiq edir.
+
+        Bootstrap paradoksunun həlli (bax modul sabitlərinin şərhi): hovuz
+        fallback ilə qalxır, bu metod isə bağlantı işlədikdən SONRA — tenant
+        məlum olanda — çağırılır və `ConnectionPool.resize()` ilə ölçünü
+        Root-un yazdığı dəyərə gətirir. Prosesi yenidən başlatmaq TƏLƏB
+        OLUNMUR.
+
+        Taymaut DƏYİŞMİR: `psycopg_pool` onu yalnız qurulma anında qəbul edir
+        və yeni dəyər üçün hovuzu bağlayıb yenidən açmaq lazım gələrdi —
+        işləyən sessiyada bu, bütün açıq tranzaksiyaları qırardı. Taymaut
+        növbəti başlanğıcda qüvvəyə minir.
+
+        Qaytarır: tətbiq edilmiş `(min_size, max_size)` — çağıran onu loga
+        yazmaq və ya ekranda göstərmək üçün istifadə edir.
+        """
+        min_size, max_size, _ = _clamped_pool_settings(
+            limits.int_of(SystemLimitKey.DB_POOL_MIN_SIZE),
+            limits.int_of(SystemLimitKey.DB_POOL_MAX_SIZE),
+            limits.float_of(SystemLimitKey.DB_CONNECT_TIMEOUT_SECONDS),
+        )
+        if (min_size, max_size) == (self._min_size, self._max_size):
+            return min_size, max_size
+        self._pool.resize(min_size=min_size, max_size=max_size)
+        self._min_size, self._max_size = min_size, max_size
+        _log.info("DB_POOL_RESIZED", extra={"min_size": min_size, "max_size": max_size})
+        return min_size, max_size
+
+    @property
+    def pool_settings(self) -> tuple[int, int, float]:
+        """Qüvvədə olan `(min_size, max_size, timeout)` — diaqnostika üçün."""
+        return self._min_size, self._max_size, self._timeout
 
     @staticmethod
     def _make_pool(dsn: str, min_size: int, max_size: int, timeout: float) -> ConnectionPool:
@@ -171,9 +258,9 @@ class Database:
         )
 
     def open(self) -> None:
-        self._pool.open(wait=True, timeout=DEFAULT_TIMEOUT_SECONDS)
+        self._pool.open(wait=True, timeout=self._timeout)
         if self._admin_pool is not None:
-            self._admin_pool.open(wait=True, timeout=DEFAULT_TIMEOUT_SECONDS)
+            self._admin_pool.open(wait=True, timeout=self._timeout)
             _security_log.warning(
                 "DB_ADMIN_POOL_OPENED",
                 extra={
@@ -309,9 +396,22 @@ class PostgresUnitOfWork:
 
     def _build_repositories(self) -> None:
         # Dövri idxaldan qaçmaq üçün yerli idxal (repo-lar bu modulu tanıyır).
+        from src.infrastructure.persistence.announcement_repository import (  # noqa: PLC0415
+            PostgresAnnouncementRepository,
+        )
+        from src.infrastructure.persistence.attrition_repository import (  # noqa: PLC0415
+            PostgresAttritionRepository,
+        )
         from src.infrastructure.persistence.audit import (  # noqa: PLC0415
             PostgresAuditReader,
             PostgresAuditTrail,
+        )
+        from src.infrastructure.persistence.behavior_repositories import (  # noqa: PLC0415
+            PostgresBehaviorBaselineRepository,
+            PostgresCheckInHistoryProvider,
+        )
+        from src.infrastructure.persistence.benchmark_repository import (  # noqa: PLC0415
+            PostgresMultiStoreBenchmarkRepository,
         )
         from src.infrastructure.persistence.catalog_repositories import (  # noqa: PLC0415
             PostgresFineTypeRepository,
@@ -329,6 +429,13 @@ class PostgresUnitOfWork:
             PostgresStoreWriter,
             PostgresSystemLimits,
         )
+        from src.infrastructure.persistence.employee_document_repository import (  # noqa: PLC0415
+            PostgresEmployeeDocumentRepository,
+        )
+        from src.infrastructure.persistence.exception_repositories import (  # noqa: PLC0415
+            PostgresExceptionRepository,
+            PostgresExceptionSourceCatalog,
+        )
         from src.infrastructure.persistence.migration import (  # noqa: PLC0415
             PostgresMigrationEventLog,
             SessionReadOnlyController,
@@ -336,9 +443,22 @@ class PostgresUnitOfWork:
         from src.infrastructure.persistence.notification_repositories import (  # noqa: PLC0415
             PostgresNotificationRepository,
         )
+        from src.infrastructure.persistence.open_shift_repository import (  # noqa: PLC0415
+            PostgresOpenShiftPostingRepository,
+        )
+        from src.infrastructure.persistence.overtime_repositories import (  # noqa: PLC0415
+            PostgresOvertimeLogRepository,
+            PostgresWorkedHoursProvider,
+        )
+        from src.infrastructure.persistence.performance_review_repository import (  # noqa: PLC0415
+            PostgresPerformanceReviewRepository,
+        )
         from src.infrastructure.persistence.platform_repositories import (  # noqa: PLC0415
             PostgresBackupCatalog,
             PostgresPluginRegistry,
+        )
+        from src.infrastructure.persistence.pos_policy_repository import (  # noqa: PLC0415
+            PostgresPOSThresholdRepository,
         )
         from src.infrastructure.persistence.preferences import (  # noqa: PLC0415
             PostgresUserPreferences,
@@ -352,6 +472,10 @@ class PostgresUnitOfWork:
             PostgresFineRepository,
             PostgresLeaveRequestRepository,
             PostgresPositionRepository,
+        )
+        from src.infrastructure.persistence.staffing_repositories import (  # noqa: PLC0415
+            PostgresStaffingHistoryProvider,
+            PostgresStaffingPatternRepository,
         )
         from src.infrastructure.persistence.support_repositories import (  # noqa: PLC0415
             PostgresSupportTicketRepository,
@@ -369,6 +493,12 @@ class PostgresUnitOfWork:
         if self._conn is None:  # pragma: no cover - invariant
             raise TenantContextError("Bağlantı yoxdur")
         conn = self._conn
+        # #21 (Faza 9) — TƏK nüsxə aşağıda İKİ açarla ("attrition_signals",
+        # "attrition_scores") qeydiyyatdan keçir (bax `attrition_repository.py`
+        # başlığı: "bir sinif iki protokolu birlikdə tətbiq edir"). Dict
+        # literalının İÇİNDƏ ikinci dəfə qurmaq həm iki ayrı bağlantı təhlükəsi
+        # yaradardı, həm də oxucuya "bunlar EYNİ obyektdir" faktını gizlədərdi.
+        attrition = PostgresAttritionRepository(conn, self._context)
         # HAMISI EYNİ BAĞLANTIDADIR — bu, təsadüf deyil: bir use case bir neçə
         # repo-ya toxunur (məs. icazə təsdiqi status + cərimə + audit yazır) və
         # onlar EYNİ tranzaksiyada olmalıdır. Ayrı bağlantı işlətsəydik,
@@ -386,6 +516,12 @@ class PostgresUnitOfWork:
             # --- Faza 5/6 qatları --------------------------------------------
             "shifts": PostgresShiftRepository(conn, self._context),
             "shift_swaps": PostgresShiftSwapRepository(conn, self._context),
+            # --- #16 Açıq Növbə Bazarı (Faza 6) -------------------------------
+            # Elan cədvəli və `shifts` EYNİ bağlantıdadır — MƏCBURİDİR: elan
+            # tutulanda `shift_assignments`-ə təyinat yazılır və hər ikisi bir
+            # tranzaksiyada olmalıdır. Ayrı bağlantıda elan "tutulmuş", təqvim
+            # isə boş qala bilərdi.
+            "open_shifts": PostgresOpenShiftPostingRepository(conn, self._context),
             "sheets": PostgresDailyAttendanceSheetRepository(conn, self._context),
             "attendance_facts": PostgresAttendanceFactProvider(conn, self._context),
             "appeals": PostgresFineAppealRepository(conn, self._context),
@@ -404,6 +540,57 @@ class PostgresUnitOfWork:
             "report_facts": PostgresReportFactProvider(conn, self._context),
             "support": PostgresSupportTicketRepository(conn, self._context),
             "sync_conflicts": PostgresSyncConflictRepository(conn, self._context),
+            # --- Vahid İstisna Motoru (#9) ------------------------------------
+            # Jurnal və mənbə kataloqu EYNİ bağlantıdadır: motor istisnanı
+            # yazarkən mənbənin `is_active`/`default_severity` dəyərini oxuyur
+            # və hər ikisi bir tranzaksiyada görünməlidir (mənbə söndürüləndə
+            # yarımçıq icra yeni sətir yazmasın).
+            "exceptions": PostgresExceptionRepository(conn, self._context),
+            "exception_sources": PostgresExceptionSourceCatalog(conn, self._context),
+            # --- #8 İşçi Davranış Baz Xətti (Faza 5) ---------------------------
+            # Baz xətt cədvəli və xam giriş mənbəyi EYNİ bağlantıda: gecəlik
+            # yenidən-hesablama hər ikisini bir tranzaksiyada oxuyub yazır.
+            "behavior_baselines": PostgresBehaviorBaselineRepository(conn, self._context),
+            "checkin_history": PostgresCheckInHistoryProvider(conn, self._context),
+            # --- #15 Norma üstü iş saatları (Faza 6) ---------------------------
+            # Jurnal və iş pəncərəsi mənbəyi EYNİ bağlantıdadır, çünki yazı
+            # TABELİN TƏSDİQİ ilə eyni tranzaksiyada baş verir: təsdiq geri
+            # qayıdarsa, ondan çıxan aşım sətri də qayıtmalıdır (əks halda
+            # imzalanmamış günün "sübutu" bazada qalardı).
+            "overtime_log": PostgresOvertimeLogRepository(conn, self._context),
+            "worked_hours": PostgresWorkedHoursProvider(conn, self._context),
+            # --- #13 Tarixi-nümunə kadr təklifi (Faza 6) ----------------------
+            # Təklif cədvəli və xam davamiyyət mənbəyi EYNİ bağlantıdadır:
+            # yenidən-hesablama eyni tranzaksiyada oxuyub yazır, yəni yarımçıq
+            # icra yarısı köhnə, yarısı yeni pəncərədən çıxmış təklif qoymur.
+            # 1C-YƏ HEÇ BİR BAĞLANTI YOXDUR (kompasos11.md struktur qərar D).
+            "staffing_patterns": PostgresStaffingPatternRepository(conn, self._context),
+            "staffing_history": PostgresStaffingHistoryProvider(conn, self._context),
+            # --- #7 POS Səlahiyyət Siyasəti (sənədləşdirmə, Faza 4) -----------
+            # Eyni bağlantıda: yazı + audit BİR tranzaksiyada olmalıdır (bax
+            # `audit.py` başlığı — audit yazısı istisna udmur, CLAUDE.md §5).
+            "pos_thresholds": PostgresPOSThresholdRepository(conn, self._context),
+            # --- #17 İşçi Sənədləri (Faza 7) -----------------------------------
+            # Eyni bağlantıda: yazı + audit BİR tranzaksiyada (audit istisna
+            # udmur, CLAUDE.md §5). Shift Matrix-in `documents` asılılığı da
+            # BU repo-nu işlədir (bax `composition.py` — eyni bağlantı,
+            # hələ commit olunmamış sənəd dəyişikliyi görünsün deyə).
+            "employee_documents": PostgresEmployeeDocumentRepository(conn, self._context),
+            # --- #19/#20 Ünsiyyət və Performans (Faza 8) -----------------------
+            # Eyni bağlantıda: yazı + audit BİR tranzaksiyada (audit istisna
+            # udmur, CLAUDE.md §5). İkisi ARASI ƏLAQƏ YOXDUR (ayrı aqreqatlar,
+            # ayrı use case-lər) — yan-yana qeydiyyat sırf oxunaqlılıq üçündür.
+            "announcements": PostgresAnnouncementRepository(conn, self._context),
+            "performance_reviews": PostgresPerformanceReviewRepository(conn, self._context),
+            # --- #21 İşdən Çıxma Riski (Faza 9) --------------------------------
+            # `attrition` YUXARIDA quruldu (bax dict-dən ƏVVƏLKİ şərh) — burada
+            # YALNIZ İKİ açarla qeydə alınır, YENİDƏN QURULMUR.
+            "attrition_signals": attrition,
+            "attrition_scores": attrition,
+            # --- #24 Çox-Mağaza Benchmark Dashboard (Faza 9A) ------------------
+            # YALNIZ-OXU aqreqasiya — heç bir başqa repo ilə eyni tranzaksiya
+            # tələb etmir (yazı yolu yoxdur, bax use case modul başlığı).
+            "multi_store_benchmark": PostgresMultiStoreBenchmarkRepository(conn, self._context),
             # Bildirişin YAZISI `PostgresNotifier`-dədir (öz tranzaksiyası ilə);
             # burada qeydiyyatdan keçən yalnız OXU və "oxundu" işarəsidir.
             "notifications": PostgresNotificationRepository(conn, self._context),
@@ -521,6 +708,9 @@ class PostgresUnitOfWork:
 
 
 __all__ = [
+    "FALLBACK_POOL_MAX",
+    "FALLBACK_POOL_MIN",
+    "FALLBACK_TIMEOUT_SECONDS",
     "OWNER_ROLE_PREFIXES",
     "SCHEMA",
     "Database",

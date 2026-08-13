@@ -24,6 +24,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QWidget
 
 from src import __version__
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.presentation.shell.admin_shell import AdminShell
 from src.presentation.shell.kiosk import KioskWindow
 from src.presentation.shell.menu import build_default_registry
@@ -60,7 +61,22 @@ SPLASH_DURATION_MS: Final = 1200
 #: Cərimə yaradılan anda növbə ONSUZ DA bir dəfə boşaldılır (bax
 #: `FineEntryController._issue`) — bu taymer yalnız şəbəkə qayıdanda və ya
 #: kvota problemi həll olunanda gözləyən elementləri götürmək üçündür.
-UPLOAD_POLL_INTERVAL_MS: Final = 120_000
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS`, seed: migrations/035). Ritm
+#: filialın internetindən asılıdır: zəif kanalda seyrək dövrə həm şəbəkəni,
+#: həm də DB sessiyalarını qoruyur. Sabit YALNIZ kontekst olmayanda
+#: (önizləmə/dizayn rejimi) və ya limit oxunmayanda işə düşür.
+FALLBACK_UPLOAD_POLL_INTERVAL_MS: Final = (
+    int(DEFAULT_LIMITS[SystemLimitKey.EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS]) * 1000
+)
+
+#: Dövrənin ALT HƏDDİ — migrations/035-dəki `min_value` ilə eyni ədəd.
+#: NİYƏ KODDA DA VAR: `QTimer(0)` hər hadisə dövrəsində işə düşər və hər
+#: işləməsi bir DB sessiyası açardı — yəni "0" yazmaq interfeysi dondurardı.
+#: DB-dəki `min_value` yalnız ROOT ekranından yazılan dəyəri qoruyur; birbaşa
+#: SQL ilə düşən dəyər üçün son müdafiə xətti buradadır.
+MIN_UPLOAD_POLL_INTERVAL_SECONDS: Final = 10
 
 #: Brend ikonu — pəncərə başlığı, Windows Taskbar və Alt-Tab (bölmə 9, 296).
 ICON_RELATIVE_PATH: Final = "assets/kompasos.ico"
@@ -375,16 +391,39 @@ class KompasApplication:
         toxunur; Qt hadisə dövrəsində qalmaq bu yazının interfeyslə eyni
         sırada getməsini təmin edir.
 
-        Interval yükləmə HƏDDİ deyil, sadəcə fon dövrəsidir — ona görə
-        `system_limits`-də açarı yoxdur (bölmə 3 onu sadalamır).
+        İNTERVAL ARTIQ ROOT-DANDIR (`EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS`,
+        Faza 10.2): əvvəl sabit 120 000 ms idi və zəif internetli filialda onu
+        seyrəkləşdirmək üçün yeni buraxılış lazım gəlirdi. Dəyər BURADA, taymer
+        qurularkən bir dəfə oxunur — Qt taymerinin intervalını hər dövrədə
+        yenidən soruşmaq üçün ikinci bir taymer lazım olardı; yeni ritm növbəti
+        girişdə qüvvəyə minir və bu, fon işi üçün kifayət qədər tezdir.
         """
         if self._context is None or self._upload_timer is not None:
             return
         timer = QTimer(self._window)
-        timer.setInterval(UPLOAD_POLL_INTERVAL_MS)
+        timer.setInterval(self._upload_poll_interval_ms())
         timer.timeout.connect(self._drain_upload_queue)
         timer.start()
         self._upload_timer = timer
+
+    def _upload_poll_interval_ms(self) -> int:
+        """Fon dövrəsinin ritmi — ROOT-dan, oxuna bilmirsə fallback.
+
+        Baza əlçatmazlığı BURADA istisna atmır: verilməli cavab "növbə
+        boşaldılsınmı" deyil, "hansı ritmlə" idi. Cavabsız qaldıqda sabit ritm
+        işləyir və sübut şəkilləri yenə göndərilir (eyni əsaslandırma
+        `composition._upload_limit`-dədir).
+        """
+        if self._context is None:
+            return FALLBACK_UPLOAD_POLL_INTERVAL_MS
+        try:
+            seconds = self._context.infrastructure_limits().int_of(
+                SystemLimitKey.EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS
+            )
+        except Exception:
+            _log.exception("UPLOAD_POLL_INTERVAL_READ_FAILED")
+            return FALLBACK_UPLOAD_POLL_INTERVAL_MS
+        return max(MIN_UPLOAD_POLL_INTERVAL_SECONDS, seconds) * 1000
 
     def _drain_upload_queue(self) -> None:
         if self._context is None:
@@ -503,6 +542,15 @@ class KompasApplication:
             group_h,
             group_i,
         )
+        from src.presentation.screens.announcements import (  # noqa: PLC0415
+            AnnouncementsScreen,
+        )
+        from src.presentation.screens.attrition_risk import (  # noqa: PLC0415
+            AttritionRiskScreen,
+        )
+        from src.presentation.screens.performance_review import (  # noqa: PLC0415
+            PerformanceReviewScreen,
+        )
 
         handlers: tuple[tuple[type[QWidget], Callable[[QWidget], None]], ...] = (
             # Ayarlar ekranı tema seçimini örtüyə bağlayır — bu, önizləmə
@@ -519,9 +567,32 @@ class KompasApplication:
             (group_h.HelpCenterScreen, self._attach_help_center),
             # Faza 5/6 yazı yolları — hər biri öz use case-inə bağlanır.
             (group_c.PermissionMatrixScreen, self._attach_permission_matrix),
+            # #7 POS Səlahiyyət Siyasəti (sənədləşdirmə, Faza 4) — "···"
+            # menyusunun YALNIZ "POS Səlahiyyəti" bəndini emal edir.
+            (group_c.UsersScreen, self._attach_users_pos_threshold),
+            # #16 Açıq Növbə Bazarı (Faza 6) — matrisin canlı məlumatı
+            # `_binders()`-dən gəlməyə DAVAM EDİR; kontroller YALNIZ açıq
+            # elan kartını bağlayır (`users` ekranındakı ilə eyni hibrid
+            # naxış — bax `controllers/open_shift.py` başlığı).
+            (group_c.ShiftPlanningScreen, self._attach_open_shift_market),
             (group_f.UnassignedSalesScreen, self._attach_sales_review),
             (group_i.PluginScreen, self._attach_plugin_admin),
             (group_i.DashboardBuilderScreen, self._attach_dashboard_builder),
+            # #24 Çox-Mağaza Benchmark (Faza 9A) — YALNIZ siqnal bağlaması
+            # (dropdown + drill-down); canlı MƏLUMAT `_binders()`-dəki
+            # `_dashboard`-dan gəlməyə davam edir (bax metodun başlığı).
+            (group_c.DashboardScreen, self._attach_dashboard_benchmark),
+            # #9-un GUI tərəfi (kompasos11.md Faza 5) — bax `controllers/exceptions.py`.
+            (group_i.ExceptionsScreen, self._attach_exceptions),
+            # #19/#20 Ünsiyyət və Performans (kompasos11.md Faza 8) — hər ikisi
+            # HƏM oxuyur, HƏM yazır (bax `controllers/announcements.py` və
+            # `controllers/performance_review.py` başlıqları).
+            (AnnouncementsScreen, self._attach_announcements),
+            (PerformanceReviewScreen, self._attach_performance_review),
+            # #21 İşdən Çıxma Riski (kompasos11.md Faza 9) — TAMAMİLƏ oxu
+            # ekranıdır, lakin baxış audit-ləndiyi üçün ÖZ kontrolleri var
+            # (bax `controllers/attrition_risk.py` başlığı).
+            (AttritionRiskScreen, self._attach_attrition_risk),
             (group_g.ProfileScreen, self._attach_profile),
             # Faza 3 yekunu: ERP, ehtiyat nüsxə, baza keçidi və diaqnostika.
             (group_d.ErpServersScreen, self._attach_erp_servers),
@@ -571,6 +642,69 @@ class KompasApplication:
             return
         PluginAdminController(self._context, self._current_employee).attach(screen)
 
+    def _attach_exceptions(self, screen: QWidget) -> None:
+        """ "İstisnalar" ekranını `ExceptionEngineUseCase`-ə bağlayır (#9, Faza 5).
+
+        `PluginScreen`/`DashboardBuilderScreen` ilə EYNİ naxış: ekranın canlı
+        yolu `ScreenDataBinder`-də deyil, çünki o həm oxuyur, həm yazır (bax
+        `controllers/exceptions.py` başlığı).
+        """
+        from src.presentation.controllers.exceptions import (  # noqa: PLC0415
+            ExceptionsController,
+        )
+        from src.presentation.screens.group_i import ExceptionsScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, ExceptionsScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        ExceptionsController(self._context, self._current_employee).attach(screen)
+
+    def _attach_announcements(self, screen: QWidget) -> None:
+        """ "Elanlar" ekranını `AnnouncementUseCase`-ə bağlayır (#19, Faza 8)."""
+        from src.presentation.controllers.announcements import (  # noqa: PLC0415
+            AnnouncementsAdminController,
+        )
+        from src.presentation.screens.announcements import (  # noqa: PLC0415
+            AnnouncementsScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, AnnouncementsScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        AnnouncementsAdminController(self._context, self._current_employee).attach(screen)
+
+    def _attach_performance_review(self, screen: QWidget) -> None:
+        """ "Performans Qiymətləndirmələri" ekranını use case-ə bağlayır (#20, Faza 8)."""
+        from src.presentation.controllers.performance_review import (  # noqa: PLC0415
+            PerformanceReviewController,
+        )
+        from src.presentation.screens.performance_review import (  # noqa: PLC0415
+            PerformanceReviewScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, PerformanceReviewScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        PerformanceReviewController(self._context, self._current_employee).attach(screen)
+
+    def _attach_attrition_risk(self, screen: QWidget) -> None:
+        """ "İşdən Çıxma Riski" ekranını use case-ə bağlayır (#21, Faza 9)."""
+        from src.presentation.controllers.attrition_risk import (  # noqa: PLC0415
+            AttritionRiskController,
+        )
+        from src.presentation.screens.attrition_risk import (  # noqa: PLC0415
+            AttritionRiskScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, AttritionRiskScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        AttritionRiskController(self._context, self._current_employee).attach(screen)
+
     def _attach_dashboard_builder(self, screen: QWidget) -> None:
         """Dashboard qurucusunu `DashboardLayoutUseCase`-ə bağlayır (bölmə 6)."""
         from src.presentation.controllers.dashboard_builder import (  # noqa: PLC0415
@@ -585,6 +719,66 @@ class KompasApplication:
         if not isinstance(screen, DashboardBuilderScreen):  # pragma: no cover - tip qoruyucusu
             return
         DashboardBuilderController(self._context, self._current_employee).attach(screen)
+
+    def _attach_dashboard_benchmark(self, screen: QWidget) -> None:
+        """Reytinq Cədvəlinin dropdown/drill-down siqnallarını bağlayır (#24, Faza 9A).
+
+        AYRI KONTROLLER YARADILMADI: bu widget-lər YALNIZ OXUYUR (bax
+        `application.use_cases.multi_store_benchmark` modul başlığı), ona
+        görə mövcud `ScreenDataBinder`-in iki metodu (`refresh_dashboard_
+        benchmark`, `populate_daily_roster_for_store`) kifayət edir.
+        """
+        from src.presentation.screens.group_c import DashboardScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, DashboardScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        if self._binder is None:  # pragma: no cover - `show_admin`-lə bərabər qurulur
+            return
+        screen.ranking_metric_changed.connect(
+            lambda metric_key: self._on_ranking_metric_changed(screen, metric_key)
+        )
+        screen.ranking_row_selected.connect(self._on_ranking_row_selected)
+
+    def _on_ranking_metric_changed(self, screen: QWidget, metric_key: str) -> None:
+        """Reytinq dropdown-u dəyişdi — dörd bölmə YENİ metriklə yenilənir."""
+        if self._binder is None:  # pragma: no cover - invariant
+            return
+        self._binder.refresh_dashboard_benchmark(screen, metric_key=metric_key)
+
+    def _on_ranking_row_selected(self, store_id_text: str) -> None:
+        """DRILL-DOWN: reytinq sətrinə klik → MÖVCUD "Gündəlik Tabel" ekranı.
+
+        ──────────────────────────────────────────────────────────────────
+        NİYƏ QƏRARIN ÖZÜ `perform_ranking_drill_down`-DADIR
+        ──────────────────────────────────────────────────────────────────
+        `AdminShell.show_screen(key)` YALNIZ açardan asılıdır, parametr
+        daşımır (mövcud imza — YENİ naviqasiya qatı YARADILMADI). Reytinq
+        cədvəlindəki mağaza isə Root/CEO/Admin/HR_Admin-in ÖZ mağazası
+        olmaya bilər (`daily_roster`-in canlı yolu defolt aktorun ÖZ
+        `store_id`-sinə bağlıdır, bax `screen_data._daily_roster`), ona görə
+        keçiddən SONRA `AdminShell.screen_for()` ilə artıq açılmış instansiya
+        götürülür və `populate_daily_roster_for_store` ONU XÜSUSİ olaraq
+        kliklənən mağaza ilə doldurur. Bu ÜÇ addım `screen_data.
+        perform_ranking_drill_down`-da SAF funksiya kimi yaşayır ki,
+        `QApplication` olmadan test oluna bilsin — burada YALNIZ HAZIR
+        collaborator-lar ötürülür.
+        """
+        if self._shell is None or self._binder is None:
+            return
+        from src.presentation.controllers.screen_data import (  # noqa: PLC0415
+            perform_ranking_drill_down,
+        )
+
+        succeeded = perform_ranking_drill_down(
+            store_id_text,
+            show_screen=self._shell.show_screen,
+            screen_for=self._shell.screen_for,
+            populate=self._binder.populate_daily_roster_for_store,
+        )
+        if not succeeded:
+            _log.warning("BENCHMARK_DRILL_DOWN_FAILED", extra={"value": store_id_text})
 
     def _attach_sales_review(self, screen: QWidget) -> None:
         """«Şübhəli Satışlar» növbəsini `SalesReviewQueueUseCase`-ə bağlayır."""
@@ -619,6 +813,54 @@ class KompasApplication:
         if not isinstance(screen, PermissionMatrixScreen):  # pragma: no cover - tip qoruyucusu
             return
         PermissionMatrixController(self._context, self._current_employee).attach(screen)
+
+    def _attach_users_pos_threshold(self, screen: QWidget) -> None:
+        """`UsersScreen`-in "POS Səlahiyyəti" VƏ "Sənədlər" bəndlərini bağlayır.
+
+        #7 (kompasos11.md Faza 4) və #17 (Faza 7) — HƏR İKİSİ YALNIZ
+        sənədləşdirmədir. Bütün qoruyucular (icazə flag-i, Self-Escalation,
+        Strict Hierarchy) use case-lərin İÇİNDƏDİR — bax `controllers/
+        pos_threshold.py` və `controllers/employee_documents.py` başlıqları.
+
+        İKİ KONTROLLER EYNİ `action_requested` SİQNALINA bağlanır — hər biri
+        ÖZ açarını filtrləyir (`POS_THRESHOLD_ACTION_KEY`/
+        `EMPLOYEE_DOCUMENT_ACTION_KEY`), yəni bir-birinə mane olmurlar. Metod
+        adı DƏYİŞMİR (`_attach_write_controller` cədvəlində `UsersScreen`
+        üçün TƏK giriş nöqtəsidir — ilk uyğunluqdan sonra dayanır).
+        """
+        from src.presentation.controllers.employee_documents import (  # noqa: PLC0415
+            UsersEmployeeDocumentController,
+        )
+        from src.presentation.controllers.pos_threshold import (  # noqa: PLC0415
+            UsersPOSThresholdController,
+        )
+        from src.presentation.screens.group_c import UsersScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, UsersScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        UsersPOSThresholdController(self._context, self._current_employee).attach(screen)
+        UsersEmployeeDocumentController(self._context, self._current_employee).attach(screen)
+
+    def _attach_open_shift_market(self, screen: QWidget) -> None:
+        """Növbə Planlama ekranının "Açıq Növbə Bazarı" kartını bağlayır (#16).
+
+        Matrisin ÖZÜ toxunulmur: onun canlı məlumatı `ScreenDataBinder.
+        _shift_planning`-dən gəlməyə davam edir. Bu kontroller yalnız elan
+        kartını (oxu + yazı) idarə edir — hibrid bağlama, `users` ekranı ilə
+        eyni naxış.
+        """
+        from src.presentation.controllers.open_shift import (  # noqa: PLC0415
+            ShiftMatrixOpenShiftController,
+        )
+        from src.presentation.screens.group_c import ShiftPlanningScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, ShiftPlanningScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        ShiftMatrixOpenShiftController(self._context, self._current_employee).attach(screen)
 
     def _attach_erp_servers(self, screen: QWidget) -> None:
         """1C server panelini `ErpConnectionWizardUseCase`-ə bağlayır (bölmə 7).
@@ -754,6 +996,15 @@ class KompasApplication:
             group_h,
             group_i,
         )
+        from src.presentation.screens.announcements import (  # noqa: PLC0415
+            AnnouncementsScreen,
+        )
+        from src.presentation.screens.attrition_risk import (  # noqa: PLC0415
+            AttritionRiskScreen,
+        )
+        from src.presentation.screens.performance_review import (  # noqa: PLC0415
+            PerformanceReviewScreen,
+        )
 
         theme = self._theme
 
@@ -838,6 +1089,10 @@ class KompasApplication:
             "infrastructure": lambda: group_i.InfrastructureScreen(theme),
             "plugins": lambda: group_i.PluginScreen(theme),
             "dashboard_builder": lambda: group_i.DashboardBuilderScreen(theme),
+            "exceptions": lambda: group_i.ExceptionsScreen(theme),
+            "announcements": lambda: AnnouncementsScreen(theme),
+            "performance_reviews": lambda: PerformanceReviewScreen(theme),
+            "attrition_risk": lambda: AttritionRiskScreen(theme),
             "settings": lambda: group_d.SettingsScreen(theme),
             "profile": lambda: group_g.ProfileScreen(
                 theme,
@@ -861,6 +1116,10 @@ class KompasApplication:
             "leave_types": "Fasilə kateqoriyaları",
             "infrastructure": "Baza keçidi · texniki fasilə",
             "plugins": "Sandbox-da işləyən genişləndirmələr",
+            "exceptions": "Davranış anomaliyaları · avtomatik aşkarlanır",
+            "announcements": "Bütün mağazalar · bir-tərəfli yayım",
+            "performance_reviews": "Dövri qiymətləndirmə · KPI + qeyd",
+            "attrition_risk": "Gecəlik hesablanır · yalnız məsləhət xarakterlidir",
         }
 
         for key, factory in factories.items():
@@ -1090,6 +1349,33 @@ class KompasApplication:
 
         home.action_requested.connect(on_action)
         home.logout_requested.connect(lambda: kiosk.set_content(pin_pad))
+
+        # #16 — "Açıq Növbələr" kartının ÖZ kontrolleri var (CLAUDE.md §6):
+        # kart həm oxuyur, həm yazır və hər tutmadan sonra siyahı yenidən
+        # oxunmalıdır. `KioskController`-ə əlavə edilmədi, çünki o, GÜNÜN
+        # AXINI (giriş/icazə/qayıdış) üçündür — açıq növbə isə gələcək günə
+        # aiddir və statusdan asılı deyil.
+        #
+        # Kontrollerə istinad SAXLANMIR: o, siqnala bağladığı `lambda`-nın
+        # bağlamasında yaşayır və ekranla birlikdə ölür.
+        if self._context is not None:
+            from src.presentation.controllers.open_shift import (  # noqa: PLC0415
+                EmployeeOpenShiftController,
+            )
+
+            EmployeeOpenShiftController(self._context, employee).attach(home)
+
+            # #19 Elan (Broadcast, kompasos11.md Faza 8) — "Elanlar" kartının
+            # ÖZ kontrolleri var, LAKİN bağlayacaq siqnalı YOXDUR (bir-tərəfli,
+            # cavab yoxdur — bax `controllers/announcements.py` başlığı).
+            # Kontrollerə istinad SAXLANMIR — `EmployeeOpenShiftController` ilə
+            # eyni qərar.
+            from src.presentation.controllers.announcements import (  # noqa: PLC0415
+                EmployeeAnnouncementController,
+            )
+
+            EmployeeAnnouncementController(self._context, employee).attach(home)
+
         refresh(outcome)
         return home
 
@@ -1129,6 +1415,33 @@ class KompasApplication:
                 total_text="25 ₼",
                 latest="Gecikmə — 04 Avqust",
                 appeal_days_left=3,
+            )
+            # #16 — maket və canlı yol EYNİ açarları işlədir (`id`, `date`,
+            # `work_mode`); bax `controllers/open_shift.py::_to_employee_row`.
+            home.set_open_shifts(
+                [
+                    {
+                        "id": "00000000-0000-0000-0000-000000000016",
+                        "date": "14.08.2026 · Cüm",
+                        "work_mode": "Səhər · 09:00–18:00",
+                    }
+                ]
+            )
+            # #19 — maket və canlı yol EYNİ açarları işlədir (`title`,
+            # `message`, `scope_text`, `date`); bax
+            # `controllers/announcements.py::_to_employee_row`.
+            home.set_announcements(
+                [
+                    {
+                        "id": "00000000-0000-0000-0000-000000000019",
+                        "title": "Bayram iş qrafiki",
+                        "message": (
+                            "20-22 Avqust tarixlərində iş saatları 10:00–19:00 olaraq dəyişdirilib."
+                        ),
+                        "scope_text": "Bütün mağazalar",
+                        "date": "12.08.2026 09:00",
+                    }
+                ]
             )
             home.logout_requested.connect(lambda: kiosk.set_content(pin_pad))
             kiosk.set_content(home)
@@ -1313,7 +1626,11 @@ class _SessionScopedLogin:
         with self._context.session() as session:
             use_case = AdminLoginUseCase(
                 employees=session.uow.employees,
-                hashing=HashingService(),
+                # `limits`: şifrə siyasətinin minimum uzunluğu
+                # (`PASSWORD_MIN_LENGTH`) ROOT-dandır. Ötürülməsəydi servis
+                # fallback ilə işləyər və Root-un yazdığı uzunluq HEÇ VAXT
+                # tətbiq olunmazdı.
+                hashing=HashingService(limits=self._context.infrastructure_limits()),
                 clock=SystemClock(),
                 audit=session.uow.audit,
             )

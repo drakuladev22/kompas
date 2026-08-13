@@ -53,6 +53,12 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
+from src.domain.policies import SystemLimitKey
+from src.infrastructure.config.limits import (
+    InfrastructureLimits,
+    fallback_int,
+    fallback_int_tuple,
+)
 from src.shared.logger import LogChannel, get_logger
 from src.shared.runtime import deployment_root, relaunch_command
 
@@ -64,12 +70,29 @@ if TYPE_CHECKING:
 _error_log = get_logger(__name__, channel=LogChannel.ERROR)
 _app_log = get_logger(__name__)
 
-#: Artan gecikmə cədvəli (saniyə) — sonuncu dəyər təkrarlanır.
-DEFAULT_RESTART_BACKOFF_SECONDS: Final[tuple[int, ...]] = (2, 4, 8, 16, 30)
+#: ÜÇÜ DƏ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`KIOSK_RESTART_BACKOFF_SECONDS`, `KIOSK_RESTART_WINDOW_MINUTES`,
+#: `KIOSK_MAX_RESTARTS_PER_WINDOW`; seed: migrations/032).
+#:
+#: NİYƏ ROOT PARAMETRİDİR: fırtına həddi mağazanın avadanlığından asılıdır —
+#: zəif kioskda soyuq açılış uzun çəkir və 10 dəqiqədə 5 restart normal
+#: bərpa ola bilər, sabit quraşdırmada isə eyni say real nasazlıq əlamətidir.
+#: Hədd struktur zəmanət DEYİL: watchdog dayananda tətbiq bağlanmır, sadəcə
+#: avtomatik yenidən başlatma dayanır və hadisə `error.log`-a düşür.
+#:
+#: Artan gecikmə cədvəli (saniyə) — sonuncu dəyər təkrarlanır. Vergüllü siyahı
+#: naxışı `EMPLOYEE_DOCUMENT_EXPIRY_WARNING_DAYS` ilə eynidir (sıra mənalıdır).
+FALLBACK_RESTART_BACKOFF_SECONDS: Final[tuple[int, ...]] = fallback_int_tuple(
+    SystemLimitKey.KIOSK_RESTART_BACKOFF_SECONDS
+)
 #: Pəncərə limiti: bu qədər dəqiqədə...
-RESTART_WINDOW_MINUTES: Final[int] = 10
+FALLBACK_RESTART_WINDOW_MINUTES: Final[int] = fallback_int(
+    SystemLimitKey.KIOSK_RESTART_WINDOW_MINUTES
+)
 #: ...bu qədər yenidən başlatmadan çox olarsa watchdog dayanır.
-MAX_RESTARTS_PER_WINDOW: Final[int] = 5
+FALLBACK_MAX_RESTARTS_PER_WINDOW: Final[int] = fallback_int(
+    SystemLimitKey.KIOSK_MAX_RESTARTS_PER_WINDOW
+)
 #: `0` — qəsdən bağlanma; yenidən başlatma tələb OLUNMUR.
 CLEAN_EXIT_CODE: Final[int] = 0
 
@@ -125,17 +148,44 @@ class KioskWatchdog:
         runner: Callable[[Sequence[str]], int] | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
-        backoff_seconds: Sequence[int] = DEFAULT_RESTART_BACKOFF_SECONDS,
-        max_restarts: int = MAX_RESTARTS_PER_WINDOW,
+        backoff_seconds: Sequence[int] | None = None,
+        max_restarts: int | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
+        """
+        Args:
+            backoff_seconds / max_restarts: AÇIQ üstünlük — verilərsə ROOT
+                dəyəri OXUNMUR (test və xüsusi quraşdırma bunu işlədir).
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback-lar.
+        """
         self._command = list(command) if command else self._default_command()
         self._crash_reporter = crash_reporter
         self._runner = runner or self._spawn
         self._sleep = sleeper
         self._monotonic = monotonic
-        self._backoff = tuple(backoff_seconds) or DEFAULT_RESTART_BACKOFF_SECONDS
-        self._max_restarts = max_restarts
+        self._explicit_backoff = tuple(backoff_seconds) if backoff_seconds else None
+        self._explicit_max_restarts = max_restarts
+        self._limits = limits or InfrastructureLimits()
         self._stopped = False
+
+    def _backoff_schedule(self) -> tuple[int, ...]:
+        """Gözləmə cədvəli — HƏR ÇÖKMƏDƏ oxunur.
+
+        Nəzarətçi tətbiqdən UZUN yaşayır (o, tətbiqi yenidən başladan
+        prosesdir), ona görə konstruktorda dondurulmuş cədvəl Root-un
+        dəyişikliyini heç vaxt görməzdi.
+        """
+        if self._explicit_backoff is not None:
+            return self._explicit_backoff
+        return self._limits.int_tuple_of(SystemLimitKey.KIOSK_RESTART_BACKOFF_SECONDS)
+
+    def _max_restarts_value(self) -> int:
+        if self._explicit_max_restarts is not None:
+            return self._explicit_max_restarts
+        return self._limits.int_of(SystemLimitKey.KIOSK_MAX_RESTARTS_PER_WINDOW)
+
+    def _window_minutes(self) -> int:
+        return self._limits.int_of(SystemLimitKey.KIOSK_RESTART_WINDOW_MINUTES)
 
     @staticmethod
     def _default_command() -> list[str]:
@@ -180,16 +230,16 @@ class KioskWatchdog:
                 return outcome
 
             now = self._monotonic()
-            self._prune(recent, now)
+            self._prune(recent, now, self._window_minutes())
             recent.append(now)
 
-            if len(recent) > self._max_restarts:
+            if len(recent) > self._max_restarts_value():
                 outcome.stopped_because = "restart_storm"
                 _error_log.error(
                     "KIOSK_RESTART_STORM",
                     extra={
                         "restarts": len(recent),
-                        "window_minutes": RESTART_WINDOW_MINUTES,
+                        "window_minutes": self._window_minutes(),
                         "exit_code": exit_code,
                     },
                 )
@@ -228,13 +278,19 @@ class KioskWatchdog:
 
     def _backoff_for(self, previous_restarts: int) -> int:
         """Artan gecikmə — cədvəlin sonuncu dəyəri təkrarlanır."""
-        index = min(previous_restarts, len(self._backoff) - 1)
-        return self._backoff[index]
+        schedule = self._backoff_schedule()
+        index = min(previous_restarts, len(schedule) - 1)
+        return schedule[index]
 
     @staticmethod
-    def _prune(recent: deque[float], now: float) -> None:
-        """Pəncərədən çıxmış hadisələri atır."""
-        cutoff = now - RESTART_WINDOW_MINUTES * 60
+    def _prune(recent: deque[float], now: float, window_minutes: int) -> None:
+        """Pəncərədən çıxmış hadisələri atır.
+
+        Pəncərə uzunluğu ARQUMENT kimi gəlir (metod ROOT-a özü müraciət etmir),
+        çünki bu, saf hesablamadır: eyni giriş həmişə eyni nəticə verməlidir və
+        testdə konfiqurasiya olmadan yoxlanıla bilməlidir.
+        """
+        cutoff = now - window_minutes * 60
         while recent and recent[0] < cutoff:
             recent.popleft()
 
@@ -278,9 +334,9 @@ class KioskWatchdog:
 
 __all__ = [
     "CLEAN_EXIT_CODE",
-    "DEFAULT_RESTART_BACKOFF_SECONDS",
-    "MAX_RESTARTS_PER_WINDOW",
-    "RESTART_WINDOW_MINUTES",
+    "FALLBACK_MAX_RESTARTS_PER_WINDOW",
+    "FALLBACK_RESTART_BACKOFF_SECONDS",
+    "FALLBACK_RESTART_WINDOW_MINUTES",
     "KioskProcessCrashError",
     "KioskWatchdog",
     "RestartRecord",

@@ -42,6 +42,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 from psycopg import sql
 
+from src.domain.policies import SystemLimitKey
+from src.infrastructure.config.limits import InfrastructureLimits, fallback_int
 from src.infrastructure.offline.buffer import BufferedWrite, OfflineBuffer
 from src.infrastructure.persistence.connection import SCHEMA
 from src.shared.logger import LogChannel, get_logger
@@ -70,7 +72,12 @@ VERSION_COLUMN: Final[dict[str, str | None]] = {
     "audit_logs": None,
 }
 
-DEFAULT_BATCH_SIZE: Final[int] = 100
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits` (`OFFLINE_SYNC_BATCH_SIZE`,
+#: seed: migrations/032). Bir dövrdə neçə yazı tətbiq olunur: offline
+#: qaldıqdan sonra bufer minlərlə sətir saxlaya bilər və paketin ölçüsü
+#: "nə qədər tez bərpa olsun" ilə "istifadəçi əməliyyatları nə qədər
+#: gözləsin" arasındakı tarazlıqdır — o isə mağazanın kanalından asılıdır.
+FALLBACK_BATCH_SIZE: Final[int] = fallback_int(SystemLimitKey.OFFLINE_SYNC_BATCH_SIZE)
 
 
 class SyncError(Exception):
@@ -106,13 +113,30 @@ class OfflineSyncService:
         buffer: OfflineBuffer,
         database: Database,
         is_online: Callable[[], bool] | None = None,
-        batch_size: int = DEFAULT_BATCH_SIZE,
+        batch_size: int | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
+        """
+        Args:
+            batch_size: AÇIQ üstünlük — verilərsə ROOT dəyəri OXUNMUR.
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback.
+        """
         self._buffer = buffer
         self._database = database
         self._is_online = is_online or database.health_check
-        self._batch_size = batch_size
+        self._explicit_batch_size = batch_size
+        self._limits = limits or InfrastructureLimits()
         self._column_cache: dict[str, dict[str, tuple[str, str]]] = {}
+
+    def _batch_size(self) -> int:
+        """Paket ölçüsü — HƏR DÖVRDƏ oxunur.
+
+        Servis uzun ömürlüdür və bərpa dövrü saatlarla çəkə bilər; admin
+        yükü azaltmaq üçün paketi ORTADA kiçiltmək istəyə bilər.
+        """
+        if self._explicit_batch_size is not None:
+            return self._explicit_batch_size
+        return self._limits.int_of(SystemLimitKey.OFFLINE_SYNC_BATCH_SIZE)
 
     def run_once(self, *, now: datetime | None = None) -> SyncReport:
         """Hazır olan yazıları tətbiq etməyə cəhd edir."""
@@ -124,7 +148,7 @@ class OfflineSyncService:
             _log.debug("OFFLINE_SYNC_SKIPPED", extra={"reason": "bağlantı yoxdur"})
             return report
 
-        for write in self._buffer.pending(now=moment, limit=self._batch_size):
+        for write in self._buffer.pending(now=moment, limit=self._batch_size()):
             report.attempted += 1
             try:
                 outcome = self._apply(write, now=moment)

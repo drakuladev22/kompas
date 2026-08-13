@@ -7,6 +7,22 @@ portu (bax `interfaces.ports`) vasitəsilə ötürülür.
 QAYDA: sistem limiti OLMAYAN sabit dəyər domen kodunda hardcode edilə bilməz
 (bölmə 3, DİNAMİK LİMİT VƏ TAYMAUT İDARƏETMƏSİ) — istisna yalnız struktur
 təhlükəsizlik zəmanətləridir (hardlock, anti-fraud, guard-lar).
+
+──────────────────────────────────────────────────────────────────────────────
+BU MODUL YARPAQDIR — RUNTIME-DA HEÇ BİR DOMEN MODULUNU İDXAL ETMİR
+──────────────────────────────────────────────────────────────────────────────
+`value_objects/*` modulları (licensing, updates, erp, catalogs, storage,
+gamification, infrastructure) fallback sabitlərini artıq `DEFAULT_LIMITS`-dən
+oxuyur — yəni oxu istiqaməti `value_objects → policies`-dir. Əgər bu fayl
+`Money`-ni modul səviyyəsində idxal etsəydi, əks istiqamət də yaranardı:
+`import src.domain.policies` əvvəlcə `src/domain/value_objects/__init__.py`-ni
+TAM icra edərdi (alt-modul idxalı paket `__init__`-ini işə salır), o isə
+yarımçıq qalmış `policies`-dən `DEFAULT_LIMITS` istəyərdi — dairəvi idxal.
+
+Ona görə `Money` YALNIZ `TYPE_CHECKING` altında və `amount_for` daxilində
+idxal olunur. Alternativ (fallback sabitlərini ayrı bir modula köçürmək) rədd
+edildi: onda "defolt haradadır?" sualının İKİ cavabı olardı və parity qapısı
+(`tests/unit/test_root_control_parameter_parity.py`) yalnız birini görərdi.
 """
 
 from __future__ import annotations
@@ -14,9 +30,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import Enum
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
-from src.domain.value_objects.money import Money
+if TYPE_CHECKING:
+    from src.domain.value_objects.money import Money
 
 
 class SystemLimitKey(str, Enum):
@@ -36,6 +53,489 @@ class SystemLimitKey(str, Enum):
     LEAVE_ALLOWANCE_FIXED_MINUTES = "LEAVE_ALLOWANCE_FIXED_MINUTES"
     # --- BR-002 ilə əlavə olunan (bax aşağı) ---
     DELAY_FINE_RATE_PER_MINUTE = "DELAY_FINE_RATE_PER_MINUTE"
+    # --- Vahid İstisna Motoru (#9, kompasos11.md Faza 3) ---
+    #
+    # DÖRDÜ DƏ ROOT PARAMETRİDİR. Motorda sabit ədəd QALMIR: hər biri
+    # `system_limits`-dən oxunur və `DEFAULT_LIMITS` yalnız DB sətri hələ
+    # seed edilməmiş yollar üçün fallback-dır (seed: migrations/022).
+    EXCEPTION_PAGE_SIZE = "EXCEPTION_PAGE_SIZE"
+    EXCEPTION_MAX_FINDINGS_PER_RULE = "EXCEPTION_MAX_FINDINGS_PER_RULE"
+    EXCEPTION_NOTIFY_MIN_SEVERITY = "EXCEPTION_NOTIFY_MIN_SEVERITY"
+    EXCEPTION_REVIEW_NOTE_MIN_LENGTH = "EXCEPTION_REVIEW_NOTE_MIN_LENGTH"
+    # --- #7 POS Səlahiyyət Siyasəti (kompasos11.md Faza 4, sənədləşdirmə) ---
+    #
+    # YEGANƏ ROOT PARAMETRİ: DB `CHECK`-i (migrations/018) 0–100 sxem
+    # sərhədidir və dəyişməz; bu açar isə Root-un ONUN DA altında öz biznes
+    # siyasətini tətbiq edə biləcəyi ƏLAVƏ tavandır (məs. "heç bir işçiyə
+    # 40%-dən çox endirim səlahiyyəti verilməsin"). Defolt 100 = sxem
+    # sərhədi ilə eyni, yəni başlanğıcda ƏLAVƏ məhdudiyyət YOXDUR.
+    POS_MAX_DISCOUNT_PCT_CEILING = "POS_MAX_DISCOUNT_PCT_CEILING"
+    # --- #8 İşçi Davranış Baz Xətti (kompasos11.md Faza 5) ---
+    #
+    # DÖRDÜ DƏ ROOT PARAMETRİDİR (tapşırığın açıq tələbi). Sinifdə (bax
+    # `application.use_cases.behavior_baseline`) qalan ədəd YALNIZ
+    # `system_limits` sətri hələ seed edilməyibsə işə düşən fallback-dır
+    # (seed: migrations/024).
+    #
+    # Baxılan gün sayı — kompasos11.md açıq şəkildə "son 30 günün orta
+    # check-in vaxtı" deyir, ona görə defolt 30-dur, lakin Root onu dəyişə
+    # bilməlidir (məs. mövsümi mağazada daha qısa pəncərə lazım ola bilər).
+    BEHAVIOR_BASELINE_WINDOW_DAYS = "BEHAVIOR_BASELINE_WINDOW_DAYS"
+    # Bugünkü check-in baz xəttindən neçə dəqiqə sapanda anomaliya elan
+    # edilsin. Spesifikasiyanın açıq tələbi (kompasos11.md Faza 5, addım 2).
+    BEHAVIOR_ANOMALY_THRESHOLD_MINUTES = "BEHAVIOR_ANOMALY_THRESHOLD_MINUTES"
+    # MİNİMUM NÜMUNƏ HƏDDİ — migrations/018 `sample_size` şərhinin açıq
+    # tələbi: "3 günlük müşahidədən çıxan baz xətt ilə anomaliya elan etmək
+    # yanlış ittihamdır". Bu hədddən az müşahidəsi olan işçi üçün qayda HEÇ
+    # NƏ elan etmir (baz xətti yenə də yazılır — yalnız istifadəsi bloklanır).
+    BEHAVIOR_BASELINE_MIN_SAMPLE_SIZE = "BEHAVIOR_BASELINE_MIN_SAMPLE_SIZE"
+    # σ VURUĞU — sapmanın CİDDİYYƏTİNİ dərəcələndirmək üçün: kənarlaşma işçinin
+    # ÖZ standart kənarlaşmasının bu qat qədərini keçəndə ciddiyyət bir pillə
+    # yuxarı qalxır (statistik cəhətdən "adətdən çıxma" nə qədər ekstremdir).
+    # Əsas AÇMA/BAĞLAMA qapısı YENƏ DƏ dəqiqə həddidir — σ yalnız artıq
+    # aşkarlanmış anomaliyanın rəngini (LOW→CRITICAL) təyin edir.
+    BEHAVIOR_ANOMALY_SIGMA_MULTIPLIER = "BEHAVIOR_ANOMALY_SIGMA_MULTIPLIER"
+    # --- #15 Norma üstü iş saatlarının izlənməsi (kompasos11.md Faza 6) ---
+    #
+    # ÜÇÜ DƏ ROOT PARAMETRİDİR. Norma saatı ƏMƏK QANUNVERİCİLİYİ dəyəridir və
+    # kirayəçidən kirayəçiyə (hətta mövsümdən mövsümə) fərqlənə bilər — onu
+    # koda yazmaq "8" rəqəmini dəyişdirmək üçün yeni buraxılış tələb edərdi.
+    # `application.use_cases.overtime_tracking`-dəki sabitlər YALNIZ
+    # `system_limits` sətri hələ seed edilməyibsə işə düşən fallback-dır
+    # (seed: migrations/026).
+    #
+    # GÜNDƏLİK norma: bir iş gününün neçə saatdan sonra "norma üstü" saydığı.
+    OVERTIME_DAILY_NORM_HOURS = "OVERTIME_DAILY_NORM_HOURS"
+    # HƏFTƏLİK norma: gündəlik norma heç vaxt aşılmasa belə, həftədə çox GÜN
+    # işləmək aşım yaradır (6 × 7 saat = 42). İki norma bir-birini əvəz etmir,
+    # TAMAMLAYIR — ona görə hər ikisi ayrıca parametrdir.
+    OVERTIME_WEEKLY_NORM_HOURS = "OVERTIME_WEEKLY_NORM_HOURS"
+    # BİLDİRİŞ HƏDDİ — bu hədddən (daxil olmaqla) böyük aşım HR_Admin-ə
+    # bildiriş doğurur. Jurnala isə aşımın HAMISI yazılır: hədd yalnız
+    # bildiriş kanalının səs-küydən qorunmasıdır (15 dəqiqəlik aşıma görə
+    # hər gün e-poçt getsəydi, kanal bir həftədə görməzdən gəlinərdi).
+    OVERTIME_NOTIFY_THRESHOLD_HOURS = "OVERTIME_NOTIFY_THRESHOLD_HOURS"
+    # --- #14 Əmək qanunu xəbərdarlığı (kompasos11.md Faza 6) ---
+    #
+    # DÖRDÜ DƏ ROOT PARAMETRİDİR. Qayda BLOKLAMIR, yalnız xəbərdarlıq göstərir
+    # (bax `domain.labor_rules` başlığı) — ona görə hədlər "təhlükəsizlik
+    # zəmanəti" DEYİL və CLAUDE.md §5-ə görə yerləri məhz `system_limits`-dədir.
+    # `LaborLimits.defaults()` yalnız DB sətri hələ seed edilməyibsə işə düşür
+    # (seed: migrations/025).
+    #
+    # İki ardıcıl növbə arasındakı minimum istirahət (saat). Gecə növbəsi
+    # nəzərə alınır: hesablama növbənin BİTMƏ ANINDAN aparılır, bitmə
+    # saatından yox.
+    LABOR_MIN_REST_HOURS = "LABOR_MIN_REST_HOURS"
+    # Uzun növbədə nəzərdə tutulmalı fasilənin MÜDDƏTİ (dəqiqə).
+    LABOR_MANDATORY_BREAK_MINUTES = "LABOR_MANDATORY_BREAK_MINUTES"
+    # Fasilənin MƏCBURİ olduğu hədd (saat). Müddət və hədd AYRI parametrdir,
+    # çünki müəssisələr onları müstəqil təyin edir; tək parametr ya hər
+    # növbədə xəbərdarlıq verərdi (səs-küy), ya da heç vaxt.
+    LABOR_BREAK_REQUIRED_AFTER_HOURS = "LABOR_BREAK_REQUIRED_AFTER_HOURS"
+    # İstirahət günü olmadan ardıcıl neçə gün işləmək olar.
+    LABOR_MAX_CONSECUTIVE_WORK_DAYS = "LABOR_MAX_CONSECUTIVE_WORK_DAYS"
+    # --- #13 Tarixi-nümunə əsaslı kadr təklifi (kompasos11.md Faza 6) ---
+    #
+    # TAPŞIRIĞIN AÇIQ TƏLƏBİ: "neçə həftəlik tarixçəyə baxılsın" ROOT
+    # parametridir. Pəncərənin uzunluğu təklifin keyfiyyətini birbaşa təyin
+    # edir (qısa = təsadüfi, uzun = köhnəlmiş), yəni bu, müəssisənin öz
+    # mövsümi ritminə görə tənzimlədiyi dəyərdir — koda yazıla bilməz.
+    STAFFING_PATTERN_BASED_ON_WEEKS = "STAFFING_PATTERN_BASED_ON_WEEKS"
+    # --- #16 Açıq Növbə Bazarı (kompasos11.md Faza 6) ---
+    #
+    # HƏR İKİSİ ROOT PARAMETRİDİR. `application.use_cases.open_shift_market`
+    # sinfindəki sabitlər YALNIZ `system_limits` sətri hələ seed edilməyibsə
+    # işə düşən fallback-dır (seed: migrations/027).
+    #
+    # Elan neçə gün irəli üçün verilə bilər. Növbə DƏYİŞMƏ sorğusundakı 90
+    # günlük pəncərədən (bax `shift_scheduling.MAX_SWAP_LEAD_DAYS`) qəsdən
+    # FƏRQLİDİR: orada işçi ÖZ mövcud gününü dəyişir, burada isə hələ heç
+    # kimə aid olmayan slot elan olunur. Üç ay əvvəldən "açıq" qalan elan
+    # bazarı yox, planlaşdırılmamış təqvimi göstərərdi — o iş Shift
+    # Matrix-indir.
+    OPEN_SHIFT_MAX_LEAD_DAYS = "OPEN_SHIFT_MAX_LEAD_DAYS"
+    # Bir işçinin BİR TƏQVİM AYINDA götürə biləcəyi açıq növbə sayı. Tavan
+    # olmasa açıq bazar sükutla "daimi əlavə iş" mexanizminə çevrilərdi:
+    # eyni işçi hər elanı tutar, norma üstü saatı (#15) və istirahət qaydası
+    # (#14) isə yalnız FAKT baş verdikdən SONRA xəbərdarlıq verərdi.
+    OPEN_SHIFT_MAX_CLAIMS_PER_MONTH = "OPEN_SHIFT_MAX_CLAIMS_PER_MONTH"
+    # --- #17 İşçi Sənədləri (kompasos11.md Faza 7) --------------------------- #
+    #
+    # ROOT PARAMETRİDİR (tapşırığın açıq tələbi: "bu gün ədədləri hardcode
+    # edilməməlidir"). ÜÇ AYRI AÇAR ƏVƏZİNƏ BİR SİYAHI-AÇAR seçildi: üç hədd
+    # BİRGƏ bir "xatırlatma cədvəli" təşkil edir (30 → 14 → 7 gün) və ayrı
+    # açarlarda Root onları YANLIŞ SIRAYA (məs. FAR=7, NEAR=30) yaza bilərdi —
+    # bu, "hansı ədəd hansı pillədir" sualını sükutla pozardı. Tək sətirdə
+    # (`"30,14,7"`) Root bir dəfəyə bütöv cədvəli görür və dəyişdirir; format
+    # `EXCEPTION_NOTIFY_MIN_SEVERITY` kimi digər `TEXT` limitlərlə eynidir —
+    # `min_value`/`max_value` mənasızdır (bax migrations/022 şərhi).
+    EMPLOYEE_DOCUMENT_EXPIRY_WARNING_DAYS = "EMPLOYEE_DOCUMENT_EXPIRY_WARNING_DAYS"
+    # --- #19 Elan (Broadcast) (kompasos11.md Faza 8) ------------------------- #
+    #
+    # ROOT PARAMETRİDİR: elanın İşçi Ana Ekranında NEÇƏ GÜN görünəcəyi. Geri
+    # çəkmə (`withdraw`) əl ilədir və HƏMİŞƏ mövcuddur, lakin admin unudanda
+    # köhnə elan əbədi qalmamalıdır — kiosk ekranı köhnəlmiş göstərişlərlə
+    # dolardı. Sətir SİLİNMİR/deaktiv EDİLMİR: yalnız YENİ görüntülənmə
+    # dayanır (`is_active`-dan MÜSTƏQİL bir ölçüdür, `Announcement.
+    # is_within_visibility_window` başlığına bax).
+    ANNOUNCEMENT_VISIBILITY_DAYS = "ANNOUNCEMENT_VISIBILITY_DAYS"
+    # --- #20 Performans Qiymətləndirməsi (kompasos11.md Faza 8) -------------- #
+    #
+    # ROOT PARAMETRİ: dövr GRANULYARLIĞI (aylıq/rüblük) — tapşırığın açıq
+    # tələbi. Dəyər `PerformanceReviewPeriodType`-a uyğunlaşdırılır; forma
+    # bugünkü tarixdən DEFOLT dövr sətrini bu açara görə hesablayır, lakin
+    # `performance_reviews.period` sərbəst formatı (illik də) qəbul etməyə
+    # davam edir (bax `entities/performance_review.py`).
+    PERFORMANCE_REVIEW_PERIOD_TYPE = "PERFORMANCE_REVIEW_PERIOD_TYPE"
+    # KPI KATALOQU — SƏRT SİYAHI KODA YAZILMIR (tapşırığın açıq tələbi).
+    # Format: "KOD:Ad;KOD:Ad;..." — `EMPLOYEE_DOCUMENT_EXPIRY_WARNING_DAYS`-in
+    # vergüllü siyahı naxışının İKİ SƏVİYYƏLİ variantı (KPI kodu VƏ Azərbaycanca
+    # etiketi birlikdə). Ayrı "KOD" və "ETİKET" açarları RƏDD EDİLDİ: onlar
+    # sıra ilə uyğunlaşdırılmalı olardı (n-ci kod → n-ci etiket) və Root iki
+    # siyahını fərqli uzunluqda saxlaya bilərdi — sükutla "hansı etiket hansı
+    # koda aiddir" sualını pozardı (`EMPLOYEE_DOCUMENT_EXPIRY_WARNING_DAYS`-in
+    # eyni əsaslandırması, migrations/028).
+    PERFORMANCE_REVIEW_KPI_CATALOG = "PERFORMANCE_REVIEW_KPI_CATALOG"
+    # --- #21 İşdən Çıxma Riski Balı (kompasos11.md Faza 9) ------------------- #
+    #
+    # YEDDİSİ DƏ ROOT PARAMETRİDİR (tapşırığın açıq tələbi: "hər siqnalın
+    # çəkisi ... bunlar system_limits-də, kod-hardcode DEYİL"). Sinifdə
+    # (bax `domain.attrition_rules.AttritionWeights.defaults`) qalan ədəd
+    # YALNIZ `system_limits` sətri hələ seed edilməyibsə işə düşən fallback-dır
+    # (seed: migrations/030). "Yüksək risk" sayılan bal həddi də BURADADIR —
+    # sabit 70/80 kimi bir ədəd Root-un öz müəssisəsinin normal dövriyyə
+    # səviyyəsini bilmədən doğru olmazdı.
+    #
+    # Son `ATTRITION_WINDOW_MONTHS` ayı iki yarıya bölüb sonuncu yarımdakı
+    # cərimə sayının əvvəlkindən artımına verilən bal (mütləq say YOX, artım —
+    # bax `attrition_rules.py` başlığı).
+    ATTRITION_FINE_TREND_WEIGHT = "ATTRITION_FINE_TREND_WEIGHT"
+    # Eyni pəncərədə hər icazəsiz davamiyyət pozuntusuna verilən bal.
+    ATTRITION_ATTENDANCE_VIOLATION_WEIGHT = "ATTRITION_ATTENDANCE_VIOLATION_WEIGHT"
+    # Staj `ATTRITION_NEW_HIRE_THRESHOLD_MONTHS`-dan az olduqda verilən SABİT bal
+    # ("onboarding riski") — iki parametr AYRIDIR, çünki müəssisələr "nə qədər
+    # bal" və "neçə aya qədər yeni sayılır" suallarını müstəqil tənzimləyir
+    # (`LABOR_MANDATORY_BREAK_MINUTES`/`LABOR_BREAK_REQUIRED_AFTER_HOURS`
+    # cütü ilə eyni əsaslandırma).
+    ATTRITION_NEW_HIRE_RISK_POINTS = "ATTRITION_NEW_HIRE_RISK_POINTS"
+    ATTRITION_NEW_HIRE_THRESHOLD_MONTHS = "ATTRITION_NEW_HIRE_THRESHOLD_MONTHS"
+    # Cari ay icazə istifadəsinin aylıq limitə (`MONTHLY_LEAVE_MINUTES_LIMIT`)
+    # nisbəti 100%-ə çatanda verilən MAKSİMUM bal (nisbətlə xətti miqyaslanır).
+    ATTRITION_LEAVE_USAGE_WEIGHT = "ATTRITION_LEAVE_USAGE_WEIGHT"
+    # Cərimə artımı/davamiyyət pozuntusu siqnallarının baxdığı ay sayı —
+    # "son 3 ayda cərimə artımı" tapşırığın öz nümunəsidir, lakin ədəd
+    # koda yazılmır.
+    ATTRITION_WINDOW_MONTHS = "ATTRITION_WINDOW_MONTHS"
+    # Bu bal həddindən (daxil olmaqla) yuxarı "yüksək risk" sayılır və
+    # bildiriş zəncirini (Store Manager → HR_Admin) işə salır.
+    ATTRITION_HIGH_RISK_THRESHOLD = "ATTRITION_HIGH_RISK_THRESHOLD"
+    # --- #24 Çox-Mağaza Benchmark Dashboard (kompasos11.md Faza 9A) --------- #
+    #
+    # İKİSİ DƏ ROOT PARAMETRİDİR (tapşırığın açıq tələbi: "6 ay/2σ hardcode
+    # edilməməlidir"). Sinifdə (bax `application.use_cases.multi_store_
+    # benchmark`) qalan ədəd YALNIZ `system_limits` sətri hələ seed
+    # edilməyibsə işə düşən fallback-dır (seed: migrations/031).
+    #
+    # Zaman-üzrə Trend widget-inin geriyə baxdığı ay sayı.
+    BENCHMARK_TREND_MONTHS = "BENCHMARK_TREND_MONTHS"
+    # Kritik-Kənar (Outlier) kartının standart-sapma həddi —
+    # `BEHAVIOR_ANOMALY_SIGMA_MULTIPLIER` ilə EYNİ statistik məntiq, fərqli
+    # domende (mağaza müqayisəsi, işçi baz xətti YOX).
+    BENCHMARK_OUTLIER_SIGMA_MULTIPLIER = "BENCHMARK_OUTLIER_SIGMA_MULTIPLIER"
+    # --- Faza 10.2 — DOMEN VALUE OBJECT PARAMETRLƏRİ ------------------------ #
+    #
+    # AŞAĞIDAKI 22 AÇAR `src/domain/value_objects/` faylarında SABİT ƏDƏD kimi
+    # yaşayırdı. Heç biri CLAUDE.md §5-in struktur zəmanətlərinə aid deyil
+    # (anti-fraud, SEC-001, hierarchy/self-escalation guard, `HardlockLevel`
+    # toxunulmaz qalır) — hamısı müəssisənin şəbəkəsindən, kommersiya
+    # şərtindən və ya iş rejimindən asılı ƏMƏLİYYAT/SİYASƏT dəyəridir.
+    #
+    # DAVRANIŞ DƏYİŞMİR: hər defolt köçürmədən ƏVVƏLKİ hardcode ilə HƏRFƏN
+    # eynidir. Value object-lərdəki sabitlər YERİNDƏ QALIR, lakin artıq ədəd
+    # SAXLAMIR — dəyəri `DEFAULT_LIMITS`-dən oxuyur və yalnız `system_limits`
+    # sətri əlçatmaz olduqda işə düşən FALLBACK-dır (seed: migrations/033).
+    # Naxış `domain.labor_rules.LaborLimits.defaults()` ilə eynidir.
+    #
+    # Satış xalları (#6). `SALES_POINTS_CURRENCY_PER_POINT` — bal sisteminin
+    # MƏRKƏZİ parametri: neçə AZN brutto satış 1 xal qazandırır. Əvvəl
+    # `gamification.py` şərhi onun "ROOT-dan idarə olunduğunu" YAZIRDI, halbuki
+    # belə açar heç vaxt mövcud olmayıb — yəni mükafat kursu faktiki olaraq
+    # koda bərkidilmişdi və kampaniya dövründə dəyişdirilə bilmirdi.
+    SALES_POINTS_CURRENCY_PER_POINT = "SALES_POINTS_CURRENCY_PER_POINT"
+    # Xal etirazı pəncərəsi. `FINE_APPEAL_WINDOW_HOURS`-a BAĞLANMADI, AYRI
+    # AÇAR verildi — səbəb: (a) sayğaclar FƏRQLİ andan başlayır (xal
+    # `awarded_at`-dan, cərimə `publish()`-dan), (b) biri pul kəsintisi, digəri
+    # mükafat kursudur və müəssisə pul mübahisəsinə daha uzun müddət verə
+    # bilər, (c) bağlansaydı, Root cərimə pəncərəsini dəyişəndə xal pəncərəsi
+    # də SÜKUTLA dəyişərdi — ekranda isə yalnız bir sətir görünərdi.
+    # Defolt HƏR İKİSİNDƏ 72-dir (bölmə 6: "eyni məntiqlə").
+    SALES_POINTS_DISPUTE_WINDOW_HOURS = "SALES_POINTS_DISPUTE_WINDOW_HOURS"
+    # 6 aylıq sıfırlanmadan neçə gün əvvəl işçiyə bildiriş gedir. Sıfırlanma
+    # TARİXLƏRİ (1 Yanvar / 1 İyul) parametr DEYİL və qalır (bax `gamification`
+    # başlığı) — dəyişən yalnız xəbərdarlığın qabaqcadanlığıdır.
+    SALES_POINTS_RESET_NOTICE_DAYS = "SALES_POINTS_RESET_NOTICE_DAYS"
+    # Lisenziya klienti (bölmə 8). Yoxlama ritmi kommersiya qərarıdır: sutkalıq
+    # dövr 21 filial üçün seçilib, lakin zəif internetli quraşdırmada seyrək,
+    # ödəniş gecikməsi olan müştəridə isə sıx ritm lazım ola bilər.
+    LICENSE_CHECK_IN_INTERVAL_SECONDS = "LICENSE_CHECK_IN_INTERVAL_SECONDS"
+    LICENSE_RETRY_INTERVAL_SECONDS = "LICENSE_RETRY_INTERVAL_SECONDS"
+    LICENSE_BLOCKED_RECHECK_INTERVAL_SECONDS = "LICENSE_BLOCKED_RECHECK_INTERVAL_SECONDS"
+    # Offline qrace aralığı. Bu üç açar `license_tenants.offline_grace_days`
+    # CHECK-inin (7–14) GÜZGÜSÜDÜR, onun ƏVƏZİ DEYİL: sütun dəyəri onsuz da
+    # CHECK ilə bağlıdır, buradakı sıxma isə oxunan dəyəri həmin bandda
+    # saxlayır. Miqrasiyadakı `max_value` 14-də kilidlənib — Root bandı
+    # GENİŞLƏNDİRƏ bilməz (DB onsuz da 14-dən böyüyünü qəbul etməz),
+    # yalnız DARALDA bilər (daha sərt offline siyasəti).
+    LICENSE_MIN_OFFLINE_GRACE_DAYS = "LICENSE_MIN_OFFLINE_GRACE_DAYS"
+    LICENSE_MAX_OFFLINE_GRACE_DAYS = "LICENSE_MAX_OFFLINE_GRACE_DAYS"
+    LICENSE_DEFAULT_OFFLINE_GRACE_DAYS = "LICENSE_DEFAULT_OFFLINE_GRACE_DAYS"
+    # Developer Panelindəki "[1 Ay Uzat]" düyməsinin əlavə etdiyi gün sayı —
+    # kommersiya şərti (aylıq abunə) dəyişəndə kod buraxılışı gözlənilməməlidir.
+    LICENSE_EXTENSION_DAYS = "LICENSE_EXTENSION_DAYS"
+    # Saatın geri çəkilməsinin "manipulyasiya" sayılma həddi. TAVANI SƏRTDİR
+    # (migrations/033: 30–900 saniyə) — bu, müddət bitməsinin yeganə qoruyucu
+    # ölçüsüdür və böyük tolerantlıq onu faktiki söndürərdi: 6 saatlıq tolerantlıq
+    # hər gün 6 saat geri çəkilməyə icazə verərdi. Yuxarı hədd 15 dəqiqədir,
+    # çünki NTP düzəlişi saniyələrlə ölçülür və yay/qış saatı UTC-də sıçrayış
+    # YARATMIR (müqayisə tz-aware UTC anları üzərindədir).
+    LICENSE_CLOCK_ROLLBACK_TOLERANCE_SECONDS = "LICENSE_CLOCK_ROLLBACK_TOLERANCE_SECONDS"
+    # Müddətin bitməsinə neçə gün qalanda banner göstərilsin (bloklamır).
+    LICENSE_EXPIRY_WARNING_DAYS = "LICENSE_EXPIRY_WARNING_DAYS"
+    # Avtomatik yenilənmə klienti. Yoxlama/təkrar cəhd ritmi lisenziya ilə eyni
+    # səbəbdən parametrdir; paket tavanı isə fail-closed qoruyucudur (diski
+    # dolduran nəhəng fayl) — ona görə miqrasiyada 2 GB tavanı var.
+    UPDATE_CHECK_INTERVAL_SECONDS = "UPDATE_CHECK_INTERVAL_SECONDS"
+    UPDATE_RETRY_INTERVAL_SECONDS = "UPDATE_RETRY_INTERVAL_SECONDS"
+    UPDATE_MAX_PACKAGE_BYTES = "UPDATE_MAX_PACKAGE_BYTES"
+    # 1C sinxronizasiyası. Səhifə ölçüsü mağaza PC-sinin yaddaşı və 1C
+    # serverinin yükü ilə balanslaşdırılır — 21 filialda eyni ədəd optimal
+    # olmaya bilər. (`ERP_SYNC_MAX_PAGES_PER_RUN` DÖVRDƏKİ SƏHİFƏ SAYIDIR,
+    # bu isə BİR səhifədəki sənəd sayı — iki fərqli ölçü.)
+    ERP_SYNC_PAGE_SIZE = "ERP_SYNC_PAGE_SIZE"
+    # Ad-əsaslı fallback uyğunlaşmasının qəbul həddi. AŞAĞI HÜDUD SƏRTDİR
+    # (0.70): ondan aşağı "Əliyev Elnur" ↔ "Əliyev Elvin" keçər və satış xalı
+    # SƏHV işçiyə yazılardı. Yuxarı hüdud 1.00 = yalnız hərfi bərabərlik.
+    ERP_NAME_MATCH_THRESHOLD = "ERP_NAME_MATCH_THRESHOLD"
+    # İcazə Növü kataloqunda tövsiyə olunan müddətin tavanı. Sxem CHECK-i
+    # DEYİL (DB `default_duration_minutes` üçün belə hədd saxlamır) — bu,
+    # kataloq ekranının biznes qaydasıdır: müəssisə tam iş günü (12 saat)
+    # əvəzinə daha qısa/uzun tavan seçə bilər.
+    LEAVE_TYPE_MAX_DURATION_MINUTES = "LEAVE_TYPE_MAX_DURATION_MINUTES"
+    # Baza keçidi (Cloud ↔ Şəxsi server). Hər iki dəyər TEXNİKİ FASİLƏ
+    # planlamasına aiddir və müəssisənin iş qrafikindən asılıdır: gecə
+    # bağlanan mağaza uzun pəncərə seçə bilər, 24 saat işləyən isə yox.
+    DB_MIGRATION_DRAIN_TIMEOUT_SECONDS = "DB_MIGRATION_DRAIN_TIMEOUT_SECONDS"
+    DB_MIGRATION_MAX_WINDOW_MINUTES = "DB_MIGRATION_MAX_WINDOW_MINUTES"
+    # Sübut şəklinin kiçildilmə kənarları (piksel). Drive kvotası, şəbəkə
+    # sürəti və ekran ölçüsü quraşdırmadan-quraşdırmaya fərqlənir; kiçik
+    # kənar kvotaya qənaət edir, böyük kənar mübahisədə şəklin oxunaqlığını
+    # saxlayır — bu balansı Root seçir.
+    EVIDENCE_THUMBNAIL_MAX_EDGE_PX = "EVIDENCE_THUMBNAIL_MAX_EDGE_PX"
+    EVIDENCE_FULL_MAX_EDGE_PX = "EVIDENCE_FULL_MAX_EDGE_PX"
+    # --- Faza 10.2 — İNFRASTRUKTUR ƏMƏLİYYAT PARAMETRLƏRİ ------------------- #
+    #
+    # AŞAĞIDAKILARIN HAMISI `src/infrastructure/` qatındakı əməliyyat
+    # sabitləridir (taymaut, təkrar cəhd, hədd, dövr aralığı). Onlar CLAUDE.md
+    # §5-in "struktur təhlükəsizlik zəmanəti" siyahısına DAXİL DEYİL — heç biri
+    # anti-fraud, hardlock və ya guard qaydası deyil; hamısı müəssisənin
+    # şəbəkəsindən, disk sürətindən və 1C serverinin yükündən asılı olan
+    # ƏMƏLİYYAT dəyərləridir. Ona görə yerləri `system_limits`-dədir.
+    #
+    # KÖÇÜRMƏ DAVRANIŞI DƏYİŞMİR: hər defolt aşağıda mövcud hardcode dəyərlə
+    # HƏRFƏN eynidir. Modul sabitləri `FALLBACK_*` adı ilə YERİNDƏ QALIR və
+    # yalnız `system_limits` sətri oxunmadıqda (bağlantı yoxdur, sətir hələ
+    # seed edilməyib) işə düşür — seed: migrations/032.
+    #
+    # SƏRT ARALIQ MƏCBURİDİR: bu dəyərlərin bir qismi (DB hovuzu, taymautlar)
+    # səhv yazılsa tətbiq işləməz vəziyyətə düşərdi. Ona görə migrations/032
+    # hər açara `min_value`/`max_value` yazır və oxuyan kod dəyəri həmin
+    # aralığa KLAMP edir (bax `infrastructure/config/limits.py`).
+    #
+    # Admin-tier şifrənin minimum uzunluğu. PIN tərəfi ARTIQ
+    # `PIN_MAX_FAILED_ATTEMPTS`/`PIN_LOCKOUT_MINUTES` ilə idarə olunurdu —
+    # şifrə tərəfi isə qalmışdı.
+    # `noqa: S105` — bu, ŞİFRƏNİN ÖZÜ deyil, onun uzunluq siyasətinin
+    # `system_limits` açarıdır; linter adda "PASSWORD" görüb sirr güman edir.
+    PASSWORD_MIN_LENGTH = "PASSWORD_MIN_LENGTH"  # noqa: S105
+    # Gecəlik ehtiyat nüsxə: saxlama müddətinin DÖŞƏMƏSİ, faktiki müddət və
+    # `pg_dump` taymautu. Döşəmə də parametrdir, çünki müəssisənin daxili
+    # saxlama siyasəti spesifikasiyanın 30 günündən UZUN ola bilər; aşağı
+    # hüdud (30) miqrasiyada kilidlənib, yəni Root onu 30-dan aşağı SALA
+    # BİLMƏZ — spesifikasiya tələbi qorunur.
+    BACKUP_MIN_RETENTION_DAYS = "BACKUP_MIN_RETENTION_DAYS"
+    BACKUP_RETENTION_DAYS = "BACKUP_RETENTION_DAYS"
+    BACKUP_DUMP_TIMEOUT_SECONDS = "BACKUP_DUMP_TIMEOUT_SECONDS"
+    # System Health Monitor hədləri. Disk faizi quraşdırmadan-quraşdırmaya
+    # fərqlənir (128 GB SSD-li kiosk ilə 2 TB serverdə "85% doludur" tamam
+    # fərqli qalıq yer deməkdir), DB ping həddi isə şəbəkə məsafəsindən asılıdır.
+    HEALTH_DISK_WARNING_PERCENT = "HEALTH_DISK_WARNING_PERCENT"
+    HEALTH_DISK_CRITICAL_PERCENT = "HEALTH_DISK_CRITICAL_PERCENT"
+    HEALTH_DB_PING_SLOW_MS = "HEALTH_DB_PING_SLOW_MS"
+    # Google Drive kvota xəbərdarlığı: hansı doluluqda və nə qədər seyrək.
+    DRIVE_QUOTA_WARNING_RATIO = "DRIVE_QUOTA_WARNING_RATIO"
+    DRIVE_QUOTA_WARNING_COOLDOWN_DAYS = "DRIVE_QUOTA_WARNING_COOLDOWN_DAYS"
+    # NTP ölçmə rejimi. `NTP_MAX_DRIFT_SECONDS` ARTIQ MÖVCUDDUR (yuxarıda) —
+    # burada təkrarlanmır; yalnız ölçmənin TEZLİYİ, taymautu, nümunənin
+    # köhnəlmə müddəti və qəbul edilən maksimum gediş-dönüş vaxtı əlavə olunur.
+    NTP_POLL_INTERVAL_SECONDS = "NTP_POLL_INTERVAL_SECONDS"
+    NTP_QUERY_TIMEOUT_SECONDS = "NTP_QUERY_TIMEOUT_SECONDS"
+    NTP_SAMPLE_TTL_SECONDS = "NTP_SAMPLE_TTL_SECONDS"
+    NTP_MAX_ROUND_TRIP_SECONDS = "NTP_MAX_ROUND_TRIP_SECONDS"
+    # 1C: ad uyğunlaşmasının qərarsızlıq marjası, sinxronizasiya paralelliyi,
+    # dövr başına səhifə tavanı, HTTP taymautu və təkrar cəhd sayı.
+    ERP_MATCH_AMBIGUITY_MARGIN = "ERP_MATCH_AMBIGUITY_MARGIN"
+    ERP_SYNC_MAX_PARALLEL_SERVERS = "ERP_SYNC_MAX_PARALLEL_SERVERS"
+    ERP_SYNC_MAX_PAGES_PER_RUN = "ERP_SYNC_MAX_PAGES_PER_RUN"
+    ERP_REQUEST_TIMEOUT_SECONDS = "ERP_REQUEST_TIMEOUT_SECONDS"
+    ERP_MAX_RETRIES = "ERP_MAX_RETRIES"
+    # Kiosk nəzarətçisi: yenidən-başlatma fırtınasının pəncərəsi, tavanı və
+    # artan gözləmə cədvəli.
+    KIOSK_RESTART_WINDOW_MINUTES = "KIOSK_RESTART_WINDOW_MINUTES"
+    KIOSK_MAX_RESTARTS_PER_WINDOW = "KIOSK_MAX_RESTARTS_PER_WINDOW"
+    KIOSK_RESTART_BACKOFF_SECONDS = "KIOSK_RESTART_BACKOFF_SECONDS"
+    # Developer Paneli: quraşdırmanın "səssiz" sayılma həddi.
+    DEVELOPER_DIRECTORY_STALE_DAYS = "DEVELOPER_DIRECTORY_STALE_DAYS"
+    # Bildiriş növbəsi: dövr başına paket ölçüsü, cəhd tavanı, cəhdlərarası
+    # artan gözləmə cədvəli və dövr aralığı.
+    NOTIFY_MAX_BATCH_SIZE = "NOTIFY_MAX_BATCH_SIZE"
+    NOTIFY_MAX_ATTEMPTS = "NOTIFY_MAX_ATTEMPTS"
+    NOTIFY_RETRY_BACKOFF_MINUTES = "NOTIFY_RETRY_BACKOFF_MINUTES"
+    NOTIFY_POLL_INTERVAL_SECONDS = "NOTIFY_POLL_INTERVAL_SECONDS"
+    # SMTP soket taymautu (portlar 587/465 STANDARTDIR — onlar köçürülmür).
+    EMAIL_SMTP_TIMEOUT_SECONDS = "EMAIL_SMTP_TIMEOUT_SECONDS"
+    # Eyni çökmə barmaq izi üçün bir sessiyada göndərilən hesabat tavanı.
+    CRASH_MAX_REPORTS_PER_FINGERPRINT = "CRASH_MAX_REPORTS_PER_FINGERPRINT"
+    # Realtime kanalı: polling aralığı və yenidən-qoşulma gözləmə cədvəli.
+    REALTIME_POLL_INTERVAL_SECONDS = "REALTIME_POLL_INTERVAL_SECONDS"
+    REALTIME_RECONNECT_BACKOFF_SECONDS = "REALTIME_RECONNECT_BACKOFF_SECONDS"
+    # Offline bufer: sinxronizasiya paketi, təkrar cəhd cədvəli və SQLite
+    # kilid gözləmə taymautu.
+    OFFLINE_SYNC_BATCH_SIZE = "OFFLINE_SYNC_BATCH_SIZE"
+    OFFLINE_RETRY_BACKOFF_SECONDS = "OFFLINE_RETRY_BACKOFF_SECONDS"
+    OFFLINE_SQLITE_TIMEOUT_SECONDS = "OFFLINE_SQLITE_TIMEOUT_SECONDS"
+    # PostgreSQL bağlantı hovuzu. ƏN HƏSSAS ÜÇLÜKDÜR: hovuz ölçüsü 0 olsa
+    # tətbiq heç bir sorğu edə bilməz. Miqrasiyadakı aralıq (1–32 / 1–64 /
+    # 1–300 san) və koddakı klamp məhz buna görə SƏRTDİR.
+    DB_POOL_MIN_SIZE = "DB_POOL_MIN_SIZE"
+    DB_POOL_MAX_SIZE = "DB_POOL_MAX_SIZE"
+    DB_CONNECT_TIMEOUT_SECONDS = "DB_CONNECT_TIMEOUT_SECONDS"
+    # Google Drive API: tokenin vaxtından əvvəl yenilənmə marjası, HTTP
+    # taymautu, təkrar cəhd sayı, OAuth razılıq axınının ömrü, sübut şəklinin
+    # JPEG keyfiyyəti və növbədə "claim" edilmiş elementin köhnəlmə müddəti.
+    # `noqa: S105` — açar ADIDIR, token DEYİL (linter "TOKEN" sözünə reaksiya
+    # verir; eyni istisna `storage/drive_api.TOKEN_ENDPOINT`-də də var).
+    DRIVE_TOKEN_REFRESH_MARGIN_SECONDS = "DRIVE_TOKEN_REFRESH_MARGIN_SECONDS"  # noqa: S105
+    DRIVE_REQUEST_TIMEOUT_SECONDS = "DRIVE_REQUEST_TIMEOUT_SECONDS"
+    DRIVE_MAX_RETRIES = "DRIVE_MAX_RETRIES"
+    DRIVE_OAUTH_FLOW_TIMEOUT_SECONDS = "DRIVE_OAUTH_FLOW_TIMEOUT_SECONDS"
+    EVIDENCE_JPEG_QUALITY = "EVIDENCE_JPEG_QUALITY"
+    UPLOAD_CLAIM_STALE_AFTER_SECONDS = "UPLOAD_CLAIM_STALE_AFTER_SECONDS"
+    # Şəkil keşi: ömür və disk tavanı.
+    IMAGE_CACHE_TTL_SECONDS = "IMAGE_CACHE_TTL_SECONDS"
+    IMAGE_CACHE_MAX_BYTES = "IMAGE_CACHE_MAX_BYTES"
+    # Plugin sandbox-u: icra taymautu və çıxış tavanı. BUNLAR ETİBAR
+    # SİYASƏTİ DEYİL — imza/nəşriyyatçı yoxlaması (fail-closed) toxunulmaz
+    # qalır; burada yalnız "nə qədər gözləyək, nə qədər oxuyaq" var.
+    PLUGIN_SANDBOX_TIMEOUT_SECONDS = "PLUGIN_SANDBOX_TIMEOUT_SECONDS"
+    PLUGIN_SANDBOX_MAX_OUTPUT_BYTES = "PLUGIN_SANDBOX_MAX_OUTPUT_BYTES"
+    # Auto-update: imza yoxlaması, yayım yükləməsi və endirmə taymautları,
+    # imzalı linkin ömrü, kataloq sorğusunun sətir tavanı.
+    UPDATE_VERIFY_TIMEOUT_SECONDS = "UPDATE_VERIFY_TIMEOUT_SECONDS"
+    UPDATE_UPLOAD_TIMEOUT_SECONDS = "UPDATE_UPLOAD_TIMEOUT_SECONDS"
+    UPDATE_DOWNLOAD_TIMEOUT_SECONDS = "UPDATE_DOWNLOAD_TIMEOUT_SECONDS"
+    UPDATE_SIGNED_URL_TTL_SECONDS = "UPDATE_SIGNED_URL_TTL_SECONDS"
+    UPDATE_CATALOG_FETCH_LIMIT = "UPDATE_CATALOG_FETCH_LIMIT"
+    # --- Faza 10.2 — TƏTBİQ QATININ (application) PARAMETRLƏRİ -------------- #
+    #
+    # AŞAĞIDAKI 15 AÇAR `src/application/use_cases/` altında SABİT ƏDƏD kimi
+    # yaşayırdı: SLA hədəfləri, səhifə ölçüləri, xatırlatma cədvəli, növbə
+    # dəyişmə pəncərəsi və quraşdırma tövsiyəsi. Heç biri CLAUDE.md §5-in
+    # struktur zəmanətlərinə aid deyil (anti-fraud vəzifə ayrılığı, SEC-001,
+    # Strict Hierarchy / Self-Escalation Guard, dörd-səviyyəli `HardlockLevel`
+    # toxunulmaz qalır) — hamısı xidmət səviyyəsi, ekran həcmi və ya kommersiya
+    # ritmi ilə bağlı ƏMƏLİYYAT dəyəridir.
+    #
+    # DAVRANIŞ DƏYİŞMİR: hər defolt köçürmədən ƏVVƏLKİ hardcode ilə HƏRFƏN
+    # eynidir. Modul sabitləri YERİNDƏ QALIR, lakin artıq ədəd SAXLAMIR —
+    # dəyəri `DEFAULT_LIMITS`-dən götürür və yalnız `system_limits` sətri
+    # əlçatmaz olduqda işə düşən FALLBACK-dır (seed: migrations/034).
+    #
+    # Dəstək müraciətinin İKİ AYRI SLA sayğacı (bax `developer_console` başlığı:
+    # "saatlarla susub sonra bir dəqiqəyə bağlanan müraciət yaxşı xidmət kimi
+    # görünərdi"). Hər ikisi kommersiya öhdəliyidir — müqavilə dəyişəndə kod
+    # buraxılışı gözlənilməməlidir.
+    SUPPORT_FIRST_RESPONSE_SLA_HOURS = "SUPPORT_FIRST_RESPONSE_SLA_HOURS"
+    SUPPORT_RESOLUTION_SLA_HOURS = "SUPPORT_RESOLUTION_SLA_HOURS"
+    # Hədəfin son neçə hissəsi "risk altında" zolağıdır (0.75 = son 25%).
+    # AYRI AÇARDIR, çünki zolağın eni SLA-nın ÖZÜNDƏN müstəqil qərardır:
+    # 24 saatlıq hədəfdə 6 saatlıq xəbərdarlıq kifayətdir, 72 saatlıqda isə
+    # eyni nisbət 18 saat verir və komanda daha erkən siqnal istəyə bilər.
+    SUPPORT_SLA_AT_RISK_RATIO = "SUPPORT_SLA_AT_RISK_RATIO"
+    # Çökmə neçə FƏRQLİ quraşdırmada təkrarlananda "kütləvi" sayılsın. Aşağı
+    # hüdud 2-dir: 1 yazılsaydı HƏR çökmə kütləvi görünərdi və nişan öz
+    # prioritetləşdirmə dəyərini itirərdi (bax `CrashGroup.is_widespread`).
+    CRASH_WIDESPREAD_INSTALLATION_THRESHOLD = "CRASH_WIDESPREAD_INSTALLATION_THRESHOLD"
+    # Çökmə panelinin "ən çox təkrarlanan N qrup" siyahısının uzunluğu.
+    CRASH_DASHBOARD_TOP_LIMIT = "CRASH_DASHBOARD_TOP_LIMIT"
+    # Növbə DƏYİŞMƏ sorğusu neçə gün irəli üçün göndərilə bilər. Açıq növbə
+    # bazarının `OPEN_SHIFT_MAX_LEAD_DAYS` açarından QƏSDƏN AYRIDIR — səbəb
+    # həmin açarın şərhindədir (orada işçi ÖZ gününü dəyişir, burada hələ heç
+    # kimə aid olmayan slot elan olunur).
+    SHIFT_SWAP_MAX_LEAD_DAYS = "SHIFT_SWAP_MAX_LEAD_DAYS"
+    # Lisenziya ödənişi xatırlatma cədvəli: MƏNFİ = bitmədən əvvəl, MÜSBƏT =
+    # sonra. Vergüllü siyahı naxışı `EMPLOYEE_DOCUMENT_EXPIRY_WARNING_DAYS` ilə
+    # eynidir: beş mərhələ BİRGƏ bir cədvəl təşkil edir və ayrı açarlarda Root
+    # onları yanlış sıraya yaza bilərdi. `min_value`/`max_value` mənasızdır
+    # (mənfi element var), ona görə `TEXT` tipindədir.
+    LICENSE_PAYMENT_REMINDER_OFFSET_DAYS = "LICENSE_PAYMENT_REMINDER_OFFSET_DAYS"
+    # Ekran səhifə ölçüləri. HAMISININ AŞAĞI HÜDUDU 1-dir: 0 yazılsa siyahı
+    # HƏMİŞƏ boş qayıdardı və istifadəçi "məlumat yoxdur" ilə "limit sıfırdır"
+    # arasındakı fərqi heç bir ekranda görə bilməzdi.
+    SALES_REVIEW_QUEUE_PAGE_SIZE = "SALES_REVIEW_QUEUE_PAGE_SIZE"
+    AUDIT_LOG_MAX_PAGE_SIZE = "AUDIT_LOG_MAX_PAGE_SIZE"
+    AUDIT_LOG_DEFAULT_PAGE_SIZE = "AUDIT_LOG_DEFAULT_PAGE_SIZE"
+    BACKUP_HISTORY_PAGE_SIZE = "BACKUP_HISTORY_PAGE_SIZE"
+    ANNOUNCEMENT_LIST_PAGE_SIZE = "ANNOUNCEMENT_LIST_PAGE_SIZE"
+    SUPPORT_THREAD_PAGE_SIZE = "SUPPORT_THREAD_PAGE_SIZE"
+    SYNC_CONFLICT_PAGE_SIZE = "SYNC_CONFLICT_PAGE_SIZE"
+    # İlk quraşdırma sihirbazının "ən azı bu qədər admin olsun" TÖVSİYƏSİ.
+    # BLOKLAMIR — yalnız xəbərdarlıq göstərir (bax `first_run_setup`), ona görə
+    # struktur zəmanət deyil və yeri `system_limits`-dədir.
+    SETUP_RECOMMENDED_ADMIN_COUNT = "SETUP_RECOMMENDED_ADMIN_COUNT"
+    # --- Faza 10.2 — TƏQDİMAT QATININ (presentation) PARAMETRLƏRİ ----------- #
+    #
+    # AŞAĞIDAKI BEŞ AÇAR `src/presentation/` və `src/developer_panel/` altında
+    # SABİT ƏDƏD idi: ekranın göstərdiyi pəncərə, fon dövrəsinin ritmi, "zəif
+    # uyğunluq" rəng həddi və panel cədvəllərinin sətir tavanı. Heç biri
+    # CLAUDE.md §5-in struktur zəmanətlərinə aid deyil — hamısı GÖRÜNÜŞ və
+    # ƏMƏLİYYAT dəyəridir, yəni yeri `system_limits`-dədir.
+    #
+    # DAVRANIŞ DƏYİŞMİR: hər defolt köçürmədən ƏVVƏLKİ hardcode ilə eynidir;
+    # modul sabitləri `FALLBACK_*` adı ilə yerində qalır və dəyərini məhz
+    # `DEFAULT_LIMITS`-dən götürür (seed: migrations/035).
+    #
+    # Növbə matrisinin və işçi təqviminin göstərdiyi gün sayı. 21 filialın
+    # planlaması eyni ritmdə getmir: bəzi müəssisə həftəlik (7), bəzisi aylıq
+    # (30) planlayır və ekranın pəncərəsi həmin ritmə uyğunlaşmalıdır.
+    SHIFT_MATRIX_WINDOW_DAYS = "SHIFT_MATRIX_WINDOW_DAYS"
+    # Sübut şəkli növbəsinin FON dövrəsi. Hədd DEYİL, ritmdir: cərimə yaradılan
+    # anda növbə onsuz da bir dəfə boşaldılır (`FineEntryController._issue`) —
+    # bu dövrə yalnız şəbəkə qayıdanda qalanları götürür. Zəif internetli
+    # filialda daha seyrək, ofisdə daha sıx ritm seçilə bilər.
+    EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS = "EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS"
+    # «Şübhəli Satışlar» ekranında uyğunluq faizinin XƏBƏRDARLIQ rənginə
+    # keçdiyi hədd. `ERP_NAME_MATCH_THRESHOLD` (qəbul həddi) ilə QARIŞDIRILMIR:
+    # o, satışın işçiyə BAĞLANIB-bağlanmamasını həll edir, bu isə operatorun
+    # gözünə hansı sətrin şübhəli göründüyünü deyir — biri qərar, digəri rəng.
+    ERP_MATCH_LOW_CONFIDENCE_PERCENT = "ERP_MATCH_LOW_CONFIDENCE_PERCENT"
+    # Developer Panelindəki iki diaqnostika cədvəlinin sətir tavanı. Kəsilmə
+    # SƏSSİZ deyil — status sətri "neçəsindən neçəsi göstərilir" sualını
+    # cavablandırır. Tətbiq qatındakı `CrashDashboard.top()` defoltundan
+    # AYRIDIR: ora "təhlil üçün ən çox təkrarlanan N qrup" deməkdir, bura isə
+    # "panel pəncərəsinə neçə sətir sığır" — biri analiz, digəri düzülüş.
+    DEVELOPER_CRASH_ROW_LIMIT = "DEVELOPER_CRASH_ROW_LIMIT"
+    DEVELOPER_TICKET_ROW_LIMIT = "DEVELOPER_TICKET_ROW_LIMIT"
 
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
@@ -51,6 +551,293 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.LEAVE_ALLOWANCE_SOURCE: "LEAVE_TYPE",
     SystemLimitKey.LEAVE_ALLOWANCE_FIXED_MINUTES: "0",
     SystemLimitKey.DELAY_FINE_RATE_PER_MINUTE: "0.00",
+    # İstisnalar ekranının bir səhifədə oxuduğu sətir sayı. 21 filialın açıq
+    # növbəsi böyüyə bilər; limitsiz oxu ekranı dondurardı.
+    SystemLimitKey.EXCEPTION_PAGE_SIZE: "200",
+    # BİR qaydanın BİR icrada yarada biləcəyi maksimum tapıntı. Qüsurlu qayda
+    # (məs. baz xətti sıfır olan yeni işçilər) minlərlə sətir yarada bilər və
+    # `exceptions`-da `REVOKE DELETE` olduğu üçün onları TƏMİZLƏMƏK MÜMKÜN
+    # DEYİL — ona görə tavan konfiqurasiya edilə bilən qoruyucudur.
+    SystemLimitKey.EXCEPTION_MAX_FINDINGS_PER_RULE: "500",
+    # Bu ciddiyyətdən (daxil olmaqla) yuxarı tapıntı DƏRHAL bildiriş doğurur.
+    # Defolt HIGH: MEDIUM-da hər gecikmə anomaliyası HR-a mesaj göndərər və
+    # bildiriş kanalı bir həftədə "səs-küy" kimi görməzdən gəlinərdi.
+    SystemLimitKey.EXCEPTION_NOTIFY_MIN_SEVERITY: "HIGH",
+    # Rədd qərarının izahı üçün minimum uzunluq (`FineAppeal` ilə eyni dəyər).
+    SystemLimitKey.EXCEPTION_REVIEW_NOTE_MIN_LENGTH: "10",
+    # #7 POS həddinin Root-dan idarə olunan ƏLAVƏ tavanı. 100 = sxem
+    # sərhədi ilə üst-üstə düşür (migrations/018 CHECK-i) — başlanğıcda
+    # Root heç bir əlavə məhdudiyyət qoymur, istəsə aşağı sala bilər.
+    SystemLimitKey.POS_MAX_DISCOUNT_PCT_CEILING: "100",
+    # #8 baz xətt pəncərəsi — kompasos11.md "son 30 gün" tələbinin defoltu.
+    SystemLimitKey.BEHAVIOR_BASELINE_WINDOW_DAYS: "30",
+    # 45 dəqiqə: `VERIFICATION_TIMEOUT_MINUTES` ilə eyni miqyasda seçilib —
+    # bundan az sapma gündəlik nəqliyyat/trafik dalğalanması ola bilər,
+    # ondan çoxu isə HR-ın araşdırmalı olduğu davamlı meyl siqnalıdır.
+    SystemLimitKey.BEHAVIOR_ANOMALY_THRESHOLD_MINUTES: "45",
+    # 5 gün ≈ bir iş həftəsi — bundan az müşahidə statistik cəhətdən etibarsız
+    # baz xətt deməkdir (migrations/018 şərhi).
+    SystemLimitKey.BEHAVIOR_BASELINE_MIN_SAMPLE_SIZE: "5",
+    # 2.0σ — normal paylanmada təsadüfi kənarlaşmaların ~95%-i bu hüdud
+    # daxilindədir; ondan kənar sapma statistik cəhətdən "adi deyil" sayılır.
+    SystemLimitKey.BEHAVIOR_ANOMALY_SIGMA_MULTIPLIER: "2.0",
+    # #15 — Azərbaycan Əmək Məcəlləsinin normal iş vaxtı: gündə 8, həftədə 40
+    # saat. Defolt qanunun ÖZÜNÜ təkrarlayır; qısaldılmış iş vaxtı rejimləri
+    # (məs. yetkinlik yaşına çatmayanlar) üçün Root onu aşağı sala bilər.
+    SystemLimitKey.OVERTIME_DAILY_NORM_HOURS: "8.00",
+    SystemLimitKey.OVERTIME_WEEKLY_NORM_HOURS: "40.00",
+    # 1 saat — bir növbədə bu qədər aşım artıq təsadüfi deyil (növbənin
+    # uzadılması və ya əlavə iş günü deməkdir). Ondan kiçik fərqlər jurnalda
+    # qalır, lakin HR-a bildiriş göndərmir.
+    SystemLimitKey.OVERTIME_NOTIFY_THRESHOLD_HOURS: "1.00",
+    # #14 — 12 saat: iki növbə arasında bir gecəlik yuxu + yol vaxtı. Bu, ƏMƏK
+    # HÜQUQU MƏSLƏHƏTİ DEYİL, layihənin başlanğıc dəyəridir — müəssisə öz
+    # hüquqşünasının göstərişinə görə Root panelindən dəyişir.
+    SystemLimitKey.LABOR_MIN_REST_HOURS: "12",
+    # 60 dəqiqə — mağaza praktikasındakı standart nahar fasiləsi. `LeaveType`
+    # "Nahar Fasiləsi" ilə eyni miqyasda seçilib ki, plandakı xatırlatma ilə
+    # faktiki icazə axını bir-birini təkzib etməsin.
+    SystemLimitKey.LABOR_MANDATORY_BREAK_MINUTES: "60",
+    # 6 saat — bundan qısa növbədə fasilə xatırlatması hər gün təkrarlanardı
+    # və xəbərdarlıq kanalı dəyərini itirərdi.
+    SystemLimitKey.LABOR_BREAK_REQUIRED_AFTER_HOURS: "6",
+    # 6 gün — həftədə ən azı bir istirahət günü prinsipi. 6/1 iş rejimi
+    # (`ShiftPlanningScreen.TEMPLATES`) xəbərdarlıq DOĞURMUR, 7-ci ardıcıl gün
+    # doğurur.
+    SystemLimitKey.LABOR_MAX_CONSECUTIVE_WORK_DAYS: "6",
+    # #13 — 8 həftə ≈ 2 ay: bir mağazanın həftə-günü ritmini görmək üçün kifayət
+    # qədər uzun, mövsüm dəyişikliyini "orta"ya qatmayacaq qədər qısa. DB
+    # sütununun defoltu ilə eyni miqyasdadır (migrations/019 `based_on_weeks`).
+    SystemLimitKey.STAFFING_PATTERN_BASED_ON_WEEKS: "8",
+    # #16 — 30 gün: açıq növbə "boşluğu doldurmaq" alətidir, uzunmüddətli
+    # planlama deyil. Bir aydan uzağa elan verilsəydi, işçilər hələ
+    # planlaşdırılmamış təqvimi elan siyahısından oxumağa başlayardı.
+    SystemLimitKey.OPEN_SHIFT_MAX_LEAD_DAYS: "30",
+    # #16 — ayda 8 elan ≈ həftədə iki əlavə növbə. Bu, işçinin öz istəyi ilə
+    # götürdüyü ƏLAVƏ işdir; gündə birdən çoxu onsuz da mümkün deyil (DB:
+    # `uq_open_shift_one_claim_per_employee_day`), lakin AYLIQ tavan olmasa
+    # bazar bir neçə işçinin daimi əlavə növbəsinə çevrilərdi.
+    SystemLimitKey.OPEN_SHIFT_MAX_CLAIMS_PER_MONTH: "8",
+    # #17 — 30/14/7 gün: spesifikasiyanın öz nümunəsi (üç mərhələli xatırlatma:
+    # "hələ vaxt var" → "tezliklə" → "təcili"). Vergüllə ayrılmış siyahı —
+    # yuxarıdakı şərhə bax.
+    SystemLimitKey.EMPLOYEE_DOCUMENT_EXPIRY_WARNING_DAYS: "30,14,7",
+    # #19 — 14 gün: bir "cari xəbərlər lövhəsi" pəncərəsi üçün ağlabatan
+    # müddət (iki iş həftəsi) — bundan uzun görüntülənmə kiosk kartını köhnə
+    # göstərişlərlə doldurardı.
+    SystemLimitKey.ANNOUNCEMENT_VISIBILITY_DAYS: "14",
+    # #20 — aylıq: `MONTHLY_LEAVE_MINUTES_LIMIT` və digər dövri hesabatlarla
+    # (Aylıq Cərimə İcmalı) EYNİ ritmdə. Root rüblük rejimə keçə bilər.
+    SystemLimitKey.PERFORMANCE_REVIEW_PERIOD_TYPE: "MONTHLY",
+    # #20 — dörd ümumi KPI: keyfiyyət, məhsuldarlıq, komanda işi, müştəri
+    # xidməti. Bunlar YALNIZ İLKİN dəyərdir — Root panelindən dəyişdirilə
+    # bilər (aşağı/yuxarı hüdud mənasızdır, `EXCEPTION_NOTIFY_MIN_SEVERITY`
+    # ilə eyni TEXT üslubu).
+    SystemLimitKey.PERFORMANCE_REVIEW_KPI_CATALOG: (
+        "KEYFIYYET:İş Keyfiyyəti;MEHSULDARLIQ:Məhsuldarlıq;"
+        "KOMANDA_ISI:Komanda İşi;MUSTERI_XIDMETI:Müştəri Xidməti"
+    ),
+    # #21 — 5 bal hər ƏLAVƏ cərimə üçün (artım, mütləq say yox). 3 cərimədən
+    # 6-ya qalxma (+3) = 15 bal — tək başına "yüksək risk" elan etmir, lakin
+    # digər siqnallarla birləşəndə həlledici ola bilər.
+    SystemLimitKey.ATTRITION_FINE_TREND_WEIGHT: "5",
+    # #21 — 8 bal hər icazəsiz davamiyyət pozuntusuna. Cərimədən bir az ağır
+    # çəkilib, çünki icazəsiz qayıb birbaşa "işə bağlılığın azalması" siqnalıdır.
+    SystemLimitKey.ATTRITION_ATTENDANCE_VIOLATION_WEIGHT: "8",
+    # #21 — yeni işçiyə sabit 15 bal ("onboarding riski").
+    SystemLimitKey.ATTRITION_NEW_HIRE_RISK_POINTS: "15",
+    # #21 — 3 ay: sınaq müddəti ilə eyni miqyasda seçilib (əksər əmək
+    # müqavilələrində ilk 3 ay sınaq dövrüdür).
+    SystemLimitKey.ATTRITION_NEW_HIRE_THRESHOLD_MONTHS: "3",
+    # #21 — aylıq icazə limitinin TAM istifadəsinə (100%) qarşılıq 20 bal
+    # (xətti miqyaslanır: 50% istifadə = 10 bal).
+    SystemLimitKey.ATTRITION_LEAVE_USAGE_WEIGHT: "20",
+    # #21 — 3 ay: tapşırığın öz nümunəsi ("son 3 ayda cərimə artımı").
+    SystemLimitKey.ATTRITION_WINDOW_MONTHS: "3",
+    # #21 — 70 bal: dörd siqnalın heç biri tək başına bu həddə çatmır (maks.
+    # tək-siqnal töhfəsi leave-usage-da 20-dir), yəni bildiriş YALNIZ bir neçə
+    # siqnal BİRLƏŞƏNDƏ işə düşür — tək bir pozuntu HR-ı həyəcanlandırmamalıdır.
+    SystemLimitKey.ATTRITION_HIGH_RISK_THRESHOLD: "70",
+    # #24 — 6 ay: tapşırığın öz nümunəsi ("son 6 ay üzrə dəyişim").
+    SystemLimitKey.BENCHMARK_TREND_MONTHS: "6",
+    # #24 — 2.0σ: `BEHAVIOR_ANOMALY_SIGMA_MULTIPLIER` ilə EYNİ statistik
+    # əsaslandırma (normal paylanmada təsadüfi kənarlaşmaların ~95%-i bu
+    # hüdud daxilindədir).
+    SystemLimitKey.BENCHMARK_OUTLIER_SIGMA_MULTIPLIER: "2.0",
+    # --- Faza 10.2 — domen value object parametrləri (seed: 033) ------------ #
+    #
+    # HƏR DEFOLT KÖÇÜRÜLƏN HARDCODE DƏYƏRLƏ HƏRFƏN EYNİDİR — köçürmə davranışı
+    # DƏYİŞMİR, yalnız dəyərin harada yaşadığı dəyişir.
+    #
+    # #6 — 100 AZN brutto satış = 1 xal. "Hər satışa 1 xal" RƏDD EDİLİB:
+    # satıcını bir çeki bir neçəyə bölməyə həvəsləndirərdi (bax `gamification`).
+    SystemLimitKey.SALES_POINTS_CURRENCY_PER_POINT: "100",
+    # #6 — 72 saat: `FINE_APPEAL_WINDOW_HOURS` ilə EYNİ DEFOLT, AYRI açar
+    # (səbəb enum şərhindədir).
+    SystemLimitKey.SALES_POINTS_DISPUTE_WINDOW_HOURS: "72",
+    # #6 — 14 gün: bölmə 6-nın öz ədədi ("reset öncəsi 14 gün əvvəldən bildiriş").
+    SystemLimitKey.SALES_POINTS_RESET_NOTICE_DAYS: "14",
+    # Bölmə 8 — "məs. hər 24 saatda" (86 400 san). Təkrar cəhd bir saatdır:
+    # qrace sayğacı işləyərkən sutkalıq gözləmə bərpa olunmuş şəbəkəni bir gün
+    # gec görmək demək olardı. Bloklanmış vəziyyətdə ritm 15 dəqiqəyə enir —
+    # ödənişini edib telefonda gözləyən müştəri 24 saat gözləməməlidir.
+    SystemLimitKey.LICENSE_CHECK_IN_INTERVAL_SECONDS: "86400",
+    SystemLimitKey.LICENSE_RETRY_INTERVAL_SECONDS: "3600",
+    SystemLimitKey.LICENSE_BLOCKED_RECHECK_INTERVAL_SECONDS: "900",
+    # Bölmə 8 — `license_tenants.offline_grace_days` CHECK bandı (7–14) və
+    # sətir oxunmadıqda işlənən defolt (14 = bandın yuxarı ucu, çünki fail-open
+    # prinsipi şübhə halında İŞLƏMƏYƏ DAVAM ETMƏYİ seçir).
+    SystemLimitKey.LICENSE_MIN_OFFLINE_GRACE_DAYS: "7",
+    SystemLimitKey.LICENSE_MAX_OFFLINE_GRACE_DAYS: "14",
+    SystemLimitKey.LICENSE_DEFAULT_OFFLINE_GRACE_DAYS: "14",
+    # "[1 Ay Uzat]" = 30 gün.
+    SystemLimitKey.LICENSE_EXTENSION_DAYS: "30",
+    # 300 saniyə (5 dəqiqə) — NTP düzəlişi/sinxronizasiya bir neçə saniyə geri
+    # sıçraya bilər, 5 dəqiqə isə artıq qəsdli dəyişiklikdir.
+    SystemLimitKey.LICENSE_CLOCK_ROLLBACK_TOLERANCE_SECONDS: "300",
+    # Müddət bitməsinə 7 gün qalanda banner.
+    SystemLimitKey.LICENSE_EXPIRY_WARNING_DAYS: "7",
+    # Yenilənmə: sutkalıq yoxlama (lisenziya ilə eyni ritm), uğursuzluqdan
+    # sonra 2 saat, paket tavanı 512 MB.
+    SystemLimitKey.UPDATE_CHECK_INTERVAL_SECONDS: "86400",
+    SystemLimitKey.UPDATE_RETRY_INTERVAL_SECONDS: "7200",
+    SystemLimitKey.UPDATE_MAX_PACKAGE_BYTES: "536870912",
+    # 1C: bir sorğuda 500 sənəd, ad oxşarlığı həddi 0.87 ("Əliyev Elvin" ↔
+    # "Aliyev Elvin" keçir, "Əliyev Elnur" keçmir — bax `erp.py`).
+    SystemLimitKey.ERP_SYNC_PAGE_SIZE: "500",
+    SystemLimitKey.ERP_NAME_MATCH_THRESHOLD: "0.87",
+    # İcazə Növü tavanı: 12 saat = 720 dəqiqə (bir iş günü).
+    SystemLimitKey.LEAVE_TYPE_MAX_DURATION_MINUTES: "720",
+    # Baza keçidi: bufer boşalmasına 5 dəqiqə, texniki fasiləyə 2 saat.
+    SystemLimitKey.DB_MIGRATION_DRAIN_TIMEOUT_SECONDS: "300",
+    SystemLimitKey.DB_MIGRATION_MAX_WINDOW_MINUTES: "120",
+    # Sübut şəkli: siyahıda 320 px, açılışda 1600 px kənar.
+    SystemLimitKey.EVIDENCE_THUMBNAIL_MAX_EDGE_PX: "320",
+    SystemLimitKey.EVIDENCE_FULL_MAX_EDGE_PX: "1600",
+    # --- Faza 10.2 — infrastruktur əməliyyat parametrləri (seed: 032) ------- #
+    #
+    # HƏR DEFOLT KÖÇÜRÜLƏN HARDCODE DƏYƏRLƏ HƏRFƏN EYNİDİR. Bu, təsadüf deyil,
+    # köçürmənin ŞƏRTİDİR: köçürmə davranış dəyişikliyi deyil, idarəolunma
+    # dəyişikliyidir. "Yaxşılaşdırılmış" defolt yazsaydıq, mövcud quraşdırma
+    # yeniləmədən sonra sükutla başqa cür işləyərdi.
+    #
+    # `security/hashing.py`: 12 simvol — OWASP-ın admin hesabları üçün
+    # tövsiyəsi. PIN tərəfi ARTIQ idarə olunurdu, şifrə tərəfi qalmışdı.
+    SystemLimitKey.PASSWORD_MIN_LENGTH: "12",
+    # `backup/service.py`: spesifikasiyanın "minimum 30 gün" tələbi həm
+    # döşəmə, həm də başlanğıc dəyər kimi; `pg_dump` taymautu 1 saat.
+    SystemLimitKey.BACKUP_MIN_RETENTION_DAYS: "30",
+    SystemLimitKey.BACKUP_RETENTION_DAYS: "30",
+    SystemLimitKey.BACKUP_DUMP_TIMEOUT_SECONDS: "3600",
+    # `erp/system_health.py`: 85%/95% disk, 500 ms DB ping.
+    SystemLimitKey.HEALTH_DISK_WARNING_PERCENT: "85.0",
+    SystemLimitKey.HEALTH_DISK_CRITICAL_PERCENT: "95.0",
+    SystemLimitKey.HEALTH_DB_PING_SLOW_MS: "500",
+    # `storage/quota_monitor.py`: 90% doluluq, 7 günlük təkrar-susma.
+    SystemLimitKey.DRIVE_QUOTA_WARNING_RATIO: "0.90",
+    SystemLimitKey.DRIVE_QUOTA_WARNING_COOLDOWN_DAYS: "7",
+    # `timekeeping/ntp.py`: 5 dəq. dövr, 3 san. taymaut, 30 dəq. nümunə ömrü,
+    # 2 san. maksimum gediş-dönüş.
+    SystemLimitKey.NTP_POLL_INTERVAL_SECONDS: "300",
+    SystemLimitKey.NTP_QUERY_TIMEOUT_SECONDS: "3.0",
+    SystemLimitKey.NTP_SAMPLE_TTL_SECONDS: "1800",
+    SystemLimitKey.NTP_MAX_ROUND_TRIP_SECONDS: "2.0",
+    # `erp/matching.py`, `erp/sync_worker.py`, `erp/one_c_connector.py`.
+    SystemLimitKey.ERP_MATCH_AMBIGUITY_MARGIN: "0.05",
+    SystemLimitKey.ERP_SYNC_MAX_PARALLEL_SERVERS: "4",
+    SystemLimitKey.ERP_SYNC_MAX_PAGES_PER_RUN: "10",
+    SystemLimitKey.ERP_REQUEST_TIMEOUT_SECONDS: "30.0",
+    SystemLimitKey.ERP_MAX_RETRIES: "3",
+    # `kiosk/watchdog.py`: 10 dəqiqədə 5 yenidən başlatma, 2→30 san. gözləmə.
+    SystemLimitKey.KIOSK_RESTART_WINDOW_MINUTES: "10",
+    SystemLimitKey.KIOSK_MAX_RESTARTS_PER_WINDOW: "5",
+    # Vergüllü siyahı naxışı `EMPLOYEE_DOCUMENT_EXPIRY_WARNING_DAYS` ilə
+    # eynidir: cədvəlin SIRASI mənalıdır və üç ayrı açar Root-a onu yanlış
+    # ardıcıllıqla yazmaq imkanı verərdi.
+    SystemLimitKey.KIOSK_RESTART_BACKOFF_SECONDS: "2,4,8,16,30",
+    # `licensing/developer_directory.py`: 3 gün = bir uzun həftəsonu + bir iş günü.
+    SystemLimitKey.DEVELOPER_DIRECTORY_STALE_DAYS: "3",
+    # `notifications/notifier.py`: 25 sətir/dövr, 5 cəhd, 1→240 dəq. gözləmə,
+    # 120 san. dövr aralığı.
+    SystemLimitKey.NOTIFY_MAX_BATCH_SIZE: "25",
+    SystemLimitKey.NOTIFY_MAX_ATTEMPTS: "5",
+    SystemLimitKey.NOTIFY_RETRY_BACKOFF_MINUTES: "1,5,15,60,240",
+    SystemLimitKey.NOTIFY_POLL_INTERVAL_SECONDS: "120",
+    # `notifications/email.py`, `notifications/crash_reporter.py`.
+    SystemLimitKey.EMAIL_SMTP_TIMEOUT_SECONDS: "15.0",
+    SystemLimitKey.CRASH_MAX_REPORTS_PER_FINGERPRINT: "3",
+    # `realtime/channel.py`: 30 san. polling, 5→60 san. yenidən-qoşulma.
+    SystemLimitKey.REALTIME_POLL_INTERVAL_SECONDS: "30",
+    SystemLimitKey.REALTIME_RECONNECT_BACKOFF_SECONDS: "5,15,30,60",
+    # `offline/sync.py`, `offline/buffer.py` (spesifikasiya bölmə 5: 30s→2dq→10dq).
+    SystemLimitKey.OFFLINE_SYNC_BATCH_SIZE: "100",
+    SystemLimitKey.OFFLINE_RETRY_BACKOFF_SECONDS: "30,120,600",
+    SystemLimitKey.OFFLINE_SQLITE_TIMEOUT_SECONDS: "10.0",
+    # `persistence/connection.py`: hovuz 1–8, 15 san. bağlantı taymautu.
+    SystemLimitKey.DB_POOL_MIN_SIZE: "1",
+    SystemLimitKey.DB_POOL_MAX_SIZE: "8",
+    SystemLimitKey.DB_CONNECT_TIMEOUT_SECONDS: "15.0",
+    # `storage/drive_api.py`, `storage/oauth_flow.py`, `storage/google_drive.py`,
+    # `storage/upload_queue.py`.
+    SystemLimitKey.DRIVE_TOKEN_REFRESH_MARGIN_SECONDS: "60",
+    SystemLimitKey.DRIVE_REQUEST_TIMEOUT_SECONDS: "30.0",
+    SystemLimitKey.DRIVE_MAX_RETRIES: "3",
+    SystemLimitKey.DRIVE_OAUTH_FLOW_TIMEOUT_SECONDS: "300.0",
+    SystemLimitKey.EVIDENCE_JPEG_QUALITY: "85",
+    SystemLimitKey.UPLOAD_CLAIM_STALE_AFTER_SECONDS: "600",
+    # `storage/image_cache.py`: 30 gün (saniyə ilə), 256 MB.
+    SystemLimitKey.IMAGE_CACHE_TTL_SECONDS: "2592000",
+    SystemLimitKey.IMAGE_CACHE_MAX_BYTES: "268435456",
+    # `plugins/sandbox.py`: 10 san. icra, 1 MB çıxış.
+    SystemLimitKey.PLUGIN_SANDBOX_TIMEOUT_SECONDS: "10.0",
+    SystemLimitKey.PLUGIN_SANDBOX_MAX_OUTPUT_BYTES: "1048576",
+    # `updates/verification.py`, `updates/publisher.py`, `updates/catalog.py`.
+    SystemLimitKey.UPDATE_VERIFY_TIMEOUT_SECONDS: "60.0",
+    SystemLimitKey.UPDATE_UPLOAD_TIMEOUT_SECONDS: "600.0",
+    SystemLimitKey.UPDATE_DOWNLOAD_TIMEOUT_SECONDS: "300.0",
+    SystemLimitKey.UPDATE_SIGNED_URL_TTL_SECONDS: "3600",
+    SystemLimitKey.UPDATE_CATALOG_FETCH_LIMIT: "20",
+    # --- Faza 10.2 — tətbiq qatının parametrləri (seed: 034) ---------------- #
+    #
+    # HƏR DEFOLT KÖÇÜRÜLƏN HARDCODE İLƏ HƏRFƏN EYNİDİR — köçürmə davranış
+    # dəyişikliyi deyil, idarəolunma dəyişikliyidir.
+    #
+    # `developer_console.py`: 24 saat ilk cavab, 72 saat həll, son 25% risk
+    # zolağı, 3 quraşdırma "kütləvi", panelin ilk 10 qrupu.
+    SystemLimitKey.SUPPORT_FIRST_RESPONSE_SLA_HOURS: "24",
+    SystemLimitKey.SUPPORT_RESOLUTION_SLA_HOURS: "72",
+    SystemLimitKey.SUPPORT_SLA_AT_RISK_RATIO: "0.75",
+    SystemLimitKey.CRASH_WIDESPREAD_INSTALLATION_THRESHOLD: "3",
+    SystemLimitKey.CRASH_DASHBOARD_TOP_LIMIT: "10",
+    # `shift_scheduling.py`: sorğu ən çox 90 gün irəli üçün.
+    SystemLimitKey.SHIFT_SWAP_MAX_LEAD_DAYS: "90",
+    # `payment_reminders.py`: T-7, T-3, T-1, T+1, T+7 (modul başlığındakı
+    # cədvəlin ÖZÜ — mənfi = bitmədən əvvəl, müsbət = sonra).
+    SystemLimitKey.LICENSE_PAYMENT_REMINDER_OFFSET_DAYS: "-7,-3,-1,1,7",
+    # Səhifə ölçüləri: şübhəli satış növbəsi 200, audit jurnalı 500/100,
+    # ehtiyat nüsxə tarixçəsi 60, elan siyahısı 50, dəstək mövzuları 20,
+    # sinxronizasiya konfliktləri 100.
+    SystemLimitKey.SALES_REVIEW_QUEUE_PAGE_SIZE: "200",
+    SystemLimitKey.AUDIT_LOG_MAX_PAGE_SIZE: "500",
+    SystemLimitKey.AUDIT_LOG_DEFAULT_PAGE_SIZE: "100",
+    SystemLimitKey.BACKUP_HISTORY_PAGE_SIZE: "60",
+    SystemLimitKey.ANNOUNCEMENT_LIST_PAGE_SIZE: "50",
+    SystemLimitKey.SUPPORT_THREAD_PAGE_SIZE: "20",
+    SystemLimitKey.SYNC_CONFLICT_PAGE_SIZE: "100",
+    # `first_run_setup.py`: bölmə 2 tövsiyəsi — ən azı iki admin.
+    SystemLimitKey.SETUP_RECOMMENDED_ADMIN_COUNT: "2",
+    # `controllers/screen_data.py`: növbə matrisi 14 günlük pəncərə göstərir.
+    SystemLimitKey.SHIFT_MATRIX_WINDOW_DAYS: "14",
+    # `presentation/app.py`: sübut növbəsi 2 dəqiqədən bir boşaldılır. Sabit
+    # MİLLİSANİYƏ ilə yazılmışdı (120_000); açar SANİYƏ ilədir — `NOTIFY_`/
+    # `REALTIME_POLL_INTERVAL_SECONDS` ilə eyni vahid olsun deyə (Root eyni
+    # panelde iki fərqli vahidlə üzləşməməlidir). 120 san = 120_000 ms.
+    SystemLimitKey.EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS: "120",
+    # `screens/group_f.py`: 50%-dən aşağı uyğunluq xəbərdarlıq rəngindədir.
+    SystemLimitKey.ERP_MATCH_LOW_CONFIDENCE_PERCENT: "50",
+    # `developer_panel/ui.py`: hər iki diaqnostika cədvəli 12 sətir göstərir.
+    SystemLimitKey.DEVELOPER_CRASH_ROW_LIMIT: "12",
+    SystemLimitKey.DEVELOPER_TICKET_ROW_LIMIT: "12",
 }
 
 
@@ -179,7 +966,15 @@ class DelayFinePolicy:
         return self.rate_per_minute > 0
 
     def amount_for(self, delay_minutes: int) -> Money:
-        """Gecikmə dəqiqələrinə görə cərimə məbləği."""
+        """Gecikmə dəqiqələrinə görə cərimə məbləği.
+
+        İdxal FUNKSİYA DAXİLİNDƏDİR — səbəb modul başlığındakı dairəvi idxal
+        izahıdır (bu fayl yarpaq qalmalıdır). Çağırış tezliyi aşağıdır (bir
+        icazə qaytarılışında bir dəfə), yəni `sys.modules` axtarışının qiyməti
+        ölçülə bilən deyil.
+        """
+        from src.domain.value_objects.money import Money  # noqa: PLC0415 — bax başlıq
+
         if delay_minutes <= 0 or not self.is_enabled:
             return Money.zero()
         return Money(self.rate_per_minute * Decimal(delay_minutes))
@@ -224,11 +1019,52 @@ class FeatureModule(str, Enum):
         return self is FeatureModule.CAMERA_VERIFICATION
 
 
+# --------------------------------------------------------------------------- #
+# #20 Performans Qiymətləndirməsi — dövr granulyarlığı (kompasos11.md Faza 8)
+# --------------------------------------------------------------------------- #
+
+
+class PerformanceReviewPeriodType(str, Enum):
+    """`SystemLimitKey.PERFORMANCE_REVIEW_PERIOD_TYPE` dəyərləri.
+
+    Yalnız FORMANIN DEFOLT DÖVR SƏTRİNİ necə hesabladığını təyin edir
+    (`PerformanceReviewUseCase.default_period`) — `performance_reviews.
+    period`-un ÖZÜ sərbəst formatdadır (illik/aylıq/rüblük hamısı DB
+    `CHECK`-inə uyğundur, migrations/020), yəni bu parametr keçmiş qeydləri
+    RETROAKTİV məhdudlaşdırmır, yalnız YENİ formanın ilkin təklifini seçir.
+    """
+
+    #: Ayın "YYYY-MM" formatı — dövri hesabatların (Aylıq Cərimə İcmalı) ritmi.
+    MONTHLY = "MONTHLY"
+    #: Rübün "YYYY-Qn" formatı.
+    QUARTERLY = "QUARTERLY"
+
+    def format_period(self, *, year: int, month: int) -> str:
+        """Verilən təqvim ayından dövr sətri qurur.
+
+        `QUARTERLY` üçün ay → rüb çevrilməsi: (ay-1)//3 + 1 — Yanvar-Mart
+        1-ci rüb, Aprel-İyun 2-ci və s. (standart maliyyə rüb bölgüsü).
+        """
+        if self is PerformanceReviewPeriodType.QUARTERLY:
+            quarter = (month - 1) // 3 + 1
+            return f"{year:04d}-Q{quarter}"
+        return f"{year:04d}-{month:02d}"
+
+    @classmethod
+    def from_value(cls, raw: str) -> PerformanceReviewPeriodType:
+        """Naməlum/səhv dəyər → `MONTHLY` (ən geniş yayılmış, təhlükəsiz defolt)."""
+        try:
+            return cls(raw.strip().upper())
+        except ValueError:
+            return cls.MONTHLY
+
+
 __all__ = [
     "DEFAULT_LIMITS",
     "DelayFinePolicy",
     "FeatureModule",
     "LeaveAllowancePolicy",
     "LeaveAllowanceSource",
+    "PerformanceReviewPeriodType",
     "SystemLimitKey",
 ]

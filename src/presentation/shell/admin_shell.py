@@ -196,6 +196,17 @@ class AdminShell(QWidget):
         self.screen_changed.emit(key)
         return True
 
+    def screen_for(self, key: str) -> QWidget | None:
+        """Artıq qurulmuş ekranı qaytarır — `None` hələ AÇILMAYIBSA.
+
+        Drill-down üçün lazımdır (#24, kompasos11.md Faza 9A): çağıran tərəf
+        `show_screen(key)` ilə keçiddən SONRA həmin ekranın instansına
+        müraciət edib ONA XÜSUSİ parametrlə (məs. kliklənən mağaza) yenidən
+        canlı məlumat yazdıra bilir — YENİ naviqasiya qatı YARADILMIR, sadəcə
+        artıq mövcud olan `_screens` reyestri XARİCƏ açılır.
+        """
+        return self._screens.get(key)
+
     def set_page_subtitle(self, subtitle: str) -> None:
         """Aktiv ekranın kontekst mətnini yeniləyir ("Avqust 2026 · Bellona")."""
         key = self._sidebar.active_key

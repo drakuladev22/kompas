@@ -14,17 +14,25 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Protocol, runtime_checkable
 
+from src.domain.attrition_rules import AttritionRiskScore
+from src.domain.entities.announcement import Announcement
 from src.domain.entities.appeal import FineAppeal
 from src.domain.entities.attendance_record import AttendanceRecord
 from src.domain.entities.attendance_sheet import AttendanceFact, DailyAttendanceSheet
 from src.domain.entities.employee import Employee
+from src.domain.entities.employee_document import EmployeeDocument
+from src.domain.entities.exception_record import ExceptionRecord
 from src.domain.entities.fine import Fine
 from src.domain.entities.leave_request import LeaveRequest
+from src.domain.entities.open_shift import OpenShiftPosting, OpenShiftSlot
+from src.domain.entities.performance_review import PerformanceReview
+from src.domain.entities.pos_threshold import POSPermissionThreshold
 from src.domain.entities.position import Position
 from src.domain.entities.sales_points import PointsEntry, RewardRedemption
 from src.domain.entities.shift import ShiftAssignment, ShiftSwapRequest
 from src.domain.entities.task import Task
 from src.domain.value_objects.authorization import PermissionFlag
+from src.domain.value_objects.behavior_signals import BehaviorBaseline, CheckInObservation
 from src.domain.value_objects.catalogs import FineType, LeaveType, WorkMode
 from src.domain.value_objects.credentials import Username
 from src.domain.value_objects.erp import (
@@ -35,16 +43,25 @@ from src.domain.value_objects.erp import (
     OneCSaleRecord,
     SyncCursor,
 )
+from src.domain.value_objects.exception_signals import (
+    ExceptionFinding,
+    ExceptionSource,
+    RuleEvaluationContext,
+)
 from src.domain.value_objects.gamification import PointsPeriod, RewardItem
 from src.domain.value_objects.identifiers import (
+    AnnouncementId,
     AppealId,
     AttendanceRecordId,
+    EmployeeDocumentId,
     EmployeeId,
     ErpServerId,
+    ExceptionId,
     FineId,
     FineTypeId,
     LeaveRequestId,
     LeaveTypeId,
+    OpenShiftPostingId,
     PointsEntryId,
     PositionId,
     RedemptionId,
@@ -64,6 +81,11 @@ from src.domain.value_objects.licensing import (
     CheckInRequest,
     CrashReport,
     LicenseSnapshot,
+)
+from src.domain.value_objects.overtime import OvertimeEntry, WorkedSpan
+from src.domain.value_objects.staffing_signals import (
+    StaffingPatternSuggestion,
+    StoreDayHeadcount,
 )
 from src.domain.value_objects.storage import ImageSize, StorageReference
 from src.shared.event_bus import DomainEvent
@@ -737,6 +759,495 @@ class ShiftSwapRepository(Protocol):
 
 
 @runtime_checkable
+class OpenShiftPostingRepository(Protocol):
+    """`open_shift_postings` (#16 — açıq növbə bazarı, kompasos11.md Faza 6).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ ÜMUMİ `save()` YOXDUR
+    ──────────────────────────────────────────────────────────────────────────
+    Digər repo-larda naxış `save(aqreqat)` UPSERT-idir. Burada QƏSDƏN
+    fərqlidir: statusu dəyişən hər keçidin ÖZ metodu var (`claim`, `cancel`)
+    və hər ikisi ŞƏRTLİ `UPDATE` qaytarır (uğurlu/uğursuz).
+
+    Səbəb yarışdır. `save(posting)` olsaydı, çağıran tərəf "oxu → dəyiş →
+    yaz" ardıcıllığını qurardı; iki paralel işçi eyni elanı oxuyub HƏR İKİSİ
+    `CLAIMED` yazardı və ikinci yazı birincinin `claimed_by` dəyərini
+    ÜSTÜNDƏN yazardı. Metodun ÖZÜ şərti UPDATE olduqda bu səhvi etmək
+    mümkün deyil — imza yanlış istifadəni struktur olaraq bağlayır.
+
+    `post()` isə sadə INSERT-dir: yeni elan heç bir mövcud sətirlə yarışmır
+    (eyni slot üçün ikinci açıq elanı DB-dəki qismən unikal indeks kəsir).
+    """
+
+    def get(self, posting_id: OpenShiftPostingId) -> OpenShiftPosting | None: ...
+
+    def get_for_update(self, posting_id: OpenShiftPostingId) -> OpenShiftPosting | None:
+        """`SELECT ... FOR UPDATE` — sətri tranzaksiya sonuna qədər kilidləyir.
+
+        `get()` ekranların siyahı yolunda işlədilir; ona kilid qoymaq hər
+        baxışı yazı-kilidinə çevirərdi (`RowLockingLeaveRequests` ilə eyni
+        qərar).
+        """
+        ...
+
+    def list_open(
+        self,
+        tenant_id: TenantId,
+        *,
+        store_id: StoreId | None = None,
+        from_date: date | None = None,
+        limit: int = 100,
+    ) -> list[OpenShiftPosting]:
+        """Açıq elanlar — işçinin gördüyü siyahı və admin panelinin mənbəyi."""
+        ...
+
+    def find_open_for_slot(
+        self, tenant_id: TenantId, slot: OpenShiftSlot
+    ) -> OpenShiftPosting | None:
+        """Eyni slot üçün ikinci açıq elanın qarşısını almaq üçün."""
+        ...
+
+    def count_claims_in_month(self, employee_id: EmployeeId, *, year: int, month: int) -> int:
+        """İşçinin həmin ayda tutduğu elan sayı (aylıq tavan yoxlaması)."""
+        ...
+
+    def post(self, posting: OpenShiftPosting) -> None:
+        """Yeni elanı YAZIR (INSERT) — mövcud sətri yeniləmir."""
+        ...
+
+    def claim(
+        self,
+        *,
+        posting_id: OpenShiftPostingId,
+        employee_id: EmployeeId,
+        claimed_at: datetime,
+    ) -> bool:
+        """ŞƏRTLİ `UPDATE ... WHERE status = 'OPEN'`.
+
+        Returns:
+            `True` — bu çağırış yarışı UDDU; `False` — elan artıq bağlıdır
+            (başqası tutub və ya ləğv edilib). İstisna ATILMIR: uduzmaq
+            texniki nasazlıq deyil, axının NORMAL nəticəsidir və çağıran
+            tərəf onu istifadəçi mesajına çevirir.
+        """
+        ...
+
+    def cancel(
+        self,
+        *,
+        posting_id: OpenShiftPostingId,
+        cancelled_by: EmployeeId,
+        cancelled_at: datetime,
+        reason: str,
+    ) -> bool:
+        """ŞƏRTLİ `UPDATE` — yalnız HƏLƏ AÇIQ elan ləğv edilə bilər."""
+        ...
+
+
+# --------------------------------------------------------------------------- #
+# Vahid İstisna Motoru (#9) — qayda müqaviləsi, jurnal və mənbə kataloqu
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class ExceptionRule(Protocol):
+    """İstisna Motoruna qoşulan BİR aşkarlama qaydası.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ BU PORT `ports.py`-DADIR
+    ──────────────────────────────────────────────────────────────────────────
+    Qayda yalnız DOMEN tipləri qaytarır (`ExceptionFinding`) və yalnız domen
+    tipi qəbul edir (`RuleEvaluationContext`). Layihə qaydası budur: domen
+    tipləri ilə işləyən port `ports.py`-a gedir; tətbiq qatının strukturunu
+    qaytaran port (məs. `ReportFactProvider`) isə use case faylının yanında
+    qalır. Qayda tətbiq qatında (Faza 5) həyata keçiriləcək, lakin `Protocol`
+    strukturaldır — miras tələb olunmur, domen tətbiq qatını TANIMIR.
+
+    ──────────────────────────────────────────────────────────────────────────
+    QAYDANIN ÖHDƏLİKLƏRİ
+    ──────────────────────────────────────────────────────────────────────────
+    * `source_code` `exception_sources` kataloqundakı sətirlə EYNİ olmalıdır
+      (`FOREIGN KEY`); əks halda motor tapıntını yazmadan atır və icra
+      hesabatında "naməlum mənbə" kimi göstərir.
+    * `evaluate()` YAZMIR — nə `exceptions`-a, nə audit-ə. Yazı, təkrar
+      yoxlaması, ciddiyyət defoltu və bildiriş MOTORDADIR.
+    * `evaluate()` `datetime.now()` çağırmır — vaxt `context.as_of`-dadır.
+    * Bütün həddlər `context.limit_int(...)` ilə oxunur (`system_limits`).
+    """
+
+    @property
+    def source_code(self) -> str:
+        """`exception_sources.code` — reyestrin açarı (BÖYÜK hərflərlə)."""
+        ...
+
+    @property
+    def name_az(self) -> str:
+        """Qaydanın texniki adı — log/icra hesabatı üçün (Azərbaycanca).
+
+        Ekranda görünən mənbə adı BURADAN GƏLMİR: o, `exception_sources.
+        name_az` sütunundadır və Root onu redaktə edə bilir.
+        """
+        ...
+
+    def evaluate(self, context: RuleEvaluationContext) -> list[ExceptionFinding]:
+        """Bir kirayəçi üçün anomaliyaları hesablayır.
+
+        Tapıntı yoxdursa BOŞ siyahı qaytarılır — `None` yox, çünki "heç nə
+        tapılmadı" ilə "hesablaya bilmədim" fərqli hallardır və ikincisi
+        istisna ilə bildirilməlidir.
+        """
+        ...
+
+
+@runtime_checkable
+class ExceptionRepository(Protocol):
+    """`exceptions` — Vahid İstisna Jurnalı (#9).
+
+    `delete()` YOXDUR və olmayacaq: DB-də `REVOKE DELETE` var (migrations/018),
+    çünki rədd edilmiş istisna da "buna baxıldı və əsassız sayıldı" faktının
+    sübutudur. Portda silmə metodu olsaydı, qadağa yalnız DB-də qalar və kodda
+    "niyə işləmir?" sualı doğurardı.
+    """
+
+    def get(self, exception_id: ExceptionId) -> ExceptionRecord | None: ...
+
+    def find_by_dedupe(
+        self, tenant_id: TenantId, *, source: str, dedupe_key: str
+    ) -> ExceptionRecord | None:
+        """Təkrar-yaratma qapağı — `uq_exceptions_dedupe` indeksinin kod tərəfi.
+
+        STATUSDAN ASILI DEYİL: bağlanmış (REVIEWED/DISMISSED) tapıntı da
+        "artıq mövcuddur" sayılır, əks halda gecəlik icra rədd edilmiş
+        istisnanı sabah yenidən açardı.
+        """
+        ...
+
+    def list_open(
+        self,
+        tenant_id: TenantId,
+        *,
+        store_ids: list[StoreId] | None = None,
+        limit: int = 200,
+    ) -> list[ExceptionRecord]:
+        """ "İstisnalar" ekranının əsas sorğusu — ən yenisi əvvəldə.
+
+        `store_ids` mağaza-əhatəli görünmə üçündür (Mağaza Meneceri yalnız öz
+        filialını görür). `None` = süzgəc yoxdur; BOŞ siyahı isə "heç bir
+        mağazaya çıxışı yoxdur" deməkdir və heç nə qaytarmır (fail-safe).
+        """
+        ...
+
+    def save(self, record: ExceptionRecord) -> None:
+        """UPSERT — `ON CONFLICT (id)`."""
+        ...
+
+
+@runtime_checkable
+class ExceptionSourceCatalog(Protocol):
+    """`exception_sources` — genişlənə bilən mənbə kataloqu (#9).
+
+    Yeni mənbə DDL-siz, bir `INSERT` ilə əlavə olunur; söndürmə isə
+    `is_active = FALSE` ilə edilir (soft delete), çünki keçmiş istisnalar hansı
+    qaydadan doğduğunu göstərə bilməlidir.
+    """
+
+    def get(self, tenant_id: TenantId, code: str) -> ExceptionSource | None: ...
+
+    def list_all(
+        self, tenant_id: TenantId, *, include_inactive: bool = False
+    ) -> list[ExceptionSource]:
+        """Ekranın mənbə-badge sözlüyü. Defolt YALNIZ aktivlər."""
+        ...
+
+
+# --------------------------------------------------------------------------- #
+# #7 POS Səlahiyyət Siyasəti (sənədləşdirmə/siyasət qeydi, kompasos11.md Faza 4)
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class POSThresholdRepository(Protocol):
+    """`pos_permission_thresholds` — işçi başına BİR diri sətir (UPSERT).
+
+    `delete()` YOXDUR və olmayacaq: DB-də `REVOKE DELETE` var
+    (migrations/018) — səlahiyyət geri alınsa da (`POSPermissionThreshold.
+    revoke()`) sətir SİLİNMİR, çünki "o gün bu işçinin hansı səlahiyyəti var
+    idi?" sualı HR/audit araşdırmasında cavabsız qalmamalıdır.
+    """
+
+    def get_for_employee(
+        self, tenant_id: TenantId, employee_id: EmployeeId
+    ) -> POSPermissionThreshold | None:
+        """İşçinin diri (aktiv və ya geri alınmış) hədd sətri."""
+        ...
+
+    def save(self, record: POSPermissionThreshold) -> None:
+        """UPSERT — `ON CONFLICT (tenant_id, employee_id)`."""
+        ...
+
+
+# --------------------------------------------------------------------------- #
+# #17 İşçi Sənədləri (kompasos11.md Faza 7)
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class EmployeeDocumentRepository(Protocol):
+    """`employee_documents` — bir işçinin BİRDƏN ÇOX sətri ola bilər.
+
+    `delete()` YOXDUR: DB-də `REVOKE DELETE` var (migrations/020) — sənəd
+    "keçmiş növbə təyinatının niyə icazəli olduğunu" sübut etdiyi üçün soft
+    delete ilə idarə olunur (`EmployeeDocument.deactivate()`).
+    """
+
+    def get(self, document_id: EmployeeDocumentId) -> EmployeeDocument | None: ...
+
+    def list_for_employee(
+        self, tenant_id: TenantId, employee_id: EmployeeId, *, include_inactive: bool = False
+    ) -> list[EmployeeDocument]:
+        """İşçi redaktə ekranının "Sənədlər" bölməsi — ən yenisi əvvəldə."""
+        ...
+
+    def list_blocking_for_employee(
+        self, tenant_id: TenantId, employee_id: EmployeeId
+    ) -> list[EmployeeDocument]:
+        """Aktiv, `is_blocking=TRUE` sətirlər — Shift Matrix konflikt yoxlaması
+        üçün (`idx_employee_documents_blocking`, migrations/020).
+        """
+        ...
+
+    def list_expiring(self, tenant_id: TenantId, *, on_or_before: date) -> list[EmployeeDocument]:
+        """Aktiv, bitmə tarixi `on_or_before`-a qədər olan sətirlər —
+        bitmə xəbərdarlığı üçün (`idx_employee_documents_expiring`).
+        """
+        ...
+
+    def save(self, record: EmployeeDocument) -> None:
+        """UPSERT — `id` ilə (işçi başına çox sətir ola bildiyi üçün `id`
+        `pos_permission_thresholds`-dəki `(tenant_id, employee_id)`-dən
+        fərqli olaraq TƏK konflikt açarıdır).
+        """
+        ...
+
+
+# --------------------------------------------------------------------------- #
+# #19 Elan (Broadcast) (kompasos11.md Faza 8)
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class AnnouncementRepository(Protocol):
+    """`announcements` + `announcement_targets` (#19).
+
+    NİYƏ ÜMUMİ `save()` YOXDUR: `post()` sadə INSERT-dir (parent sətir +
+    hədəf sətirləri — bax `OpenShiftPostingRepository.post` eyni qərarı),
+    `withdraw()` isə YALNIZ soft-delete sahələrini toxunan ŞƏRTLİ UPDATE-dir.
+    Elanın MƏTNİ/ƏHATƏSİ yaradıldıqdan sonra DƏYİŞMİR (yeni elan tələb edir) —
+    ona görə "redaktə" metodu ÜMUMİYYƏTLƏ yoxdur.
+    """
+
+    def get(self, tenant_id: TenantId, announcement_id: AnnouncementId) -> Announcement | None: ...
+
+    def list_recent(self, tenant_id: TenantId, *, limit: int = 50) -> list[Announcement]:
+        """Admin panelinin siyahısı — YARADAN görür, əhatədən ASILI OLMADAN."""
+        ...
+
+    def list_visible_for_store(
+        self, tenant_id: TenantId, store_id: StoreId | None, *, created_after: datetime
+    ) -> list[Announcement]:
+        """İşçi Ana Ekranının store-scoping oxusu (#19).
+
+        `store_id=None` — yalnız `scope=ALL` elanlar qayıdır (mağazası
+        olmayan işçi `STORE_LIST` elanlarını görmür, bax `Announcement.
+        visible_to_store` başlığı).
+        """
+        ...
+
+    def post(self, record: Announcement) -> None:
+        """Yeni elanı yazır (parent + hədəf sətirləri) — YENİLƏMİR."""
+        ...
+
+    def withdraw(
+        self,
+        *,
+        tenant_id: TenantId,
+        announcement_id: AnnouncementId,
+        deactivated_by: EmployeeId,
+        deactivated_at: datetime,
+    ) -> bool:
+        """ŞƏRTLİ `UPDATE ... WHERE is_active` — artıq geri çəkilmiş sətri
+        ikinci dəfə "geri çəkməyin" qarşısını alır. Təsir olunub-olunmadığını
+        qaytarır (`OpenShiftPostingRepository.cancel` ilə eyni naxış).
+        """
+        ...
+
+
+# --------------------------------------------------------------------------- #
+# #20 Performans Qiymətləndirməsi (kompasos11.md Faza 8)
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class PerformanceReviewRepository(Protocol):
+    """`performance_reviews` — bir işçi + bir dövr = BİR sətir (UNIQUE)."""
+
+    def get(
+        self, tenant_id: TenantId, employee_id: EmployeeId, period: str
+    ) -> PerformanceReview | None:
+        """Eyni dövr üçün MÖVCUD sətri tapır — UPSERT-in "oxu" tərəfi."""
+        ...
+
+    def list_for_employee(
+        self, tenant_id: TenantId, employee_id: EmployeeId
+    ) -> list[PerformanceReview]:
+        """İşçinin ÖZ tarixçəsi (Profil ekranı) və reviewer-in keçmiş dövrlər
+        siyahısı — dövr azalan sırada (ən yenisi əvvəldə).
+        """
+        ...
+
+    def save(self, record: PerformanceReview) -> None:
+        """UPSERT — `ON CONFLICT (tenant_id, employee_id, period)`
+        (`pos_permission_thresholds` ilə EYNİ naxış: `id` yeniləmədə
+        toxunulmur, sətrin identifikatoru daimi qalır).
+        """
+        ...
+
+
+# --------------------------------------------------------------------------- #
+# #8 İşçi Davranış Baz Xətti (kompasos11.md Faza 5)
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class BehaviorBaselineRepository(Protocol):
+    """`employee_behavior_baseline` — işçi başına BİR törəmə sətir (#8).
+
+    `delete()` VAR (digər Faza 5 repo-larından fərqli olaraq): migrations/018
+    bu cədvələ tam `GRANT ... DELETE` verir, çünki sətir "tam törəmə
+    məlumatdır" — işçi profili silinərkən (CASCADE) və ya köhnəlmiş baz
+    xəttini təmizləyərkən itkisi sübut itkisi DEYİL, `attendance_records`-dan
+    istənilən an yenidən hesablana bilər.
+    """
+
+    def get_for_employee(
+        self, tenant_id: TenantId, employee_id: EmployeeId
+    ) -> BehaviorBaseline | None: ...
+
+    def list_for_tenant(self, tenant_id: TenantId) -> list[BehaviorBaseline]:
+        """`BehaviorAnomalyRule`-un "bütün işçilər üçün adət" sorğusu."""
+        ...
+
+    def save(self, baseline: BehaviorBaseline) -> None:
+        """UPSERT — `ON CONFLICT (tenant_id, employee_id)`."""
+        ...
+
+
+# --------------------------------------------------------------------------- #
+# #21 İşdən Çıxma Riski Balı (kompasos11.md Faza 9)
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class AttritionRiskScoreRepository(Protocol):
+    """`attrition_risk_scores` — GÜNLÜK tarixçə (#21).
+
+    Bura QAYTARILAN `AttritionRiskScore` SAF DOMEN TİPİDİR (`domain.
+    attrition_rules`), ona görə port `ports.py`-dadır — xam siqnal yığımı isə
+    tətbiq qatının strukturunu (`EmployeeAttritionSignals`) qaytardığı üçün
+    `application.use_cases.attrition_risk`-in ÖZÜNDƏ təyin olunur
+    (`ReportFactProvider` naxışı, CLAUDE.md — "port tətbiq qatının
+    strukturunu qaytarırsa use case faylının yanında təyin olunur").
+    """
+
+    def save(self, score: AttritionRiskScore) -> None:
+        """UPSERT — `ON CONFLICT (tenant_id, employee_id, score_date)`."""
+        ...
+
+    def get_latest_for_employee(
+        self, tenant_id: TenantId, employee_id: EmployeeId
+    ) -> AttritionRiskScore | None:
+        """Ən son (ən böyük `score_date`) sətir — dublikat bildirişin qarşısını
+        almaq üçün (yeni bal əvvəlkindən DƏYİŞMƏYİBSƏ bildiriş TƏKRARLANMIR,
+        bax `AttritionRiskUseCase._notify_high_risk` başlığı)."""
+        ...
+
+    def list_latest_for_tenant(self, tenant_id: TenantId) -> list[AttritionRiskScore]:
+        """Hər işçinin ƏN SON balı, ekranın "ən riskli işçilər" siyahısı üçün."""
+        ...
+
+
+@runtime_checkable
+class CheckInHistoryProvider(Protocol):
+    """`attendance_records.verified_at` xam giriş anları (#8).
+
+    Gecəlik baz xətt hesablaması VƏ anomaliya qaydası EYNİ portdan oxuyur —
+    bax `value_objects.behavior_signals` modul başlığı: iki ayrı sorğu
+    "check-in nədir?" tərifinin vaxtla iki fərqli cavabına gətirə bilərdi.
+    """
+
+    def list_checkins(
+        self, tenant_id: TenantId, *, since: date, until: date
+    ) -> list[CheckInObservation]:
+        """`[since, until]` (daxil) tarix aralığında TƏSDİQLƏNMİŞ girişlər."""
+        ...
+
+
+# --------------------------------------------------------------------------- #
+# #13 Tarixi-nümunə əsaslı kadr təklifi (kompasos11.md Faza 6)
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class StaffingHistoryProvider(Protocol):
+    """ "Bu mağaza filan gün neçə işçi ilə işləyib?" — XAM mənbə (#13).
+
+    1C-YƏ TOXUNMUR: port `attendance_records` üzərində qurulur, satış datası
+    ilə heç bir əlaqəsi yoxdur (kompasos11.md struktur qərar D). Ona görə
+    imzada nə `SyncCursor`, nə `OneCSaleRecord` var — bu porta 1C
+    implementasiyası VERİLƏ BİLMƏZ, çünki qaytardığı tip fiziki iştirak
+    faktıdır, satış həcmi deyil.
+
+    `CheckInHistoryProvider`-dən AYRIDIR (ikisi də davamiyyətdən oxusa da):
+    o, işçi başına ANLARı verir (davranış baz xətti üçün), bu isə mağaza
+    başına SAYı. Birləşdirilsəydi, hər təklif hesablaması on minlərlə giriş
+    anını tətbiq qatına daşıyıb orada saymalı olardı — halbuki sayma
+    `COUNT(DISTINCT ...)` ilə bazada bir sətirdə edilir.
+    """
+
+    def headcount_by_day(
+        self, tenant_id: TenantId, *, store_id: StoreId, since: date, until: date
+    ) -> list[StoreDayHeadcount]:
+        """`[since, until]` (daxil) aralığında GÜN ÜZRƏ fərqli işçi sayı.
+
+        Müşahidəsi olmayan gün siyahıda OLMUR (sıfırla doldurulmur) — bax
+        `StaffingPatternUseCase.recalculate_for_store` şərhi: "məlumat yoxdur"
+        ilə "sıfır işçi lazımdır" eyni şey deyil.
+        """
+        ...
+
+
+@runtime_checkable
+class StaffingPatternRepository(Protocol):
+    """`staffing_pattern_suggestions` — mağaza + həftə günü = BİR sətir (#13).
+
+    `delete()` VAR OLA BİLƏRDİ (migrations/019 tətbiq roluna `DELETE` verir),
+    lakin portda YOXDUR: təklif UPSERT ilə yenilənir və köhnə sətrin silinməsi
+    üçün heç bir iş axını mövcud deyil. Mağaza silinəndə `ON DELETE CASCADE`
+    onsuz da təmizləyir.
+    """
+
+    def list_for_store(
+        self, tenant_id: TenantId, store_id: StoreId
+    ) -> list[StaffingPatternSuggestion]:
+        """Bir mağazanın bütün həftə günləri üçün mövcud təklifləri."""
+        ...
+
+    def save(self, suggestion: StaffingPatternSuggestion) -> None:
+        """UPSERT — `ON CONFLICT (tenant_id, store_id, weekday)`."""
+        ...
+
+
+@runtime_checkable
 class DailyAttendanceSheetRepository(Protocol):
     """`daily_attendance_sheets` + `..._lines` (bölmə 3)."""
 
@@ -760,6 +1271,49 @@ class AttendanceFactProvider(Protocol):
     """
 
     def facts_for(self, store_id: StoreId, work_date: date) -> list[AttendanceFact]: ...
+
+
+@runtime_checkable
+class WorkedHoursProvider(Protocol):
+    """Bir günün ÖLÇÜLƏ BİLƏN iş pəncərələri (#15).
+
+    `AttendanceFactProvider`-dan AYRIDIR, çünki fərqli sual verir: o, tabelin
+    STATUSUNU (işdə/qayıb/istirahət), bu isə günün UZUNLUĞUNU çıxarır. Eyni
+    porta yığılsaydı, tabelin hər açılışı — gündə onlarla dəfə — növbə saatı
+    və icazə dəqiqələrini də gətirməli olardı, halbuki onlar YALNIZ təsdiq
+    anında bir dəfə lazımdır.
+    """
+
+    def spans_for(self, store_id: StoreId, work_date: date) -> list[WorkedSpan]:
+        """Həmin mağazanın həmin günündəki iş pəncərələri (təsdiqlənmiş giriş)."""
+        ...
+
+
+@runtime_checkable
+class OvertimeLogRepository(Protocol):
+    """`overtime_log` (migrations/019) — işçi-gün başına BİR sətir (#15).
+
+    `DELETE` metodu QƏSDƏN YOXDUR: miqrasiya tətbiq rolundan `DELETE`
+    hüququnu AÇIQ ŞƏKİLDƏ geri alır (`REVOKE DELETE ON overtime_log`), çünki
+    sətir əmək saatı iddiasının sübutudur. Yenidən hesablama sətri SİLMİR,
+    ÜSTÜNDƏN YAZIR (`hours_over_norm = 0.00` da qanuni nəticədir).
+    """
+
+    def save(self, entry: OvertimeEntry) -> None:
+        """UPSERT — `ON CONFLICT (tenant_id, employee_id, work_date)`."""
+        ...
+
+    def list_for_period(
+        self, tenant_id: TenantId, *, start: date, end: date
+    ) -> list[OvertimeEntry]:
+        """`[start, end]` (daxil) aralığındakı bütün sətirlər."""
+        ...
+
+    def list_for_employee_period(
+        self, tenant_id: TenantId, employee_id: EmployeeId, *, start: date, end: date
+    ) -> list[OvertimeEntry]:
+        """Bir işçinin aralıqdakı sətirləri — həftəlik toplamanın mənbəyi."""
+        ...
 
 
 @runtime_checkable
@@ -883,10 +1437,14 @@ class UnitOfWork(Protocol):
 
 
 __all__ = [
+    "AnnouncementRepository",
     "AttendanceFactProvider",
     "AttendanceRepository",
+    "AttritionRiskScoreRepository",
     "AuditTrail",
+    "BehaviorBaselineRepository",
     "CameraAssignmentRepository",
+    "CheckInHistoryProvider",
     "Clock",
     "DailyAttendanceSheetRepository",
     "DatabaseMigrator",
@@ -895,6 +1453,9 @@ __all__ = [
     "ErpServerRegistry",
     "EventPublisher",
     "EvidenceStorageProvider",
+    "ExceptionRepository",
+    "ExceptionRule",
+    "ExceptionSourceCatalog",
     "FeatureToggles",
     "FineAppealRepository",
     "FineRepository",
@@ -907,6 +1468,10 @@ __all__ = [
     "Notifier",
     "NtpVerifier",
     "OfflineBufferDrain",
+    "OpenShiftPostingRepository",
+    "OvertimeLogRepository",
+    "POSThresholdRepository",
+    "PerformanceReviewRepository",
     "PermissionFlagRepository",
     "PositionRepository",
     "ReadOnlyModeController",
@@ -921,4 +1486,5 @@ __all__ = [
     "TaskRepository",
     "UnitOfWork",
     "WorkModeRepository",
+    "WorkedHoursProvider",
 ]

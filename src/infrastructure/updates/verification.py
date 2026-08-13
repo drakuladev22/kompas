@@ -43,10 +43,12 @@ import platform
 import subprocess
 from typing import TYPE_CHECKING, Final
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.updates import (
     ChecksumMismatchError,
     SignatureRejectedError,
 )
+from src.infrastructure.config.limits import InfrastructureLimits, fallback_float
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
@@ -60,7 +62,12 @@ CHUNK_SIZE: Final[int] = 1024 * 1024
 #: İmza yoxlaması bu müddətdən uzun çəkərsə uğursuz sayılır. Yoxlama yerli
 #: əməliyyatdır; uzanması ancaq bir problem əlamətidir (məs. şəbəkə üzərindən
 #: CRL sorğusunun asılıb qalması).
-VERIFY_TIMEOUT_SECONDS: Final[float] = 60.0
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`UPDATE_VERIFY_TIMEOUT_SECONDS`, seed: migrations/032). Zəif kiosk PC-də
+#: PowerShell-in soyuq başlanğıcı tək başına saniyələr çəkir.
+FALLBACK_VERIFY_TIMEOUT_SECONDS: Final[float] = fallback_float(
+    SystemLimitKey.UPDATE_VERIFY_TIMEOUT_SECONDS
+)
 
 #: `Get-AuthenticodeSignature` yalnız bu statusu etibarlı sayır.
 VALID_STATUS: Final[str] = "Valid"
@@ -136,11 +143,24 @@ class AuthenticodeVerifier:
         expected_subject: str = "",
         runner: Callable[[Sequence[str], Mapping[str, str]], subprocess.CompletedProcess[str]]
         | None = None,
-        timeout_seconds: float = VERIFY_TIMEOUT_SECONDS,
+        timeout_seconds: float | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
+        """
+        Args:
+            timeout_seconds: AÇIQ üstünlük — verilərsə ROOT dəyəri OXUNMUR.
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback.
+        """
         self._expected_subject = expected_subject.strip()
         self._runner = runner
-        self._timeout = timeout_seconds
+        self._explicit_timeout = timeout_seconds
+        self._limits = limits or InfrastructureLimits()
+
+    def _timeout(self) -> float:
+        """Yoxlama taymautu — HƏR ÇAĞIRIŞDA oxunur (yoxlayıcı uzun ömürlüdür)."""
+        if self._explicit_timeout is not None:
+            return self._explicit_timeout
+        return self._limits.float_of(SystemLimitKey.UPDATE_VERIFY_TIMEOUT_SECONDS)
 
     @property
     def is_supported(self) -> bool:
@@ -216,7 +236,7 @@ class AuthenticodeVerifier:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=self._timeout,
+            timeout=self._timeout(),
             check=False,
             env=dict(environment),
         )
@@ -262,8 +282,8 @@ def verify_package(
 
 
 __all__ = [
+    "FALLBACK_VERIFY_TIMEOUT_SECONDS",
     "VALID_STATUS",
-    "VERIFY_TIMEOUT_SECONDS",
     "AuthenticodeVerifier",
     "file_sha256",
     "verify_checksum",

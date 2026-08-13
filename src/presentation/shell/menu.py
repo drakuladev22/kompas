@@ -173,6 +173,25 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         icon="download",
     ),
     MenuEntry(
+        key="announcements",
+        title_az="Elanlar",
+        # #19 (kompasos11.md Faza 8) — mövcud dəstək çatından (`support`)
+        # FƏRQLİ, bir-tərəfli broadcast. Feature Toggle YOXDUR (bax
+        # `migrations/029` başlığı: tək-flag-lə qapılı kommunikasiya funksiyası).
+        required_flag="can_broadcast_announcements",
+        order=106,
+        icon="bell",
+    ),
+    MenuEntry(
+        key="performance_reviews",
+        title_az="Performans Qiymətləndirmələri",
+        # #20 (kompasos11.md Faza 8) — nəticə işçinin ÖZ Profil ekranında
+        # (`profile`, flag-siz) da görünür; bu maddə yalnız YAZI yoludur.
+        required_flag="can_conduct_performance_review",
+        order=108,
+        icon="checklist",
+    ),
+    MenuEntry(
         key="users",
         title_az="İstifadəçilər",
         required_flag="can_manage_employees",
@@ -219,6 +238,28 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         required_flag="can_view_audit_logs",
         order=160,
         icon="file",
+    ),
+    MenuEntry(
+        key="exceptions",
+        title_az="İstisnalar",
+        # #9 (kompasos11.md Faza 5) — Vahid İstisna Motorunun jurnalı.
+        # "Nəzərdən Keçirildi" / "Rədd Et" qərarları da eyni flag arxasındadır
+        # (bax `exception_engine.py::_require_view` başlığı: "OXU VƏ QƏRAR
+        # EYNİ FLAG-DƏDİR").
+        required_flag="can_view_exceptions",
+        order=162,
+        icon="shield",
+    ),
+    MenuEntry(
+        key="attrition_risk",
+        title_az="İşdən Çıxma Riski",
+        # #21 (kompasos11.md Faza 9) — bal HƏSSAS HR proqnozudur (bax
+        # `attrition_risk.py` use case başlığı). "GÖRMƏK = SƏLAHİYYƏTİN
+        # OLMASI" burada xüsusilə vacibdir: defolt heç bir operativ rola
+        # verilmir, yalnız HR_Admin/CEO/Root (migrations/021 flag təsviri).
+        required_flag="can_view_attrition_risk",
+        order=163,
+        icon="activity",
     ),
     MenuEntry(
         key="drive_connection",

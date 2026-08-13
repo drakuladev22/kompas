@@ -56,9 +56,15 @@ if TYPE_CHECKING:
     from src.domain.value_objects.identifiers import EmployeeId
 
 #: Panelin bir dəfəyə oxuduğu maksimum sətir. Bu, biznes HƏDDİ deyil — ekran
-#: 620px hündürlükdədir və 50-dən sonrası onsuz da sürüşdürmə ilə açılmır.
-#: Ona görə `system_limits`-də açarı YOXDUR (eyni məntiq `app.py`-dakı
-#: `UPLOAD_POLL_INTERVAL_MS` üçün də seçilib).
+#: 620px hündürlükdədir və 50-dən sonrası onsuz da sürüşdürmə ilə açılmır,
+#: yəni ədəd PƏNCƏRƏNİN ÖLÇÜSÜNDƏN doğur, siyasətdən yox. Ona görə
+#: `system_limits`-də açarı YOXDUR — dizayn sabitidir (bax migrations/035-in
+#: "bu miqrasiyaya girməyənlər" bölməsi).
+#:
+#: QEYD: bu şərh əvvəl `app.py`-dakı `UPLOAD_POLL_INTERVAL_MS`-ə istinad
+#: edirdi; həmin dəyər Faza 10.2-də ROOT parametrinə çevrildi
+#: (`EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS`), çünki o, ölçü deyil, ŞƏBƏKƏ
+#: ritmi idi. İstinad silindi ki, köhnə qərar yeni qərarı əsaslandırmasın.
 PANEL_LIMIT = 50
 
 

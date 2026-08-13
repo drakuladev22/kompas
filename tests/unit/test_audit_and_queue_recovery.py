@@ -26,6 +26,7 @@ from src.infrastructure.storage.google_drive import EvidenceValidationError
 from src.infrastructure.storage.upload_queue import (
     EvidenceUploadQueue,
     EvidenceUploadWorker,
+    UploadOwnerType,
     UploadStatus,
 )
 from src.presentation.controllers.drive_connection import DriveConnectionController
@@ -242,7 +243,8 @@ def queue(tmp_path: Path) -> Any:
 def _enqueue(queue: EvidenceUploadQueue) -> str:
     return queue.enqueue(
         tenant_id=str(TENANT),
-        fine_id=FINE,  # type: ignore[arg-type]
+        owner_type=UploadOwnerType.FINE,
+        owner_id=str(FINE),
         store_id=STORE,  # type: ignore[arg-type]
         filename="sübut.jpg",
         content=b"\xff\xd8\xffbinary-image",
@@ -287,7 +289,9 @@ def test_requeue_refuses_when_the_spool_file_is_gone(queue: EvidenceUploadQueue)
 class _RejectingProvider:
     """Hər yükləməni validasiya xətası ilə rədd edən provider."""
 
-    def upload(self, *_: Any) -> Any:
+    def upload(self, *_: Any, **__: Any) -> Any:
+        # `**__`: işçi sahib tipini AÇAR SÖZ ilə ötürür (SEC-018) — real
+        # provider onu qəbul edir, bu sahtə isə arqumentlərə baxmır.
         raise EvidenceValidationError(
             "Fayl həddi aşır",
             user_message="Şəkil çox böyükdür.",

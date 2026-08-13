@@ -45,10 +45,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
-from src.domain.value_objects.licensing import (
-    CLOCK_ROLLBACK_TOLERANCE_SECONDS,
-    LicenseSnapshot,
-)
+from src.domain.policies import SystemLimitKey
+
+# `CLOCK_ROLLBACK_TOLERANCE_SECONDS` BURADAN İDXAL OLUNMUR: fallback dəyəri
+# artıq `InfrastructureLimits` verir (o da `DEFAULT_LIMITS`-dən oxuyur, yəni
+# ədəd EYNİDİR). İkinci idxal saxlasaydıq, "hansı fallback işlədi?" sualının
+# iki cavabı olardı və biri dəyişəndə digəri arxada qalardı.
+from src.domain.value_objects.licensing import LicenseSnapshot
+from src.infrastructure.config.limits import InfrastructureLimits
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
@@ -88,14 +92,31 @@ class EncryptedLicenseStateStore:
         encryption: EncryptionService,
         *,
         directory: Path | None = None,
-        rollback_tolerance_seconds: float = CLOCK_ROLLBACK_TOLERANCE_SECONDS,
+        rollback_tolerance_seconds: float | None = None,
+        limits: InfrastructureLimits | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._tenant_id = tenant_id
         self._encryption = encryption
         self._directory = directory or default_state_dir()
         self._path = self._directory / STATE_FILE_NAME
-        self._tolerance = rollback_tolerance_seconds
+        # ÜÇ PİLLƏLİ MƏNBƏ, BU SIRA İLƏ: açıq arqument → ROOT (`system_limits`)
+        # → modul fallback-ı. Açıq arqument birinci gəlir, çünki onu VERƏN
+        # tərəf (test, xüsusi quraşdırma) niyyətini artıq bildirib və Root
+        # dəyərinin onu sükutla üstələməsi "niyə mənim dəyərim işləmir?"
+        # sualını doğurardı. `limits=None` halında davranış köçürmədən
+        # ƏVVƏLKİ ilə hərfən eynidir (fallback = `DEFAULT_LIMITS`).
+        #
+        # TOLERANTLIQ BİR DƏFƏ OXUNUR: dəyər saatın geri çəkilməsini ölçür,
+        # yəni oxu anının özü nəticəyə təsir edərdi — hər müqayisədə yenidən
+        # oxumaq "hansı tolerantlıqla qərar verildi?" sualını cavabsız qoyardı.
+        self._tolerance = (
+            rollback_tolerance_seconds
+            if rollback_tolerance_seconds is not None
+            else (limits or InfrastructureLimits()).float_of(
+                SystemLimitKey.LICENSE_CLOCK_ROLLBACK_TOLERANCE_SECONDS
+            )
+        )
         # Vaxt mənbəyi İNJEKSİYA OLUNUR — layihənin `Clock` portu ilə eyni
         # qayda (`ports.py`: "domen kodu `datetime.now()` ÇAĞIRMIR ... əks
         # halda vaxt-həssas qaydalar determinstik test oluna bilməzdi").

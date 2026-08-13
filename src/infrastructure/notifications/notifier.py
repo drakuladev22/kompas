@@ -33,10 +33,17 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING, Any, Final
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.notifications import (
     email_body,
     email_subject,
     is_critical_category,
+)
+from src.infrastructure.config.limits import (
+    InfrastructureLimits,
+    fallback_float,
+    fallback_int,
+    fallback_int_tuple,
 )
 from src.infrastructure.notifications.email import (
     EmailError,
@@ -55,19 +62,29 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
+#: DÖRDÜ DƏ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`NOTIFY_MAX_BATCH_SIZE`, `NOTIFY_MAX_ATTEMPTS`,
+#: `NOTIFY_RETRY_BACKOFF_MINUTES`, `NOTIFY_POLL_INTERVAL_SECONDS`;
+#: seed: migrations/032). Bunlar SMTP PROVAYDERİNİN qaydalarına uyğunlaşdırılır
+#: və provayder müəssisədən müəssisəyə fərqlənir — birində saatda 100 mesaj
+#: limiti var, digərində 10 000. Sabit ədəd birinci halda göndərəni bloklayır,
+#: ikinci halda isə kanalı lazımsız yavaşladır.
+#:
 #: Bir dövrdə göndərilən maksimum gözləyən bildiriş. Limit olmasaydı, uzun
 #: fasilədən sonra ilk dövr yüzlərlə e-poçt göndərməyə çalışar və SMTP
 #: provayderi göndərəni müvəqqəti bloklayardı (rate limit).
-MAX_BATCH: Final[int] = 25
+FALLBACK_MAX_BATCH: Final[int] = fallback_int(SystemLimitKey.NOTIFY_MAX_BATCH_SIZE)
 
 #: Bu qədər uğursuz cəhddən sonra sətir "göndərilməz" sayılır və növbəni
 #: tıxamır. Bildirişin özü DB-də qalır — in-app kanal işləməyə davam edir.
-MAX_ATTEMPTS: Final[int] = 5
+FALLBACK_MAX_ATTEMPTS: Final[int] = fallback_int(SystemLimitKey.NOTIFY_MAX_ATTEMPTS)
 
 #: Cəhdlər arası gözləmə (dəqiqə): 1 → 5 → 15 → 60 → 240.
-BACKOFF_MINUTES: Final[tuple[int, ...]] = (1, 5, 15, 60, 240)
+FALLBACK_BACKOFF_MINUTES: Final[tuple[int, ...]] = fallback_int_tuple(
+    SystemLimitKey.NOTIFY_RETRY_BACKOFF_MINUTES
+)
 
-DEFAULT_POLL_SECONDS: Final[float] = 120.0
+FALLBACK_POLL_SECONDS: Final[float] = fallback_float(SystemLimitKey.NOTIFY_POLL_INTERVAL_SECONDS)
 
 
 class PostgresNotifier:
@@ -77,9 +94,12 @@ class PostgresNotifier:
         self,
         database: Database,
         sender: SmtpEmailSender | None = None,
+        *,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
         self._database = database
         self._sender = sender
+        self._limits = limits or InfrastructureLimits()
 
     def notify(
         self,
@@ -235,7 +255,13 @@ class PostgresNotifier:
         *,
         final: bool,
     ) -> None:
-        next_attempt = None if final or attempts + 1 >= MAX_ATTEMPTS else _backoff_minutes(attempts)
+        # Cəhd tavanı və gözləmə cədvəli UĞURSUZLUQ ANINDA oxunur: dispetçer
+        # günlərlə işləyir və Root ara-sıra SMTP provayderini dəyişir.
+        max_attempts = self._limits.int_of(SystemLimitKey.NOTIFY_MAX_ATTEMPTS)
+        schedule = self._limits.int_tuple_of(SystemLimitKey.NOTIFY_RETRY_BACKOFF_MINUTES)
+        next_attempt = (
+            None if final or attempts + 1 >= max_attempts else _backoff_minutes(attempts, schedule)
+        )
         self._execute(
             tenant_id,
             """
@@ -284,14 +310,21 @@ class EmailFallbackDispatcher:
         notifier: PostgresNotifier,
         *,
         tenants: Callable[[], Sequence[TenantId]] | Sequence[TenantId],
-        poll_seconds: float = DEFAULT_POLL_SECONDS,
+        poll_seconds: float | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
+        """
+        Args:
+            poll_seconds: AÇIQ üstünlük — verilərsə ROOT dəyəri OXUNMUR.
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback-lar.
+        """
         self._database = database
         self._notifier = notifier
+        self._limits = limits or InfrastructureLimits()
         # Hansı tenant-ların növbəsinə baxılacağı — mağaza quraşdırmasında bu,
         # tək elementli siyahıdır; Developer mühitində çoxlu ola bilər.
         self._tenants = tenants
-        self._poll_seconds = poll_seconds
+        self._explicit_poll_seconds = poll_seconds
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
@@ -331,7 +364,10 @@ class EmailFallbackDispatcher:
                      ORDER BY created_at
                      LIMIT %s
                     """,
-                    (MAX_ATTEMPTS, MAX_BATCH),
+                    (
+                        self._limits.int_of(SystemLimitKey.NOTIFY_MAX_ATTEMPTS),
+                        self._limits.int_of(SystemLimitKey.NOTIFY_MAX_BATCH_SIZE),
+                    ),
                 )
                 return [dict(row) for row in cur.fetchall()]
         except Exception as exc:
@@ -346,7 +382,7 @@ class EmailFallbackDispatcher:
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, name="email-fallback", daemon=True)
         self._thread.start()
-        _log.info("EMAIL_DISPATCHER_STARTED", extra={"poll_seconds": self._poll_seconds})
+        _log.info("EMAIL_DISPATCHER_STARTED", extra={"poll_seconds": self._poll_interval()})
 
     def stop(self, *, timeout: float = 5.0) -> None:
         self._stop_event.set()
@@ -363,22 +399,36 @@ class EmailFallbackDispatcher:
                     self.dispatch_once(tenant_id)
             except Exception as exc:  # arxa fon sapı heç vaxt ölməməlidir
                 _log.error("EMAIL_DISPATCH_CRASHED", extra={"error": str(exc)})
-            self._stop_event.wait(self._poll_seconds)
+            # Aralıq HƏR DÖVRDƏ oxunur — Root onu dəyişəndə növbəti gözləmə
+            # artıq yeni dəyərlə olur, yenidən başlatma tələb olunmur.
+            self._stop_event.wait(self._poll_interval())
+
+    def _poll_interval(self) -> float:
+        if self._explicit_poll_seconds is not None:
+            return self._explicit_poll_seconds
+        return self._limits.float_of(SystemLimitKey.NOTIFY_POLL_INTERVAL_SECONDS)
 
     def _tenant_ids(self) -> list[TenantId]:
         source = self._tenants
         return list(source()) if callable(source) else list(source)
 
 
-def _backoff_minutes(attempts: int) -> int:
-    index = min(attempts, len(BACKOFF_MINUTES) - 1)
-    return BACKOFF_MINUTES[index]
+def _backoff_minutes(attempts: int, schedule: tuple[int, ...]) -> int:
+    """Cəhd sayına görə gözləmə — cədvəl ÇAĞIRANDAN gəlir.
+
+    Cədvəl arqument kimi ötürülür (modul sabiti oxunmur), çünki onu ROOT
+    təyin edir və funksiyanın öz `system_limits` girişi olmamalıdır: bu,
+    saf hesablamadır və testdə cədvəllə birlikdə yoxlanılır.
+    """
+    index = min(attempts, len(schedule) - 1)
+    return schedule[index]
 
 
 __all__ = [
-    "BACKOFF_MINUTES",
-    "MAX_ATTEMPTS",
-    "MAX_BATCH",
+    "FALLBACK_BACKOFF_MINUTES",
+    "FALLBACK_MAX_ATTEMPTS",
+    "FALLBACK_MAX_BATCH",
+    "FALLBACK_POLL_SECONDS",
     "EmailFallbackDispatcher",
     "PostgresNotifier",
 ]

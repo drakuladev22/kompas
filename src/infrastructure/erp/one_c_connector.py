@@ -45,6 +45,7 @@ from urllib.parse import quote
 
 import httpx
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.erp import (
     DEFAULT_PAGE_SIZE,
     ONE_C_ODATA_PATH,
@@ -54,6 +55,11 @@ from src.domain.value_objects.erp import (
     ErpProtocolError,
     OneCDocumentMapping,
     OneCSaleRecord,
+)
+from src.infrastructure.config.limits import (
+    InfrastructureLimits,
+    fallback_float,
+    fallback_int,
 )
 from src.shared.logger import get_logger
 
@@ -65,10 +71,16 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-DEFAULT_TIMEOUT_SECONDS: Final[float] = 30.0
+#: HƏR İKİSİ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`ERP_REQUEST_TIMEOUT_SECONDS`, `ERP_MAX_RETRIES`; seed: migrations/032).
+#: 1C serveri müəssisənin öz binasında da ola bilər (millisaniyələr), VPN
+#: arxasında da (saniyələr) — sabit 30 saniyə ikinci halda dövrü uzadır,
+#: birinci halda isə nasazlığın aşkarlanmasını gecikdirir.
+FALLBACK_TIMEOUT_SECONDS: Final[float] = fallback_float(SystemLimitKey.ERP_REQUEST_TIMEOUT_SECONDS)
 #: 1C serveri yüklü olduqda 503 qaytarır; şəbəkə proxy-ləri 502/504 verir.
+#: SİYAHININ ÖZÜ KÖÇÜRÜLMÜR: bunlar HTTP standart kodlarıdır, siyasət deyil.
 RETRY_STATUS: Final[frozenset[int]] = frozenset({429, 500, 502, 503, 504})
-MAX_RETRIES: Final[int] = 3
+FALLBACK_MAX_RETRIES: Final[int] = fallback_int(SystemLimitKey.ERP_MAX_RETRIES)
 HTTP_UNAUTHORIZED: Final[int] = 401
 HTTP_FORBIDDEN: Final[int] = 403
 
@@ -90,7 +102,9 @@ class OneCServerConfig:
     infobase: str
     use_https: bool = False
     mapping: OneCDocumentMapping = field(default_factory=OneCDocumentMapping)
-    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    #: `None` = taymaut ROOT-dan (`ERP_REQUEST_TIMEOUT_SECONDS`) oxunur.
+    #: Açıq ədəd verilərsə O QALIR — çağıran onu bilərəkdən təyin edib.
+    timeout_seconds: float | None = None
 
     @classmethod
     def from_draft(cls, draft: ErpServerDraft) -> OneCServerConfig:
@@ -128,15 +142,36 @@ class OneCConnector:
         *,
         transport: httpx.Client | None = None,
         sleep: Any = time.sleep,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
+        """
+        Args:
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback-lar.
+
+        Taymaut BURADA — `httpx.Client` qurularkən — həll olunur, çünki həmin
+        klient dəyəri sonradan qəbul etmir. Bu, ROOT nəzarətini itirmir:
+        konnektor QISA ÖMÜRLÜDÜR (`OneCConnectorFactory` hər sinxronizasiya
+        dövründə yenisini qurur), yəni Root-un dəyişikliyi növbəti dövrdə
+        qüvvəyə minir. Təkrar cəhd sayı isə hər sorğuda oxunur.
+        """
         self._config = config
+        self._limits = limits or InfrastructureLimits()
+        self._timeout = (
+            config.timeout_seconds
+            if config.timeout_seconds is not None
+            else self._limits.float_of(SystemLimitKey.ERP_REQUEST_TIMEOUT_SECONDS)
+        )
         self._http = transport or httpx.Client(
-            timeout=config.timeout_seconds,
+            timeout=self._timeout,
             auth=httpx.BasicAuth(config.username, config.password),
             headers={"Accept": "application/json"},
         )
         self._owns_transport = transport is None
         self._sleep = sleep
+
+    def _max_retries(self) -> int:
+        """Təkrar cəhd sayı — HƏR SORĞUDA oxunur."""
+        return self._limits.int_of(SystemLimitKey.ERP_MAX_RETRIES)
 
     def close(self) -> None:
         if self._owns_transport:
@@ -158,13 +193,14 @@ class OneCConnector:
         url = f"{self._config.base_url}/{path}" if path else self._config.base_url
         last_error = ""
 
-        for attempt in range(MAX_RETRIES):
+        max_retries = self._max_retries()
+        for attempt in range(max_retries):
             try:
                 response = self._http.get(url, params=params)
             except httpx.TimeoutException as exc:
                 raise ErpConnectionError(
                     f"1C serveri vaxtında cavab vermədi ({self._config.host})",
-                    context={"host": self._config.host, "timeout": self._config.timeout_seconds},
+                    context={"host": self._config.host, "timeout": self._timeout},
                 ) from exc
             except httpx.HTTPError as exc:
                 raise ErpConnectionError(
@@ -209,7 +245,7 @@ class OneCConnector:
 
         raise ErpConnectionError(
             f"1C serveri cavab vermədi ({last_error})",
-            context={"host": self._config.host, "attempts": MAX_RETRIES},
+            context={"host": self._config.host, "attempts": max_retries},
         )
 
     def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
@@ -363,15 +399,21 @@ class OneCConnectorFactory:
         credentials: Callable[[ErpServerId], OneCServerConfig],
         *,
         transport: httpx.Client | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
         self._credentials = credentials
         self._transport = transport
+        self._limits = limits or InfrastructureLimits()
 
     def for_draft(self, draft: ErpServerDraft) -> OneCConnector:
-        return OneCConnector(OneCServerConfig.from_draft(draft), transport=self._transport)
+        return OneCConnector(
+            OneCServerConfig.from_draft(draft), transport=self._transport, limits=self._limits
+        )
 
     def for_server(self, server_id: ErpServerId) -> OneCConnector:
-        return OneCConnector(self._credentials(server_id), transport=self._transport)
+        return OneCConnector(
+            self._credentials(server_id), transport=self._transport, limits=self._limits
+        )
 
 
 # --------------------------------------------------------------------------- #

@@ -28,16 +28,22 @@ from enum import Enum
 from typing import Final
 from uuid import UUID
 
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.shared.exceptions import KompasOSError
 
 #: `KompasOS/{Mağaza}/{İl-Ay}/` iyerarxiyasının kök qovluğu.
 DRIVE_ROOT_FOLDER_NAME: Final[str] = "KompasOS"
 
 #: Siyahı görünüşlərində göstərilən kiçik şəklin maksimum kənarı (piksel).
-THUMBNAIL_MAX_EDGE: Final[int] = 320
+#: FALLBACK — HƏQİQİ MƏNBƏ `system_limits.EVIDENCE_THUMBNAIL_MAX_EDGE_PX`
+#: (seed: migrations/033).
+THUMBNAIL_MAX_EDGE: Final[int] = int(DEFAULT_LIMITS[SystemLimitKey.EVIDENCE_THUMBNAIL_MAX_EDGE_PX])
 #: Yükləmə zamanı tam ölçünün maksimum kənarı — 5 MB-lıq orijinal hər dəfə
 #: şəbəkədən çəkilməsin deyə (bölmə 6 onsuz da "avtomatik kiçildilmə" tələb edir).
-FULL_MAX_EDGE: Final[int] = 1600
+#: FALLBACK — HƏQİQİ MƏNBƏ `system_limits.EVIDENCE_FULL_MAX_EDGE_PX`. Kənarın
+#: özü Drive kvotası ilə mübahisədə şəklin oxunaqlığı arasındakı balansdır —
+#: hər ikisi müəssisədən asılıdır, ona görə koda yazılmır.
+FULL_MAX_EDGE: Final[int] = int(DEFAULT_LIMITS[SystemLimitKey.EVIDENCE_FULL_MAX_EDGE_PX])
 
 
 class StorageError(KompasOSError):

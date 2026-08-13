@@ -34,11 +34,13 @@ from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from src.application.use_cases.developer_console import CrashRecord, TicketRecord
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.licensing import (
     LicenseStatus,
     extend_by_month,
 )
 from src.domain.value_objects.updates import Version
+from src.infrastructure.config.limits import InfrastructureLimits, fallback_int
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
@@ -55,7 +57,14 @@ DEVELOPER_MODE_ENV: Final[str] = "KOMPASOS_DEVELOPER_MODE"
 
 #: Bu qədər gündür check-in etməyən quraşdırma "səssiz" sayılır — panel
 #: sətri vurğulanır. 3 gün seçilib: bir uzun həftəsonu + bir iş günü.
-STALE_CHECK_IN_DAYS: Final[int] = 3
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`DEVELOPER_DIRECTORY_STALE_DAYS`, seed: migrations/032). Mövsümi bağlanan
+#: və ya həftədə bir neçə gün işləyən filialda 3 gün daimi "səssiz" nişanı
+#: verərdi və panel öz siqnal dəyərini itirərdi.
+FALLBACK_STALE_CHECK_IN_DAYS: Final[int] = fallback_int(
+    SystemLimitKey.DEVELOPER_DIRECTORY_STALE_DAYS
+)
 
 _LIST_SQL: Final[str] = """
     SELECT t.tenant_id,
@@ -127,8 +136,19 @@ class TenantRow:
     def is_expired(self, now: datetime) -> bool:
         return self.expires_at is not None and now >= self.expires_at
 
-    def needs_attention(self, now: datetime, *, warn_days: int = 7) -> bool:
-        """Sətir vurğulanmalıdırmı (bitib, bitir, və ya uzun müddət səssiz)."""
+    def needs_attention(
+        self,
+        now: datetime,
+        *,
+        warn_days: int = 7,
+        limits: InfrastructureLimits | None = None,
+    ) -> bool:
+        """Sətir vurğulanmalıdırmı (bitib, bitir, və ya uzun müddət səssiz).
+
+        `limits` verilməzsə "səssizlik" həddi fallback-dır. Developer Paneli
+        MASTER bazaya (service_role) qoşulur, tenant-ın öz `system_limits`
+        sətrinə deyil — ona görə həddi çağıran ötürür, sətir özü oxumur.
+        """
         if self.status is LicenseStatus.DEAKTIV or self.is_expired(now):
             return True
         days = self.days_left(now)
@@ -136,7 +156,10 @@ class TenantRow:
             return True
         if self.last_check_in_at is None:
             return True
-        return (now - self.last_check_in_at).days >= STALE_CHECK_IN_DAYS
+        stale_days = (limits or InfrastructureLimits()).int_of(
+            SystemLimitKey.DEVELOPER_DIRECTORY_STALE_DAYS
+        )
+        return (now - self.last_check_in_at).days >= stale_days
 
 
 @dataclass(frozen=True)
@@ -634,8 +657,8 @@ def _require_datetime(value: Any) -> datetime:
 
 __all__ = [
     "DEVELOPER_MODE_ENV",
+    "FALLBACK_STALE_CHECK_IN_DAYS",
     "SERVICE_ROLE_ENV",
-    "STALE_CHECK_IN_DAYS",
     "DeveloperModeRequiredError",
     "DeveloperTenantDirectory",
     "ExtensionResult",

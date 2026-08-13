@@ -31,6 +31,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.domain.policies import SystemLimitKey
+from src.infrastructure.config.limits import fallback_float, fallback_int
 from src.infrastructure.plugins.contracts import (
     PluginCapability,
     PluginError,
@@ -46,8 +48,17 @@ from src.shared.runtime import PLUGIN_PYTHON_ENV, plugin_interpreter
 _log = get_logger(__name__)
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 
-DEFAULT_TIMEOUT_SECONDS = 10.0
-MAX_OUTPUT_BYTES = 1 * 1024 * 1024  # 1 MB
+#: HƏR İKİSİ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`PLUGIN_SANDBOX_TIMEOUT_SECONDS`, `PLUGIN_SANDBOX_MAX_OUTPUT_BYTES`;
+#: seed: migrations/032).
+#:
+#: BUNLAR ETİBAR SİYASƏTİ DEYİL: imza/nəşriyyatçı yoxlaması (fail-closed,
+#: `KOMPASOS_PLUGIN_TRUSTED_PUBLISHERS`) və mühit təmizlənməsi TOXUNULMAZ
+#: qalır. Burada yalnız "nə qədər gözləyək, nə qədər oxuyaq" var — ağır
+#: hesabat plugin-i 10 saniyəyə sığmaya bilər və o zaman funksiya sükutla
+#: işləməz olardı.
+FALLBACK_TIMEOUT_SECONDS: float = fallback_float(SystemLimitKey.PLUGIN_SANDBOX_TIMEOUT_SECONDS)
+FALLBACK_MAX_OUTPUT_BYTES: int = fallback_int(SystemLimitKey.PLUGIN_SANDBOX_MAX_OUTPUT_BYTES)
 
 #: Plugin prosesinə ÖTÜRÜLMƏYƏN mühit dəyişəni prefiksləri.
 SECRET_ENV_PREFIXES = (
@@ -86,8 +97,8 @@ def build_sandbox_env() -> dict[str, str]:
 class SandboxPolicy:
     """Sandbox məhdudiyyətləri."""
 
-    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
-    max_output_bytes: int = MAX_OUTPUT_BYTES
+    timeout_seconds: float = FALLBACK_TIMEOUT_SECONDS
+    max_output_bytes: int = FALLBACK_MAX_OUTPUT_BYTES
     allowed_capabilities: frozenset[PluginCapability] = field(default_factory=frozenset)
 
     def assert_allowed(self, capability: PluginCapability) -> None:
@@ -247,8 +258,8 @@ class PluginSandbox:
 
 __all__ = [
     "ALLOWED_ENV_KEYS",
-    "DEFAULT_TIMEOUT_SECONDS",
-    "MAX_OUTPUT_BYTES",
+    "FALLBACK_MAX_OUTPUT_BYTES",
+    "FALLBACK_TIMEOUT_SECONDS",
     "SECRET_ENV_PREFIXES",
     "PluginSandbox",
     "SandboxPolicy",

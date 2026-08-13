@@ -1,0 +1,134 @@
+"""Çox-Mağaza Benchmark Dashboard-un aqreqasiya qatı — #24, kompasos11.md Faza 9A.
+
+`application.use_cases.multi_store_benchmark.MultiStoreMetricProvider`-in
+Postgres tətbiqi. Beş metrik BEŞ AYRI, TAM statik SQL sətrindən oxunur —
+dinamik `WHERE` şərti YOXDUR, metrik seçimi `_METRIC_QUERIES` sabit lüğətindən
+gəlir (CLAUDE.md bölmə 4: "dinamik metrik seçimi SQL-ə sətir-birləşdirmə ilə
+GİRMƏSİN"). Hər sorğu tam literal mətndir — heç bir f-string/`.format()`/`%`
+ilə QURULMUR, ona görə bandit S608 xəbərdarlığı BURADA yaranmır (müqayisə
+üçün bax `config_repositories.py::list_range` — orada dinamik `AND` siyahısı
+VAR və `noqa: S608` ORADADIR).
+
+──────────────────────────────────────────────────────────────────────────────
+1C SƏRHƏDİ
+──────────────────────────────────────────────────────────────────────────────
+Beş sorğu YALNIZ `fines`, `daily_attendance_sheets`/`_lines`, `points_ledger`,
+`overtime_log`, `attrition_risk_scores` və `employees`/`stores` cədvəllərinə
+toxunur. `sales_transactions`/`erp_servers` HEÇ YERDƏ görünmür (statik `ast`
+qapısı: `tests/unit/test_benchmark_widgets.py`).
+
+──────────────────────────────────────────────────────────────────────────────
+NİYƏ HƏR SORĞU `store_id`-Sİ OLMAYAN SƏTRİ ATIR
+──────────────────────────────────────────────────────────────────────────────
+Nəticə dict-i YALNIZ dəyəri olan mağazaları ehtiva edir (`GROUP BY` təbii
+olaraq bunu edir) — istifadəçi qatı (use case) "məlumat yoxdur" ilə "dəyər
+sıfırdır" fərqini BUNDAN çıxarır (bax use case modul başlığı).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Final
+
+from src.application.use_cases.multi_store_benchmark import BenchmarkMetric
+from src.domain.value_objects.identifiers import StoreId
+from src.infrastructure.persistence.repositories import _BaseRepository
+
+if TYPE_CHECKING:
+    from datetime import date
+
+    from src.domain.value_objects.identifiers import TenantId
+
+#: Aktiv filiallar — reytinq/outlier/store-vs-network HAMISININ bazası.
+_ACTIVE_STORES_QUERY: Final = """
+    SELECT id, name FROM stores WHERE tenant_id = %s AND is_active ORDER BY name
+"""
+
+#: Metrik → TAM statik SQL. Hər sorğu `(tenant_id, start, end)` ilə çağırılır
+#: və `store_id, value` sütunlarını qaytarır (bax modul başlığı).
+_METRIC_QUERIES: Final[dict[BenchmarkMetric, str]] = {
+    # Cərimə sayı — `_dashboard_fines` ilə EYNİ əsaslandırma: idarəetmə
+    # göstəricisidir, hesabat ixracı deyil, ona görə BÜTÜN statuslar (o
+    # cümlədən hələ nəşr olunmamış `PENDING_REVIEW`) daxildir.
+    BenchmarkMetric.FINE_COUNT: """
+        SELECT store_id AS store_id, COUNT(*) AS value
+          FROM fines
+         WHERE tenant_id = %s AND fine_date >= %s AND fine_date < %s
+         GROUP BY store_id
+    """,
+    # Davamiyyət faizi — `daily_attendance_sheet_lines.auto_status`
+    # `AutoAttendanceStatus.counts_as_worked` domen tərifinin SQL güzgüsüdür
+    # (bax `domain/entities/attendance_sheet.py`): VERIFIED/LATE/OUTSIDE/
+    # UNPLANNED "işlənilib" sayılır, OFF_DAY/PENDING isə məxrəcdən DƏ çıxılır
+    # (istirahət günü və günün hələ bitməməsi "davamsızlıq" deyil).
+    BenchmarkMetric.ATTENDANCE_RATE: """
+        SELECT das.store_id AS store_id,
+               100.0 * COUNT(*) FILTER (
+                   WHERE dal.auto_status IN ('VERIFIED', 'LATE', 'OUTSIDE', 'UNPLANNED')
+               ) / COUNT(*) FILTER (WHERE dal.auto_status NOT IN ('OFF_DAY', 'PENDING')) AS value
+          FROM daily_attendance_sheets das
+          JOIN daily_attendance_sheet_lines dal ON dal.sheet_id = das.id
+         WHERE das.tenant_id = %s AND das.sheet_date >= %s AND das.sheet_date < %s
+         GROUP BY das.store_id
+        -- Məxrəc sıfır olan qrup (bütün sətirlər OFF_DAY/PENDING) BURADA
+        -- SÜZÜLÜR — sıfıra bölmə DB SƏVİYYƏSİNDƏ baş vermir.
+        HAVING COUNT(*) FILTER (WHERE dal.auto_status NOT IN ('OFF_DAY', 'PENDING')) > 0
+    """,
+    # Xal balansı — MÖVCUD, icazəli 1C-bal-kanalından (`points_ledger`) gəlir,
+    # `_dashboard_leaders`-lə EYNİ `status <> 'REVERSED'` süzgəci. YENİ
+    # bağlantı YOXDUR — `sales_transactions` FK-si BURADA HEÇ oxunmur.
+    BenchmarkMetric.POINTS_BALANCE: """
+        SELECT e.store_id AS store_id, COALESCE(SUM(l.delta_points), 0) AS value
+          FROM points_ledger l
+          JOIN employees e ON e.id = l.employee_id
+         WHERE l.tenant_id = %s AND l.created_at >= %s AND l.created_at < %s
+           AND l.status <> 'REVERSED'
+         GROUP BY e.store_id
+    """,
+    # Overtime saatı — #15-in `overtime_log.hours_over_norm` sütunu, mağazaya
+    # `employees.store_id` ilə bağlanır (jurnalın özündə store_id yoxdur).
+    BenchmarkMetric.OVERTIME_HOURS: """
+        SELECT e.store_id AS store_id, COALESCE(SUM(ol.hours_over_norm), 0) AS value
+          FROM overtime_log ol
+          JOIN employees e ON e.id = ol.employee_id
+         WHERE ol.tenant_id = %s AND ol.work_date >= %s AND ol.work_date < %s
+         GROUP BY e.store_id
+    """,
+    # Turnover riski — #21-in NATİV NƏTİCƏSİ (`attrition_risk_scores.score`),
+    # hər işçinin PƏNCƏRƏ daxilindəki ƏN SON balı orta alınır (DISTINCT ON —
+    # `AttritionRiskScoreRepository.get_latest_for_employee` ilə EYNİ "ən son
+    # tarix" məntiqi, tək sorğuya sıxılmış).
+    BenchmarkMetric.TURNOVER_RISK: """
+        SELECT latest.store_id AS store_id, AVG(latest.score) AS value
+          FROM (
+              SELECT DISTINCT ON (ars.employee_id)
+                     e.store_id AS store_id, ars.score AS score
+                FROM attrition_risk_scores ars
+                JOIN employees e ON e.id = ars.employee_id
+               WHERE ars.tenant_id = %s AND ars.score_date >= %s AND ars.score_date < %s
+               ORDER BY ars.employee_id, ars.score_date DESC
+          ) AS latest
+         GROUP BY latest.store_id
+    """,
+}
+
+
+class PostgresMultiStoreBenchmarkRepository(_BaseRepository):
+    """`MultiStoreMetricProvider`-in Postgres tətbiqi (#24)."""
+
+    def active_stores(self, tenant_id: TenantId) -> dict[StoreId, str]:
+        rows = self._fetch_all(_ACTIVE_STORES_QUERY, (tenant_id,))
+        return {StoreId(row["id"]): str(row["name"]) for row in rows}
+
+    def metric_values(
+        self, tenant_id: TenantId, metric: BenchmarkMetric, *, start: date, end: date
+    ) -> dict[StoreId, float]:
+        query = _METRIC_QUERIES[metric]
+        rows = self._fetch_all(query, (tenant_id, start, end))
+        return {
+            StoreId(row["store_id"]): float(row["value"])
+            for row in rows
+            if row["store_id"] is not None and row["value"] is not None
+        }
+
+
+__all__ = ["PostgresMultiStoreBenchmarkRepository"]

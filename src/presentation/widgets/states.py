@@ -192,7 +192,12 @@ class EmptyState(QWidget):
         outer.addLayout(inner)
 
     def set_footnote(self, text: str) -> None:
-        """Altdakı kiçik qeyd — "Avtomatik yenidən cəhd 30 saniyədən bir edilir."."""
+        """Altdakı kiçik qeyd — məs. `i18n` kataloqundakı `state.error.auto_retry`.
+
+        MƏTNİ ÇAĞIRAN VERİR: qeyd tez-tez bir DƏYƏRDƏN (interval, son uğurlu
+        yenilənmə) formatlanır və widget-in içində sabit cümlə saxlamaq həmin
+        dəyərlə mətni bir-birindən ayırardı.
+        """
         self._footer.setText(text)
         self._footer.setVisible(bool(text))
 

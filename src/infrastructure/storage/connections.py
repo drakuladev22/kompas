@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from src.domain.value_objects.storage import QuotaStatus, StorageError
+from src.infrastructure.config.limits import InfrastructureLimits
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
@@ -298,6 +299,7 @@ class DriveProviderFactory:
         store_names: StoreNameResolver | None = None,
         folder_cache_factory: Any = None,
         max_upload_bytes: int | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
         self._repository = repository
         self._encryption = encryption
@@ -305,6 +307,10 @@ class DriveProviderFactory:
         self._cache = cache
         self._store_names = store_names
         self._folder_cache_factory = folder_cache_factory
+        # ROOT pəncərəsi provider-ə və HTTP klientinə ÖTÜRÜLÜR: sübut şəklinin
+        # JPEG keyfiyyəti, Drive taymautu, token marjası və təkrar cəhd sayı
+        # oradan oxunur (bax `google_drive`/`drive_api` fallback şərhləri).
+        self._limits = limits or InfrastructureLimits()
         # `system_limits.MAX_UPLOAD_SIZE_BYTES` (bölmə 3) — kompozisiya kökü
         # tenant üçün oxuyub ötürür. `None` → provider öz defoltunu (5 MB)
         # işlədir; fabrika limiti UYDURMUR.
@@ -335,6 +341,12 @@ class DriveProviderFactory:
         api = DriveApiClient(
             oauth=self._oauth,
             refresh_token=self._repository.refresh_token_for(connection_id, self._encryption),
+            # HTTP taymautu, təkrar cəhd sayı və token yeniləmə marjası
+            # ROOT-dandır — fabrik onu klientə də ÖTÜRMƏLİDİR, əks halda
+            # yalnız provider Root dəyərini görər, sorğunu edən klient isə
+            # fallback ilə işləyərdi (yəni Root taymautu heç vaxt tətbiq
+            # olunmazdı).
+            limits=self._limits,
         )
         folder_cache = (
             self._folder_cache_factory()
@@ -343,8 +355,9 @@ class DriveProviderFactory:
         )
         # Limit `None` olduqda arqument ÜMUMİYYƏTLƏ ötürülmür ki, provider öz
         # defoltunu (5 MB) işlətsin — burada ikinci bir defolt yazmaq iki
-        # mənbə yaradardı.
-        upload_limit: dict[str, int] = (
+        # mənbə yaradardı. `dict[str, Any]`: `**` açılışı provider-in BÜTÜN
+        # qalan parametrlərinə qarşı yoxlanılır və onların hamısı `int` deyil.
+        upload_limit: dict[str, Any] = (
             {} if self._max_upload_bytes is None else {"max_upload_bytes": self._max_upload_bytes}
         )
         provider = GoogleDriveStorageProvider(
@@ -358,6 +371,7 @@ class DriveProviderFactory:
             cache=self._cache,
             connection_id=connection_id,
             store_names=self._store_names or StoreNameResolver(),
+            limits=self._limits,
             **upload_limit,
         )
         self._providers[connection_id] = provider

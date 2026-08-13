@@ -45,6 +45,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final
 
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.identifiers import EmployeeId, ErpServerId, StoreId, TenantId
 from src.shared.exceptions import KompasOSError
 
@@ -52,20 +53,27 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 #: 1C 8.3-ün standart OData kök yolu — infobase adından sonra gəlir.
+#: ROOT PARAMETRİ DEYİL: 1C platformasının sənədləşmiş sabitidir, müəssisə
+#: seçimi deyil (konfiqurasiyadan asılı adlar `OneCDocumentMapping`-dədir).
 ONE_C_ODATA_PATH: Final[str] = "odata/standard.odata"
 
 #: Bir sinxronizasiya dövründə bir serverdən gətirilən maksimum sənəd sayı.
 #: Səbəb: ilk qoşulmada 1C bazasında illərlə sənəd ola bilər; hamısını bir
 #: sorğuda çəkmək həm 1C serverini, həm də mağaza PC-sinin yaddaşını yıxar.
 #: Növbəti dövr qaldığı yerdən davam edir (`sync_cursor`).
-DEFAULT_PAGE_SIZE: Final[int] = 500
+#: FALLBACK — HƏQİQİ MƏNBƏ `system_limits.ERP_SYNC_PAGE_SIZE`
+#: (seed: migrations/033).
+DEFAULT_PAGE_SIZE: Final[int] = int(DEFAULT_LIMITS[SystemLimitKey.ERP_SYNC_PAGE_SIZE])
 
 #: Ad-əsaslı fallback uyğunlaşmasının qəbul edilməsi üçün minimum oxşarlıq.
 #: `difflib.SequenceMatcher` nisbəti. 0.87 seçilib, çünki "Əliyev Elvin" ↔
 #: "Aliyev Elvin" (transliterasiya fərqi) keçir, "Əliyev Elvin" ↔ "Əliyev
 #: Elnur" (fərqli adam) keçmir. Keçən nəticə onsuz da LOW_CONFIDENCE_MATCH
 #: kimi işarələnib insan nəzərdən keçirməsinə göndərilir.
-NAME_MATCH_THRESHOLD: Final[float] = 0.87
+#: FALLBACK — HƏQİQİ MƏNBƏ `system_limits.ERP_NAME_MATCH_THRESHOLD`; aşağı
+#: hüdud miqrasiyada 0.70-də kilidlidir, çünki daha aşağı hədd satış xalını
+#: SƏHV işçiyə yazardı (yuxarıdakı "Elvin/Elnur" nümunəsi).
+NAME_MATCH_THRESHOLD: Final[float] = float(DEFAULT_LIMITS[SystemLimitKey.ERP_NAME_MATCH_THRESHOLD])
 
 
 class ErpError(KompasOSError):

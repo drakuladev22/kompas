@@ -33,8 +33,16 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from src.domain.entities.shift import ShiftAssignment, ShiftSource
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.authorization import HardlockLevel, PermissionFlag
-from src.domain.value_objects.catalogs import LeaveType
+from src.domain.value_objects.catalogs import MAX_LEAVE_DURATION_MINUTES, LeaveType
+
+# `TenantId` RUNTIME İDXALDIR, `TYPE_CHECKING` bloku DEYİL: `LeaveType._hydrate`
+# onu ÇAĞIRIR (`TenantId(row["tenant_id"])`), yəni yalnız tip-yoxlaması üçün
+# idxal edilsəydi kataloq bazadan oxunanda `NameError` atardı. Qüsur uzun müddət
+# görünməz qaldı, çünki həmin yolu yalnız `DATABASE_URL` tələb edən inteqrasiya
+# testləri gəzirdi — indi vahid test də onu gəzir (bax `test_config_repositories`).
+from src.domain.value_objects.identifiers import TenantId
 from src.infrastructure.persistence.repositories import _BaseRepository
 from src.shared.logger import get_logger
 
@@ -45,7 +53,6 @@ if TYPE_CHECKING:
         EmployeeId,
         LeaveTypeId,
         StoreId,
-        TenantId,
     )
 
 _log = get_logger(__name__)
@@ -343,7 +350,31 @@ class PostgresLeaveTypeRepository(_BaseRepository):
         if not include_inactive:
             sql += " AND is_active"
         rows = self._fetch_all(sql + " ORDER BY name_az", (tenant_id,))
-        return [self._hydrate(row) for row in rows]
+        # TAVAN SORĞU BAŞINA BİR DƏFƏ oxunur, sətir başına YOX: kataloq onlarla
+        # sətirdən ibarətdir və hər biri üçün `system_limits`-ə getmək eyni
+        # cavabı təkrar-təkrar gətirərdi.
+        ceiling = self.max_duration_minutes(tenant_id)
+        return [self._hydrate(row, ceiling) for row in rows]
+
+    def max_duration_minutes(self, tenant_id: TenantId) -> int:
+        """ROOT tavanı (`LEAVE_TYPE_MAX_DURATION_MINUTES`) — mənbə `system_limits`.
+
+        ────────────────────────────────────────────────────────────────────
+        NİYƏ OXU YOLU DA TAVANI BİLMƏLİDİR
+        ────────────────────────────────────────────────────────────────────
+        Tavan yalnız YAZI anında yoxlanılsaydı bəs edərdi — LAKİN `LeaveType`
+        həm də bazadan BƏRPA edilərkən qurulur. Root tavanı 720→1200-ə
+        qaldırıb 900 dəqiqəlik növ yaratsaydı, növbəti oxu modul fallback-ı
+        (720) ilə həmin sətri RƏDD edərdi və kataloq ekranı bütövlükdə
+        açılmazdı. Yəni oxu və yazı EYNİ tavanı görməlidir.
+
+        `PostgresSystemLimits` EYNİ bağlantı üzərində qurulur — ikinci
+        bağlantı açılmır və dəyər eyni tranzaksiyadan oxunur.
+        """
+        key = SystemLimitKey.LEAVE_TYPE_MAX_DURATION_MINUTES
+        return PostgresSystemLimits(self._conn, self._context).get_int(
+            tenant_id, key.value, MAX_LEAVE_DURATION_MINUTES
+        )
 
     def save(self, tenant_id: TenantId, entry: LeaveType, *, changed_by: EmployeeId) -> None:
         self._execute(
@@ -382,9 +413,11 @@ class PostgresLeaveTypeRepository(_BaseRepository):
         )
 
     @staticmethod
-    def _hydrate(row: dict[str, Any]) -> LeaveType:
+    def _hydrate(row: dict[str, Any], ceiling: int) -> LeaveType:
         is_active = bool(row.get("is_active", True))
         return LeaveType(
+            # ROOT tavanı ötürülür — bax `max_duration_minutes()` başlığı.
+            max_duration_minutes=ceiling,
             name=str(row["name_az"]),
             tenant_id=TenantId(row["tenant_id"]),
             is_active=is_active,

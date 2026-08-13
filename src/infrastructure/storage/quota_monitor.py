@@ -26,7 +26,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Final
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.storage import QuotaStatus
+from src.infrastructure.config.limits import (
+    InfrastructureLimits,
+    fallback_float,
+    fallback_int,
+)
 from src.infrastructure.storage.connections import DriveConnection, DriveConnectionStatus
 from src.shared.logger import get_logger
 
@@ -40,10 +46,16 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-#: Bu həddi keçəndə xəbərdarlıq göndərilir.
-WARNING_THRESHOLD: Final[float] = 0.90
-#: Xəbərdarlıq bu müddətdən tez təkrarlanmır.
-WARNING_COOLDOWN: Final[timedelta] = timedelta(days=7)
+#: HƏR İKİSİ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`DRIVE_QUOTA_WARNING_RATIO`, `DRIVE_QUOTA_WARNING_COOLDOWN_DAYS`;
+#: seed: migrations/032). Bu ədədlər yalnız ROOT portu əlçatmaz olduqda işə
+#: düşür. Hədd və təkrar-susma müddəti müəssisənin Drive planından asılıdır:
+#: 15 GB-lıq pulsuz hesabda 90% bir neçə günlük ehtiyat, 2 TB-lıq planda isə
+#: aylarca deməkdir.
+FALLBACK_WARNING_THRESHOLD: Final[float] = fallback_float(SystemLimitKey.DRIVE_QUOTA_WARNING_RATIO)
+FALLBACK_WARNING_COOLDOWN_DAYS: Final[int] = fallback_int(
+    SystemLimitKey.DRIVE_QUOTA_WARNING_COOLDOWN_DAYS
+)
 
 
 @dataclass
@@ -65,15 +77,23 @@ class DriveQuotaMonitor:
         provider_factory: DriveProviderFactory,
         notifier: Notifier,
         tenant_id: TenantId,
-        warning_threshold: float = WARNING_THRESHOLD,
-        cooldown: timedelta = WARNING_COOLDOWN,
+        warning_threshold: float | None = None,
+        cooldown: timedelta | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
+        """
+        Args:
+            warning_threshold / cooldown: AÇIQ üstünlük — verilərsə ROOT
+                dəyəri OXUNMUR (çağıran onu bilərəkdən təyin edib).
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback-lar.
+        """
         self._repository = repository
         self._factory = provider_factory
         self._notifier = notifier
         self._tenant_id = tenant_id
-        self._threshold = warning_threshold
-        self._cooldown = cooldown
+        self._explicit_threshold = warning_threshold
+        self._explicit_cooldown = cooldown
+        self._limits = limits or InfrastructureLimits()
 
     def check(self, *, now: datetime | None = None) -> QuotaCheckResult:
         moment = now or datetime.now(UTC)
@@ -123,7 +143,7 @@ class DriveQuotaMonitor:
             )
             return result
 
-        if quota.usage_ratio >= self._threshold and self._should_warn(connection, moment):
+        if quota.usage_ratio >= self._warning_threshold() and self._should_warn(connection, moment):
             self._notify(
                 title="Google Drive dolmaq üzrədir",
                 body=(
@@ -142,11 +162,29 @@ class DriveQuotaMonitor:
 
         return result
 
+    def _warning_threshold(self) -> float:
+        """Xəbərdarlıq həddi — YOXLAMA ANINDA ROOT-dan oxunur.
+
+        Monitor gecəlik planlayıcı ilə uzun müddət yaşayır; həddi
+        konstruktorda dondursaydıq, Root-un dəyişikliyi yalnız proqramın
+        yenidən başladılmasından sonra qüvvəyə minərdi.
+        """
+        if self._explicit_threshold is not None:
+            return self._explicit_threshold
+        return self._limits.float_of(SystemLimitKey.DRIVE_QUOTA_WARNING_RATIO)
+
+    def _cooldown_period(self) -> timedelta:
+        """Təkrar xəbərdarlıq arasındakı minimum müddət (gün → `timedelta`)."""
+        if self._explicit_cooldown is not None:
+            return self._explicit_cooldown
+        days = self._limits.int_of(SystemLimitKey.DRIVE_QUOTA_WARNING_COOLDOWN_DAYS)
+        return timedelta(days=days)
+
     def _should_warn(self, connection: DriveConnection, now: datetime) -> bool:
         sent_at = connection.quota_warning_sent_at
         if sent_at is None:
             return True
-        return bool(now - sent_at >= self._cooldown)
+        return bool(now - sent_at >= self._cooldown_period())
 
     def _notify(self, *, title: str, body: str, critical: bool) -> None:
         # `recipient_id=None` → bildiriş tenant səviyyəsindədir; marşrutlaşdırma
@@ -171,8 +209,8 @@ def status_label(status: DriveConnectionStatus) -> str:
 
 
 __all__ = [
-    "WARNING_COOLDOWN",
-    "WARNING_THRESHOLD",
+    "FALLBACK_WARNING_COOLDOWN_DAYS",
+    "FALLBACK_WARNING_THRESHOLD",
     "DriveQuotaMonitor",
     "QuotaCheckResult",
     "status_label",

@@ -33,11 +33,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from src.application.root_limits import limit_decimal, limit_int
 from src.domain.entities.sales_points import PointsEntry, RewardRedemption
-from src.domain.policies import FeatureModule
+from src.domain.policies import FeatureModule, SystemLimitKey
 from src.domain.value_objects.erp import MatchConfidence
 from src.domain.value_objects.gamification import (
-    DEFAULT_RESET_NOTICE_DAYS,
     PointsBalance,
     PointsEntryStatus,
     PointsPeriod,
@@ -62,6 +62,7 @@ if TYPE_CHECKING:
         Notifier,
         RewardRepository,
         SalesPointsRepository,
+        SystemLimits,
     )
     from src.domain.value_objects.gamification import RewardItem
     from src.domain.value_objects.identifiers import (
@@ -119,7 +120,21 @@ class SalesPointsUseCase:
         clock: Clock,
         notifier: Notifier,
         toggles: FeatureToggles | None = None,
+        limits: SystemLimits | None = None,
     ) -> None:
+        """
+        Args:
+            limits: Xal sisteminin ÜÇ ROOT parametrinə açılan pəncərə —
+                `SALES_POINTS_CURRENCY_PER_POINT` (neçə AZN = 1 xal),
+                `SALES_POINTS_RESET_NOTICE_DAYS` və
+                `SALES_POINTS_DISPUTE_WINDOW_HOURS`. Faza 10.2-nin birinci
+                dalğası bu açarları YARATDI, lakin bu use case onları OXUMURDU
+                — yəni ekranda görünən, dəyişdirilən, TƏSİRSİZ parametrlər idi
+                (`gamification.py` şərhi hətta "ROOT-dan idarə olunur"
+                deyirdi). Bu sahə həmin halqanı bağlayır. `toggles` ilə eyni
+                İSTƏYƏ BAĞLI naxış: `None` → domen fallback-ları, davranış
+                köçürmədən ƏVVƏLKİ ilə HƏRFƏN eyni.
+        """
         self._points = points
         self._rewards = rewards
         self._audit = audit
@@ -127,6 +142,28 @@ class SalesPointsUseCase:
         self._notifier = notifier
         # `None` → fail-open (bax `task_workflow.py` eyni sahə şərhi).
         self._toggles = toggles
+        self._limits = limits
+
+    # ---------------------------- ROOT parametrləri --------------------------- #
+
+    def _currency_per_point(self, tenant_id: TenantId) -> Decimal:
+        """Neçə AZN brutto satış 1 xal qazandırır (ROOT parametri).
+
+        ÇAĞIRIŞ ANINDA oxunur: kampaniya dövründə Root kursu dəyişdirən kimi
+        növbəti sinxronizasiya yeni kursla xal yazmalıdır.
+        """
+        return limit_decimal(
+            self._limits, tenant_id, SystemLimitKey.SALES_POINTS_CURRENCY_PER_POINT
+        )
+
+    def _dispute_window_hours(self, tenant_id: TenantId) -> int:
+        """Xal etirazı pəncərəsi (ROOT parametri, cərimə pəncərəsindən AYRI).
+
+        Sətrin ÖZÜNƏ yazılır (`PointsEntry.dispute_window_hours`), çünki
+        pəncərə `awarded_at`-dan sayılır: sonradan dəyişən Root dəyəri artıq
+        yazılmış sətirlərin müddətini geriyə dönüb uzatmamalı/qısaltmamalıdır.
+        """
+        return limit_int(self._limits, tenant_id, SystemLimitKey.SALES_POINTS_DISPUTE_WINDOW_HOURS)
 
     # -------------------------------- balans --------------------------------- #
 
@@ -417,8 +454,13 @@ class SalesPointsUseCase:
 
         if moved_points <= 0:
             # Köhnə sahib yox idi (UNASSIGNED) və ya sətri tapılmadı —
-            # xal məbləğdən yenidən hesablanır.
-            moved_points = points_for_amount(gross_amount)
+            # xal məbləğdən yenidən hesablanır. Kurs ROOT-dan oxunur ki,
+            # köçürmə ilə ilkin yazma EYNİ qaydaya tabe olsun (əvvəl burada
+            # domen fallback-ı işlədilirdi və Root kursu dəyişəndə köçürülən
+            # xal sükutla köhnə kursla hesablanırdı).
+            moved_points = points_for_amount(
+                gross_amount, currency_per_point=self._currency_per_point(tenant_id)
+            )
 
         if moved_points <= 0:
             _app_log.info(
@@ -437,6 +479,7 @@ class SalesPointsUseCase:
             confidence=MatchConfidence.MANUAL_MATCH,
             sales_transaction_id=transaction_id,
             gross_amount=Money(gross_amount),
+            dispute_window_hours=self._dispute_window_hours(tenant_id),
         )
         self._points.save(replacement)
 
@@ -485,11 +528,14 @@ class SalesPointsUseCase:
         ):
             return None
 
-        earned = (
-            points_for_amount(gross_amount)
+        # AÇIQ ARQUMENT > ROOT > domen fallback-ı. Açıq arqument saxlanılıb:
+        # yenidən-hesablama skripti keçmiş dövrü ÖZ kursu ilə emal etməlidir.
+        rate = (
+            self._currency_per_point(tenant_id)
             if currency_per_point is None
-            else points_for_amount(gross_amount, currency_per_point=currency_per_point)
+            else (currency_per_point)
         )
+        earned = points_for_amount(gross_amount, currency_per_point=rate)
         if earned <= 0:
             return None
 
@@ -503,6 +549,7 @@ class SalesPointsUseCase:
             confidence=confidence,
             sales_transaction_id=transaction_id,
             gross_amount=Money(gross_amount),
+            dispute_window_hours=self._dispute_window_hours(tenant_id),
         )
         self._points.save(entry)
         return entry
@@ -514,7 +561,7 @@ class SalesPointsUseCase:
         *,
         tenant_id: TenantId,
         employee_ids: list[EmployeeId],
-        notice_days: int = DEFAULT_RESET_NOTICE_DAYS,
+        notice_days: int | None = None,
     ) -> ResetNoticeResult:
         """1 Yanvar / 1 İyul sıfırlanmasından 14 gün əvvəl xəbərdarlıq (bölmə 6).
 
@@ -527,7 +574,14 @@ class SalesPointsUseCase:
         period = PointsPeriod.containing(today)
         result = ResetNoticeResult(period=period)
 
-        if not period.is_notice_due(today, notice_days=notice_days):
+        # `None` → ROOT parametri (`SALES_POINTS_RESET_NOTICE_DAYS`); açıq
+        # arqument onu əvəz edir (əl ilə "indi xəbərdar et" icrası üçün).
+        applied_notice_days = (
+            limit_int(self._limits, tenant_id, SystemLimitKey.SALES_POINTS_RESET_NOTICE_DAYS)
+            if notice_days is None
+            else notice_days
+        )
+        if not period.is_notice_due(today, notice_days=applied_notice_days):
             return result
 
         for employee_id in employee_ids:

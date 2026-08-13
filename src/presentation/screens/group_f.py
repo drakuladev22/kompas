@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -707,7 +708,15 @@ class UnassignedSalesScreen(Screen):
     bulk_assign_requested = Signal(list)
 
     #: Bu faizdən aşağı uyğunluq "zəif" sayılır və xəbərdarlıq tonunda göstərilir.
-    LOW_CONFIDENCE_THRESHOLD: Final = 50
+    #:
+    #: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits.
+    #: ERP_MATCH_LOW_CONFIDENCE_PERCENT` (seed: migrations/035). Canlı dəyəri
+    #: kontroller `set_low_confidence_threshold()` ilə ötürür; ekran bazanı
+    #: TANIMIR (CLAUDE.md §6: ekran yalnız `theme` alır və setter təqdim edir),
+    #: ona görə sabit maket/önizləmə yolu üçün yerində qalır.
+    FALLBACK_LOW_CONFIDENCE_PERCENT: Final = int(
+        DEFAULT_LIMITS[SystemLimitKey.ERP_MATCH_LOW_CONFIDENCE_PERCENT]
+    )
 
     def __init__(
         self,
@@ -719,6 +728,8 @@ class UnassignedSalesScreen(Screen):
         super().__init__(theme, parent=parent)
         self._employees = employees
         self._combos: dict[str, QComboBox] = {}
+        #: Qüvvədə olan hədd — kontroller canlı dəyəri yazana qədər fallback.
+        self._low_confidence_percent = self.FALLBACK_LOW_CONFIDENCE_PERCENT
 
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
@@ -762,6 +773,16 @@ class UnassignedSalesScreen(Screen):
         bulk_layout.addWidget(bulk)
         self.add(bulk_row)
 
+    def set_low_confidence_threshold(self, percent: int) -> None:
+        """Xəbərdarlıq rənginin həddini ROOT dəyəri ilə əvəzləyir.
+
+        `set_sales`-dan ƏVVƏL çağırılmalıdır (kontroller bunu edir): sətirlər
+        artıq çəkilibsə rəng yenidən hesablanmır — cədvəl hər doldurmada
+        onsuz da sıfırdan qurulur, ona görə ikinci bir yenidən-boyama yolu
+        əlavə etmək lazımsız mürəkkəblik olardı.
+        """
+        self._low_confidence_percent = percent
+
     def set_sales(self, sales: list[dict[str, str]], *, total_amount: str) -> None:
         self._banner_text.setText(
             f"{len(sales)} satış işçiyə təyin edilməyib — xal hesablanması bu "
@@ -783,7 +804,7 @@ class UnassignedSalesScreen(Screen):
             confidence = int(sale.get("confidence", "0"))
 
             confidence_label = mono_label(f"{confidence}%")
-            if confidence < self.LOW_CONFIDENCE_THRESHOLD:
+            if confidence < self._low_confidence_percent:
                 confidence_label.setStyleSheet(f"color: {self.theme.color('--color-warning')};")
 
             combo = QComboBox()

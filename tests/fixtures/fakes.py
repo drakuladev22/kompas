@@ -375,9 +375,11 @@ class FakeCameraAssignments:
 
 __all__ = [
     "LIVE_AUTO_DELAY_STATUSES",
+    "DuplicateDedupeKeyError",
     "DuplicateLiveFineError",
     "FakeCameraAssignments",
     "FakeClock",
+    "FakeExceptionSources",
     "FakeFeatureToggles",
     "FakeLeaveTypes",
     "FakeNtp",
@@ -385,6 +387,7 @@ __all__ = [
     "FakeSystemLimits",
     "InMemoryAttendance",
     "InMemoryEmployees",
+    "InMemoryExceptions",
     "InMemoryFines",
     "InMemoryLeaveRequests",
     "RecordingAudit",
@@ -512,6 +515,113 @@ class InMemoryAppeals:
 
     def save(self, appeal: Any) -> None:
         self.items[appeal.id] = appeal
+
+
+class DuplicateDedupeKeyError(Exception):
+    """Sahtə repo-da `uq_exceptions_dedupe` indeksinin qarşılığı.
+
+    Real `PostgresExceptionRepository` bu halda `UniqueViolation` alır. Sahtə
+    repo qaydanı təkrarlayır ki, "təkrar tapıntı ikinci sətir yaratmır"
+    iddiası DB olmadan da yoxlana bilsin — əks halda unit dəsti indeksin
+    olmadığı bir dünyada yaşayardı (`DuplicateLiveFineError` ilə eyni qərar).
+    """
+
+
+class InMemoryExceptions:
+    """`ExceptionRepository` sahtəsi — Vahid İstisna Jurnalı (#9).
+
+    `delete()` QƏSDƏN YOXDUR: DB-də `REVOKE DELETE` var və sahtə repo real
+    məhdudiyyətdən daha sərbəst olmamalıdır.
+    """
+
+    def __init__(self) -> None:
+        self.items: dict[Any, Any] = {}
+        self.save_failure: Exception | None = None
+
+    def get(self, exception_id: Any) -> Any:
+        return self.items.get(exception_id)
+
+    def find_by_dedupe(self, tenant_id: TenantId, *, source: str, dedupe_key: str) -> Any:
+        for record in self.items.values():
+            if (
+                record.tenant_id == tenant_id
+                and record.source == source
+                and record.dedupe_key == dedupe_key
+            ):
+                return record
+        return None
+
+    def list_open(
+        self,
+        tenant_id: TenantId,
+        *,
+        store_ids: list[StoreId] | None = None,
+        limit: int = 200,
+    ) -> list[Any]:
+        rows = [
+            record
+            for record in self.items.values()
+            if record.tenant_id == tenant_id
+            and record.status.value == "OPEN"
+            and (store_ids is None or record.store_id in store_ids)
+        ]
+        rows.sort(key=lambda record: record.created_at, reverse=True)
+        return rows[:limit]
+
+    def save(self, record: Any) -> None:
+        if self.save_failure is not None:
+            raise self.save_failure
+        self._require_unique_dedupe(record)
+        self.items[record.id] = record
+
+    def _require_unique_dedupe(self, record: Any) -> None:
+        if record.dedupe_key is None:
+            return
+        existing = self.find_by_dedupe(
+            record.tenant_id, source=record.source, dedupe_key=record.dedupe_key
+        )
+        if existing is not None and existing.id != record.id:
+            raise DuplicateDedupeKeyError(
+                f"'{record.source}' mənbəyində '{record.dedupe_key}' açarı artıq var"
+            )
+
+
+class FakeExceptionSources:
+    """`ExceptionSourceCatalog` sahtəsi — `exception_sources` kataloqu."""
+
+    def __init__(self, sources: list[Any] | None = None) -> None:
+        self.sources: dict[str, Any] = {source.code: source for source in sources or []}
+
+    def get(self, tenant_id: TenantId, code: str) -> Any:
+        return self.sources.get(code.strip().upper())
+
+    def list_all(self, tenant_id: TenantId, *, include_inactive: bool = False) -> list[Any]:
+        return [source for source in self.sources.values() if include_inactive or source.is_active]
+
+
+class InMemoryPOSThresholds:
+    """`POSThresholdRepository` sahtəsi (#7 — sənədləşdirmə/siyasət qeydi).
+
+    Açar `employee_id`-dir: `pos_permission_thresholds`-da işçi başına BİR
+    diri sətir var (`UNIQUE (tenant_id, employee_id)`, migrations/018).
+    `delete()` QƏSDƏN YOXDUR — real repo-da `REVOKE DELETE` var
+    (bax `InMemoryExceptions` ilə eyni qərar).
+    """
+
+    def __init__(self) -> None:
+        self.items: dict[Any, Any] = {}
+        self.save_failure: Exception | None = None
+
+    def get_for_employee(self, tenant_id: TenantId, employee_id: EmployeeId) -> Any:
+        record = self.items.get(employee_id)
+        if record is None or record.tenant_id != tenant_id:
+            return None
+        return record
+
+    def save(self, record: Any) -> None:
+        if self.save_failure is not None:
+            raise self.save_failure
+        self.items[record.employee_id] = record
 
 
 class FakeFineTypes:

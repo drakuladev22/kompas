@@ -47,6 +47,12 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
+from src.domain.policies import SystemLimitKey
+from src.infrastructure.config.limits import (
+    InfrastructureLimits,
+    fallback_float,
+    fallback_int,
+)
 from src.infrastructure.persistence.dsn import dsn_without_password, password_env
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
@@ -61,12 +67,23 @@ _log = get_logger(__name__)
 _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
 
 BACKUP_DIR_ENV: Final[str] = "KOMPASOS_BACKUP_DIR"
-#: Spesifikasiya "minimum 30 gün" deyir — konfiqurasiya bundan AŞAĞI düşə bilməz.
-MIN_RETENTION_DAYS: Final[int] = 30
-DEFAULT_RETENTION_DAYS: Final[int] = 30
+
+#: ÜÇÜ DƏ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`BACKUP_MIN_RETENTION_DAYS`, `BACKUP_RETENTION_DAYS`,
+#: `BACKUP_DUMP_TIMEOUT_SECONDS`; seed: migrations/032). Bu ədədlər yalnız
+#: ROOT portu əlçatmaz olduqda işə düşür.
+#:
+#: Spesifikasiya "minimum 30 gün" deyir — konfiqurasiya bundan AŞAĞI düşə
+#: bilməz. Tələb İTMİR: miqrasiyada `BACKUP_MIN_RETENTION_DAYS`-in
+#: `min_value`-su da 30-dur və oxunan dəyər həmin aralığa klamp edilir, yəni
+#: Root döşəməni yalnız YUXARI qaldıra bilər.
+FALLBACK_MIN_RETENTION_DAYS: Final[int] = fallback_int(SystemLimitKey.BACKUP_MIN_RETENTION_DAYS)
+FALLBACK_RETENTION_DAYS: Final[int] = fallback_int(SystemLimitKey.BACKUP_RETENTION_DAYS)
 #: `pg_dump` bu müddətdən uzun çəkərsə dayandırılır (asılıb qalmış proses
 #: gecəlik pəncərəni bloklamamalıdır).
-DUMP_TIMEOUT_SECONDS: Final[float] = 60 * 60
+FALLBACK_DUMP_TIMEOUT_SECONDS: Final[float] = fallback_float(
+    SystemLimitKey.BACKUP_DUMP_TIMEOUT_SECONDS
+)
 CHUNK_SIZE: Final[int] = 1024 * 1024
 
 BACKUP_TYPE_NIGHTLY: Final[str] = "NIGHTLY_AUTO"
@@ -133,25 +150,46 @@ class NightlyBackupService:
         *,
         dsn: str = "",
         backup_dir: Path | None = None,
-        retention_days: int = DEFAULT_RETENTION_DAYS,
+        retention_days: int | None = None,
+        limits: InfrastructureLimits | None = None,
         runner: Callable[[Sequence[str], Mapping[str, str]], subprocess.CompletedProcess[str]]
         | None = None,
         clock: Callable[[], datetime] | None = None,
         tool_locator: Callable[[str], str | None] | None = None,
     ) -> None:
+        """
+        Args:
+            retention_days: AÇIQ üstünlük — verilərsə ROOT dəyəri OXUNMUR
+                (çağıran onu bilərəkdən təyin edib). `None` = ROOT-dan oxu.
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback-lar.
+        """
         self._database = database
         self._dsn = dsn or os.environ.get("DATABASE_URL", "")
         self._dir = backup_dir or _default_backup_dir()
-        # Spesifikasiya "minimum 30 gün" deyir — aşağı dəyər YUXARI qaldırılır,
-        # əks halda bir konfiqurasiya səhvi tələbi sükutla pozardı.
-        self._retention_days = max(MIN_RETENTION_DAYS, retention_days)
+        self._explicit_retention_days = retention_days
+        self._limits = limits or InfrastructureLimits()
         self._runner = runner
         self._clock = clock or (lambda: datetime.now(UTC))
         self._locate = tool_locator or shutil.which
 
     @property
     def retention_days(self) -> int:
-        return self._retention_days
+        """Qüvvədə olan saxlama müddəti — HƏR OXUDA yenidən həll olunur.
+
+        Servis gecəlik planlayıcı ilə birlikdə günlərlə yaşayır; Root müddəti
+        bu vaxt ərzində dəyişə bilər. Konstruktorda bir dəfə hesablasaydıq,
+        dəyişiklik yalnız yenidən başlatmadan sonra qüvvəyə minərdi.
+
+        Spesifikasiya "minimum 30 gün" deyir — aşağı dəyər YUXARI qaldırılır,
+        əks halda bir konfiqurasiya səhvi tələbi sükutla pozardı.
+        """
+        floor = self._limits.int_of(SystemLimitKey.BACKUP_MIN_RETENTION_DAYS)
+        configured = (
+            self._explicit_retention_days
+            if self._explicit_retention_days is not None
+            else self._limits.int_of(SystemLimitKey.BACKUP_RETENTION_DAYS)
+        )
+        return max(floor, configured)
 
     @property
     def backup_dir(self) -> Path:
@@ -194,7 +232,7 @@ class NightlyBackupService:
             storage_ref=str(target),
             size_bytes=size,
             checksum=checksum,
-            retention_until=(moment + timedelta(days=self._retention_days)).date(),
+            retention_until=(moment + timedelta(days=self.retention_days)).date(),
             created_at=moment,
         )
         self._persist(tenant_id, record)
@@ -228,11 +266,21 @@ class NightlyBackupService:
         except subprocess.TimeoutExpired as exc:
             target.unlink(missing_ok=True)
             raise BackupError(
-                "pg_dump vaxtında tamamlanmadı", context={"timeout_seconds": DUMP_TIMEOUT_SECONDS}
+                "pg_dump vaxtında tamamlanmadı",
+                context={"timeout_seconds": self._dump_timeout()},
             ) from exc
         except OSError as exc:
             target.unlink(missing_ok=True)
             raise BackupError("pg_dump icra edilə bilmədi", context={"error": str(exc)}) from exc
+
+    def _dump_timeout(self) -> float:
+        """`pg_dump` taymautu — icra ANINDA ROOT-dan oxunur.
+
+        Miqrasiyadakı aşağı hüdud (60 san.) klampla birlikdə "0 taymaut"
+        halını qapadır: sıfır dəyər hər gecəlik nüsxəni dərhal uğursuz edərdi
+        və səbəbi yalnız `system_limits` sətrinə baxmaqla tapılardı.
+        """
+        return self._limits.float_of(SystemLimitKey.BACKUP_DUMP_TIMEOUT_SECONDS)
 
     def _default_runner(
         self, command: Sequence[str], environment: Mapping[str, str]
@@ -243,7 +291,7 @@ class NightlyBackupService:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=DUMP_TIMEOUT_SECONDS,
+            timeout=self._dump_timeout(),
             check=False,
             env=dict(environment),
         )
@@ -458,7 +506,7 @@ __all__ = [
     "BACKUP_TYPE_MANUAL",
     "BACKUP_TYPE_NIGHTLY",
     "BACKUP_TYPE_PRE_MIGRATION",
-    "MIN_RETENTION_DAYS",
+    "FALLBACK_MIN_RETENTION_DAYS",
     "RESTORE_CONFIRMATION",
     "BackupError",
     "BackupRecord",

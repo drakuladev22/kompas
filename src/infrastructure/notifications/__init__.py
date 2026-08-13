@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING
 
 from src.infrastructure.notifications.crash_reporter import (
-    MAX_REPORTS_PER_FINGERPRINT,
+    FALLBACK_MAX_REPORTS_PER_FINGERPRINT,
     CrashReporter,
     fingerprint_of,
     format_trace,
@@ -18,8 +18,8 @@ from src.infrastructure.notifications.email import (
     SmtpEmailSender,
 )
 from src.infrastructure.notifications.notifier import (
-    BACKOFF_MINUTES,
-    MAX_ATTEMPTS,
+    FALLBACK_BACKOFF_MINUTES,
+    FALLBACK_MAX_ATTEMPTS,
     EmailFallbackDispatcher,
     PostgresNotifier,
 )
@@ -35,9 +35,9 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 __all__ = [
-    "BACKOFF_MINUTES",
-    "MAX_ATTEMPTS",
-    "MAX_REPORTS_PER_FINGERPRINT",
+    "FALLBACK_BACKOFF_MINUTES",
+    "FALLBACK_MAX_ATTEMPTS",
+    "FALLBACK_MAX_REPORTS_PER_FINGERPRINT",
     "CrashReporter",
     "EmailConfig",
     "EmailError",

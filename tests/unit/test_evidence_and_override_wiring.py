@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from src.infrastructure.storage.upload_queue import UploadOwnerType
 from src.presentation.controllers.camera_queue import _combine
 from src.presentation.controllers.fine_entry import NO_STORES_MESSAGE, FineEntryController
 
@@ -27,6 +28,7 @@ TENANT = uuid.uuid4()
 STORE = uuid.uuid4()
 WORKER = uuid.uuid4()
 FINE_TYPE = uuid.uuid4()
+CONNECTION_A = uuid.uuid4()
 
 
 # --------------------------------------------------------------------------- #
@@ -178,8 +180,12 @@ def test_evidence_is_spooled_before_the_fine_row_is_written(tmp_path: Any) -> No
     assert context.queue.calls[0]["content"] == b"binary-image"
     # Cəriməyə gedən sübut istinadı məhz növbə açarıdır.
     assert fines.issued[0]["evidence_reference"] == "entry-1"
-    # Növbə açarı `fine_id`-ni bilir, cərimə də EYNİ id ilə yazılır.
-    assert context.queue.calls[0]["fine_id"] == fines.issued[0]["fine_id"]
+    # Növbə `owner_id`-ni bilir, cərimə də EYNİ id ilə yazılır (#17: `fine_id`
+    # → `owner_type`/`owner_id` ümumiləşdirilib, bax `upload_queue.py` başlığı).
+    from src.infrastructure.storage.upload_queue import UploadOwnerType
+
+    assert context.queue.calls[0]["owner_type"] is UploadOwnerType.FINE
+    assert context.queue.calls[0]["owner_id"] == str(fines.issued[0]["fine_id"])
     assert fines.pending == [fines.issued[0]["fine_id"]]
     # `sessions[0]` — cərimə tranzaksiyası. Sonrakı sessiya siyahının
     # yenilənməsinə aiddir və commit-ə ehtiyacı yoxdur.
@@ -379,3 +385,87 @@ def test_upload_run_never_raises(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(context, "session", _boom)
     assert context.run_evidence_uploads() == 0
+
+
+# --------------------------------------------------------------------------- #
+# `_attach_evidence` — #17: `owner_type`-a görə sahib cədvəlin seçilməsi
+# --------------------------------------------------------------------------- #
+
+
+def test_attach_evidence_routes_a_fine_to_the_fines_repository(monkeypatch: Any) -> None:
+    """Köçürmədən ƏVVƏLKİ tək-sahib davranış — `FINE` üçün DƏYİŞMİR."""
+    from contextlib import contextmanager
+
+    from src.domain.value_objects.storage import StorageReference
+
+    context = _context_without_db()
+    calls: list[Any] = []
+
+    class _FinesRepo:
+        def attach_drive_evidence(self, fine_id: Any, *, file_id: str, connection_id: Any) -> None:
+            calls.append((fine_id, file_id, connection_id))
+
+    class _Session:
+        def __init__(self) -> None:
+            self.uow = type("_Uow", (), {"fines": _FinesRepo()})()
+            self.committed = False
+
+        def commit(self) -> None:
+            self.committed = True
+
+    session = _Session()
+
+    @contextmanager
+    def _fake_session(**_: Any) -> Any:
+        yield session
+
+    monkeypatch.setattr(context, "session", _fake_session)
+    fine_id = uuid.uuid4()
+    reference = StorageReference.drive(file_id="drive-1", connection_id=CONNECTION_A)
+
+    context._attach_evidence(UploadOwnerType.FINE.value, str(fine_id), reference)
+
+    assert calls == [(fine_id, "drive-1", CONNECTION_A)]
+    assert session.committed
+
+
+def test_attach_evidence_routes_an_employee_document_to_the_document_use_case(
+    monkeypatch: Any,
+) -> None:
+    """#17: YENİ qol — sənəd skanı `attach_uploaded_file`-a getməlidir."""
+    from contextlib import contextmanager
+
+    from src.domain.value_objects.storage import StorageReference
+
+    context = _context_without_db()
+    calls: list[dict[str, Any]] = []
+
+    class _Documents:
+        def attach_uploaded_file(self, **kwargs: Any) -> None:
+            calls.append(kwargs)
+
+    class _Session:
+        def __init__(self) -> None:
+            self.tenant_id = TENANT
+            self.employee_documents = _Documents()
+            self.committed = False
+
+        def commit(self) -> None:
+            self.committed = True
+
+    session = _Session()
+
+    @contextmanager
+    def _fake_session(**_: Any) -> Any:
+        yield session
+
+    monkeypatch.setattr(context, "session", _fake_session)
+    document_id = uuid.uuid4()
+    reference = StorageReference.drive(file_id="drive-2", connection_id=CONNECTION_A)
+
+    context._attach_evidence(UploadOwnerType.EMPLOYEE_DOCUMENT.value, str(document_id), reference)
+
+    assert len(calls) == 1
+    assert calls[0]["document_id"] == document_id
+    assert calls[0]["file_ref"] == str(reference)
+    assert session.committed

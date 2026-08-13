@@ -171,6 +171,32 @@ TENANT_NOTIFICATION_AUDIENCE: Final[dict[str, tuple[str, ...]]] = {
     # (`can_fill_daily_attendance`); ona öz təqdim etdiyi sətir barədə
     # xəbərdarlıq göndərmək məlumat vermir.
     "ATTENDANCE_SHEET_MISMATCH": ("can_manage_shifts",),
+    # `overtime_tracking.record_for_day`: sətir bir işçinin NEÇƏ SAAT işlədiyini
+    # elan edir — fərdi əmək məlumatıdır. `ATTENDANCE_SHEET_MISMATCH`-dan fərqli
+    # olaraq cavab verəcək şəxs plan sahibi deyil, işçi hesabatlarına baxandır:
+    # aşımın həlli ya növbənin qısaldılması, ya da əlavə iş vaxtının rəsmi
+    # sənədləşdirilməsidir və hər ikisi HR-ın işidir (`can_view_employee_reports`
+    # — HR_Admin/CEO-da var, `Satıcı`-da yoxdur, §23).
+    "OVERTIME_NORM_EXCEEDED": ("can_view_employee_reports",),
+    # `employee_documents.notify_expiring_documents`: gecəlik iş — 30/14/7 gün
+    # qalanda bitmə xəbərdarlığı (#17, kompasos11.md Faza 7). Auditoriya
+    # sənədi İDARƏ EDƏ BİLƏN roldur, sadəcə görəndir — `can_manage_employee_documents`
+    # (migrations/021 flag təsviri: "sənəd/müqavilə qeydlərini yaratmaq, bitmə
+    # tarixini izləmək"). Bloklama xəbərdarlığından fərqli olaraq (o, ekran
+    # qarşısındakı admin üçündür və bildiriş kanalını doldurmur — bax
+    # `shift_scheduling._document_conflicts`), bu, PLANLAŞDIRILMIŞ işdir və
+    # heç kim ekranda deyil, ona görə bildiriş MƏCBURİDİR.
+    "EMPLOYEE_DOCUMENT_EXPIRING": ("can_manage_employee_documents",),
+    # `AttritionRiskUseCase._notify_high_risk`: yüksək risk aşkarlananda İKİ
+    # bildiriş gedir — ƏVVƏLCƏ işçinin Store Manager-inə (ŞƏXSİ sətir,
+    # `recipient_id` dolu, bu cədvəldən ASILI DEYİL), SONRA HR_Admin-ə
+    # (tenant-broadcast). Auditoriya elə bu balı GÖRMƏK səlahiyyətinin ÖZÜdür
+    # — `can_view_attrition_risk` (migrations/021: "defolt heç bir operativ
+    # rola verilmir, yalnız HR_Admin/CEO/Root"). Store Manager bu flag-i
+    # DAŞIMASA da öz işçisi barədə ŞƏXSİ sətri görür — bu, cədvəldəki
+    # süzgəcdən deyil, şəxsi bildiriş qaydasından gəlir (bax fayl başlığı
+    # "ŞƏXSİ SƏTİR").
+    "ATTRITION_RISK_HIGH": ("can_view_attrition_risk",),
     # ─────────────────────────────────────────────────────────────────────
     # `MONTHLY_FINES_PUBLISHED` BURAYA QƏSDƏN SALINMIR — ONU SÜZMƏYİN.
     # ─────────────────────────────────────────────────────────────────────

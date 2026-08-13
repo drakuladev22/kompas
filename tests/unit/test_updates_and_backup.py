@@ -31,7 +31,7 @@ from src.domain.value_objects.updates import (
     decide,
 )
 from src.infrastructure.backup.service import (
-    MIN_RETENTION_DAYS,
+    FALLBACK_MIN_RETENTION_DAYS,
     RESTORE_CONFIRMATION,
     BackupError,
     BackupRecord,
@@ -547,7 +547,7 @@ def make_backup_service(
     database: FakeBackupDatabase | None = None,
     runner: Any = None,
     tool: str | None = "pg_dump.exe",
-    retention_days: int = MIN_RETENTION_DAYS,
+    retention_days: int = FALLBACK_MIN_RETENTION_DAYS,
 ) -> tuple[NightlyBackupService, FakeBackupDatabase]:
     db = database or FakeBackupDatabase()
     service = NightlyBackupService(
@@ -597,7 +597,7 @@ class TestNightlyBackup:
         sükutla poza bilməməlidir."""
         service, _ = make_backup_service(tmp_path, retention_days=3)
 
-        assert service.retention_days == MIN_RETENTION_DAYS
+        assert service.retention_days == FALLBACK_MIN_RETENTION_DAYS
         assert service.create(TENANT).retention_until == (NOW + timedelta(days=30)).date()
 
     def test_bos_fayl_etibarsiz_sayilir(self, tmp_path: Path) -> None:

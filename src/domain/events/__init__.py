@@ -220,6 +220,32 @@ class ShiftSwapDecidedEvent(DomainEvent):
 
 
 @dataclass(frozen=True, kw_only=True)
+class OpenShiftPostedEvent(DomainEvent):
+    """#16: admin doldurulmamış slotu "açıq" elan etdi.
+
+    Shift Swap hadisələrindən AYRIDIR: orada dəyişikliyin subyekti KONKRET
+    işçidir (`employee_id`), burada isə slot HƏLƏ SAHİBSİZDİR — ona görə
+    hadisədə işçi sahəsi yoxdur, mağaza və şablon var.
+    """
+
+    posting_id: uuid.UUID
+    store_id: uuid.UUID
+    shift_date: date
+    work_mode_id: uuid.UUID
+    posted_by: uuid.UUID
+
+
+@dataclass(frozen=True, kw_only=True)
+class OpenShiftClaimedEvent(DomainEvent):
+    """#16: elanı İLK BASAN işçi tutdu — yarışın qalibi artıq bəllidir."""
+
+    posting_id: uuid.UUID
+    employee_id: uuid.UUID
+    store_id: uuid.UUID
+    shift_date: date
+
+
+@dataclass(frozen=True, kw_only=True)
 class DailyAttendanceSheetConfirmedEvent(DomainEvent):
     sheet_id: uuid.UUID
     store_id: uuid.UUID
@@ -297,6 +323,99 @@ class FeatureToggleChangedEvent(DomainEvent):
 
 
 # --------------------------------------------------------------------------- #
+# Vahid İstisna Motoru (#9, kompasos11.md Faza 3)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, kw_only=True)
+class ExceptionRaisedEvent(DomainEvent):
+    """Qayda anomaliya tapdı və `exceptions` sətri yarandı.
+
+    `actor_id` `None`-dur və bu, qəsdəndir: istisnanı İNSAN yaratmır,
+    planlaşdırılmış qayda yaradır. Süni olaraq işə salan operatoru aktor
+    yazsaydıq, audit izində "bu tapıntını o adam elan etdi" kimi yanlış
+    məsuliyyət yaranardı.
+    """
+
+    exception_id: uuid.UUID
+    source: str
+    employee_id: uuid.UUID
+    store_id: uuid.UUID
+    severity: str
+    dedupe_key: str | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ExceptionReviewDecidedEvent(DomainEvent):
+    """İstisna bağlandı: `REVIEWED` və ya `DISMISSED` (terminal keçid)."""
+
+    exception_id: uuid.UUID
+    source: str
+    employee_id: uuid.UUID
+    status: str
+    decided_by: uuid.UUID
+    note: str | None
+
+
+# --------------------------------------------------------------------------- #
+# İşçi sənədləri (#17, kompasos11.md Faza 7)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, kw_only=True)
+class EmployeeDocumentRecordedEvent(DomainEvent):
+    """Yeni sənəd/müqavilə qeydi yaradıldı.
+
+    YALNIZ YARADILMA hadisə yaradır — redaktə (`update`/`attach_file`) və
+    deaktivasiya AYRI hadisə DEYİL, çünki hazırkı heç bir abunəçi onlara
+    ehtiyac duymur (YAGNI) və audit izi bunlardan ASILI OLMADAN
+    `audit_logs`-dadır (CLAUDE.md §5: audit istisna udmur, hadisə isə
+    ƏLAVƏ kanaldır, yeganə deyil). `POSPermissionThreshold` da eyni
+    qərarla YALNIZ audit yazır, heç bir hadisə yaymır — bu, ardıcıl naxışdır.
+    """
+
+    document_id: uuid.UUID
+    employee_id: uuid.UUID
+    doc_type: str
+    is_blocking: bool
+    uploaded_by: uuid.UUID | None
+
+
+# --------------------------------------------------------------------------- #
+# Ünsiyyət və Performans (#19, #20, kompasos11.md Faza 8)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, kw_only=True)
+class AnnouncementBroadcastEvent(DomainEvent):
+    """#19: yeni elan dərc olundu.
+
+    YALNIZ YARADILMA hadisə yaradır — geri çəkmə (`withdraw`) AYRI hadisə
+    DEYİL, çünki audit izi ondan asılı olmadan `audit_logs`-dadır
+    (`EmployeeDocumentRecordedEvent` ilə eyni qərar, CLAUDE.md §5).
+    """
+
+    announcement_id: uuid.UUID
+    scope: str
+    store_count: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class PerformanceReviewRecordedEvent(DomainEvent):
+    """#20: qiymətləndirmə yazıldı — YENİ dövr VƏ YA eyni dövrün YENİLƏNMƏSİ.
+
+    İkisi arasında fərq YARADILMIR (ayrı `...UpdatedEvent` yoxdur): hər iki
+    halda nəticə eynidir — "bu dövr üçün indi bu qiymətlər qüvvədədir" — və
+    fərqi bilməli olan yeganə tərəf `audit_logs`-dur (before/after snapshot).
+    """
+
+    review_id: uuid.UUID
+    employee_id: uuid.UUID
+    period: str
+    overall_score: Decimal | None
+
+
+# --------------------------------------------------------------------------- #
 # İnfrastruktur & Lisenziya (bölmə 2, 5, 8)
 # --------------------------------------------------------------------------- #
 
@@ -328,9 +447,13 @@ class LicenseStatusChangedEvent(DomainEvent):
 
 
 __all__ = [
+    "AnnouncementBroadcastEvent",
     "DailyAttendanceSheetConfirmedEvent",
     "DualControlApprovalRequestedEvent",
     "DualControlDecisionEvent",
+    "EmployeeDocumentRecordedEvent",
+    "ExceptionRaisedEvent",
+    "ExceptionReviewDecidedEvent",
     "FeatureToggleChangedEvent",
     "FineAppealSubmittedEvent",
     "FineIssuedEvent",
@@ -343,6 +466,9 @@ __all__ = [
     "MorningCheckInRejectedEvent",
     "MorningCheckInRequestedEvent",
     "MorningCheckInVerifiedEvent",
+    "OpenShiftClaimedEvent",
+    "OpenShiftPostedEvent",
+    "PerformanceReviewRecordedEvent",
     "PermissionChangedEvent",
     "ShiftAssignmentChangedEvent",
     "ShiftSwapDecidedEvent",

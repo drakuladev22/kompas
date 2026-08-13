@@ -226,7 +226,13 @@ CATALOG_AZ: Final[dict[str, str]] = {
     "state.error.title": "Serverə bağlanmaq mümkün olmadı",
     "state.error.code": "Xəta kodu",
     "state.error.last_success": "Son uğurlu yenilənmə",
-    "state.error.auto_retry": "Avtomatik yenidən cəhd 30 saniyədən bir edilir.",
+    # ƏDƏD QƏSDƏN ÇIXARILIB: mətn əvvəl "30 saniyədən bir" yazırdı, halbuki bu
+    # kataloq sətri STATİKDİR (modul səviyyəsində qurulur) və heç bir təkrar-
+    # cəhd dövrəsinə bağlı deyil. Yeganə 30 saniyəlik dövrə `REALTIME_POLL_
+    # INTERVAL_SECONDS`-dir və o, Root-dan idarə olunur — yəni Root ritmi
+    # dəyişən kimi mətn YALAN olardı. Konfiqurasiyaya bağlana bilməyən ədədi
+    # mətndə saxlamaq mətnlə davranışı bir-birindən ayırmaq deməkdir.
+    "state.error.auto_retry": "Bağlantı bərpa olunan kimi avtomatik yenidən cəhd edilir.",
 }
 
 __all__ = ["CATALOG_AZ"]

@@ -68,6 +68,11 @@ DELEGATED_BINDERS: Final[dict[str, tuple[str, ...]]] = {
         "_dashboard_leaders",
         "_dashboard_health",
     ),
+    # #13 — tarixi nümunə kartı Növbə Matrisinin İKİNCİ, müstəqil bölməsidir
+    # (matris + məsləhət). Ayrı köməkçi olması onun heç nə təyin etmədiyini
+    # struktur olaraq göstərir; imza yoxlaması isə burada elan edildiyi üçün
+    # onu da əhatə edir.
+    "_shift_planning": ("_shift_staffing_pattern",),
 }
 
 

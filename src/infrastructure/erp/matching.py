@@ -39,11 +39,13 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.erp import (
     NAME_MATCH_THRESHOLD,
     MatchConfidence,
     MatchResult,
 )
+from src.infrastructure.config.limits import InfrastructureLimits, fallback_float
 from src.shared.logger import get_logger
 
 if TYPE_CHECKING:
@@ -79,7 +81,12 @@ _TRANSLITERATION: Final[dict[str, str]] = {
 #: Ən yaxşı iki namizədin fərqi bundan azdırsa nəticə QƏBUL EDİLMİR.
 #: "Əliyev Elvin" ↔ {"Əliyev Elnur", "Əliyev Elvin"} kimi hallarda təsadüfi
 #: qalibi seçmək əvəzinə sətir insana göndərilir.
-AMBIGUITY_MARGIN: Final[float] = 0.05
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits` (`ERP_MATCH_AMBIGUITY_MARGIN`,
+#: seed: migrations/032). Marja müəssisənin ad bazasının "sıxlığından" asılıdır:
+#: eyni soyadlı çoxlu işçisi olan şəbəkədə daha geniş marja lazımdır, əks halda
+#: "Şübhəli Uyğunlaşma" növbəsi boş qalar və səhv təyinat sükutla keçər.
+FALLBACK_AMBIGUITY_MARGIN: Final[float] = fallback_float(SystemLimitKey.ERP_MATCH_AMBIGUITY_MARGIN)
 
 
 @runtime_checkable
@@ -118,11 +125,29 @@ class SalesMatcher:
         directory: MatchDirectory,
         *,
         threshold: float = NAME_MATCH_THRESHOLD,
-        ambiguity_margin: float = AMBIGUITY_MARGIN,
+        ambiguity_margin: float | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
+        """
+        Args:
+            ambiguity_margin: AÇIQ üstünlük — verilərsə ROOT dəyəri OXUNMUR.
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback.
+        """
         self._directory = directory
         self._threshold = threshold
-        self._margin = ambiguity_margin
+        self._explicit_margin = ambiguity_margin
+        self._limits = limits or InfrastructureLimits()
+
+    def _ambiguity_margin(self) -> float:
+        """Qərarsızlıq marjası — HƏR SƏTİRDƏ yenidən oxunur.
+
+        Sinxronizasiya dövrü uzun sürür və Root marjanı onun ortasında dəyişə
+        bilər; oxu ucuzdur (bir sətirlik sorğu), səhv təyinat isə bahalıdır
+        (işçiyə yanlış satış xalı).
+        """
+        if self._explicit_margin is not None:
+            return self._explicit_margin
+        return self._limits.float_of(SystemLimitKey.ERP_MATCH_AMBIGUITY_MARGIN)
 
     def match(self, record: OneCSaleRecord, server_id: ErpServerId) -> MatchResult:
         store_id = self._directory.store_for(server_id, record.store_code)
@@ -188,7 +213,7 @@ class SalesMatcher:
             )
 
         runner_up = candidates[1] if len(candidates) > 1 else None
-        if runner_up is not None and (best.score - runner_up.score) < self._margin:
+        if runner_up is not None and (best.score - runner_up.score) < self._ambiguity_margin():
             # Bax modul başlığı: təxmin etmək boş buraxmaqdan bahadır.
             _log.warning(
                 "ERP_MATCH_AMBIGUOUS",
@@ -265,7 +290,7 @@ def name_similarity(left: str, right: str) -> float:
 
 
 __all__ = [
-    "AMBIGUITY_MARGIN",
+    "FALLBACK_AMBIGUITY_MARGIN",
     "MatchDirectory",
     "SalesMatcher",
     "name_similarity",

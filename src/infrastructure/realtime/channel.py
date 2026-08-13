@@ -40,6 +40,12 @@ from collections.abc import Callable
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
+from src.domain.policies import SystemLimitKey
+from src.infrastructure.config.limits import (
+    InfrastructureLimits,
+    fallback_int,
+    fallback_int_tuple,
+)
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
@@ -48,12 +54,20 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 _error_log = get_logger(__name__, channel=LogChannel.ERROR)
 
+#: HƏR İKİSİ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`REALTIME_POLL_INTERVAL_SECONDS`, `REALTIME_RECONNECT_BACKOFF_SECONDS`;
+#: seed: migrations/032). Yük 21 filialın SAYINDAN və şəbəkə keyfiyyətindən
+#: asılıdır — tək mağazalı quraşdırma daha tez-tez sorğu edə bilər, böyük
+#: şəbəkə isə aralığı uzatmalıdır.
+#:
 #: Polling rejimində sorğu aralığı (saniyə). 30 saniyə seçilib: daha tez-tez
 #: sorğu 21 filialdan gələn yüklə bazanı lazımsız yükləyər, daha seyrək isə
 #: "canlı" hissini tamamilə itirər.
-DEFAULT_POLL_SECONDS: Final[int] = 30
+FALLBACK_POLL_SECONDS: Final[int] = fallback_int(SystemLimitKey.REALTIME_POLL_INTERVAL_SECONDS)
 #: WebSocket-i yenidən qurmaq cəhdləri arasındakı artan gecikmə.
-RECONNECT_BACKOFF_SECONDS: Final[tuple[int, ...]] = (5, 15, 30, 60)
+FALLBACK_RECONNECT_BACKOFF_SECONDS: Final[tuple[int, ...]] = fallback_int_tuple(
+    SystemLimitKey.REALTIME_RECONNECT_BACKOFF_SECONDS
+)
 
 
 class RealtimeState(str, Enum):
@@ -105,13 +119,20 @@ class LiveUpdateChannel:
         transport: RealtimeTransport | None,
         poll: Callable[[], None],
         on_event: Callable[[str, Any], None] | None = None,
-        poll_seconds: int = DEFAULT_POLL_SECONDS,
+        poll_seconds: int | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
+        """
+        Args:
+            poll_seconds: AÇIQ üstünlük — verilərsə ROOT dəyəri OXUNMUR.
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback-lar.
+        """
         self._channels = channels
         self._transport = transport
         self._poll = poll
         self._on_event = on_event or (lambda _channel, _payload: None)
-        self._poll_seconds = poll_seconds
+        self._explicit_poll_seconds = poll_seconds
+        self._limits = limits or InfrastructureLimits()
 
         self._state = RealtimeState.STOPPED
         self._elapsed = 0
@@ -172,7 +193,7 @@ class LiveUpdateChannel:
         self._elapsed += seconds
         self._seconds_since_attempt += seconds
 
-        if self._elapsed >= self._poll_seconds:
+        if self._elapsed >= self._poll_interval():
             self._elapsed = 0
             self._run_poll()
 
@@ -217,8 +238,19 @@ class LiveUpdateChannel:
         _log.info("REALTIME_RECOVERED", extra={"channels": self._channels})
 
     def _current_backoff(self) -> int:
-        index = min(self._reconnect_attempts, len(RECONNECT_BACKOFF_SECONDS) - 1)
-        return RECONNECT_BACKOFF_SECONDS[index]
+        schedule = self._limits.int_tuple_of(SystemLimitKey.REALTIME_RECONNECT_BACKOFF_SECONDS)
+        index = min(self._reconnect_attempts, len(schedule) - 1)
+        return schedule[index]
+
+    def _poll_interval(self) -> int:
+        """Polling aralığı — HƏR TİKDƏ oxunur.
+
+        Kanal sessiya boyu yaşayır; Root aralığı dəyişəndə növbəti tik artıq
+        yeni dəyərlə hesablanır və yenidən qoşulma tələb olunmur.
+        """
+        if self._explicit_poll_seconds is not None:
+            return self._explicit_poll_seconds
+        return self._limits.int_of(SystemLimitKey.REALTIME_POLL_INTERVAL_SECONDS)
 
     def _degrade(self, reason: str) -> RealtimeState:
         """Polling rejiminə keçir və DƏRHAL bir sorğu edir.
@@ -238,8 +270,8 @@ class LiveUpdateChannel:
 
 
 __all__ = [
-    "DEFAULT_POLL_SECONDS",
-    "RECONNECT_BACKOFF_SECONDS",
+    "FALLBACK_POLL_SECONDS",
+    "FALLBACK_RECONNECT_BACKOFF_SECONDS",
     "LiveUpdateChannel",
     "RealtimeState",
     "RealtimeTransport",

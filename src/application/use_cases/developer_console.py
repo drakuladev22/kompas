@@ -35,20 +35,101 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Final
 
+from src.application.root_limits import (
+    fallback_decimal,
+    fallback_int,
+    limit_decimal,
+    limit_int,
+)
+from src.domain.policies import SystemLimitKey
 from src.shared.exceptions import KompasOSError
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from src.domain.interfaces.ports import SystemLimits
+    from src.domain.value_objects.identifiers import TenantId
+
+# --------------------------------------------------------------------------- #
+# ROOT PARAMETRLƏRİNİN FALLBACK DƏYƏRLƏRİ (Faza 10.2)
+# --------------------------------------------------------------------------- #
+# Aşağıdakı beş sabitin HƏQİQİ MƏNBƏYİ `system_limits` cədvəlidir
+# (`SystemLimitKey.SUPPORT_*` / `CRASH_*`, seed: migrations/034) — burada
+# yalnız ROOT sətri oxunmadıqda işə düşən fallback saxlanılır və ədəd
+# `DEFAULT_LIMITS`-dən gəlir, bu faylda YAZILMIR.
+#
+# NİYƏ DEVELOPER PANELİ ÇOX VAXT MƏHZ FALLBACK-I GÖRÜR: panel kirayəçi
+# kontekstindən KƏNARDA işləyir (`--developer-mode`, `service_role`, bütün
+# tenant-ların sətirləri) və `system_limits` per-tenant cədvəldir — yəni orada
+# oxunacaq "bir" tenant yoxdur. Eyni vəziyyət `DEVELOPER_DIRECTORY_STALE_DAYS`
+# açarındadır (migrations/032). Dəyər buna baxmayaraq ROOT parametridir: bu
+# oxu-modeli kirayəçi kontekstində də çağırıla bilir (`ConsoleThresholds.
+# from_limits`) və SLA hədəfi kommersiya öhdəliyidir — müqavilə dəyişəndə
+# kod buraxılışı gözlənilməməlidir.
+
 #: İlk cavab üçün hədəf (bölmə 8) — aşılarsa müraciət ekranda nişanlanır.
-FIRST_RESPONSE_SLA_HOURS: Final[int] = 24
+FIRST_RESPONSE_SLA_HOURS: Final[int] = fallback_int(SystemLimitKey.SUPPORT_FIRST_RESPONSE_SLA_HOURS)
 #: Tam həll üçün hədəf.
-RESOLUTION_SLA_HOURS: Final[int] = 72
+RESOLUTION_SLA_HOURS: Final[int] = fallback_int(SystemLimitKey.SUPPORT_RESOLUTION_SLA_HOURS)
+#: Hədəfin son neçə hissəsi "risk altında" zolağıdır (0.75 → son 25%).
+SLA_AT_RISK_RATIO: Final[Decimal] = fallback_decimal(SystemLimitKey.SUPPORT_SLA_AT_RISK_RATIO)
 #: Çökmə "kütləvi" sayılırsa (bu qədər fərqli quraşdırmada təkrarlanıb).
-WIDESPREAD_INSTALLATION_THRESHOLD: Final[int] = 3
+WIDESPREAD_INSTALLATION_THRESHOLD: Final[int] = fallback_int(
+    SystemLimitKey.CRASH_WIDESPREAD_INSTALLATION_THRESHOLD
+)
+#: Çökmə panelinin "ən çox təkrarlanan N qrup" siyahısının uzunluğu.
+CRASH_DASHBOARD_TOP_LIMIT: Final[int] = fallback_int(SystemLimitKey.CRASH_DASHBOARD_TOP_LIMIT)
+
+
+@dataclass(frozen=True)
+class ConsoleThresholds:
+    """Panelin beş ROOT parametri — bir yerdə, bir dəfə oxunur.
+
+    BEŞ AYRI ARQUMENT ƏVƏZİNƏ BİR OBYEKT: `SupportInbox.from_records` və
+    `CrashDashboard.from_records` eyni mənbədən qidalanır və hər yeni parametr
+    əks halda hər iki imzaya ayrıca əlavə olunardı — imzalar bir gün ayrılar,
+    inbox yeni həddi görər, panel görməzdi.
+
+    Defoltlar `DEFAULT_LIMITS`-dən gəlir, yəni portsuz qurulan obyekt
+    köçürmədən ƏVVƏLKİ davranışı HƏRFƏN təkrarlayır.
+    """
+
+    first_response_sla_hours: int = FIRST_RESPONSE_SLA_HOURS
+    resolution_sla_hours: int = RESOLUTION_SLA_HOURS
+    at_risk_ratio: Decimal = SLA_AT_RISK_RATIO
+    widespread_installations: int = WIDESPREAD_INSTALLATION_THRESHOLD
+    dashboard_top_limit: int = CRASH_DASHBOARD_TOP_LIMIT
+
+    @classmethod
+    def from_limits(cls, limits: SystemLimits | None, tenant_id: TenantId) -> ConsoleThresholds:
+        """`system_limits`-dən oxuyur; port yoxdursa defoltlar qalır.
+
+        HƏR ÇAĞIRIŞDA YENİDƏN OXUNUR (keş yoxdur): Root dəyəri dəyişdirən kimi
+        növbəti panel yenilənməsi yeni hədəfi göstərməlidir, əks halda "niyə
+        tətbiq olunmur?" sualının cavabı yalnız prosesin yenidən başladılması
+        olardı.
+        """
+        return cls(
+            first_response_sla_hours=limit_int(
+                limits, tenant_id, SystemLimitKey.SUPPORT_FIRST_RESPONSE_SLA_HOURS
+            ),
+            resolution_sla_hours=limit_int(
+                limits, tenant_id, SystemLimitKey.SUPPORT_RESOLUTION_SLA_HOURS
+            ),
+            at_risk_ratio=limit_decimal(
+                limits, tenant_id, SystemLimitKey.SUPPORT_SLA_AT_RISK_RATIO
+            ),
+            widespread_installations=limit_int(
+                limits, tenant_id, SystemLimitKey.CRASH_WIDESPREAD_INSTALLATION_THRESHOLD
+            ),
+            dashboard_top_limit=limit_int(
+                limits, tenant_id, SystemLimitKey.CRASH_DASHBOARD_TOP_LIMIT
+            ),
+        )
 
 
 class DeveloperConsoleError(KompasOSError):
@@ -82,7 +163,12 @@ class SlaState(str, Enum):
 
 
 def _sla_state(
-    *, opened_at: datetime, satisfied_at: datetime | None, now: datetime, target_hours: int
+    *,
+    opened_at: datetime,
+    satisfied_at: datetime | None,
+    now: datetime,
+    target_hours: int,
+    at_risk_ratio: Decimal = SLA_AT_RISK_RATIO,
 ) -> SlaState:
     """Bir SLA sayğacının vəziyyəti.
 
@@ -94,8 +180,8 @@ def _sla_state(
         return SlaState.MET if satisfied_at <= deadline else SlaState.BREACHED
     if now > deadline:
         return SlaState.BREACHED
-    # Son 25% — "risk altında" zolağı.
-    warning_point = opened_at + timedelta(hours=target_hours * 0.75)
+    # "Risk altında" zolağı — defolt hədəfin son 25%-i (ROOT parametri).
+    warning_point = opened_at + timedelta(hours=float(Decimal(target_hours) * at_risk_ratio))
     return SlaState.AT_RISK if now >= warning_point else SlaState.ON_TRACK
 
 
@@ -127,6 +213,11 @@ class CrashGroup:
     first_seen: datetime
     last_seen: datetime
     app_versions: tuple[str, ...]
+    #: Qrupun qurulduğu andakı ROOT həddi. SƏTRƏ YAZILIR, qlobal sabitdən
+    #: OXUNMUR: panel açıq ikən Root həddi dəyişsə, artıq göstərilən sətirlərin
+    #: nişanı sükutla sıçrayardı və istifadəçi eyni siyahıda iki fərqli qaydaya
+    #: görə rənglənmiş sətirlər görərdi.
+    widespread_threshold: int = WIDESPREAD_INSTALLATION_THRESHOLD
 
     @property
     def is_widespread(self) -> bool:
@@ -136,7 +227,7 @@ class CrashGroup:
         bir neçə quraşdırmada təkrarlanan isə KOD problemidir. Bu fərq
         prioritetləşdirmənin əsasıdır.
         """
-        return self.affected_installations >= WIDESPREAD_INSTALLATION_THRESHOLD
+        return self.affected_installations >= self.widespread_threshold
 
     @property
     def is_regression(self) -> bool:
@@ -155,13 +246,18 @@ class CrashGroup:
         )
 
 
-def group_crashes(records: Iterable[CrashRecord]) -> list[CrashGroup]:
+def group_crashes(
+    records: Iterable[CrashRecord],
+    *,
+    thresholds: ConsoleThresholds | None = None,
+) -> list[CrashGroup]:
     """Çökmələri `fingerprint` üzrə qruplaşdırır və TEZLİYƏ görə sıralayır.
 
     Sıralama açarı iki mərtəbəlidir: əvvəlcə təsirlənmiş quraşdırma sayı,
     sonra ümumi təkrar sayı. Yalnız təkrar sayına baxsaq, bir mağazada 500
     dəfə çökən lokal problem 20 mağazada 3 dəfə çökən kod xətasını üstələyərdi.
     """
+    applied = thresholds or ConsoleThresholds()
     buckets: dict[str, list[CrashRecord]] = {}
     for record in records:
         buckets.setdefault(record.fingerprint, []).append(record)
@@ -175,6 +271,7 @@ def group_crashes(records: Iterable[CrashRecord]) -> list[CrashGroup]:
             first_seen=min(item.occurred_at for item in items),
             last_seen=max(item.occurred_at for item in items),
             app_versions=tuple(sorted({item.app_version for item in items})),
+            widespread_threshold=applied.widespread_installations,
         )
         for fingerprint, items in buckets.items()
     ]
@@ -187,6 +284,9 @@ class CrashDashboard:
     """Panelin yekun görünüşü."""
 
     groups: list[CrashGroup] = field(default_factory=list)
+    #: Panelin qurulduğu andakı ROOT parametrləri — `top()` defoltu buradan
+    #: oxunur (bax `CrashGroup.widespread_threshold` eyni əsaslandırma).
+    thresholds: ConsoleThresholds = field(default_factory=ConsoleThresholds)
 
     @property
     def total_crashes(self) -> int:
@@ -197,12 +297,24 @@ class CrashDashboard:
         """Dərhal baxılmalı qruplar — siyahının başında göstərilir."""
         return [group for group in self.groups if group.is_widespread]
 
-    def top(self, limit: int = 10) -> list[CrashGroup]:
-        return self.groups[:limit]
+    def top(self, limit: int | None = None) -> list[CrashGroup]:
+        """İlk N qrup. `None` → ROOT parametri (`CRASH_DASHBOARD_TOP_LIMIT`).
+
+        AÇIQ ARQUMENT ÜSTÜNDÜR: konsol rejimi öz sütun sayına görə fərqli
+        uzunluq istəyə bilər (`developer_panel/console.py`) və o seçim ROOT
+        parametri ilə mübahisə etməməlidir.
+        """
+        return self.groups[: self.thresholds.dashboard_top_limit if limit is None else limit]
 
     @classmethod
-    def from_records(cls, records: Iterable[CrashRecord]) -> CrashDashboard:
-        return cls(groups=group_crashes(records))
+    def from_records(
+        cls,
+        records: Iterable[CrashRecord],
+        *,
+        thresholds: ConsoleThresholds | None = None,
+    ) -> CrashDashboard:
+        applied = thresholds or ConsoleThresholds()
+        return cls(groups=group_crashes(records, thresholds=applied), thresholds=applied)
 
 
 # --------------------------------------------------------------------------- #
@@ -271,9 +383,23 @@ class SupportInbox:
         records: Iterable[TicketRecord],
         *,
         now: datetime,
-        response_sla_hours: int = FIRST_RESPONSE_SLA_HOURS,
-        resolution_sla_hours: int = RESOLUTION_SLA_HOURS,
+        thresholds: ConsoleThresholds | None = None,
+        response_sla_hours: int | None = None,
+        resolution_sla_hours: int | None = None,
     ) -> SupportInbox:
+        """SLA hədəfləri: açıq arqument > `thresholds` > `DEFAULT_LIMITS`.
+
+        Açıq arqumentlər SAXLANILIB (əvvəl defolt dəyərləri var idi), çünki
+        testlər və hesabat skriptləri bir hədəfi süni şəkildə dəyişib
+        sərhəd davranışını yoxlaya bilməlidir — ROOT sətrini dəyişdirmədən.
+        """
+        applied = thresholds or ConsoleThresholds()
+        response_target = (
+            applied.first_response_sla_hours if response_sla_hours is None else response_sla_hours
+        )
+        resolution_target = (
+            applied.resolution_sla_hours if resolution_sla_hours is None else resolution_sla_hours
+        )
         views = [
             TicketView(
                 record=record,
@@ -281,13 +407,15 @@ class SupportInbox:
                     opened_at=record.created_at,
                     satisfied_at=record.first_response_at,
                     now=now,
-                    target_hours=response_sla_hours,
+                    target_hours=response_target,
+                    at_risk_ratio=applied.at_risk_ratio,
                 ),
                 resolution_sla=_sla_state(
                     opened_at=record.created_at,
                     satisfied_at=record.closed_at,
                     now=now,
-                    target_hours=resolution_sla_hours,
+                    target_hours=resolution_target,
+                    at_risk_ratio=applied.at_risk_ratio,
                 ),
                 evaluated_at=now,
             )
@@ -316,9 +444,12 @@ class SupportInbox:
 
 
 __all__ = [
+    "CRASH_DASHBOARD_TOP_LIMIT",
     "FIRST_RESPONSE_SLA_HOURS",
     "RESOLUTION_SLA_HOURS",
+    "SLA_AT_RISK_RATIO",
     "WIDESPREAD_INSTALLATION_THRESHOLD",
+    "ConsoleThresholds",
     "CrashDashboard",
     "CrashGroup",
     "CrashRecord",

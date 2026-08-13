@@ -68,6 +68,27 @@ LIMIT_LABELS: dict[SystemLimitKey, tuple[str, int, int, str]] = {
     SystemLimitKey.LEAVE_ALLOWANCE_SOURCE: ("İcazə güzəştinin mənbəyi", 0, 0, ""),
     SystemLimitKey.LEAVE_ALLOWANCE_FIXED_MINUTES: ("Sabit güzəşt müddəti", 0, 1_440, "dəq"),
     SystemLimitKey.DELAY_FINE_RATE_PER_MINUTE: ("Gecikmə cərimə dərəcəsi", 0, 0, "AZN/dəq"),
+    # --- Faza 10.2 (ikinci dalğa) — təqdimat qatının parametrləri ----------- #
+    #
+    # ETİKET OLMASA DA GÖRÜNÜRDÜLƏR (`limit_row` naməlum açar üçün adın özünü
+    # göstərir) — bu sətirlər yalnız Root-un ekranda TEXNİKİ AD əvəzinə
+    # anlaşılan ifadə görməsi üçündür. Diapazonlar migrations/035-dəki
+    # `min_value`/`max_value` ilə eynidir.
+    SystemLimitKey.SHIFT_MATRIX_WINDOW_DAYS: ("Növbə matrisinin pəncərəsi", 1, 120, "gün"),
+    SystemLimitKey.EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS: (
+        "Sübut yükləmə dövrəsi",
+        10,
+        3_600,
+        "san",
+    ),
+    SystemLimitKey.ERP_MATCH_LOW_CONFIDENCE_PERCENT: (
+        "Zəif uyğunluq həddi (satış)",
+        0,
+        100,
+        "%",
+    ),
+    SystemLimitKey.DEVELOPER_CRASH_ROW_LIMIT: ("Çökmə cədvəlinin sətir tavanı", 1, 200, "sətir"),
+    SystemLimitKey.DEVELOPER_TICKET_ROW_LIMIT: ("Dəstək cədvəlinin sətir tavanı", 1, 200, "sətir"),
 }
 
 #: Modul açarı → Azərbaycanca etiket.

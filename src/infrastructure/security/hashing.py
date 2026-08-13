@@ -36,7 +36,7 @@ import os
 import re
 import secrets
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Final
@@ -48,12 +48,14 @@ from argon2.exceptions import (
     VerifyMismatchError,
 )
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.credentials import (
     PIN_LENGTH,
     WEAK_PINS,
     InvalidPinError,
     Pin,
 )
+from src.infrastructure.config.limits import InfrastructureLimits, fallback_int
 from src.shared.exceptions import ConfigurationError, KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
@@ -75,10 +77,21 @@ ARGON2_PARALLELISM: Final[int] = 4
 ARGON2_HASH_LENGTH: Final[int] = 32
 ARGON2_SALT_LENGTH: Final[int] = 16
 
-DEFAULT_MAX_PIN_ATTEMPTS: Final[int] = 5
-DEFAULT_PIN_LOCKOUT_MINUTES: Final[int] = 15
+#: PIN lockout fallback-ları — HƏQİQİ MƏNBƏ `system_limits`-dir
+#: (`PIN_MAX_FAILED_ATTEMPTS`, `PIN_LOCKOUT_MINUTES`; `schema.sql` seed edir).
+#:
+#: YENİ AÇAR YARADILMADI: bu iki dəyər ARTIQ ROOT parametridir və
+#: `AuthenticationUseCase._pin_policy()` hər çağırışda onları oxuyub
+#: `PinPolicy`-ni qurur. Buradakı ədədlər YALNIZ port əlçatmaz olduqda
+#: (bağlantı yoxdur, sətir hələ seed edilməyib) işə düşür. İkinci ad
+#: yaratsaydıq, Root birini dəyişər, digəri sükutla qüvvədə qalardı.
+FALLBACK_MAX_PIN_ATTEMPTS: Final[int] = fallback_int(SystemLimitKey.PIN_MAX_FAILED_ATTEMPTS)
+FALLBACK_PIN_LOCKOUT_MINUTES: Final[int] = fallback_int(SystemLimitKey.PIN_LOCKOUT_MINUTES)
 
-MIN_PASSWORD_LENGTH: Final[int] = 12
+#: Admin-tier şifrənin minimum uzunluğu — fallback; HƏQİQİ MƏNBƏ
+#: `system_limits` (`PASSWORD_MIN_LENGTH`, seed: migrations/032).
+#: `HashingService` hər yoxlamada ROOT dəyərini oxuyur (bax `_password_policy`).
+FALLBACK_MIN_PASSWORD_LENGTH: Final[int] = fallback_int(SystemLimitKey.PASSWORD_MIN_LENGTH)
 
 
 class WeakSecretError(KompasOSError):
@@ -220,8 +233,8 @@ class PepperProvider:
 class PinPolicy:
     """PIN siyasəti — dəyərlər `system_limits`-dən oxunur (bölmə 3)."""
 
-    max_attempts: int = DEFAULT_MAX_PIN_ATTEMPTS
-    lockout_minutes: int = DEFAULT_PIN_LOCKOUT_MINUTES
+    max_attempts: int = FALLBACK_MAX_PIN_ATTEMPTS
+    lockout_minutes: int = FALLBACK_PIN_LOCKOUT_MINUTES
     reject_weak: bool = True
 
     def lockout_until(self, *, now: datetime | None = None) -> datetime:
@@ -243,7 +256,7 @@ class PinPolicy:
 class PasswordPolicy:
     """Admin-tier şifrə siyasəti (bölmə 2: "güclü şifrə")."""
 
-    min_length: int = MIN_PASSWORD_LENGTH
+    min_length: int = FALLBACK_MIN_PASSWORD_LENGTH
     require_upper: bool = True
     require_lower: bool = True
     require_digit: bool = True
@@ -294,20 +307,30 @@ class HashingService:
         pepper_provider: PepperProvider | None = None,
         pin_policy: PinPolicy | None = None,
         password_policy: PasswordPolicy | None = None,
+        limits: InfrastructureLimits | None = None,
         time_cost: int = ARGON2_TIME_COST,
         memory_cost: int = ARGON2_MEMORY_COST_KIB,
         parallelism: int = ARGON2_PARALLELISM,
     ) -> None:
         """
         Args:
+            limits: ROOT İdarə Mərkəzinə açılan pəncərə. Verilməzsə şifrə
+                siyasəti `DEFAULT_LIMITS` fallback-ları ilə işləyir — servis
+                bağlantısız (kiosk ilk açılış, test) da qurula bilməlidir.
             time_cost / memory_cost / parallelism: Argon2id parametrləri.
                 Defolt dəyərlər OWASP 2024 tövsiyəsidir və İSTEHSALATDA
                 DƏYİŞDİRİLMƏMƏLİDİR. Yalnız test dəstində (sürət üçün) və
                 zəif kiosk PC-lərində ölçmə əsasında tənzimlənə bilər —
                 azaldılma qərarı `docs/security_decisions.md`-də qeyd olunmalıdır.
+                BUNLAR `system_limits`-Ə KÖÇÜRÜLMÜR: kripto gücünü Root
+                panelindən aşağı salmaq imkanı hash-in özünü zəiflədərdi.
         """
         self._pepper_provider = pepper_provider or PepperProvider()
+        self._limits = limits or InfrastructureLimits()
         self.pin_policy = pin_policy or PinPolicy()
+        # Açıq verilmiş siyasət ROOT dəyərini ƏVƏZ EDİR: çağıran onu bilərəkdən
+        # qurub (test, xüsusi axın) və sükutla üstündən yazmaq gözlənilməzdir.
+        self._password_policy_is_explicit = password_policy is not None
         self.password_policy = password_policy or PasswordPolicy()
         self._hasher = PasswordHasher(
             time_cost=time_cost,
@@ -322,6 +345,25 @@ class HashingService:
         self._lock = threading.Lock()
         #: İstifadəçi-sayma (enumeration) hücumuna qarşı sabit-vaxtlı "dummy" hash.
         self._dummy_hash = self._hasher.hash("dummy-value-for-timing-equalisation")
+
+    def _active_password_policy(self) -> PasswordPolicy:
+        """Yoxlama ANINDA qüvvədə olan şifrə siyasəti.
+
+        Minimum uzunluq ROOT-dan (`PASSWORD_MIN_LENGTH`) HƏR ÇAĞIRIŞDA oxunur:
+        servis nüsxəsi tətbiqin bütün ömrü boyu yaşayır, Root isə siyasəti bu
+        müddət ərzində sərtləşdirə bilər. Konstruktorda bir dəfə oxusaydıq,
+        dəyişiklik yalnız proqramın yenidən başladılmasından sonra qüvvəyə
+        minərdi — və bunun səbəbi ekranda görünməzdi.
+
+        Yalnız `min_length` əvəzlənir: qalan tələblər (böyük/kiçik hərf, rəqəm,
+        simvol) struktur qaydadır və Root panelindən söndürülmür.
+        """
+        if self._password_policy_is_explicit:
+            return self.password_policy
+        return replace(
+            self.password_policy,
+            min_length=self._limits.int_of(SystemLimitKey.PASSWORD_MIN_LENGTH),
+        )
 
     # ------------------------------ pepper ---------------------------------- #
 
@@ -427,7 +469,7 @@ class HashingService:
     def hash_password(self, password: str, *, validate: bool = True) -> str:
         """Admin-tier şifrəni Argon2id ilə hash-ləyir (CARİ pepper versiyası ilə)."""
         if validate:
-            self.password_policy.validate(password)
+            self._active_password_policy().validate(password)
         # Şifrə üçün də pepper tətbiq olunur (entropiyası yüksək olsa da,
         # DB sızması ssenarisində əlavə qat zərər vermir).
         peppered = self._apply_pepper(password, kind="pwd", subject_id=None)
@@ -516,7 +558,7 @@ class HashingService:
         while True:
             candidate = "".join(secrets.choice(alphabet) for _ in range(length))
             try:
-                self.password_policy.validate(candidate)
+                self._active_password_policy().validate(candidate)
             except WeakSecretError:
                 continue
             return candidate

@@ -101,7 +101,11 @@ class KioskController:
 
                 use_case = PinHandshakeUseCase(
                     employees=employees,
-                    hashing=HashingService(),
+                    # `limits`: hash servisinin ROOT pəncərəsi. PIN siyasəti
+                    # (cəhd sayı / bloklama) use case-in ÖZ `limits`-indən
+                    # gəlir — burada ikinci mənbə yaranmır, sadəcə servis də
+                    # ROOT-a bağlanır (şifrə uzunluğu siyasəti üçün).
+                    hashing=HashingService(limits=self._context.infrastructure_limits()),
                     clock=SystemClock(),
                     limits=session.limits,
                     audit=session.uow.audit,

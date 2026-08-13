@@ -3,6 +3,16 @@
     36  [İnfrastruktur Və Baza Ayarları]  (`can_switch_db`,      bölmə 2)
     37  Panel Qurucusu                    (səlahiyyət tələb etmir, bölmə 6)
     38  Plugin İdarəetməsi                (`can_manage_plugins`, bölmə 1)
+    39  İstisnalar                        (`can_view_exceptions`, kompasos11.md
+                                            Faza 5, #9-un GUI tərəfi)
+
+──────────────────────────────────────────────────────────────────────────────
+39-CU EKRANIN MAKETİ NİYƏ YOXDUR
+──────────────────────────────────────────────────────────────────────────────
+"İstisnalar" ekranı kompasos11.md-nin YENİ tələbidir (#9) — Qrup A–H-in HTML
+maketlərində yoxdur. 36–38 də eyni səbəbdən buradadır (bax bu faylın adı:
+"Faza 5/6", maket-referanslı qruplardan fərqli olaraq). Yeni "maketsiz" ekranı
+buraya qoşmaq mövcud naxışı təkrarlayır, süni beşinci qrup yaratmır.
 
 ──────────────────────────────────────────────────────────────────────────────
 BAZA KEÇİDİ EKRANI NİYƏ "SEHRBAZ" DEYİL
@@ -40,8 +50,10 @@ from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
     Chip,
+    ChipTone,
     Divider,
     body_label,
+    mono_label,
     muted_label,
     plain_label,
     stretch,
@@ -684,8 +696,139 @@ class PluginScreen(Screen):
         return card
 
 
+# --------------------------------------------------------------------------- #
+# 39 — İstisnalar (Vahid İstisna Motoru, #9 — kompasos11.md Faza 5)
+# --------------------------------------------------------------------------- #
+
+
+class ExceptionsScreen(Screen):
+    """Açıq davranış-anomaliyası siqnallarının jurnalı (`can_view_exceptions`).
+
+    ──────────────────────────────────────────────────────────────────────────
+    MƏNBƏ-BADGE NİYƏ SƏRT ZƏNCİR DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Motor rule-registry ilə qurulub (bax `exception_engine.py` başlığı) — YENİ
+    mənbə YALNIZ `registry.register(...)` ilə qoşulur, motorun kodu
+    TOXUNULMUR. Ekran eyni prinsipi təkrarlayır: nişanın MƏTNİ hər sətirdə
+    `ExceptionView.source_name_az`-dan (bazadan) gəlir, `if source == "..."`
+    zənciri YOXDUR. Ton isə QƏSDƏN sabitdir ("info") — mənbəyə görə rəngləmək
+    hər yeni mənbə üçün BURAYA da toxunmağı tələb edərdi, halbuki motor məhz
+    bunun qarşısını almaq üçün qurulub. Ciddiyyət nişanı (aşağıda) fərqlidir:
+    `ExceptionSeverity` SƏRT siyahıdır (bax `exception_signals.py` başlığı),
+    ona görə onun rəng lüğəti kodda saxlanıla bilər.
+
+    Signals:
+        reviewed_requested: `exception_id` — "[Nəzərdən Keçirildi]" (qeyd
+            könüllüdür, dialoq açılmır).
+        dismissed_requested: `exception_id` — "[Rədd Et]" (səbəb kontrollerdə
+            soruşulur, çünki domen qaydası onu MƏCBURİ edir — bax
+            `ExceptionRecord.dismiss`).
+    """
+
+    reviewed_requested = Signal(str)
+    dismissed_requested = Signal(str)
+
+    #: Ciddiyyət kodu → nişan tonu. `ExceptionSeverity` SƏRT enum-dur (yeni
+    #: dəyər buraxılış tələb edir), ona görə burada sabit lüğət YAZILA bilər —
+    #: mənbə lüğəti ilə eyni azadlıq YOXDUR (bax sinif başlığı).
+    _SEVERITY_TONES: Final[dict[str, ChipTone]] = {
+        "LOW": "neutral",
+        "MEDIUM": "info",
+        "HIGH": "warning",
+        "CRITICAL": "danger",
+    }
+
+    def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
+        super().__init__(theme, parent=parent)
+
+        self._table = DataTable(
+            [
+                Column("Mənbə", 160),
+                Column("İşçi", 160),
+                Column("Mağaza", 140),
+                Column("Təfərrüat", 240),
+                Column("Ciddiyyət", 100),
+                Column("Tarix", 140, mono=True),
+                Column("Əməliyyat"),
+            ],
+            theme,
+            footnote=("Bağlanmış istisna yenidən açılmır — rədd qərarı da audit jurnalına düşür."),
+        )
+        self.add(self._table)
+
+    def set_exceptions(self, rows: list[dict[str, str]]) -> None:
+        """Açıq istisnaları göstərir.
+
+        Args:
+            rows: `id`, `source`, `source_name`, `employee`, `store`,
+                `detail`, `severity`, `severity_text`, `date` açarları —
+                canlı yol (`controllers/exceptions.py`) və maket yolu
+                (`preview_screens._exceptions`) EYNİ dəsti göndərir.
+        """
+        self._table.clear()
+        if not rows:
+            self.show_empty(
+                icon_name="shield",
+                title="Açıq istisna yoxdur",
+                message="Bütün davranış siqnalları nəzərdən keçirilib.",
+            )
+            return
+
+        for row in rows:
+            exception_id = row.get("id", "")
+            severity = row.get("severity", "")
+
+            detail = muted_label(row.get("detail", ""))
+            # SÖZƏ GÖRƏ SARILMA: təfərrüat mətni sabit enli xanadadır (240px),
+            # sarılmayan uzun mətn `DataTable` sütununu genişləndirər və
+            # nəticə bütün ekranlara sızardı (bax `DataTable` başlığı).
+            detail.setWordWrap(True)
+
+            self._table.add_row(
+                [
+                    # Naməlum/gələcək mənbə də mətnini BAZADAN alır — sərt
+                    # `if` zənciri yoxdur (bax sinif başlığı).
+                    Chip(row.get("source_name", "") or row.get("source", ""), "info"),
+                    row.get("employee", ""),
+                    row.get("store", ""),
+                    detail,
+                    Chip(
+                        row.get("severity_text", "") or severity,
+                        self._SEVERITY_TONES.get(severity, "neutral"),
+                    ),
+                    mono_label(row.get("date", "")),
+                    self._build_actions(exception_id),
+                ]
+            )
+        self.show_content()
+
+    def _build_actions(self, exception_id: str) -> QWidget:
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        review = secondary_button("Nəzərdən Keçirildi")
+        review.clicked.connect(lambda: self.reviewed_requested.emit(exception_id))
+        layout.addWidget(review)
+
+        # "Rədd Et" `danger` variantını alır — `PosThresholdDialog`-dakı
+        # "Geri Al" ilə EYNİ naxış (`secondary_button` + üstündən `variant`
+        # dəyişikliyi), yeni kontrast cütü yaratmır.
+        dismiss = secondary_button("Rədd Et")
+        dismiss.setProperty("variant", "danger")
+        dismiss.clicked.connect(lambda: self.dismissed_requested.emit(exception_id))
+        layout.addWidget(dismiss)
+
+        return container
+
+    def table(self) -> DataTable:
+        return self._table
+
+
 __all__ = [
     "DashboardBuilderScreen",
+    "ExceptionsScreen",
     "InfrastructureScreen",
     "MigrationConfirmDialog",
     "PhaseRow",

@@ -3,7 +3,7 @@
 ──────────────────────────────────────────────────────────────────────────────
 NİYƏ BU TEST VAR
 ──────────────────────────────────────────────────────────────────────────────
-`app.py` 28 ekran açarını qeydiyyatdan keçirir, `ScreenDataBinder._binders()`
+`app.py` 29 ekran açarını qeydiyyatdan keçirir, `ScreenDataBinder._binders()`
 isə onların yalnız bir hissəsini tanıyır. Qalan açarlar üçün `populate()`
 sadəcə geri qayıdırdı — nə istisna, nə jurnal sətri. Nəticə: canlı bağlaması
 olmayan ekran YALNIZ istifadəçi boş pəncərə görəndə üzə çıxırdı və bu, tipik
@@ -54,10 +54,21 @@ CONTROLLER_BOUND: Final[dict[str, str]] = {
     "unassigned_sales": "_attach_sales_review",
     "plugins": "_attach_plugin_admin",
     "dashboard_builder": "_attach_dashboard_builder",
+    "exceptions": "_attach_exceptions",
     "profile": "_attach_profile",
     "erp_servers": "_attach_erp_servers",
     "backups": "_attach_backups",
     "infrastructure": "_attach_infrastructure",
+    # #19/#20 Ünsiyyət və Performans (kompasos11.md Faza 8) — hər ikisi HƏM
+    # oxuyur, HƏM yazır (bax `controllers/announcements.py` və
+    # `controllers/performance_review.py` başlıqları).
+    "announcements": "_attach_announcements",
+    "performance_reviews": "_attach_performance_review",
+    # #21 İşdən Çıxma Riski (kompasos11.md Faza 9) — İSTİSNA: bu ekran YALNIZ
+    # oxuyur, lakin `_binders()`-ə DEYİL, ÖZ kontrolleri var — çünki baxış
+    # `AttritionRiskUseCase.list_for_tenant`-də AUDİT-lənir və icazə yoxlaması
+    # use case-in ÖZÜNDƏDİR (bax `controllers/attrition_risk.py` başlığı).
+    "attrition_risk": "_attach_attrition_risk",
 }
 
 #: Həm `_binders()`-də, HƏM DƏ `_attach_*` ilə bağlanan açarlar.
@@ -69,9 +80,28 @@ CONTROLLER_BOUND: Final[dict[str, str]] = {
 #: «Sistem Sağlamlığı» də belədir: bütün göstəricilər `_health` binder-indən
 #: gəlir, `[Yenidən Yoxla]` düyməsi isə həmin binder-i təkrar çağırır — ayrıca
 #: kontroller bir sətirlik yenidən-oxuma üçün lazımsız qat olardı.
+#: «İstifadəçi İdarəetməsi» də belədir (kompasos11.md Faza 4, #7): cədvəl
+#: `_users` binder-indən oxunur, "···" menyusunun YALNIZ "POS Səlahiyyəti"
+#: bəndi isə `UsersPOSThresholdController`-ə bağlanır — qalan üç maddə
+#: (`reset_pin`, `reset_password`, `change_role`, `deactivate`) bu Faza-nın
+#: əhatəsindən kənardır və əvvəlki kimi kontrollersiz qalır.
+#: «Növbə Planlama» da belədir (kompasos11.md Faza 6, #16): aylıq matris
+#: `_shift_planning` binder-indən oxunur və O DƏYİŞMİR, ekrana ƏLAVƏ edilmiş
+#: "Açıq Növbə Bazarı" kartı isə həm oxuyur, həm yazır (elan et / ləğv et) və
+#: hər yazıdan sonra siyahını yenidən oxuyur — ona görə ÖZ kontrolleri var
+#: (bax `controllers/open_shift.py` başlığı).
+#: «İdarə Paneli» də belədir (#24, kompasos11.md Faza 9A): beş köhnə bölmə
+#: `_dashboard` binder-indən DƏYİŞMƏDƏN oxunur, Çox-Mağaza Benchmark
+#: dörd bölməsi isə ƏLAVƏ olaraq dropdown/drill-down SİQNALLARINI qoşur
+#: (yazı YOXDUR, YALNIZ metrik dəyişəndə YENİDƏN oxu və naviqasiya) — ona
+#: görə ÖZ kontrolleri yox, YALNIZ bir `_attach_*` siqnal bağlaması var
+#: (bax `app.py::_attach_dashboard_benchmark` başlığı).
 HYBRID_BOUND: Final[dict[str, str]] = {
     "help": "_attach_help_center",
     "health": "_attach_health",
+    "users": "_attach_users_pos_threshold",
+    "shift_planning": "_attach_open_shift_market",
+    "dashboard": "_attach_dashboard_benchmark",
 }
 
 #: Kontrolleri olmayan, lakin örtüyə birbaşa bağlanan ekran: Ayarlar temanı
@@ -91,12 +121,16 @@ ATTACH_SCAN_FUNCTIONS: Final[frozenset[str]] = frozenset(
 
 #: HƏLƏ CANLI BAĞLANMAMIŞ açarlar.
 #:
-#: SİYAHI ARTIQ BOŞDUR — `app.py`-dakı 28 ekran açarının HAMISI ya
+#: SİYAHI ARTIQ BOŞDUR — `app.py`-dakı 29 ekran açarının HAMISI ya
 #: `_binders()`-dədir, ya da öz `_attach_*` kontrollerinə bağlanıb. Boş
 #: frozenset SİLİNMİR: o, qapının ÖZÜDÜR. Yeni ekran əlavə edən adam ya onu
 #: bağlamalı, ya da bura yazıb səbəbini izah etməlidir — hər iki halda qərar
 #: kod-review-də GÖRÜNÜR olur. Siyahını silsək, növbəti bağlanmamış ekran
 #: yenidən sükutla keçərdi (məhz bu testin yarandığı hal).
+#:
+#: 29-cu ekran (`exceptions`, #9 — kompasos11.md Faza 5) `CONTROLLER_BOUND`-a
+#: əlavə olunub, buraya YOX — `PluginScreen`/`DashboardBuilderScreen` ilə eyni
+#: səbəbdən öz kontrolleri var (bax `controllers/exceptions.py` başlığı).
 PENDING_LIVE_BINDING: Final[frozenset[str]] = frozenset()
 
 

@@ -30,18 +30,29 @@ from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from src.application.root_limits import fallback_int, limit_int
+from src.domain.policies import SystemLimitKey
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
-    from src.domain.interfaces.ports import AuditTrail, Clock
+    from src.domain.interfaces.ports import AuditTrail, Clock, SystemLimits
     from src.domain.value_objects.identifiers import EmployeeId, TenantId
     from src.infrastructure.backup.service import BackupRecord
 
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 
 MANAGE_BACKUPS_FLAG = "can_manage_backups"
+
+#: Bərpa nöqtələri siyahısının bir oxunuşda gətirdiyi sətir sayı.
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`SystemLimitKey.BACKUP_HISTORY_PAGE_SIZE`, seed: migrations/034). Saxlama
+#: müddəti (`BACKUP_RETENTION_DAYS`) ARTIQ Root parametridir; siyahının
+#: uzunluğu ondan MÜSTƏQİL olmalıdır, çünki 90 günlük saxlama seçən müəssisə
+#: ekranda yenə də son bir ayı görmək istəyə bilər.
+DEFAULT_HISTORY_LIMIT = fallback_int(SystemLimitKey.BACKUP_HISTORY_PAGE_SIZE)
 
 
 class BackupAccessError(KompasOSError):
@@ -54,7 +65,9 @@ class BackupAccessError(KompasOSError):
 class BackupCatalog(Protocol):
     """Yaradılmış nüsxələrin siyahısı (`backup_records`)."""
 
-    def list_available(self, tenant_id: TenantId, *, limit: int = 60) -> list[BackupRecord]: ...
+    def list_available(
+        self, tenant_id: TenantId, *, limit: int = DEFAULT_HISTORY_LIMIT
+    ) -> list[BackupRecord]: ...
 
 
 @runtime_checkable
@@ -101,23 +114,29 @@ class BackupAccessUseCase:
         operations: BackupOperations,
         audit: AuditTrail,
         clock: Clock,
+        limits: SystemLimits | None = None,
     ) -> None:
+        # `limits` İSTƏYƏ BAĞLIDIR: `None` halında siyahı uzunluğu
+        # `DEFAULT_HISTORY_LIMIT` fallback-ıdır (davranış köçürmədən ƏVVƏLKİ
+        # ilə HƏRFƏN eyni).
         self._catalog = catalog
         self._operations = operations
         self._audit = audit
         self._clock = clock
+        self._limits = limits
 
     def restore_points(self, *, tenant_id: TenantId, actor: Employee) -> list[RestorePoint]:
         """Mövcud bərpa nöqtələri — ən yenidən köhnəyə."""
         self._require(actor)
         today = self._clock.now().date()
+        history_limit = limit_int(self._limits, tenant_id, SystemLimitKey.BACKUP_HISTORY_PAGE_SIZE)
         return [
             RestorePoint(
                 record=record,
                 label_az=_label_for(record.created_at.date(), today),
                 is_expired=record.is_expired(today),
             )
-            for record in self._catalog.list_available(tenant_id)
+            for record in self._catalog.list_available(tenant_id, limit=history_limit)
         ]
 
     def create_now(self, *, tenant_id: TenantId, actor: Employee) -> BackupRecord:
@@ -216,6 +235,7 @@ def _mask_dsn(dsn: str) -> str:
 
 
 __all__ = [
+    "DEFAULT_HISTORY_LIMIT",
     "MANAGE_BACKUPS_FLAG",
     "BackupAccessError",
     "BackupAccessUseCase",

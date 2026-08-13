@@ -33,13 +33,13 @@ from src.infrastructure.storage.google_drive import (
 )
 from src.infrastructure.storage.image_cache import ImageCache, default_cache_dir
 from src.infrastructure.storage.quota_monitor import (
-    WARNING_THRESHOLD,
+    FALLBACK_WARNING_THRESHOLD,
     DriveQuotaMonitor,
     QuotaCheckResult,
     status_label,
 )
 from src.infrastructure.storage.upload_queue import (
-    CLAIM_STALE_AFTER_SECONDS,
+    FALLBACK_CLAIM_STALE_AFTER_SECONDS,
     EvidenceUploadQueue,
     EvidenceUploadWorker,
     PendingUpload,
@@ -47,8 +47,8 @@ from src.infrastructure.storage.upload_queue import (
 )
 
 __all__ = [
-    "CLAIM_STALE_AFTER_SECONDS",
-    "WARNING_THRESHOLD",
+    "FALLBACK_CLAIM_STALE_AFTER_SECONDS",
+    "FALLBACK_WARNING_THRESHOLD",
     "DriveApiClient",
     "DriveApiError",
     "DriveConnection",

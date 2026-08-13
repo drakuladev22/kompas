@@ -113,6 +113,31 @@ class LatenessAssessment:
         return False
 
 
+def checkin_minutes_since_midnight(
+    moment: datetime, *, timezone_name: str = DEFAULT_TIMEZONE
+) -> float:
+    """Bir anın MAĞAZANIN yerli gecəyarısından neçə dəqiqə sonra olduğu (#8).
+
+    İşçi Davranış Baz Xətti (migrations/018, `employee_behavior_baseline`)
+    `TIME` yox, dəqiqə saxlayır və DDL şərhi UTC damğasının YEREL zamana
+    çevrildikdən SONRA yazılmasını tələb edir — server UTC-də işləsə də,
+    "adət vaxtı" mağazanın yerli saatına aiddir (bax modul başlığı, DTZ
+    qaydası). `astimezone()` YEREL TARİXƏ görə çevirir: saat qurşağı UTC-dən
+    fərqli olanda (Bakı UTC+4 kimi) gecəyarını keçən anlar doğru günə düşür,
+    ona görə bu funksiya birbaşa `moment.hour` YOX, çevrilmiş `local.hour`
+    işlədir.
+
+    QEYD (bilinən sadələşdirmə): nəticə XƏTTİ dəqiqədir (0–1440), DAİRƏVİ
+    (circular) statistika DEYİL. Əksər növbələrdə giriş vaxtı sabit saata
+    yaxın olduğu üçün bu, kifayət edir; yalnız gecə saat 00:00 ətrafında
+    dəyişən nadir hallarda ədədi orta və standart kənarlaşma real yayılmanı
+    bir qədər təhrif edə bilər — bu, gələcək təkmilləşdirmə üçün açıq qalır.
+    """
+    require_aware(moment, field="moment")
+    local = moment.astimezone(ZoneInfo(timezone_name))
+    return local.hour * 60 + local.minute + local.second / 60
+
+
 def assess_lateness(
     *,
     verified_at: datetime,
@@ -154,5 +179,6 @@ __all__ = [
     "NaiveDatetimeError",
     "TimeRange",
     "assess_lateness",
+    "checkin_minutes_since_midnight",
     "require_aware",
 ]

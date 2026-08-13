@@ -369,6 +369,9 @@ class ProfileScreen(Screen):
         columns_layout.addWidget(right, 1)
 
         self.add(columns)
+        # #20 Performans Qiymətləndirməsi (kompasos11.md Faza 8) — TAM ENLİ:
+        # notlar uzun ola bilər, iki sütunlu kartda hər sətir kəsilərdi.
+        self.add(self._build_performance_card())
         self.body().addStretch(1)
 
         # Zəncir bütün kartlar qurulduqdan SONRA verilir. Sıra REDAKTƏ EDİLƏ
@@ -493,6 +496,76 @@ class ProfileScreen(Screen):
         self._password_note = muted_label("")
         card.add(self._password_note)
         return card
+
+    # ------------------------ performans tarixçəsi (#20) ---------------------- #
+
+    def _build_performance_card(self) -> Card:
+        """ "Performans Tarixçəm" — #20 (kompasos11.md Faza 8).
+
+        SƏLAHİYYƏT/DÜYMƏ YOXDUR: bu, TAMAMİLƏ OXU kartıdır (qiymətləndirməni
+        yalnız `can_conduct_performance_review` sahibi ayrıca ekrandan yazır,
+        bax `screens/performance_review.py`). Cavab/etiraz sahəsi YOXDUR —
+        performans qiyməti dəstək çatı deyil, birtərəfli qeyddir.
+        """
+        card = Card(padding=20, spacing=12)
+        card.add(section_label("Performans Tarixçəm"))
+        card.add(Divider())
+
+        self._performance_rows = QVBoxLayout()
+        self._performance_rows.setSpacing(14)
+        holder = QWidget()
+        holder.setLayout(self._performance_rows)
+        card.add(holder)
+
+        self._performance_empty = muted_label("Hələ heç bir qiymətləndirmə yazılmayıb.")
+        card.add(self._performance_empty)
+        return card
+
+    def set_performance_history(self, rows: list[dict[str, str]]) -> None:
+        """Qiymətləndirmə tarixçəsini göstərir (#20).
+
+        Args:
+            rows: `period`, `overall_score`, `reviewer`, `notes`, `ratings_text`
+                açarları olan sözlüklər — ən yeni dövr ƏVVƏLDƏ. Açarlar maket
+                (`preview_screens._profile`) və canlı yolda (`controllers/
+                profile.py`) EYNİDİR (CLAUDE.md §6).
+        """
+        clear_layout(self._performance_rows)
+        self._performance_empty.setVisible(not rows)
+
+        for row in rows:
+            self._performance_rows.addWidget(self._build_performance_row(row))
+
+    def _build_performance_row(self, row: dict[str, str]) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        head = QWidget()
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(0, 0, 0, 0)
+        head_layout.setSpacing(10)
+        head_layout.addWidget(title_label(row.get("period", ""), size=14))
+        head_layout.addWidget(stretch())
+        score_text = row.get("overall_score", "")
+        if score_text:
+            head_layout.addWidget(Chip(f"{score_text} xal", "info"))
+        layout.addWidget(head)
+
+        reviewer = row.get("reviewer", "")
+        if reviewer:
+            layout.addWidget(muted_label(f"Qiymətləndirən: {reviewer}", size=12))
+
+        ratings_text = row.get("ratings_text", "")
+        if ratings_text:
+            layout.addWidget(body_label(ratings_text, size=12))
+
+        notes = row.get("notes", "")
+        if notes:
+            layout.addWidget(body_label(notes, size=12))
+
+        return container
 
     # ------------------------------- doldurma -------------------------------- #
 

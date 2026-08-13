@@ -94,6 +94,10 @@ class ProfileController:
                 )
                 screen.set_role_info(_role_rows(session, employee))
                 screen.set_sessions(_session_rows(session, employee))
+                # #20 Performans Qiymətləndirməsi (kompasos11.md Faza 8) —
+                # SƏLAHİYYƏT TƏLƏB OLUNMUR (`list_own` işçinin ÖZ tarixçəsidir,
+                # bax use case başlığı).
+                screen.set_performance_history(_performance_rows(session, employee))
         except KompasOSError as error:
             screen.show_error(title="Profil açıla bilmədi", message=error.user_message)
         except Exception:
@@ -328,6 +332,32 @@ def _session_rows(session: Session, employee: Any) -> list[tuple[str, str, str]]
             )
         )
     return result
+
+
+def _performance_rows(session: Session, employee: Any) -> list[dict[str, str]]:
+    """ "Performans Tarixçəm" kartının sətirləri (#20) — ən yeni dövr ƏVVƏLDƏ.
+
+    `group_g.ProfileScreen.set_performance_history`-nin gözlədiyi AÇARLARLA
+    EYNİ sözlük qaytarılır (CLAUDE.md §6). Qiymətləndirən adı BURADA əlavə
+    olunur (`PerformanceReviewView`-da yalnız ID var) — profil ekranı "kim
+    qiymətləndirdi?" sualını cavabsız qoymamalıdır.
+    """
+    views = session.performance_reviews.list_own(tenant_id=session.tenant_id, employee=employee)
+    rows: list[dict[str, str]] = []
+    for view in views:
+        reviewer = session.uow.employees.get(view.reviewer_id)
+        reviewer_name = str(reviewer.full_name) if reviewer is not None else "—"
+        ratings_text = ", ".join(f"{code}: {score}" for code, score in sorted(view.ratings.items()))
+        rows.append(
+            {
+                "period": view.period,
+                "overall_score": str(view.overall_score) if view.overall_score is not None else "",
+                "reviewer": reviewer_name,
+                "ratings_text": ratings_text,
+                "notes": view.notes or "",
+            }
+        )
+    return rows
 
 
 def _active_session_count(session: Session, employee: Any) -> int:

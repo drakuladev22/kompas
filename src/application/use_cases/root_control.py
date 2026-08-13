@@ -64,6 +64,29 @@ MANAGE_PERMISSIONS_FLAG = "can_manage_permissions"
 
 #: Struktur-kritik modulu söndürmək üçün minimum təsdiq mətni uzunluğu.
 #: "ok" yazmaq təsdiq deyil — istifadəçi nə etdiyini ifadə etməlidir.
+#:
+#: ──────────────────────────────────────────────────────────────────────────
+#: BU ƏDƏD QƏSDƏN `system_limits`-Ə KÖÇÜRÜLMÜR (Faza 10.2 qərarı)
+#: ──────────────────────────────────────────────────────────────────────────
+#: CLAUDE.md §5 hər sabit üçün "bu, struktur zəmanətdirmi?" sualını tələb edir.
+#: Cavab burada BƏLİ-dir və səbəb ədədin özündə deyil, ONU KİMİN DƏYİŞDİYİNDƏ:
+#:
+#:   * Həm `set_limit`, həm də `set_module_enabled` EYNİ flag-i tələb edir
+#:     (`can_manage_system_limits`). Yəni bu həddi `system_limits`-ə köçürsək,
+#:     modulu söndürmək istəyən aktor ƏVVƏLCƏ öz qarşısındakı maneəni `1`-ə
+#:     endirə, sonra "x" yazıb `CAMERA_VERIFICATION`-ı bağlaya bilərdi. Qoruma
+#:     ilə qorunan şeyi eyni adam idarə edəndə qoruma qalmır — bu, Self-
+#:     Escalation Guard-ın qadağan etdiyi naxışın forması ilə eynidir.
+#:   * Qayda İKİ YERDƏDİR (CLAUDE.md §5): burada UZUNLUQ, repository-də isə
+#:     MÖVCUDLUQ yoxlanılır, çünki ekranı yan keçən skript də ona tabe
+#:     olmalıdır. Root-dan dəyişdirilə bilən yarım qayda həmin ikili qapının
+#:     bir qanadını sükutla açardı.
+#:   * Bu, `MIN_REASON_LENGTH` / `MIN_SUBJECT_LENGTH` ilə eyni ailədəndir:
+#:     mətn-uzunluğu validatorları məzmun keyfiyyəti qaydasıdır, əməliyyat
+#:     limiti deyil — onların heç biri ROOT parametrinə çevrilmir.
+#:
+#: Dəyişdirmək lazım gələrsə, bu kod buraxılışı ilə edilir və qərar
+#: `docs/security_decisions.md`-də qeyd olunur.
 MIN_CONFIRMATION_LENGTH = 6
 
 

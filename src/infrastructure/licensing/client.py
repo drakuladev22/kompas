@@ -31,11 +31,10 @@ import threading
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.licensing import (
-    BLOCKED_RECHECK_INTERVAL_SECONDS,
-    DEFAULT_CHECK_IN_INTERVAL_SECONDS,
-    RETRY_INTERVAL_SECONDS,
     CheckInRequest,
+    LicenseLimits,
     LicenseNotFoundError,
     LicenseSnapshot,
     LicenseState,
@@ -44,6 +43,7 @@ from src.domain.value_objects.licensing import (
     evaluate,
     payment_warning,
 )
+from src.infrastructure.config.limits import InfrastructureLimits
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
@@ -72,9 +72,10 @@ class LicenseClient:
         *,
         app_version: str,
         dev_mode: bool = False,
-        interval_seconds: float = DEFAULT_CHECK_IN_INTERVAL_SECONDS,
-        retry_interval_seconds: float = RETRY_INTERVAL_SECONDS,
-        blocked_interval_seconds: float = BLOCKED_RECHECK_INTERVAL_SECONDS,
+        limits: InfrastructureLimits | None = None,
+        interval_seconds: float | None = None,
+        retry_interval_seconds: float | None = None,
+        blocked_interval_seconds: float | None = None,
         telemetry_source: Callable[[], Telemetry] | None = None,
         drift_source: Callable[[], float | None] | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -84,9 +85,22 @@ class LicenseClient:
         self._store = store
         self._app_version = app_version
         self._dev_mode = dev_mode
-        self._interval = interval_seconds
-        self._retry_interval = retry_interval_seconds
-        self._blocked_interval = blocked_interval_seconds
+        # ROOT PƏNCƏRƏSİ SAXLANILIR, DƏYƏR YOX: qrace bandı və xəbərdarlıq
+        # günü HƏR `current_state()` çağırışında yenidən oxunur (aşağı bax),
+        # üç RİTM isə burada bir dəfə oxunur — onlar arxa fon sapının
+        # gözləmə cədvəlidir və sap yenidən başlayana qədər onsuz da dəyişə
+        # bilməz. `limits=None` → `DEFAULT_LIMITS` fallback-ı, yəni davranış
+        # köçürmədən ƏVVƏLKİ ilə eynidir.
+        self._limits = limits or InfrastructureLimits()
+        self._interval = self._seconds(
+            interval_seconds, SystemLimitKey.LICENSE_CHECK_IN_INTERVAL_SECONDS
+        )
+        self._retry_interval = self._seconds(
+            retry_interval_seconds, SystemLimitKey.LICENSE_RETRY_INTERVAL_SECONDS
+        )
+        self._blocked_interval = self._seconds(
+            blocked_interval_seconds, SystemLimitKey.LICENSE_BLOCKED_RECHECK_INTERVAL_SECONDS
+        )
         self._telemetry_source = telemetry_source
         self._drift_source = drift_source
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -98,6 +112,38 @@ class LicenseClient:
 
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+
+    def _seconds(self, explicit: float | None, key: SystemLimitKey) -> float:
+        """Açıq arqument → ROOT dəyəri → fallback (bu sıra ilə).
+
+        Açıq arqument birinci gəlir, çünki onu VERƏN tərəf (test, xüsusi
+        quraşdırma) niyyətini artıq bildirib; Root dəyərinin onu sükutla
+        üstələməsi "niyə mənim dəyərim işləmir?" sualını doğurardı
+        (`EncryptedLicenseStateStore` ilə eyni qayda).
+        """
+        return explicit if explicit is not None else self._limits.float_of(key)
+
+    def _license_limits(self) -> LicenseLimits:
+        """ROOT-un lisenziya bandı — HƏR ÇAĞIRIŞDA oxunur.
+
+        Klient tətbiqin bütün ömrü boyu yaşayır; qrace bandını konstruktorda
+        dondursaydıq, Root-un "offline qrace 14 günə qaldırılsın" qərarı
+        yalnız proqram yenidən başladıqdan sonra işləyərdi — halbuki həmin
+        qərar məhz şəbəkəsi kəsilmiş filial üçün TƏCİLİ verilir.
+        """
+        return LicenseLimits(
+            min_offline_grace_days=self._limits.int_of(
+                SystemLimitKey.LICENSE_MIN_OFFLINE_GRACE_DAYS
+            ),
+            max_offline_grace_days=self._limits.int_of(
+                SystemLimitKey.LICENSE_MAX_OFFLINE_GRACE_DAYS
+            ),
+            default_offline_grace_days=self._limits.int_of(
+                SystemLimitKey.LICENSE_DEFAULT_OFFLINE_GRACE_DAYS
+            ),
+            expiry_warning_days=self._limits.int_of(SystemLimitKey.LICENSE_EXPIRY_WARNING_DAYS),
+            extension_days=self._limits.int_of(SystemLimitKey.LICENSE_EXTENSION_DAYS),
+        )
 
     # ------------------------------ vəziyyət --------------------------------- #
 
@@ -114,13 +160,14 @@ class LicenseClient:
             clock_rollback=self._store.clock_rollback_detected(now),
             time_drift_seconds=self._drift_source() if self._drift_source else None,
             dev_mode=self._dev_mode,
+            limits=self._license_limits(),
         )
 
     def payment_banner(self) -> str:
         """Müddət xəbərdarlığı mətni; xəbərdarlıq lazım deyilsə boş sətir."""
         with self._lock:
             snapshot = self._snapshot
-        return payment_warning(snapshot, now=self._clock())
+        return payment_warning(snapshot, now=self._clock(), limits=self._license_limits())
 
     @property
     def snapshot(self) -> LicenseSnapshot | None:

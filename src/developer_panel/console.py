@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from src.application.use_cases.developer_console import CrashDashboard, SupportInbox
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.licensing import BLOCKED_RECHECK_INTERVAL_SECONDS, EXTENSION_DAYS
 from src.shared.exceptions import KompasOSError
 
@@ -41,6 +42,15 @@ SYNC_NOTE_AZ: Final[str] = (
     "Dəyişiklik Supabase-də artıq qüvvədədir. Bağlı quraşdırma onu "
     f"{int(BLOCKED_RECHECK_INTERVAL_SECONDS // 60)} dəqiqəyə qədər özü tutur; "
     "işləyən quraşdırmalarda növbəti sutkalıq yoxlamada görünür."
+)
+
+#: Konsol çökmə cədvəlinin sətir tavanı — GUI paneli ilə EYNİ ROOT açarından
+#: (`DEVELOPER_CRASH_ROW_LIMIT`, seed: migrations/035). FALLBACK-dır və burada
+#: qalıcıdır: konsol rejimi də çox-kirayəçilidir (bax `developer_panel/ui.py`
+#: sabitinin şərhi — RLS kontekstsiz kirayəçi limiti oxuna bilmir).
+FALLBACK_CRASH_ROW_LIMIT: Final[int] = int(DEFAULT_LIMITS[SystemLimitKey.DEVELOPER_CRASH_ROW_LIMIT])
+FALLBACK_TICKET_ROW_LIMIT: Final[int] = int(
+    DEFAULT_LIMITS[SystemLimitKey.DEVELOPER_TICKET_ROW_LIMIT]
 )
 
 #: Cədvəl sütunlarının eni — dar terminalda da oxunaqlı qalsın.
@@ -77,12 +87,18 @@ def render_table(rows: Sequence[TenantRow], *, now: datetime) -> str:
     return "\n".join(lines)
 
 
-def render_crash_dashboard(dashboard: CrashDashboard, *, limit: int = 12) -> str:
+def render_crash_dashboard(
+    dashboard: CrashDashboard, *, limit: int = FALLBACK_CRASH_ROW_LIMIT
+) -> str:
     """Çökmə paneli — TEZLİYƏ görə sıralanmış (bölmə 8).
 
     Konsol variantı GUI ilə EYNİ oxu-modeli (`CrashDashboard`) istifadə edir;
     fərq yalnız çıxış formatındadır. Ayrı hesablama olsaydı, iki panel bir gün
     fərqli prioritet göstərərdi.
+
+    `limit` defoltu da GUI ilə EYNİ mənbədəndir (`DEVELOPER_CRASH_ROW_LIMIT`,
+    `DEFAULT_LIMITS` — bax sabitin şərhi): konsolda ayrı bir "12" yazsaydıq,
+    biri dəyişəndə digəri sükutla köhnələrdi.
     """
     if not dashboard.groups:
         return "Çökmə hesabatı yoxdur."
@@ -108,8 +124,12 @@ def render_crash_dashboard(dashboard: CrashDashboard, *, limit: int = 12) -> str
     return "\n".join(lines)
 
 
-def render_support_inbox(inbox: SupportInbox, *, limit: int = 12) -> str:
-    """Dəstək inbox-u — diqqət tələb edənlər ƏVVƏLDƏ (bölmə 8)."""
+def render_support_inbox(inbox: SupportInbox, *, limit: int = FALLBACK_TICKET_ROW_LIMIT) -> str:
+    """Dəstək inbox-u — diqqət tələb edənlər ƏVVƏLDƏ (bölmə 8).
+
+    `limit` defoltu GUI paneli ilə EYNİ mənbədəndir
+    (`DEVELOPER_TICKET_ROW_LIMIT` — bax yuxarıdakı sabitin şərhi).
+    """
     if not inbox.tickets:
         return "Dəstək müraciəti yoxdur."
 
@@ -404,6 +424,7 @@ def _recover_access(
     )
     from src.domain.value_objects.credentials import Username  # noqa: PLC0415
     from src.domain.value_objects.identifiers import TenantId  # noqa: PLC0415
+    from src.infrastructure.config.limits import InfrastructureLimits  # noqa: PLC0415
     from src.infrastructure.notifications.notifier import PostgresNotifier  # noqa: PLC0415
     from src.infrastructure.security.hashing import HashingService  # noqa: PLC0415
     from src.infrastructure.timekeeping.clock import SystemClock  # noqa: PLC0415
@@ -433,12 +454,21 @@ def _recover_access(
         if employee is None:
             return 1, f"Hesab tapılmadı: {username}"
 
+        # ROOT pəncərəsi HƏDƏF kirayəçinin öz sətirlərindən oxunur: bərpa
+        # konkret quraşdırmaya aiddir və `identifier` məlumdur, yəni burada
+        # (panelin qalan hissəsindən fərqli olaraq) çox-kirayəçi maneəsi
+        # YOXDUR. Açıq `uow` işlədilir — ikinci bağlantı lazımsızdır.
+        limits = InfrastructureLimits(limits=uow.repository("limits"), tenant_id=identifier)
         use_case = EmergencyAccessRecoveryUseCase(
             employees=uow.employees,
-            hashing=HashingService(),
+            # Müvəqqəti şifrənin uzunluq siyasəti (`PASSWORD_MIN_LENGTH`)
+            # ROOT-dandır — ötürülməsəydi fallback işləyər və kirayəçinin
+            # seçdiyi siyasət tətbiq olunmazdı.
+            hashing=HashingService(limits=limits),
             clock=SystemClock(),
             audit=uow.audit,
-            notifier=PostgresNotifier(database),
+            # Bildiriş cəhd/gözləmə cədvəli də həmin pəncərədən.
+            notifier=PostgresNotifier(database, limits=limits),
         )
         credential = use_case.recover(
             tenant_id=identifier,

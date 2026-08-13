@@ -27,6 +27,7 @@ from src.application.use_cases.db_switch import (
     MigrationReport,
 )
 from src.application.use_cases.developer_console import (
+    ConsoleThresholds,
     CrashDashboard,
     CrashGroup,
     CrashRecord,
@@ -162,6 +163,7 @@ __all__ = [
     "CatalogPermissionError",
     "CheckInOutcome",
     "ConnectionNotVerifiedError",
+    "ConsoleThresholds",
     "CrashDashboard",
     "CrashGroup",
     "CrashRecord",

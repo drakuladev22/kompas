@@ -135,15 +135,20 @@ class FineEntryController:
         content: bytes,
     ) -> None:
         from src.domain.value_objects.identifiers import new_fine_id  # noqa: PLC0415
+        from src.infrastructure.storage.upload_queue import UploadOwnerType  # noqa: PLC0415
 
         fine_id = new_fine_id()
         taken_at = datetime.now(UTC)
 
         try:
             # 1) Şəkil diskə — bax modul başlığındakı sıra izahı.
+            # `owner_type`/`owner_id` #17-də (Faza 7) ÜMUMİLƏŞDİRİLDİ — cərimə
+            # sübutu artıq növbənin YEGANƏ sahibi deyil (bax `upload_queue.py`
+            # başlığı), lakin bu axının ÖZÜ dəyişmir.
             entry_id = self._context.evidence_queue().enqueue(
                 tenant_id=str(self._context.tenant_id),
-                fine_id=fine_id,
+                owner_type=UploadOwnerType.FINE,
+                owner_id=str(fine_id),
                 store_id=store_id,
                 filename=filename,
                 content=content,

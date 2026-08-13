@@ -43,7 +43,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from src.application.root_limits import fallback_int, limit_int
 from src.domain.entities.employee import Employee
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.authorization import SystemRole
 from src.domain.value_objects.identifiers import new_employee_id, new_store_id
 from src.shared.exceptions import KompasOSError
@@ -57,6 +59,7 @@ if TYPE_CHECKING:
         Clock,
         EmployeeRepository,
         PositionRepository,
+        SystemLimits,
     )
     from src.domain.value_objects.credentials import EmailAddress, Username
     from src.domain.value_objects.identifiers import EmployeeId, StoreId, TenantId
@@ -68,7 +71,15 @@ _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 ADMIN_ROLE_CODES = frozenset({SystemRole.ROOT.value, SystemRole.CEO.value})
 
 #: Bölmə 2 tövsiyəsi — bundan az admin qalarsa xəbərdarlıq göstərilir.
-RECOMMENDED_ADMIN_COUNT = 2
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`SystemLimitKey.SETUP_RECOMMENDED_ADMIN_COUNT`, seed: migrations/034).
+#: Bu, STRUKTUR ZƏMANƏT DEYİL və `system_limits`-ə köçürülməsi CLAUDE.md §5-ə
+#: uyğundur: qayda heç nə bloklamır (bax modul başlığı — "tövsiyə sözü
+#: qəsdlidir"), yalnız mətn göstərir. 21 filiallı şəbəkə "ən azı üç admin"
+#: siyasəti qoya bilər, tək nəfərlik biznes isə xəbərdarlığı bir admində
+#: saxlamaq istəyər — hər ikisi Root panelindən həll olunur.
+RECOMMENDED_ADMIN_COUNT = fallback_int(SystemLimitKey.SETUP_RECOMMENDED_ADMIN_COUNT)
 
 
 class SetupAlreadyCompletedError(KompasOSError):
@@ -166,13 +177,20 @@ class FirstRunSetupUseCase:
         credentials: CredentialWriter,
         audit: AuditTrail,
         clock: Clock,
+        limits: SystemLimits | None = None,
     ) -> None:
+        # `limits` İSTƏYƏ BAĞLIDIR: sihirbaz ƏN ERKƏN axındır və `system_limits`
+        # sətirləri o anda hələ oxunmaya bilər (yeni tenant, seed trigger-i
+        # işləyib, lakin bağlantı konteksti quraşdırma sihirbazınındır). `None`
+        # halında `RECOMMENDED_ADMIN_COUNT` fallback-ı işləyir — davranış
+        # köçürmədən ƏVVƏLKİ ilə HƏRFƏN eynidir.
         self._employees = employees
         self._positions = positions
         self._stores = stores
         self._credentials = credentials
         self._audit = audit
         self._clock = clock
+        self._limits = limits
 
     # ------------------------------ yoxlama ---------------------------------- #
 
@@ -314,7 +332,10 @@ class FirstRunSetupUseCase:
 
     def _warning_for(self, tenant_id: TenantId) -> str | None:
         """Bölmə 2 tövsiyəsi — bloklamayan xəbərdarlıq."""
-        if self._admin_count(tenant_id) >= RECOMMENDED_ADMIN_COUNT:
+        recommended = limit_int(
+            self._limits, tenant_id, SystemLimitKey.SETUP_RECOMMENDED_ADMIN_COUNT
+        )
+        if self._admin_count(tenant_id) >= recommended:
             return None
         return (
             "Hazırda yalnız bir Root/CEO hesabı var. Bu hesab bloklanarsa "

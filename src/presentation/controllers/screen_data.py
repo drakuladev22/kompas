@@ -32,10 +32,12 @@ qalır, örtük çökmür), lakin qüsur ölçülə bilən hala gəlir.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 
 from src.domain.policies import DEFAULT_LIMITS, FeatureModule, SystemLimitKey
+from src.domain.value_objects.identifiers import StoreId
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
@@ -43,13 +45,24 @@ if TYPE_CHECKING:
 
     from PySide6.QtWidgets import QWidget
 
+    from src.application.use_cases.multi_store_benchmark import BenchmarkMetric
     from src.domain.entities.employee import Employee
     from src.presentation.composition import ApplicationContext, Session
 
 _error_log = get_logger(__name__, channel=LogChannel.ERROR)
 
 #: Növbə/təqvim görünüşlərində göstərilən dövr.
-MATRIX_WINDOW_DAYS = 14
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits.SHIFT_MATRIX_WINDOW_DAYS`
+#: (seed: migrations/035) və hədd hər dəfə ondan oxunur (bax
+#: `matrix_window_days()`). 21 filialın planlama ritmi eyni deyil: kimisi
+#: həftəlik, kimisi aylıq planlayır. Sabit YALNIZ limit oxuna bilmədikdə işə
+#: düşür — onu silmək "limit yoxdursa matris də yoxdur" davranışı yaradardı.
+FALLBACK_MATRIX_WINDOW_DAYS = int(DEFAULT_LIMITS[SystemLimitKey.SHIFT_MATRIX_WINDOW_DAYS])
+
+#: Çox-Mağaza Reytinq Cədvəlinin DRILL-DOWN hədəfi (#24, Faza 9A) — mövcud
+#: "Gündəlik Tabel" ekranının `AdminShell`-dəki açarı (bax `shell/menu.py`).
+DAILY_ROSTER_SCREEN_KEY: Final = "daily_roster"
 
 #: Növbə dəyişmə statusu → ekran mətni.
 _SWAP_STATUS_TEXT: Final[dict[str, str]] = {
@@ -191,6 +204,7 @@ class ScreenDataBinder:
         self._dashboard_leave(session, screen, month_start=month_start, next_month=next_month)
         self._dashboard_leaders(session, screen, today=today)
         self._dashboard_health(session, screen)
+        self._dashboard_benchmark(session, screen)
 
     def _dashboard_summary(
         self, session: Session, screen: Any, *, today: date, fine_totals: tuple[str, str]
@@ -376,6 +390,171 @@ class ScreenDataBinder:
             ]
         )
 
+    def _dashboard_benchmark(self, session: Session, screen: Any) -> None:
+        """#24 Çox-Mağaza Benchmark — dörd yeni widget, YALNIZ `can_export_reports`.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ MAĞAZA_MENECERI ÜÇÜN "ERKƏN RETURN" KİFAYƏTDİR
+        ──────────────────────────────────────────────────────────────────────
+        `MultiStoreBenchmarkUseCase`-in ÖZÜ də bu flag-i tələb edir (ikinci
+        qat, use case modul başlığı) — burdakı yoxlama əlavə səlahiyyət
+        QAYDASI DEYİL, sadəcə lazımsız sorğunun qarşısını alan QISA-DÖVRƏDİR:
+        flag yoxdursa `set_*` heç çağırılmır, ekranın dörd bölməsi (bax
+        `group_c.DashboardScreen` sinif başlığı) defolt GİZLİ qalır.
+        """
+        from src.application.use_cases.multi_store_benchmark import (  # noqa: PLC0415
+            VIEW_BENCHMARK_FLAG,
+            BenchmarkMetric,
+        )
+
+        now = datetime.now(UTC)
+        if not self._actor.has_permission(VIEW_BENCHMARK_FLAG, now=now):
+            return
+        # İLK açılışdakı defolt metrik — dropdown dəyişəndə `refresh_dashboard_
+        # benchmark` YENİ metriklə TƏKRAR çağırır (bax o metodun başlığı).
+        self._populate_benchmark_sections(session, screen, metric=BenchmarkMetric.FINE_COUNT)
+
+    def refresh_dashboard_benchmark(self, screen: Any, *, metric_key: str) -> None:
+        """Reytinq dropdown-u dəyişəndə dörd bölməni YENİ metriklə yeniləyir.
+
+        Kontroller sessiyanı SAXLAMIR (CLAUDE.md bölmə 6) — hər dəyişiklik
+        ÖZ sessiyasını açır, `_dashboard`-ın ilkin populate çağırışından
+        MÜSTƏQİLDİR.
+        """
+        from src.application.use_cases.multi_store_benchmark import (  # noqa: PLC0415
+            VIEW_BENCHMARK_FLAG,
+            BenchmarkMetric,
+        )
+
+        now = datetime.now(UTC)
+        if not self._actor.has_permission(VIEW_BENCHMARK_FLAG, now=now):
+            return
+        try:
+            metric = BenchmarkMetric(metric_key)
+        except ValueError:
+            _error_log.warning("BENCHMARK_UNKNOWN_METRIC", extra={"metric_key": metric_key})
+            return
+
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                self._populate_benchmark_sections(session, screen, metric=metric)
+        except Exception:
+            _error_log.exception("BENCHMARK_REFRESH_FAILED", extra={"metric_key": metric_key})
+
+    def _populate_benchmark_sections(
+        self, session: Session, screen: Any, *, metric: BenchmarkMetric
+    ) -> None:
+        """Dörd bölmənin ORTAQ doldurma məntiqi (`_dashboard_benchmark` +
+        `refresh_dashboard_benchmark` EYNİ kodu paylaşır)."""
+        from src.application.use_cases.multi_store_benchmark import (  # noqa: PLC0415
+            BenchmarkMetric,
+            format_metric_value,
+        )
+        from src.presentation.screens.group_c import RankingEntry  # noqa: PLC0415
+
+        metric_options = [(item.value, item.label_az) for item in BenchmarkMetric]
+
+        rows = session.multi_store_benchmark.ranking(
+            tenant_id=session.tenant_id, actor=self._actor, metric=metric
+        )
+        screen.set_ranking_table(
+            [
+                RankingEntry(
+                    store_id=str(row.store_id),
+                    store_name=row.store_name,
+                    value_display=row.display_value,
+                    trend_arrow=row.trend.arrow,
+                    trend_label=row.trend.label_az,
+                )
+                for row in rows
+            ],
+            metric_options=metric_options,
+            selected_metric=metric.value,
+        )
+
+        if rows:
+            # Defolt müqayisə ƏN YAXŞI sıralanan mağaza üçündür — istifadəçi
+            # sətrə klikləyəndə (drill-down) fərqli bir kontekstə keçir,
+            # bura toxunmur (bax `AdminShell.screen_for` şərhi).
+            comparison = session.multi_store_benchmark.store_vs_network(
+                tenant_id=session.tenant_id,
+                actor=self._actor,
+                metric=metric,
+                store_id=rows[0].store_id,
+            )
+            screen.set_store_vs_network(
+                metric_label=metric.label_az,
+                store_label=comparison.store_name,
+                store_value=comparison.store_value or 0.0,
+                store_display=format_metric_value(comparison.store_value, metric),
+                network_label="Şəbəkə ortalaması",
+                network_value=comparison.network_average or 0.0,
+                network_display=format_metric_value(comparison.network_average, metric),
+            )
+
+        trend_points = session.multi_store_benchmark.trend(
+            tenant_id=session.tenant_id, actor=self._actor, metric=metric
+        )
+        screen.set_metric_trend(
+            metric_label=metric.label_az,
+            points=[
+                (point.period_label, point.value or 0.0, format_metric_value(point.value, metric))
+                for point in trend_points
+            ],
+        )
+
+        outliers = session.multi_store_benchmark.outliers(
+            tenant_id=session.tenant_id, actor=self._actor, metric=metric
+        )
+        screen.set_outliers(
+            summary_text=outliers.summary_text_az,
+            rows=[
+                (
+                    outlier.store_name,
+                    f"{outlier.deviation_sigma:.1f}σ "
+                    f"{'yuxarı' if outlier.above_average else 'aşağı'}",
+                )
+                for outlier in outliers.outliers
+            ],
+        )
+
+    def populate_daily_roster_for_store(self, store_id: StoreId, screen: Any) -> None:
+        """Reytinq Cədvəlindəki DRILL-DOWN-un yazı yolu (#24, Faza 9A).
+
+        `_daily_roster`-dən FƏRQİ: o, aktorun ÖZ mağazasını göstərir (Store
+        Manager-in gündəlik işi). Bura İSƏ Root/CEO/Admin/HR_Admin-in
+        REYTİNQDƏ kliklədiyi İSTƏNİLƏN mağazanı açır — `DailyAttendanceSheet
+        UseCase.open_sheet` bunu ARTIQ dəstəkləyir (`store_id` sərbəst
+        arqumentdir, `_require_store_access` `can_view_employee_reports`
+        sahibini istənilən mağazaya buraxır), ona görə YENİ use case metodu
+        YOX, sadəcə bu kontroller bir yeni AÇAR yolu əlavə edir.
+        """
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                view = session.daily_attendance.open_sheet(
+                    tenant_id=session.tenant_id, actor=self._actor, store_id=store_id
+                )
+                session.commit()
+                rows = [
+                    {
+                        "employee": _employee_name(session, line.employee_id),
+                        "status": line.auto_status.label_az,
+                        "note": line.manager_note or "",
+                    }
+                    for line in view.sheet.lines
+                ]
+        except Exception:
+            _error_log.exception(
+                "BENCHMARK_DRILL_DOWN_ROSTER_FAILED", extra={"store_id": str(store_id)}
+            )
+            return
+
+        screen.set_rows(rows)
+        if view.mismatch_count:
+            screen.set_mismatch(
+                f"{view.mismatch_count} sətir HR planı ilə uyğun gəlmir — nəzərdən keçirin."
+            )
+
     # ------------------------------ Qrup B ----------------------------------- #
 
     def _live_queue(self, session: Session, screen: Any) -> None:
@@ -448,7 +627,8 @@ class ScreenDataBinder:
 
     def _shift_planning(self, session: Session, screen: Any) -> None:
         today = date.today()  # noqa: DTZ011
-        end = today + timedelta(days=MATRIX_WINDOW_DAYS)
+        window_days = matrix_window_days(session)
+        end = today + timedelta(days=window_days)
         assignments = session.shift_planning.view_matrix(
             tenant_id=session.tenant_id,
             actor=self._actor,
@@ -458,7 +638,7 @@ class ScreenDataBinder:
         # `set_matrix(days, rows)` İKİ arqument gözləyir: sütun başlıqları və
         # sətirlər. Əvvəl bura tək `dict` ötürülürdü — `TypeError` `populate()`
         # tərəfindən udulurdu və matris canlı rejimdə HƏMİŞƏ boş qalırdı.
-        window = [today + timedelta(days=offset) for offset in range(MATRIX_WINDOW_DAYS)]
+        window = [today + timedelta(days=offset) for offset in range(window_days)]
         days = [(day.day, _WEEKDAYS_AZ[day.weekday()]) for day in window]
 
         by_employee: dict[str, dict[date, str]] = {}
@@ -471,6 +651,44 @@ class ScreenDataBinder:
             for name, marks in sorted(by_employee.items())
         ]
         screen.set_matrix(days, rows)
+        self._shift_staffing_pattern(session, screen)
+
+    def _shift_staffing_pattern(self, session: Session, screen: Any) -> None:
+        """#13 — Növbə Matrisinin QEYRİ-MƏCBURİ tarixi nümunə kartı.
+
+        MAĞAZA SEÇİMİ: aktorun öz filialı, o yoxdursa (Root/CEO şəbəkə
+        səviyyəsindədir) əlifba üzrə İLK aktiv mağaza. Rəqəmlərin hansı
+        mağazaya aid olduğu kartın başlığında YAZILIR — əks halda 21 filiallı
+        şəbəkədə göstərici mənasız olardı.
+
+        MÜŞAHİDƏSİZ HAL SÜKUTLA KEÇİLMİR: mağaza tapılmasa da kart "tarixçə
+        yoxdur" mətni ilə göstərilir (bax `set_staffing_pattern` docstring-i).
+        """
+        store_id, store_name = _default_store(session, self._actor)
+        suggestions = (
+            []
+            if store_id is None
+            else session.staffing_pattern.suggestions_for(session.tenant_id, store_id=store_id)
+        )
+        based_on_weeks = (
+            suggestions[0].based_on_weeks
+            if suggestions
+            else int(DEFAULT_LIMITS[SystemLimitKey.STAFFING_PATTERN_BASED_ON_WEEKS])
+        )
+        calculated = (
+            f"hesablandı: {suggestions[0].calculated_at.strftime('%d.%m.%Y')}"
+            if suggestions
+            else "hələ hesablanmayıb"
+        )
+        screen.set_staffing_pattern(
+            [
+                (suggestion.weekday_label_az, suggestion.headcount_label_az())
+                for suggestion in suggestions
+            ],
+            store_name=store_name,
+            based_on_weeks=based_on_weeks,
+            calculated_label=calculated,
+        )
 
     def _shift_swaps(self, session: Session, screen: Any) -> None:
         requests = session.shift_swaps.pending_inbox(tenant_id=session.tenant_id, actor=self._actor)
@@ -840,6 +1058,52 @@ class ScreenDataBinder:
 # --------------------------------------------------------------------------- #
 
 
+def perform_ranking_drill_down(
+    store_id_text: str,
+    *,
+    show_screen: Callable[[str], bool],
+    screen_for: Callable[[str], Any | None],
+    populate: Callable[[StoreId, Any], None],
+) -> bool:
+    """Reytinq Cədvəlinin DRILL-DOWN qərarı — SAF funksiya, Qt TƏLƏB ETMİR.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `app.py`-DAN ÇIXARILIB
+    ──────────────────────────────────────────────────────────────────────────
+    Naviqasiya qərarının ÖZÜ ("hansı açar, hansı sıra ilə") biznes məntiqidir
+    və `QApplication` tələb etməməlidir. `app.py`-dakı `_on_ranking_row_
+    selected` bu funksiyanı `AdminShell.show_screen`/`screen_for` və
+    `ScreenDataBinder.populate_daily_roster_for_store`-u birbaşa ötürərək
+    çağırır — YENİ naviqasiya qatı YOXDUR, sadəcə MÖVCUD üç collaborator
+    (bax arqumentlər) bir yerdə çağırılır.
+
+    Args:
+        store_id_text: Klik edilən sətrin mağaza ID-si (mətn, `RankingEntry.
+            store_id`).
+        show_screen: `AdminShell.show_screen` — mövcud ekrana keçid.
+        screen_for: `AdminShell.screen_for` — keçiddən SONRA instansiyanı tapır.
+        populate: `ScreenDataBinder.populate_daily_roster_for_store` — həmin
+            instansiyanı KLİKLƏNƏN mağaza ilə doldurur.
+
+    Returns:
+        Bütün addımlar uğurlu olduqda `True`. Yararsız ID, gizli ekran və ya
+        hələ qurulmamış instansiya SƏSSİZCƏ `False` qaytarır — çağıran tərəf
+        bunu jurnala yaza bilər, lakin bu funksiya İSTİSNA ATMIR (klik hadisə
+        idarəedicisidir, çökmə istifadəçini bütün paneldən məhrum edərdi).
+    """
+    try:
+        store_id = StoreId(uuid.UUID(store_id_text))
+    except ValueError:
+        return False
+    if not show_screen(DAILY_ROSTER_SCREEN_KEY):
+        return False
+    screen = screen_for(DAILY_ROSTER_SCREEN_KEY)
+    if screen is None:
+        return False
+    populate(store_id, screen)
+    return True
+
+
 def late_threshold_minutes(session: Session) -> int:
     """Növbə sətrinin "gecikib" sayıldığı hədd — CANLI limitdən hesablanır.
 
@@ -874,6 +1138,30 @@ def late_threshold_minutes(session: Session) -> int:
         )
         return LATE_QUEUE_MINUTES
     return max(1, timeout // 2)
+
+
+def matrix_window_days(session: Session) -> int:
+    """Növbə matrisinin göstərdiyi gün sayı — CANLI limitdən.
+
+    `late_threshold_minutes` ilə EYNİ naxış (limit oxunuşunun tək düzgün
+    forması): dəyər hər doldurmada oxunur, çünki panel saatlarla açıq qala
+    bilər və Root pəncərəni bu müddət ərzində dəyişə bilər.
+
+    Ən azı 1 gün qaytarılır: `0` yazılsaydı `range(0)` boş pəncərə verər,
+    matris SÜTUNSUZ görünər və istifadəçi "məlumat yoxdur" ilə "pəncərə
+    sıfırdır" arasındakı fərqi ekranda GÖRƏ BİLMƏZDİ (DB-dəki `min_value` ROOT
+    ekranını qoruyur; bu, birbaşa SQL ilə düşən dəyərə qarşı son xətdir).
+    """
+    key = SystemLimitKey.SHIFT_MATRIX_WINDOW_DAYS
+    try:
+        days = int(session.limits.get_int(session.tenant_id, key.value, int(DEFAULT_LIMITS[key])))
+    except Exception:
+        _error_log.warning(
+            "SHIFT_MATRIX_WINDOW_FALLBACK",
+            extra={"days": FALLBACK_MATRIX_WINDOW_DAYS, "limit_key": key.value},
+        )
+        return FALLBACK_MATRIX_WINDOW_DAYS
+    return max(1, days)
 
 
 def _next_month(month_start: date) -> date:
@@ -1361,15 +1649,36 @@ def _store_name(session: Session, store_id: Any) -> str:
     return str(row["name"]) if row else "—"
 
 
+def _default_store(session: Session, actor: Employee) -> tuple[Any, str]:
+    """Mağaza-əhatəli göstəricilər üçün "hansı mağaza?" cavabı (#13).
+
+    Aktorun öz filialı ÜSTÜNDÜR. Root/CEO-nun filialı yoxdur (şəbəkə
+    səviyyəsindədir) — onlar üçün əlifba üzrə ilk AKTİV mağaza seçilir.
+    Boş nəticə "—" adı ilə qaytarılır ki, çağıran tərəf ekranı yenə də
+    doldursun: səssiz `return` istifadəçidə "kart sınıb" təəssüratı yaradardı.
+    """
+    if actor.store_id is not None:
+        return actor.store_id, _store_name(session, actor.store_id)
+
+    row = session.uow.connection.execute(
+        "SELECT id, name FROM stores WHERE tenant_id = %s AND is_active ORDER BY name LIMIT 1",
+        (session.tenant_id,),
+    ).fetchone()
+    if row is None:
+        return None, "—"
+    return row["id"], str(row["name"])
+
+
 def _position_name(session: Session, employee_id: Any) -> str:
     employee = session.uow.employees.get(employee_id)
     return str(employee.position.name_az) if employee is not None else "—"
 
 
 __all__ = [
+    "FALLBACK_MATRIX_WINDOW_DAYS",
     "HELP_TOPIC_MODULES",
     "LATE_QUEUE_MINUTES",
-    "MATRIX_WINDOW_DAYS",
     "ScreenDataBinder",
     "late_threshold_minutes",
+    "matrix_window_days",
 ]

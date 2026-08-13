@@ -24,12 +24,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from src.application.root_limits import fallback_int, limit_int
+from src.domain.policies import SystemLimitKey
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
-    from src.domain.interfaces.ports import AuditTrail, Clock
+    from src.domain.interfaces.ports import AuditTrail, Clock, SystemLimits
     from src.domain.value_objects.identifiers import EmployeeId, TenantId
 
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
@@ -37,8 +39,16 @@ _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 VIEW_AUDIT_FLAG = "can_view_audit_logs"
 
 #: Bir səhifədə maksimum sətir — 21 filialın bir ayı 100k+ sətir ola bilər.
-MAX_PAGE_SIZE = 500
-DEFAULT_PAGE_SIZE = 100
+#:
+#: HƏR İKİSİ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`AUDIT_LOG_MAX_PAGE_SIZE` / `AUDIT_LOG_DEFAULT_PAGE_SIZE`, seed:
+#: migrations/034). Tavan səhifə ölçüsü audit sətrinin HƏCMİNDƏN asılıdır
+#: (`before_state`/`after_state` JSON sahələri), o isə hər quraşdırmada
+#: fərqlidir — güclü serverdə 500 sətir bir göz qırpımı, zəif kiosk PC-sində
+#: donmuş ekran deməkdir. AÇARLAR AYRIDIR: tavan qoruyucudur, defolt isə
+#: rahatlıq seçimi; birləşdirsəydik "daha çox göstər" düyməsi tavana toxunardı.
+MAX_PAGE_SIZE = fallback_int(SystemLimitKey.AUDIT_LOG_MAX_PAGE_SIZE)
+DEFAULT_PAGE_SIZE = fallback_int(SystemLimitKey.AUDIT_LOG_DEFAULT_PAGE_SIZE)
 
 
 class AuditAccessError(KompasOSError):
@@ -86,9 +96,16 @@ class AuditFilter:
     limit: int = DEFAULT_PAGE_SIZE
     offset: int = 0
 
-    def normalized(self) -> AuditFilter:
-        """Həddi aşan `limit` sükutla kəsilir — ekranın donmasının qarşısını alır."""
-        limit = max(1, min(self.limit, MAX_PAGE_SIZE))
+    def normalized(self, *, max_page_size: int = MAX_PAGE_SIZE) -> AuditFilter:
+        """Həddi aşan `limit` sükutla kəsilir — ekranın donmasının qarşısını alır.
+
+        Args:
+            max_page_size: ROOT tavanı (`AUDIT_LOG_MAX_PAGE_SIZE`). Verilməzsə
+                modul fallback-ı işləyir — `AuditFilter` saf məlumat tipidir və
+                `SystemLimits` portunu özü tanımır (qat qaydası: süzgəc obyekti
+                ekrandan da, testdən də portsuz qurula bilməlidir).
+        """
+        limit = max(1, min(self.limit, max_page_size))
         if limit == self.limit and self.offset >= 0:
             return self
         return AuditFilter(
@@ -155,10 +172,14 @@ class AuditQueryUseCase:
         reader: AuditLogReader,
         audit: AuditTrail,
         clock: Clock,
+        limits: SystemLimits | None = None,
     ) -> None:
+        # `limits` İSTƏYƏ BAĞLIDIR: `None` halında səhifə ölçüləri modul
+        # fallback-larıdır, yəni davranış köçürmədən ƏVVƏLKİ ilə HƏRFƏN eynidir.
         self._reader = reader
         self._audit = audit
         self._clock = clock
+        self._limits = limits
 
     def search(
         self,
@@ -169,7 +190,14 @@ class AuditQueryUseCase:
     ) -> AuditPage:
         """Süzülmüş audit səhifəsi qaytarır."""
         self._require_access(actor)
-        applied = (filters or AuditFilter()).normalized()
+        # HƏR SORĞUDA yenidən oxunur — Root tavanı endirən kimi növbəti səhifə
+        # yeni hədlə gəlməlidir (keş "niyə tətbiq olunmur?" sualını doğurardı).
+        max_page_size = limit_int(self._limits, tenant_id, SystemLimitKey.AUDIT_LOG_MAX_PAGE_SIZE)
+        if filters is None:
+            filters = AuditFilter(
+                limit=limit_int(self._limits, tenant_id, SystemLimitKey.AUDIT_LOG_DEFAULT_PAGE_SIZE)
+            )
+        applied = filters.normalized(max_page_size=max_page_size)
 
         entries = self._reader.query(tenant_id, applied)
         total = self._reader.count(tenant_id, applied)

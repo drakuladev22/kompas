@@ -73,6 +73,7 @@ from src.developer_panel.console import (
     confirmation_text,
     publish_confirmation_text,
 )
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.licensing import LicenseStatus
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import get_logger
@@ -102,8 +103,22 @@ TICKET_COLUMNS = ("Müştəri", "Mövzu", "İlk cavab", "Həll", "Yaş")
 DIAGNOSTIC_TABLE_HEIGHT = 190
 #: Göstərilən sətir hədləri. Kəsilmə SƏSSİZ deyil: hər iki bölmənin
 #: status sətri "neçəsindən neçəsi göstərilir" sualını cavablandırır.
-CRASH_ROW_LIMIT = 12
-TICKET_ROW_LIMIT = 12
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`DEVELOPER_CRASH_ROW_LIMIT`, `DEVELOPER_TICKET_ROW_LIMIT`; seed:
+#: migrations/035) və ədəd məhz `DEFAULT_LIMITS`-dən götürülür ki, iki yerdə
+#: ayrı rəqəm yaşamasın.
+#:
+#: BU PANELDƏ FALLBACK QALICIDIR — SƏBƏBİ STRUKTURDUR: Developer Paneli
+#: ÇOX-KİRAYƏÇİLİdir (cədvəllər BÜTÜN quraşdırmaların çökmə/müraciət
+#: sətirlərini birləşdirir), `system_limits` isə kirayəçiyə bağlıdır və RLS
+#: kontekstsiz oxuna bilmir (SEC-008). Hansısa bir kirayəçinin dəyərini
+#: seçib bütün cədvələ tətbiq etmək ixtiyari olardı. Eyni məhdudiyyət
+#: `DEVELOPER_DIRECTORY_STALE_DAYS`-də də var (migrations/032). Açarlar yenə
+#: ROOT ekranında görünür: kirayəçi öz panelində dəyəri dəyişə bilər və
+#: təchizatçının paneli həmin dəyəri OXUMUR — bu, sənədləşdirilmiş fərqdir.
+FALLBACK_CRASH_ROW_LIMIT = int(DEFAULT_LIMITS[SystemLimitKey.DEVELOPER_CRASH_ROW_LIMIT])
+FALLBACK_TICKET_ROW_LIMIT = int(DEFAULT_LIMITS[SystemLimitKey.DEVELOPER_TICKET_ROW_LIMIT])
 
 #: Fayl seçicinin süzgəci — quraşdırıcıdan başqa bir şey yayımlamaq səhvdir.
 PACKAGE_FILTER = "Quraşdırıcı (*.exe);;Bütün fayllar (*)"
@@ -333,7 +348,7 @@ class DeveloperPanelWindow(QMainWindow):
             return
 
         dashboard = CrashDashboard.from_records(records)
-        groups = dashboard.top(CRASH_ROW_LIMIT)
+        groups = dashboard.top(FALLBACK_CRASH_ROW_LIMIT)
         self.crash_table.setRowCount(len(groups))
         for index, group in enumerate(groups):
             _set_table_cell(
@@ -368,7 +383,7 @@ class DeveloperPanelWindow(QMainWindow):
             return
 
         inbox = SupportInbox.from_records(records, now=self._clock())
-        views = inbox.tickets[:TICKET_ROW_LIMIT]
+        views = inbox.tickets[:FALLBACK_TICKET_ROW_LIMIT]
         self.ticket_table.setRowCount(len(views))
         for index, view in enumerate(views):
             attention = view.needs_attention

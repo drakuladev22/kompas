@@ -22,6 +22,25 @@ GÜN BİTMƏYİBSƏ "QAYIB" YAZILMIR
 10-da tabeli açan menecer hələ gəlməmiş işçini `🔴 İcazəsiz qayıb` kimi
 görsəydi, bu, yanlış həyəcan olardı — o, saat 14-də gələ bilər. Gün bitənə
 qədər status `🟡 Təsdiq gözləyir` qalır.
+
+──────────────────────────────────────────────────────────────────────────────
+#15 NORMA ÜSTÜ SAATLAR — ƏLAVƏ, ƏVƏZLƏMƏ DEYİL (kompasos11.md Faza 6)
+──────────────────────────────────────────────────────────────────────────────
+`confirm()` təsdiqdən SONRA `OvertimeTrackingUseCase.record_for_day()`-i
+çağırır. Yuxarıdakı üç addımın (ön-doldurma → müqayisə → təsdiq) heç biri
+dəyişmədi; aşım hesablaması onların NƏTİCƏSİNİN üzərinə qoyulur və ayrıca
+cədvələ (`overtime_log`) yazılır.
+
+Asılılıq QEYRİ-MƏCBURİDİR (`overtime: ... | None = None`): mövcud çağıranlar
+(testlər, skriptlər, gələcək CLI) beş arqumentlə qurmağa davam edir və bu
+zaman axın tam əvvəlki kimi işləyir. Məcburi etsəydik, #15-i tanımayan hər
+mövcud çağırış qırılardı — halbuki tabel təsdiqi aşım jurnalından ASILI
+deyil, ondan ƏVVƏL gəlir.
+
+Xəta UDULMUR: aşım yazısı uğursuz olarsa istisna ötürülür və təsdiq də geri
+qayıdır (hər ikisi eyni tranzaksiyadadır). Səbəb: təsdiqlənmiş tabel bir daha
+təsdiqlənə bilmir (`_require_open`), yəni sükutla udulmuş xəta həmin günün
+aşımını ƏBƏDİ yazılmamış qoyardı və heç bir jurnalda izi qalmazdı.
 """
 
 from __future__ import annotations
@@ -40,6 +59,7 @@ from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
+    from src.application.use_cases.overtime_tracking import OvertimeTrackingUseCase
     from src.domain.entities.attendance_sheet import SheetLine
     from src.domain.entities.employee import Employee
     from src.domain.interfaces.ports import (
@@ -93,12 +113,16 @@ class DailyAttendanceSheetUseCase:
         audit: AuditTrail,
         clock: Clock,
         notifier: Notifier,
+        overtime: OvertimeTrackingUseCase | None = None,
     ) -> None:
         self._sheets = sheets
         self._facts = facts
         self._audit = audit
         self._clock = clock
         self._notifier = notifier
+        #: #15 — norma üstü saat jurnalı. `None` = modul qoşulmayıb; tabel
+        #: axını tam əvvəlki kimi işləyir (bax modul başlığı).
+        self._overtime = overtime
 
     # -------------------------------- açmaq ---------------------------------- #
 
@@ -248,6 +272,15 @@ class DailyAttendanceSheetUseCase:
                     "sheet_date": sheet_date.isoformat(),
                     "mismatch_count": sheet.mismatch_count,
                 },
+            )
+
+        # #15 — TƏSDİQDƏN SONRA: norma üstü saatlar `overtime_log`-a yazılır.
+        # Yuxarıdakı heç bir addım dəyişmədi; bu, onların üzərinə əlavədir və
+        # ayrıca cədvələ toxunur (bax modul başlığı). Sıra vacibdir: aşım
+        # yalnız İMZALANMIŞ tabeldən hesablanır.
+        if self._overtime is not None:
+            self._overtime.record_for_day(
+                tenant_id=tenant_id, store_id=store_id, work_date=sheet_date
             )
 
         return SheetView(sheet=sheet, mismatches=sheet.mismatched_lines, is_editable=False)

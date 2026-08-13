@@ -46,12 +46,28 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any, Final
 
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.shared.exceptions import KompasOSError
 
+# --------------------------------------------------------------------------- #
+# ROOT PARAMETRLƏRİNİN FALLBACK DƏYƏRLƏRİ (Faza 10.2)
+# --------------------------------------------------------------------------- #
+# Üç dəyərin HƏQİQİ MƏNBƏYİ `system_limits`-dir (`SystemLimitKey.UPDATE_*`,
+# seed: migrations/033). Buradakı sabitlər yalnız fallback-dır və ədədi
+# `DEFAULT_LIMITS`-dən oxuyur.
+#
+# DİQQƏT — FAIL-CLOSED QAYDASI PARAMETR DEYİL: imza/checksum/downgrade
+# yoxlamaları (bax modul başlığı) heç bir limitlə söndürülmür. Konfiqurasiya
+# edilən yalnız "nə vaxt yoxlayaq" və "nə qədər böyük faylı qəbul edək"dir.
+
 #: Arxa fon yoxlaması aralığı — sutkada bir dəfə (lisenziya ilə eyni ritm).
-DEFAULT_CHECK_INTERVAL_SECONDS: Final[float] = 24 * 60 * 60
+DEFAULT_CHECK_INTERVAL_SECONDS: Final[float] = float(
+    DEFAULT_LIMITS[SystemLimitKey.UPDATE_CHECK_INTERVAL_SECONDS]
+)
 #: Uğursuz cəhddən sonra gözləmə.
-RETRY_INTERVAL_SECONDS: Final[float] = 2 * 60 * 60
+RETRY_INTERVAL_SECONDS: Final[float] = float(
+    DEFAULT_LIMITS[SystemLimitKey.UPDATE_RETRY_INTERVAL_SECONDS]
+)
 
 #: Quraşdırıcının bucket-dəki sabit adı. Versiya QOVLUQ adındadır, fayl adında
 #: DEYİL: `1.4.0/KompasOS-Setup.exe`. Belə olduqda köhnə buraxılışlar bir-birini
@@ -60,7 +76,8 @@ RETRY_INTERVAL_SECONDS: Final[float] = 2 * 60 * 60
 DEFAULT_PACKAGE_FILENAME: Final[str] = "KompasOS-Setup.exe"
 
 #: Quraşdırıcının maksimum ölçüsü — gözlənilməz nəhəng fayl diski doldurmasın.
-MAX_PACKAGE_BYTES: Final[int] = 512 * 1024 * 1024
+#: FALLBACK — HƏQİQİ MƏNBƏ `system_limits.UPDATE_MAX_PACKAGE_BYTES`.
+MAX_PACKAGE_BYTES: Final[int] = int(DEFAULT_LIMITS[SystemLimitKey.UPDATE_MAX_PACKAGE_BYTES])
 
 #: SHA-256 daycestinin onaltılıq uzunluğu.
 SHA256_HEX_LENGTH: Final[int] = 64

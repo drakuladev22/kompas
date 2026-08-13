@@ -59,6 +59,38 @@ sətri `PROCESSING` statusuna keçirir. `PROCESSING` `PENDING` seçimindən
 `claim` anında `next_attempt_at` "köhnəlmə anı"na (defolt +10 dəq.) təyin
 olunur; həmin an keçdikdən sonra element yenidən claim edilə bilir. Yəni
 ilişmə müddəti MƏHDUDDUR və heç bir əl müdaxiləsi tələb etmir.
+
+──────────────────────────────────────────────────────────────────────────────
+SAHİB CƏDVƏLİN ÜMUMİLƏŞDİRİLMƏSİ: `fine_id` → `owner_type` + `owner_id` (#17)
+──────────────────────────────────────────────────────────────────────────────
+Növbə əvvəllər YALNIZ cərimə sübutu üçün mövcud idi (`fine_id TEXT NOT NULL`).
+İşçi sənədi skanı (`EmployeeDocumentUseCase.attach_file`) ÜÇÜN AYRICA ikinci
+SQLite spool qurmaq bu faylın başlığındakı "eyni PATTERN, iki nüsxə YOX"
+prinsipini pozardı — həm claim/backoff/köhnəlmə məntiqini, həm də miqrasiya
+tarixçəsini ikiqat saxlamaq lazım gələrdi. Ona görə `fine_id` YERİNƏ ümumi
+`owner_type` (`UploadOwnerType`) + `owner_id` (mətn) cütü gəldi.
+
+`fine_id` sütunu FİZİKİ SİLİNMİR: köhnə buraxılışa geri dönüş zamanı (`.exe`
+downgrade) həmin versiya yalnız bu sütunu tanıyır və gözləyən cərimə şəkli
+onsuz "yetim" görünərdi. Yeni yazılarda sütun BOŞ QALMIR — `owner_id`-nin EYNİ
+dəyəri yazılır (FINE sətirləri üçün bu, əvvəlki davranışla BİREBİRDİR;
+EMPLOYEE_DOCUMENT sətirləri üçün sütun mənasız olsa da, `NOT NULL`
+məhdudiyyətini pozmadan sıfır əlavə informasiya itkisi ilə dolur — sütunun
+CHECK/FK-i olmadığı üçün bu, DB səviyyəsində zərərsizdir).
+
+Sahib tipi YALNIZ hədəf cədvəli seçmir — İCAZƏLİ FORMATI da o seçir: cərimə
+sübutu yalnız şəkil, işçi sənədi isə şəkil + PDF qəbul edir (SEC-018, qayda
+`google_drive.allowed_extensions_for`-dadır). Ona görə `owner_type` həm
+`enqueue()`-dakı ön-yoxlamaya, həm də `provider.upload()`-a ötürülür — iki
+qatın eyni cavabı verməsi bu faylın əsas şərtidir (yuxarıya bax).
+
+Köhnə (yalnız `fine_id` bilən) SQLite faylı `_ensure_owner_columns()` ilə
+köçürülür — `_ensure_rejected_status`/`_ensure_processing_status` ilə EYNİ
+idempotentlik prinsipi, lakin FƏRQLİ mexanizm: `status`-un `CHECK`
+siyahısından fərqli olaraq `owner_type`/`owner_id`-də `CHECK` YOXDUR (validasiya
+Python səviyyəsində, `UploadOwnerType` enum-u ilə), ona görə SQLite-ın
+dəstəklədiyi sadə `ALTER TABLE ... ADD COLUMN` kifayətdir — bütöv cədvəli
+yenidən qurmaq (rename + copy) YERSİZ RİSK olardı.
 """
 
 from __future__ import annotations
@@ -72,7 +104,8 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
-from src.infrastructure.offline.buffer import BACKOFF_SCHEDULE_SECONDS
+from src.domain.policies import SystemLimitKey
+from src.infrastructure.config.limits import InfrastructureLimits, fallback_int
 from src.infrastructure.storage.google_drive import (
     MAX_UPLOAD_BYTES,
     EvidenceValidationError,
@@ -81,7 +114,7 @@ from src.infrastructure.storage.google_drive import (
 from src.shared.logger import get_logger
 
 if TYPE_CHECKING:
-    from src.domain.value_objects.identifiers import FineId, StoreId
+    from src.domain.value_objects.identifiers import StoreId
     from src.domain.value_objects.storage import StorageReference
 
 _log = get_logger(__name__)
@@ -105,7 +138,13 @@ CREATE TABLE IF NOT EXISTS evidence_uploads (
     next_attempt_at TEXT NOT NULL,
     uploaded_at     TEXT,
     drive_file_id   TEXT,
-    connection_id   TEXT
+    connection_id   TEXT,
+    -- `owner_type`/`owner_id` (#17, Faza 7) — `fine_id`-in ÜMUMİLƏŞDİRİLMİŞ
+    -- davamı. CHECK QƏSDƏN YOXDUR (bax modul başlığı): validasiya `enqueue()`-
+    -- dəki `UploadOwnerType` enum-undadır, köhnə fayl köçürməsi isə YALNIZ
+    -- sadə `ALTER TABLE ADD COLUMN`-la işləməlidir (bax `_ensure_owner_columns`).
+    owner_type      TEXT,
+    owner_id        TEXT
 );
 """
 _INDEX_SQL: Final[str] = """
@@ -117,6 +156,13 @@ _SCHEMA: Final[str] = _TABLE_SQL + _INDEX_SQL
 #: Cədvəl köçürməsində (bax `_ensure_rejected_status`) sütunlar AÇIQ sadalanır:
 #: `INSERT INTO ... SELECT *` sütun sırasından asılıdır və gələcəkdə əlavə
 #: olunacaq bir sütun köçürməni sükutla təhrif edərdi.
+#:
+#: `owner_type`/`owner_id` QƏSDƏN SİYAHIDA YOXDUR: bu köçürmə YALNIZ `status`
+#: sütununun `CHECK`-ini genişləndirir (bax `_ensure_rejected_status`/
+#: `_ensure_processing_status`) və konstruktorda HƏMİŞƏ owner-sütun köçürməsindən
+#: (`_ensure_owner_columns`) ƏVVƏL işə düşür — yəni bu addımda mənbə cədvəldə
+#: hələ owner sütunları OLA BİLMƏZ. Onları siyahıya salmaq `sqlite3.
+#: OperationalError: no such column` ilə çökərdi.
 _COLUMNS: Final[str] = (
     "id, seq, tenant_id, fine_id, store_id, filename, spool_path, taken_at, "
     "status, attempts, last_error, queued_at, next_attempt_at, uploaded_at, "
@@ -131,14 +177,19 @@ _COLUMNS: Final[str] = (
 #: yüklənməkdə olan böyük faylı ikinci işçiyə verərdi, daha uzunu isə çökmüş
 #: prosesin elementini lazımsız yerə gözlədərdi. Konstruktorla dəyişdirilə
 #: bilər (test və xüsusi quraşdırma üçün).
-CLAIM_STALE_AFTER_SECONDS: Final[int] = 600
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`UPLOAD_CLAIM_STALE_AFTER_SECONDS`, seed: migrations/032).
+FALLBACK_CLAIM_STALE_AFTER_SECONDS: Final[int] = fallback_int(
+    SystemLimitKey.UPLOAD_CLAIM_STALE_AFTER_SECONDS
+)
 
 
 class UploadStatus(str, Enum):
     PENDING = "PENDING"
     #: Bir işçi elementi "claim" edib və hazırda yükləyir. `PENDING`
     #: seçimindən ÇIXIR — ikinci işçi eyni şəkli təkrar yükləyə bilmir.
-    #: Çökmə halında köhnəlmə müddəti (`CLAIM_STALE_AFTER_SECONDS`) bitəndən
+    #: Çökmə halında köhnəlmə müddəti (`UPLOAD_CLAIM_STALE_AFTER_SECONDS`) bitəndən
     #: sonra element yenidən claim edilə bilir — sonsuz ilişmə YOXDUR.
     PROCESSING = "PROCESSING"
     UPLOADED = "UPLOADED"
@@ -148,11 +199,24 @@ class UploadStatus(str, Enum):
     REJECTED = "REJECTED"
 
 
+class UploadOwnerType(str, Enum):
+    """Növbə elementinin hansı domen sətrinə aid olduğu (bax modul başlığı).
+
+    `StrEnum` YOX, açıq `.value` (CLAUDE.md §4) — digər statuslarla EYNİ qərar.
+    """
+
+    #: `fines.id` — sübut şəkli (bölmə 4, əvvəlki YEGANƏ sahib).
+    FINE = "FINE"
+    #: `employee_documents.id` — sənəd/müqavilə skanı (#17, Faza 7).
+    EMPLOYEE_DOCUMENT = "EMPLOYEE_DOCUMENT"
+
+
 @dataclass(frozen=True)
 class PendingUpload:
     id: str
     tenant_id: str
-    fine_id: str
+    owner_type: UploadOwnerType
+    owner_id: str
     store_id: str
     filename: str
     spool_path: Path
@@ -186,9 +250,10 @@ class EvidenceUploadQueue:
         db_path: Path | str,
         *,
         spool_dir: Path | str | None = None,
-        backoff_schedule: tuple[int, ...] = BACKOFF_SCHEDULE_SECONDS,
+        backoff_schedule: tuple[int, ...] | None = None,
         max_upload_bytes: int = MAX_UPLOAD_BYTES,
-        claim_stale_after_seconds: int = CLAIM_STALE_AFTER_SECONDS,
+        claim_stale_after_seconds: int | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
         """Args:
         max_upload_bytes: `enqueue()`-dəki ölçü həddi. Defolt `MAX_UPLOAD_BYTES`
@@ -197,24 +262,37 @@ class EvidenceUploadQueue:
             SÖNDÜRMÜR, defolta qaytarır — səhv konfiqurasiya qorumanı sükutla
             itirməməlidir (provider-dəki eyni qərar).
         claim_stale_after_seconds: `PROCESSING`-də ilişmiş elementin yenidən
-            claim edilə biləcəyi müddət. Sıfır/mənfi dəyər defolta qaytarılır —
-            əks halda element claim edilən kimi köhnəlmiş sayılar və qoruma
-            (ikiqat yükləmənin qarşısını alan mexanizm) sükutla itərdi.
+            claim edilə biləcəyi müddət. `None` = ROOT-dan
+            (`UPLOAD_CLAIM_STALE_AFTER_SECONDS`) oxunur. Sıfır/mənfi dəyər
+            defolta qaytarılır — əks halda element claim edilən kimi köhnəlmiş
+            sayılar və qoruma (ikiqat yükləmənin qarşısını alan mexanizm)
+            sükutla itərdi. ROOT tərəfdə eyni qoruma aralıq hüdudu ilə var
+            (min 60 saniyə, migrations/032).
+        backoff_schedule: `None` = ROOT-dan (`OFFLINE_RETRY_BACKOFF_SECONDS`).
+        limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback-lar.
         """
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._spool = Path(spool_dir) if spool_dir else self._path.parent / "evidence_spool"
         self._spool.mkdir(parents=True, exist_ok=True)
-        self._backoff = backoff_schedule
+        self._limits = limits or InfrastructureLimits()
+        self._explicit_backoff = backoff_schedule
         self._max_upload_bytes = max_upload_bytes if max_upload_bytes > 0 else MAX_UPLOAD_BYTES
-        self._claim_stale_after = (
+        self._explicit_claim_stale_after = (
             claim_stale_after_seconds
-            if claim_stale_after_seconds > 0
-            else CLAIM_STALE_AFTER_SECONDS
+            if claim_stale_after_seconds is not None and claim_stale_after_seconds > 0
+            else None
         )
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(
-            self._path, check_same_thread=False, isolation_level=None, timeout=10.0
+            self._path,
+            check_same_thread=False,
+            isolation_level=None,
+            # Kilid gözləmə taymautu `OfflineBuffer` ilə EYNİ ROOT açarındandır
+            # (`OFFLINE_SQLITE_TIMEOUT_SECONDS`): hər ikisi eyni maşındakı eyni
+            # tipli lokal SQLite faylıdır və ayrı-ayrı tənzimlənməsi yalnız
+            # "hansı biri idi?" sualını doğurardı.
+            timeout=self._limits.float_of(SystemLimitKey.OFFLINE_SQLITE_TIMEOUT_SECONDS),
         )
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -222,6 +300,28 @@ class EvidenceUploadQueue:
         self._conn.executescript(_SCHEMA)
         self._ensure_rejected_status()
         self._ensure_processing_status()
+        # SIRA MƏCBURİDİR: bu addım `owner_type`/`owner_id`-i BACKFILL edərkən
+        # cədvəlin son formada (bütün statuslarla) olduğunu güman edir —
+        # yuxarıdakı iki köçürmə hələ işə düşməmişsə cədvəl rename-COPY
+        # ortasında ola bilər (bax `_ensure_owner_columns` başlığı).
+        self._ensure_owner_columns()
+
+    def _backoff_schedule(self) -> tuple[int, ...]:
+        """Təkrar cəhd cədvəli — HƏR UĞURSUZ YÜKLƏMƏDƏ oxunur."""
+        if self._explicit_backoff is not None:
+            return self._explicit_backoff
+        return self._limits.int_tuple_of(SystemLimitKey.OFFLINE_RETRY_BACKOFF_SECONDS)
+
+    def _claim_stale_after(self) -> int:
+        """Claim köhnəlmə müddəti — HƏR CLAIM-də oxunur.
+
+        Növbə uzun ömürlüdür (tətbiqin bütün sessiyası); müddəti konstruktorda
+        dondursaydıq, admin ilişmiş elementi tez azad etmək üçün proqramı
+        yenidən başlatmalı olardı.
+        """
+        if self._explicit_claim_stale_after is not None:
+            return self._explicit_claim_stale_after
+        return self._limits.int_of(SystemLimitKey.UPLOAD_CLAIM_STALE_AFTER_SECONDS)
 
     def _ensure_rejected_status(self) -> None:
         """Köhnə növbə faylının `CHECK` məhdudiyyətini genişləndirir.
@@ -289,6 +389,53 @@ class EvidenceUploadQueue:
         )
         _log.info("EVIDENCE_QUEUE_SCHEMA_UPGRADED", extra={"status": "PROCESSING"})
 
+    def _ensure_owner_columns(self) -> None:
+        """`owner_type`/`owner_id`-i köhnə (yalnız `fine_id` bilən) fayla gətirir.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ RENAME-ƏSASLI KÖÇÜRMƏ YOX (`_ensure_rejected_status`-dan FƏRQ)
+        ──────────────────────────────────────────────────────────────────────
+        Yuxarıdakı iki metod `status` sütununun `CHECK` siyahısını genişləndirir
+        və SQLite `CHECK`-i `ALTER` ilə DƏYİŞMİR — ona görə bütün cədvəl
+        köçürülməli idi. `owner_type`/`owner_id` isə TAMAMİLƏ YENİ, `CHECK`-siz
+        sütunlardır (bax `_TABLE_SQL` şərhi) — SQLite `ALTER TABLE ... ADD
+        COLUMN`-u bunun üçün birbaşa dəstəkləyir, yəni bütün cədvəli yenidən
+        qurmaq (rename + tam köçürmə) YERSİZ RİSK olardı.
+
+        ──────────────────────────────────────────────────────────────────────
+        BACKFILL — MƏLUMAT İTKİSİ YOXDUR
+        ──────────────────────────────────────────────────────────────────────
+        Sütun(lar) əlavə olunduqdan sonra `owner_type IS NULL` olan HƏR sətir
+        `owner_type = 'FINE', owner_id = fine_id` ilə doldurulur — növbə
+        əvvəllər YALNIZ cərimə sübutu üçün mövcud olduğu üçün bu, YEGANƏ mümkün
+        mənbədir. Gözləyən (hələ yüklənməmiş) şəkil sətirləri toxunulmadan
+        qalır, yalnız iki yeni sütun dolur.
+
+        Əməliyyat HƏR başlanğıcda təkrar işə düşür (idempotentlik, digər iki
+        metodla eyni prinsip): sütun mövcuddursa `ALTER` ötürülür, `UPDATE ...
+        WHERE owner_type IS NULL` isə artıq köçürülmüş sətirlərdə heç nə
+        etməyən ucuz sorğuya çevrilir.
+        """
+        with self._lock, self._transaction() as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(evidence_uploads)")}
+            altered = False
+            if "owner_type" not in columns:
+                conn.execute("ALTER TABLE evidence_uploads ADD COLUMN owner_type TEXT")
+                altered = True
+            if "owner_id" not in columns:
+                conn.execute("ALTER TABLE evidence_uploads ADD COLUMN owner_id TEXT")
+                altered = True
+            cursor = conn.execute(
+                "UPDATE evidence_uploads SET owner_type = 'FINE', owner_id = fine_id "
+                "WHERE owner_type IS NULL"
+            )
+            backfilled = cursor.rowcount if cursor.rowcount > 0 else 0
+        if altered or backfilled:
+            _log.info(
+                "EVIDENCE_QUEUE_SCHEMA_UPGRADED",
+                extra={"status": "OWNER_COLUMNS", "backfilled_rows": backfilled},
+            )
+
     def set_max_upload_bytes(self, value: int) -> None:
         """Ölçü həddini yeniləyir — Root paneldəki dəyişiklikdən sonra.
 
@@ -309,26 +456,47 @@ class EvidenceUploadQueue:
         self,
         *,
         tenant_id: str,
-        fine_id: FineId,
+        owner_type: UploadOwnerType,
+        owner_id: str,
         store_id: StoreId,
         filename: str,
         content: bytes,
         taken_at: datetime,
         now: datetime | None = None,
     ) -> str:
+        """Args:
+        owner_type: Sətrin aid olduğu domen cədvəli (bax `UploadOwnerType`).
+        owner_id: Həmin cədvəldəki sətrin ID-si (mətn) — `FINE` üçün
+            `fines.id`, `EMPLOYEE_DOCUMENT` üçün `employee_documents.id`.
+        """
         # ÖN-ŞƏRT DİSKƏ YAZMAZDAN ƏVVƏL: yararsız fayl növbəyə DÜŞMÜR.
         #
         # Qayda `google_drive.validate_evidence_payload`-dadır — provider ilə
         # EYNİ funksiya. Burada yoxlanmasaydı, fayl diskə düşər, `PENDING`
         # qalar və hər 10 dəqiqədən bir eyni cavabla rədd edilərdi (bax modul
         # başlığı). İstisna QƏSDƏN yuxarı ötürülür: operator səbəbi dərhal
-        # ekranda görməlidir, cərimə isə sübutsuz yaradılmamalıdır.
+        # ekranda görməlidir, sənəd/cərimə isə sübutsuz yaradılmamalıdır.
+        #
+        # İCAZƏLİ FORMAT SAHİB TİPİNDƏN ASILIDIR (SEC-018, bax
+        # `google_drive` başlığı): cərimə sübutu yalnız şəkil, işçi sənədi
+        # şəkil + PDF qəbul edir. Qərar burada VERİLMİR — `owner_type`
+        # ötürülür, siyahı isə qayda ilə birlikdə TƏK yerdə saxlanır.
         try:
-            validate_evidence_payload(content, filename, max_bytes=self._max_upload_bytes)
+            validate_evidence_payload(
+                content,
+                filename,
+                max_bytes=self._max_upload_bytes,
+                owner_type=owner_type.value,
+            )
         except EvidenceValidationError as error:
             _log.warning(
                 "EVIDENCE_UPLOAD_REJECTED_AT_ENQUEUE",
-                extra={"fine_id": str(fine_id), "bytes": len(content), "reason": str(error)},
+                extra={
+                    "owner_type": owner_type.value,
+                    "owner_id": owner_id,
+                    "bytes": len(content),
+                    "reason": str(error),
+                },
             )
             raise
 
@@ -347,25 +515,33 @@ class EvidenceUploadQueue:
                 """
                 INSERT INTO evidence_uploads
                     (id, seq, tenant_id, fine_id, store_id, filename, spool_path,
-                     taken_at, status, attempts, queued_at, next_attempt_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)
+                     taken_at, status, attempts, queued_at, next_attempt_at,
+                     owner_type, owner_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?, ?, ?)
                 """,
                 (
                     entry_id,
                     int(row["n"]),
                     tenant_id,
-                    str(fine_id),
+                    # `fine_id` KÖHNƏ (`NOT NULL`) sütunudur — silinmir (bax modul
+                    # başlığı). Bura HƏMİŞƏ `owner_id`-nin EYNİ dəyəri yazılır:
+                    # `FINE` sətirləri üçün bu, əvvəlki davranışla BİREBİRDİR;
+                    # `EMPLOYEE_DOCUMENT` üçün sütun mənasız olsa da, `NOT NULL`
+                    # məhdudiyyətini pozmadan doldurulur.
+                    owner_id,
                     str(store_id),
                     filename,
                     str(spool_path),
                     taken_at.isoformat(),
                     moment.isoformat(),
                     moment.isoformat(),
+                    owner_type.value,
+                    owner_id,
                 ),
             )
         _log.info(
             "EVIDENCE_UPLOAD_QUEUED",
-            extra={"fine_id": str(fine_id), "bytes": len(content)},
+            extra={"owner_type": owner_type.value, "owner_id": owner_id, "bytes": len(content)},
         )
         return entry_id
 
@@ -406,7 +582,7 @@ class EvidenceUploadQueue:
         tələb etmədən həm kilid, həm taymer rolunu oynayır.
         """
         moment = now or datetime.now(UTC)
-        stale_at = moment + timedelta(seconds=self._claim_stale_after)
+        stale_at = moment + timedelta(seconds=self._claim_stale_after())
         with self._lock, self._transaction() as conn:
             rows = conn.execute(
                 """
@@ -512,7 +688,8 @@ class EvidenceUploadQueue:
                 "SELECT attempts FROM evidence_uploads WHERE id = ?", (entry_id,)
             ).fetchone()
             attempts = (row["attempts"] if row else 0) + 1
-            delay = self._backoff[min(attempts - 1, len(self._backoff) - 1)]
+            schedule = self._backoff_schedule()
+            delay = schedule[min(attempts - 1, len(schedule) - 1)]
             next_at = moment + timedelta(seconds=delay)
             conn.execute(
                 # `status = 'PENDING'` ƏLAVƏ EDİLİB: element artıq `claim_pending()`
@@ -659,10 +836,14 @@ class _Tx:
 
 
 def _row_to_upload(row: sqlite3.Row) -> PendingUpload:
+    # `owner_type`/`owner_id` bu ANDA HƏMİŞƏ doludur: konstruktor
+    # `_ensure_owner_columns()`-u sxem quraşdırmasının SON addımı kimi çağırır,
+    # yəni oxuma metodları işə düşənə qədər backfill artıq bitib.
     return PendingUpload(
         id=row["id"],
         tenant_id=row["tenant_id"],
-        fine_id=row["fine_id"],
+        owner_type=UploadOwnerType(row["owner_type"]),
+        owner_id=row["owner_id"],
         store_id=row["store_id"],
         filename=row["filename"],
         spool_path=Path(row["spool_path"]),
@@ -688,8 +869,11 @@ class EvidenceUploadWorker:
         provider_factory: `.active()` metodu ilə aktiv provider verən obyekt
             (`DriveProviderFactory`). Aktiv bağlantı yoxdursa istisna atır və
             işçi növbəti dövrədə yenidən cəhd edir.
-        on_uploaded: `(fine_id: str, reference: StorageReference) -> None` —
-            `fines` sətrini yeniləmək üçün geri çağırış.
+        on_uploaded: `(owner_type: str, owner_id: str, reference: StorageReference)
+            -> None` — sahib sətri (`fines` və ya `employee_documents`)
+            yeniləmək üçün geri çağırış. `owner_type` `UploadOwnerType.value`-dur
+            (mətn) — çağıran tərəf import dövrəsi qurmadan sadə müqayisə edə
+            bilsin deyə enum DEYİL, sətir ötürülür.
         """
         self._queue = queue
         self._factory = provider_factory
@@ -725,6 +909,12 @@ class EvidenceUploadWorker:
                     item.filename,
                     _UUID(item.store_id),
                     item.taken_at,
+                    # Provider yükü İKİNCİ dəfə yoxlayır (hədd dəyişmiş ola
+                    # bilər) və format siyahısı sahib tipindən asılıdır
+                    # (SEC-018). Sahib tipi ötürülməsəydi, provider ən dar
+                    # siyahını — yalnız şəkil — tətbiq edər və növbədəki
+                    # QANUNİ sənəd PDF-i `REJECTED` olardı.
+                    owner_type=item.owner_type.value,
                 )
             except EvidenceValidationError as exc:
                 # Fayl yararsızdır — şəbəkə/kvota problemi DEYİL. Gözləmək
@@ -734,13 +924,13 @@ class EvidenceUploadWorker:
                 # yeni element artıq `enqueue()`-dan keçmir.
                 report.rejected += 1
                 assert report.errors is not None
-                report.errors.append(f"{item.fine_id}: {exc}")
+                report.errors.append(f"{item.owner_type.value}:{item.owner_id}: {exc}")
                 self._queue.mark_rejected(item.id, str(exc), now=moment)
                 continue
             except Exception as exc:  # bir şəklin nasazlığı növbəni dayandırmasın
                 report.failed += 1
                 assert report.errors is not None
-                report.errors.append(f"{item.fine_id}: {exc}")
+                report.errors.append(f"{item.owner_type.value}:{item.owner_id}: {exc}")
                 self._queue.mark_failed(item.id, str(exc), now=moment)
                 continue
 
@@ -748,11 +938,17 @@ class EvidenceUploadWorker:
             report.uploaded += 1
             if self._on_uploaded is not None:
                 try:
-                    self._on_uploaded(item.fine_id, reference)  # type: ignore[operator]
+                    self._on_uploaded(  # type: ignore[operator]
+                        item.owner_type.value, item.owner_id, reference
+                    )
                 except Exception as exc:  # DB yeniləməsi sonra təkrar oluna bilər
                     _log.error(
                         "EVIDENCE_UPLOAD_CALLBACK_FAILED",
-                        extra={"fine_id": item.fine_id, "error": str(exc)},
+                        extra={
+                            "owner_type": item.owner_type.value,
+                            "owner_id": item.owner_id,
+                            "error": str(exc),
+                        },
                     )
 
         _log.info(
@@ -768,10 +964,11 @@ class EvidenceUploadWorker:
 
 
 __all__ = [
-    "CLAIM_STALE_AFTER_SECONDS",
+    "FALLBACK_CLAIM_STALE_AFTER_SECONDS",
     "EvidenceUploadQueue",
     "EvidenceUploadWorker",
     "PendingUpload",
+    "UploadOwnerType",
     "UploadRunReport",
     "UploadStatus",
 ]

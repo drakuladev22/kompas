@@ -11,8 +11,8 @@ from src.infrastructure.timekeeping.clock import (
     to_baku,
 )
 from src.infrastructure.timekeeping.ntp import (
-    DEFAULT_MAX_DRIFT_SECONDS,
     DEFAULT_SERVERS,
+    FALLBACK_MAX_DRIFT_SECONDS,
     NtpDriftChecker,
     NtpError,
     NtpSample,
@@ -21,8 +21,8 @@ from src.infrastructure.timekeeping.ntp import (
 
 __all__ = [
     "BAKU_UTC_OFFSET",
-    "DEFAULT_MAX_DRIFT_SECONDS",
     "DEFAULT_SERVERS",
+    "FALLBACK_MAX_DRIFT_SECONDS",
     "NtpCorrectedClock",
     "NtpDriftChecker",
     "NtpError",

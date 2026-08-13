@@ -33,14 +33,19 @@ from src.infrastructure.storage.folder_resolver import (
     year_month,
 )
 from src.infrastructure.storage.google_drive import (
+    ALLOWED_EXTENSIONS,
+    EMPLOYEE_DOCUMENT_OWNER_TYPE,
+    FINE_OWNER_TYPE,
     GoogleDriveStorageProvider,
     StoreNameResolver,
+    allowed_extensions_for,
 )
 from src.infrastructure.storage.image_cache import ImageCache
 from src.infrastructure.storage.quota_monitor import DriveQuotaMonitor
 from src.infrastructure.storage.upload_queue import (
     EvidenceUploadQueue,
     EvidenceUploadWorker,
+    UploadOwnerType,
     UploadStatus,
 )
 
@@ -92,6 +97,7 @@ class FakeDriveApi:
         self.create_calls = 0
         self.download_calls = 0
         self.upload_calls = 0
+        self.uploads: list[dict[str, Any]] = []
         self.fail_uploads_with: Exception | None = None
         self.quota_value = QuotaStatus(used_bytes=1_000, total_bytes=100_000)
 
@@ -115,6 +121,9 @@ class FakeDriveApi:
         self.upload_calls += 1
         if self.fail_uploads_with is not None:
             raise self.fail_uploads_with
+        # Ad + MIME saxlanılır: PDF-in kiçildilmədən və DÜZGÜN MIME ilə
+        # getdiyini yoxlayan testlər (SEC-018) başqa cür göstərə bilməzdi.
+        self.uploads.append({"filename": filename, "mime_type": mime_type, "bytes": content})
         file_id = f"file-{len(self.files) + 1}"
         self.files[file_id] = content
         return file_id
@@ -414,7 +423,8 @@ def test_enqueued_upload_is_pending(queue: EvidenceUploadQueue) -> None:
     fine_id = uuid.uuid4()
     queue.enqueue(
         tenant_id=str(uuid.uuid4()),
-        fine_id=fine_id,  # type: ignore[arg-type]
+        owner_type=UploadOwnerType.FINE,
+        owner_id=str(fine_id),
         store_id=STORE_1,
         filename="a.png",
         content=TINY_PNG,
@@ -432,7 +442,8 @@ def test_worker_uploads_and_clears_queue(
 ) -> None:
     queue.enqueue(
         tenant_id=str(uuid.uuid4()),
-        fine_id=uuid.uuid4(),  # type: ignore[arg-type]
+        owner_type=UploadOwnerType.FINE,
+        owner_id=str(uuid.uuid4()),
         store_id=STORE_1,
         filename="a.png",
         content=TINY_PNG,
@@ -455,7 +466,8 @@ def test_failed_upload_stays_queued_with_backoff(
     api.fail_uploads_with = RuntimeError("Drive əlçatmazdır")
     queue.enqueue(
         tenant_id=str(uuid.uuid4()),
-        fine_id=uuid.uuid4(),  # type: ignore[arg-type]
+        owner_type=UploadOwnerType.FINE,
+        owner_id=str(uuid.uuid4()),
         store_id=STORE_1,
         filename="a.png",
         content=TINY_PNG,
@@ -477,7 +489,8 @@ def test_retry_succeeds_after_drive_recovers(
     api.fail_uploads_with = RuntimeError("müvəqqəti nasazlıq")
     queue.enqueue(
         tenant_id=str(uuid.uuid4()),
-        fine_id=uuid.uuid4(),  # type: ignore[arg-type]
+        owner_type=UploadOwnerType.FINE,
+        owner_id=str(uuid.uuid4()),
         store_id=STORE_1,
         filename="a.png",
         content=TINY_PNG,
@@ -499,7 +512,8 @@ def test_worker_without_active_connection_keeps_items(
     """Kvota dolub və ya hesab hələ qoşulmayıb — şəkillər gözləyir."""
     queue.enqueue(
         tenant_id=str(uuid.uuid4()),
-        fine_id=uuid.uuid4(),  # type: ignore[arg-type]
+        owner_type=UploadOwnerType.FINE,
+        owner_id=str(uuid.uuid4()),
         store_id=STORE_1,
         filename="a.png",
         content=TINY_PNG,
@@ -520,11 +534,12 @@ def test_callback_receives_reference(
     queue: EvidenceUploadQueue, provider: GoogleDriveStorageProvider
 ) -> None:
     """`fines` sətrini yeniləmək üçün geri çağırış."""
-    seen: list[tuple[str, StorageReference]] = []
+    seen: list[tuple[str, str, StorageReference]] = []
     fine_id = uuid.uuid4()
     queue.enqueue(
         tenant_id=str(uuid.uuid4()),
-        fine_id=fine_id,  # type: ignore[arg-type]
+        owner_type=UploadOwnerType.FINE,
+        owner_id=str(fine_id),
         store_id=STORE_1,
         filename="a.png",
         content=TINY_PNG,
@@ -534,12 +549,13 @@ def test_callback_receives_reference(
     worker = EvidenceUploadWorker(
         queue=queue,
         provider_factory=FakeFactory(provider),
-        on_uploaded=lambda fid, ref: seen.append((fid, ref)),
+        on_uploaded=lambda otype, oid, ref: seen.append((otype, oid, ref)),
     )
     worker.run_once(now=AUGUST)
 
-    assert seen[0][0] == str(fine_id)
-    assert seen[0][1].connection_id == CONNECTION_A
+    assert seen[0][0] == UploadOwnerType.FINE.value
+    assert seen[0][1] == str(fine_id)
+    assert seen[0][2].connection_id == CONNECTION_A
 
 
 def test_callback_failure_does_not_lose_upload(
@@ -547,12 +563,13 @@ def test_callback_failure_does_not_lose_upload(
 ) -> None:
     """Şəkil Drive-dadır — DB yeniləməsinin nasazlığı onu itirməməlidir."""
 
-    def boom(_fid: str, _ref: StorageReference) -> None:
+    def boom(_otype: str, _oid: str, _ref: StorageReference) -> None:
         raise RuntimeError("DB əlçatmazdır")
 
     queue.enqueue(
         tenant_id=str(uuid.uuid4()),
-        fine_id=uuid.uuid4(),  # type: ignore[arg-type]
+        owner_type=UploadOwnerType.FINE,
+        owner_id=str(uuid.uuid4()),
         store_id=STORE_1,
         filename="a.png",
         content=TINY_PNG,
@@ -566,6 +583,131 @@ def test_callback_failure_does_not_lose_upload(
     report = worker.run_once(now=AUGUST)
 
     assert report.uploaded == 1
+
+
+# --------------------------------------------------------------------------- #
+# SEC-018 — sənəd PDF-i: icazəli format sahib tipinə görə seçilir
+# --------------------------------------------------------------------------- #
+
+#: Minimal, imzası QANUNİ PDF (bax `google_drive._PDF_MAGIC` şərhi).
+TINY_PDF = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n"
+
+
+def test_owner_type_keys_match_the_queue_enum() -> None:
+    """`google_drive` sahib tipini MƏTNLƏ tanıyır (dairəvi idxaldan qaçmaq üçün).
+
+    Enum dəyəri dəyişsəydi, format siyahısı sükutla ən dar dəstə düşər və
+    sənəd PDF-ləri rədd edilməyə başlayardı — bu test həmin sürüşməni tutur.
+    """
+    assert UploadOwnerType.FINE.value == FINE_OWNER_TYPE
+    assert UploadOwnerType.EMPLOYEE_DOCUMENT.value == EMPLOYEE_DOCUMENT_OWNER_TYPE
+    assert allowed_extensions_for(FINE_OWNER_TYPE) == ALLOWED_EXTENSIONS
+    assert ".pdf" not in allowed_extensions_for(FINE_OWNER_TYPE)
+    assert ".pdf" in allowed_extensions_for(EMPLOYEE_DOCUMENT_OWNER_TYPE)
+
+
+def test_document_pdf_is_stored_byte_for_byte(
+    provider: GoogleDriveStorageProvider, api: FakeDriveApi
+) -> None:
+    """PDF kiçildilmir: imzalı müqavilə Drive-a OLDUĞU KİMİ getməlidir."""
+    reference = provider.upload(
+        TINY_PDF, "müqavilə.pdf", STORE_1, AUGUST, owner_type=EMPLOYEE_DOCUMENT_OWNER_TYPE
+    )
+
+    assert api.uploads[0]["bytes"] == TINY_PDF, "PDF baytları dəyişdirilib"
+    assert api.uploads[0]["mime_type"] == "application/pdf"
+    assert api.uploads[0]["filename"].endswith(".pdf"), "PDF `.jpg` adı ilə saxlanıb"
+    assert reference.file_id in api.files
+
+
+def test_document_pdf_is_not_placed_in_the_image_cache(
+    provider: GoogleDriveStorageProvider, api: FakeDriveApi
+) -> None:
+    """Keş ŞƏKİL keşidir: PDF ora düşsə, thumbnail yolu Pillow-da qırılardı."""
+    reference = provider.upload(
+        TINY_PDF, "müqavilə.pdf", STORE_1, AUGUST, owner_type=EMPLOYEE_DOCUMENT_OWNER_TYPE
+    )
+
+    assert provider.get_image_bytes(reference) == TINY_PDF
+    assert api.download_calls == 1, "PDF şəkil keşindən qaytarıldı"
+
+
+def test_fine_evidence_still_refuses_pdf_at_the_provider(
+    provider: GoogleDriveStorageProvider, api: FakeDriveApi
+) -> None:
+    """Cərimə tərəfi DƏYİŞMİR — sahib tipi verilməsə də ən dar siyahı işləyir."""
+    with pytest.raises(StorageError, match="format"):
+        provider.upload(TINY_PDF, "sübut.pdf", STORE_1, AUGUST)
+
+    with pytest.raises(StorageError, match="format"):
+        provider.upload(TINY_PDF, "sübut.pdf", STORE_1, AUGUST, owner_type=FINE_OWNER_TYPE)
+
+    assert api.upload_calls == 0, "rədd edilmiş fayl Drive-a getdi"
+
+
+def test_fake_pdf_is_refused_at_the_provider(
+    provider: GoogleDriveStorageProvider, api: FakeDriveApi
+) -> None:
+    """`.pdf` adlı icra faylı: uzantı keçir, MƏZMUN imzası saxlayır."""
+    with pytest.raises(StorageError, match="PDF"):
+        provider.upload(
+            b"MZ\x90\x00" + b"\x00" * 32,
+            "müqavilə.pdf",
+            STORE_1,
+            AUGUST,
+            owner_type=EMPLOYEE_DOCUMENT_OWNER_TYPE,
+        )
+
+    assert api.upload_calls == 0
+
+
+def test_document_image_is_still_downscaled_to_jpeg(
+    provider: GoogleDriveStorageProvider, api: FakeDriveApi
+) -> None:
+    """Sənəd tərəfində ŞƏKİL yolu dəyişmir: kiçildilir və JPEG kimi saxlanır."""
+    provider.upload(
+        TINY_PNG, "vəsiqə.png", STORE_1, AUGUST, owner_type=EMPLOYEE_DOCUMENT_OWNER_TYPE
+    )
+
+    assert api.uploads[0]["mime_type"] == "image/jpeg"
+    assert api.uploads[0]["filename"].endswith(".jpg")
+    assert api.uploads[0]["bytes"] != TINY_PNG, "şəkil kiçildilmədən getdi"
+
+
+def test_document_pdf_travels_through_queue_and_worker(
+    queue: EvidenceUploadQueue, provider: GoogleDriveStorageProvider, api: FakeDriveApi
+) -> None:
+    """Uçdan-uca: növbənin ön-yoxlaması və provider EYNİ cavabı verir.
+
+    Sahib tipi ötürülməsəydi, PDF ya `enqueue`-da, ya da işçidə `REJECTED`
+    olardı — yəni sənəd modulu əsas istifadə halında işləməzdi.
+    """
+    document_id = uuid.uuid4()
+    queue.enqueue(
+        tenant_id=str(uuid.uuid4()),
+        owner_type=UploadOwnerType.EMPLOYEE_DOCUMENT,
+        owner_id=str(document_id),
+        store_id=STORE_1,
+        filename="müqavilə.pdf",
+        content=TINY_PDF,
+        taken_at=AUGUST,
+        now=AUGUST,
+    )
+    seen: list[tuple[str, str, StorageReference]] = []
+    worker = EvidenceUploadWorker(
+        queue=queue,
+        provider_factory=FakeFactory(provider),
+        on_uploaded=lambda otype, oid, ref: seen.append((otype, oid, ref)),
+    )
+
+    report = worker.run_once(now=AUGUST)
+
+    assert report.uploaded == 1
+    assert report.rejected == 0
+    assert api.uploads[0]["mime_type"] == "application/pdf"
+    assert seen[0][0] == UploadOwnerType.EMPLOYEE_DOCUMENT.value
+    assert seen[0][1] == str(document_id)
+    assert queue.counts()[UploadStatus.UPLOADED.value] == 1
 
 
 # --------------------------------------------------------------------------- #

@@ -429,6 +429,68 @@ açılmır) — "GÖRMƏK = SƏLAHİYYƏTİN OLMASI" tək qapı ola bilməz.
 
 ---
 
+## SEC-018 — İcazəli fayl formatı: sahib-tipinə görə ayrılır, `system_limits`-də DEYİL
+
+**Vəziyyət:** Qəbul edildi (2026-08-13) — Faza 7 sənəd modulunun davamı
+
+**Kontekst.** Faza 7-də sübut yükləmə növbəsi ümumiləşdirildi: eyni SQLite
+spool həm cərimə sübutunu (`owner_type = FINE`), həm də işçi sənədini
+(`EMPLOYEE_DOCUMENT`) daşıyır. Format siyahısı isə tək qalmışdı
+(`ALLOWED_EXTENSIONS` = JPG/PNG/WEBP), yəni müqavilə — praktikada PDF —
+ümumiyyətlə yüklənə bilmirdi: modul əsas istifadə halında işləmirdi.
+
+**Qərar 1 — siyahı GENİŞLƏNDİRİLMİR, AYRILIR.** Vahid siyahıya `.pdf`
+əlavə etmək cərimə tərəfini də açardı. Cərimə sübutu kameradan gələn
+fotodur; ora PDF qəbul etməyin əməliyyat səbəbi yoxdur, hücum səthini isə
+genişləndirər (PDF konteyner formatıdır: JavaScript, qoşma fayl, xarici
+istinad daşıya bilər və şəkil kimi renderlənmədiyi üçün onu gözlə YOXLAYAN
+operator da olmur). Siyahı sahib tipinə görə seçilir; naməlum sahib tipi ən
+DAR dəstə düşür (fail-closed), yəni gələcəkdə əlavə edilən sahib növü
+sükutla PDF-i açmır.
+
+| Sahib tipi | İcazəli uzantılar | Məzmun yoxlaması |
+|---|---|---|
+| `FINE` | `.jpg`, `.jpeg`, `.png`, `.webp` | JPEG/PNG/RIFF-WEBP imzası (dəyişməyib) |
+| `EMPLOYEE_DOCUMENT` | yuxarıdakılar + `.pdf` | şəkil imzası, PDF üçün `%PDF-` |
+| naməlum | yalnız şəkil | şəkil imzası |
+
+**Qərar 2 — PDF-də uzantı–məzmun uyğunluğu MƏCBURİDİR.** Şəkil yolunda
+`.jpg` adlı PNG buraxılır (`_looks_like_image` başlığı), çünki baytlar
+`_downscale`-dən keçib yenidən JPEG kimi yazılır — Drive-a gedən fayl hər
+halda şəkildir. PDF isə kiçildilmir (imzalı sənədi çevirmək onu
+DƏYİŞDİRMƏK olardı), yəni bayt olduğu kimi saxlanır; ona görə `.pdf` adının
+arxasında `%PDF-` imzası TƏLƏB OLUNUR. `.pdf` adlı `MZ` (Windows icra
+faylı) rədd edilir.
+
+**Qərar 3 — siyahı `system_limits`-ə ÇIXARILMIR (CLAUDE.md §5).**
+`MAX_UPLOAD_SIZE_BYTES` konfiqurasiyadır, çünki o, MİQDARDIR: Root onu
+dəyişəndə qorumanın növü yox, yalnız həddi sürüşür, səhv dəyər (0/mənfi)
+isə fallback-a qayıdır — yəni konfiqurasiya qorumanı SÖNDÜRƏ BİLMİR.
+Uzantı siyahısı isə hücum səthinin ÖZÜDÜR: cədvələ bir sətir (`.svg`,
+`.html`, `.exe`) əlavə etmək icra oluna bilən məzmuna yol açardı və həmin
+format üçün imza yoxlaması olmadığından ƏN GÜCLÜ qat — məzmun yoxlaması —
+sükutla keçilərdi. GUI-dan verilən bir sətir bütün faylı yoxlanmadan
+buraxa bilirsə, o, limit deyil, struktur zəmanətdir. Yeni format həmişə
+KOD dəyişikliyidir: yeni imza + yeni test.
+
+**İki qat, tək qayda.** Yoxlama `validate_evidence_payload()`-dadır və İKİ
+yerdən çağırılır: `EvidenceUploadQueue.enqueue()` (fayl DİSKƏ yazılmazdan
+əvvəl) və `GoogleDriveStorageProvider.upload()` (yükləmə anında). Sahib
+tipi hər ikisinə ötürülür — biri ötürməsəydi, qanuni sənəd PDF-i növbədə
+`REJECTED` olardı. Sərhəd `UploadOwnerType.value` (mətn) səviyyəsindədir:
+enum `upload_queue.py`-dadır və o, `google_drive.py`-ı idxal edir, tərs
+idxal dairə yaradardı. Sürüşməni
+`test_owner_type_keys_match_the_queue_enum` bağlayır.
+
+**Tətbiq:** `infrastructure/storage/google_drive.py`
+(`allowed_extensions_for`, `is_pdf_upload`, `validate_evidence_payload`),
+`infrastructure/storage/upload_queue.py` (`enqueue`,
+`EvidenceUploadWorker.run_once`), `presentation/screens/group_c.py`
+(`EmployeeDocumentDialog._pick_file` süzgəci),
+`tests/unit/test_security_hardening.py`, `tests/unit/test_drive_storage.py`.
+
+---
+
 ## Açıq qalan (Faza 3-də bağlanır)
 
 | # | Məsələ | Faza |

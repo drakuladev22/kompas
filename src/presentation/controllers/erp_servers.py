@@ -30,9 +30,12 @@ Layihədə GUI üçün fon-işçi (QThread/QRunnable) naxışı YOXDUR; yeganə 
 mexanizmi `QTimer`-dir (`app._start_upload_timer`) və o, nəticəsi gözlənilməyən
 işlər üçündür. Test isə nəticəni DƏRHAL göstərməlidir, ona görə burada sinxron
 çağırılır və gözləmə kursoru qoyulur. Donma HƏDDİ VAR: `OneCConnector` HTTP
-taymauta bağlıdır (`DEFAULT_TIMEOUT_SECONDS`), yəni pəncərə sonsuza qədər
-kilidlənmir. Yeni bir sap naxışı icad etmək bu partiyanın hüdudundan
-kənardır və ayrıca qərar tələb edir.
+taymauta bağlıdır və taymaut artıq ROOT-dandır
+(`system_limits.ERP_REQUEST_TIMEOUT_SECONDS`; moduldakı
+`FALLBACK_TIMEOUT_SECONDS` yalnız limit oxunmayanda işə düşür), yəni
+pəncərə sonsuza qədər kilidlənmir və müəssisə yavaş 1C serveri üçün həddi özü
+uzada bilər. Yeni bir sap naxışı icad etmək bu partiyanın hüdudundan kənardır
+və ayrıca qərar tələb edir.
 """
 
 from __future__ import annotations

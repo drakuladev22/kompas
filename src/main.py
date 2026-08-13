@@ -449,6 +449,12 @@ def _run_watchdog(args: argparse.Namespace) -> int:
     if args.theme != "system":
         command.extend(["--theme", args.theme])
 
+    # `limits=` QƏSDƏN ÖTÜRÜLMÜR (Faza 10.2 auditinin nəticəsi): nəzarətçi
+    # məhz tətbiq — və çox vaxt onunla birlikdə baza bağlantısı — çökəndə
+    # işləməlidir. Limit oxusu üçün `Database` qursaydıq, bazanın əlçatmazlığı
+    # yenidən-başlatma məntiqinin ÖZÜNÜ dayandırardı, yəni qoruma məhz lazım
+    # olduğu anda yox olardı. Cədvəl `system_limits`-dədir və `KioskWatchdog`
+    # onu pəncərə VERİLDİKDƏ oxuyur — burada fallback şüurlu seçimdir.
     outcome = KioskWatchdog(command=command).run()
     get_logger(__name__).info(
         "KIOSK_WATCHDOG_FINISHED",
@@ -481,6 +487,12 @@ def _build_release_publisher(database: Database) -> ReleasePublisher | None:
         )
         return None
 
+    # `limits=` QƏSDƏN ÖTÜRÜLMÜR (SEC-008): bu, Developer Panelinin ÇOX-KİRAYƏÇİ
+    # yoludur — hazırlayıcı bütün tenant-lar üçün yayım edir və "hansı tenant-ın
+    # `system_limits` sətri oxunsun?" sualının doğru cavabı YOXDUR. `system_limits`
+    # RLS ilə tenant-a bağlıdır; ixtiyari bir tenant seçmək bir müştərinin
+    # parametrini bütün şəbəkəyə tətbiq etmək olardı. Ona görə yayım tərəfi
+    # `UPDATE_MAX_PACKAGE_BYTES`-in fallback dəyəri ilə işləyir.
     return ReleasePublisher(
         database,
         verifier=AuthenticodeVerifier(

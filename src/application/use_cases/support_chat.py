@@ -33,7 +33,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from src.domain.policies import FeatureModule
+from src.application.root_limits import fallback_int, limit_int
+from src.domain.policies import FeatureModule, SystemLimitKey
 from src.domain.value_objects.identifiers import (
     new_support_message_id,
     new_support_ticket_id,
@@ -43,7 +44,7 @@ from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
-    from src.domain.interfaces.ports import Clock, FeatureToggles
+    from src.domain.interfaces.ports import Clock, FeatureToggles, SystemLimits
     from src.domain.value_objects.identifiers import (
         EmployeeId,
         SupportMessageId,
@@ -59,6 +60,15 @@ MIN_SUBJECT_LENGTH = 3
 MAX_SUBJECT_LENGTH = 200
 MIN_BODY_LENGTH = 2
 MAX_BODY_LENGTH = 4000
+
+#: Widget-in bir oxunuşda gətirdiyi mövzu sayı.
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`SystemLimitKey.SUPPORT_THREAD_PAGE_SIZE`, seed: migrations/034). Mətn
+#: uzunluğu sabitləri (yuxarıda) QƏSDƏN köçürülmür: onlar `support_messages`
+#: sxeminin öz `CHECK` hüdudlarının güzgüsüdür, səhifə ölçüsü isə yalnız
+#: üzən panelin nə qədər sətir çəkəcəyini təyin edir.
+DEFAULT_THREAD_PAGE_SIZE = fallback_int(SystemLimitKey.SUPPORT_THREAD_PAGE_SIZE)
 
 
 class SupportAccessError(KompasOSError):
@@ -124,7 +134,9 @@ class SupportTicketRepository(Protocol):
 
     def get_thread(self, ticket_id: SupportTicketId) -> SupportThread | None: ...
 
-    def list_threads(self, tenant_id: TenantId, *, limit: int = 20) -> list[SupportThread]: ...
+    def list_threads(
+        self, tenant_id: TenantId, *, limit: int = DEFAULT_THREAD_PAGE_SIZE
+    ) -> list[SupportThread]: ...
 
     def find_open_ticket(self, tenant_id: TenantId) -> SupportTicketId | None:
         """Açıq müraciət varsa onu qaytarır — yeni thread yaratmamaq üçün."""
@@ -154,10 +166,15 @@ class SupportChatUseCase:
         tickets: SupportTicketRepository,
         toggles: FeatureToggles,
         clock: Clock,
+        limits: SystemLimits | None = None,
     ) -> None:
+        # `limits` İSTƏYƏ BAĞLIDIR: `None` halında mövzu səhifəsi
+        # `DEFAULT_THREAD_PAGE_SIZE` fallback-ıdır — davranış köçürmədən
+        # ƏVVƏLKİ ilə HƏRFƏN eynidir.
         self._tickets = tickets
         self._toggles = toggles
         self._clock = clock
+        self._limits = limits
 
     # ------------------------------ görünürlük ------------------------------- #
 
@@ -176,7 +193,7 @@ class SupportChatUseCase:
 
     def threads(self, *, tenant_id: TenantId, actor: Employee) -> list[SupportThread]:
         self._require_access(tenant_id, actor)
-        return self._tickets.list_threads(tenant_id)
+        return self._tickets.list_threads(tenant_id, limit=self._thread_page_size(tenant_id))
 
     def thread(
         self, *, tenant_id: TenantId, actor: Employee, ticket_id: SupportTicketId
@@ -188,7 +205,16 @@ class SupportChatUseCase:
         """Bildiriş nöqtəsi (badge) üçün — "kiçik, nəzakətli" (bölmə 8)."""
         if not self.is_available(tenant_id=tenant_id, actor=actor):
             return 0
-        return sum(thread.unread_from_developer for thread in self._tickets.list_threads(tenant_id))
+        return sum(
+            thread.unread_from_developer
+            for thread in self._tickets.list_threads(
+                tenant_id, limit=self._thread_page_size(tenant_id)
+            )
+        )
+
+    def _thread_page_size(self, tenant_id: TenantId) -> int:
+        """ROOT limiti — mənbə `system_limits`, modul sabiti yalnız fallback."""
+        return limit_int(self._limits, tenant_id, SystemLimitKey.SUPPORT_THREAD_PAGE_SIZE)
 
     # ------------------------------ göndərmə --------------------------------- #
 
@@ -297,6 +323,7 @@ def _subject_from(body: str) -> str:
 
 __all__ = [
     "CONTACT_SUPPORT_FLAG",
+    "DEFAULT_THREAD_PAGE_SIZE",
     "SupportAccessError",
     "SupportChatUseCase",
     "SupportMessage",

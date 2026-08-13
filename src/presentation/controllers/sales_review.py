@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
@@ -108,6 +109,10 @@ class SalesReviewController:
                 items = session.sales_review.queue(tenant_id=session.tenant_id, actor=self._actor)
                 if not self._employees:
                     self._employees = _active_employee_names(session)
+                # Xəbərdarlıq rənginin həddi HƏR doldurmada oxunur: panel
+                # saatlarla açıq qala bilər və Root həddi bu müddət ərzində
+                # dəyişə bilər (eyni naxış `screen_data.late_threshold_minutes`).
+                threshold = _low_confidence_percent(session)
         except KompasOSError as error:
             screen.show_error(title="Növbə açıla bilmədi", message=error.user_message)
             return
@@ -121,6 +126,9 @@ class SalesReviewController:
 
         self._items = {item.one_c_document_id: item for item in items}
         total = sum(item.gross_amount.amount for item in items)
+        # Hədd sətirlərdən ƏVVƏL yazılır — `set_sales` cədvəli sıfırdan qurur
+        # və rəngi məhz o anda hesablayır.
+        screen.set_low_confidence_threshold(threshold)
         # Açarlar ekranın FAKTİKİ oxuduqlarıdır: `receipt`, `date`, `amount`,
         # `suggestion`, `confidence` — maket yolundakı `preview_data.
         # UNASSIGNED_SALES` ilə EYNİ dəst (CLAUDE.md bölmə 6).
@@ -240,11 +248,29 @@ def _confidence_percent(item: Any) -> int:
 
     Domendə FAİZ YOXDUR — uyğunluq kateqoriyadır (`EXACT_MATCH`,
     `LOW_CONFIDENCE_MATCH`, `UNASSIGNED`). Ekran isə rəqəm gözləyir və
-    50%-dən aşağını xəbərdarlıq tonunda göstərir. Ona görə burada YALNIZ
-    həmin astananın İKİ tərəfi təmsil olunur: kateqoriyanı faizə çevirən
-    bir düstur uydursaydıq, ekranda mövcud olmayan bir dəqiqlik göstərilərdi.
+    həddən aşağısını xəbərdarlıq tonunda göstərir (hədd Root-dandır, bax
+    `_low_confidence_percent`). Ona görə burada YALNIZ həmin astananın İKİ
+    tərəfi təmsil olunur: kateqoriyanı faizə çevirən bir düstur uydursaydıq,
+    ekranda mövcud olmayan bir dəqiqlik göstərilərdi.
     """
     return 0 if item.is_unassigned else 60
+
+
+def _low_confidence_percent(session: Any) -> int:
+    """«Zəif uyğunluq» rəng həddi — CANLI limitdən (migrations/035).
+
+    Oxu uğursuzluğu ekranı DAYANDIRMIR: verilməli cavab "növbə göstərilsinmi"
+    deyil, "hansı sətir sarı olsun" idi. Cavabsız qaldıqda `DEFAULT_LIMITS`
+    fallback-ı işləyir — ekranın öz sabiti ilə EYNİ ədəd (o da həmin
+    sözlükdən götürülür), yəni iki mənbə yaranmır.
+    """
+    key = SystemLimitKey.ERP_MATCH_LOW_CONFIDENCE_PERCENT
+    fallback = int(DEFAULT_LIMITS[key])
+    try:
+        return int(session.limits.get_int(session.tenant_id, key.value, fallback))
+    except Exception:
+        _error_log.warning("SALES_CONFIDENCE_THRESHOLD_FALLBACK", extra={"limit_key": key.value})
+        return fallback
 
 
 def _active_employee_names(session: Any) -> dict[str, Any]:

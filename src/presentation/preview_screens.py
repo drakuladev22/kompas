@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
+from src.domain.value_objects.staffing_signals import weekday_name_az
 from src.presentation import preview_data as data
 
 if TYPE_CHECKING:
@@ -51,6 +53,43 @@ def _dashboard(screen: group_c.DashboardScreen) -> None:
     screen.set_leave_usage(128, 200)
     screen.set_leaders(list(data.LEADERS))
     screen.set_server_health(list(data.SERVER_HEALTH))
+
+    # #24 Çox-Mağaza Benchmark (Faza 9A) — canlı yolla EYNİ açarlar
+    # (`screen_data.py::_populate_benchmark_sections`), bax `preview_data.py`
+    # başlığı.
+    from src.presentation.screens.group_c import RankingEntry  # noqa: PLC0415
+
+    screen.set_ranking_table(
+        [
+            RankingEntry(
+                store_id=store_id,
+                store_name=store_name,
+                value_display=value_display,
+                trend_arrow=trend_arrow,
+                trend_label=trend_label,
+            )
+            for store_id, store_name, value_display, trend_arrow, trend_label in (
+                data.BENCHMARK_RANKING
+            )
+        ],
+        metric_options=list(data.BENCHMARK_METRIC_OPTIONS),
+        selected_metric="FINE_COUNT",
+    )
+    versus = data.BENCHMARK_STORE_VS_NETWORK
+    screen.set_store_vs_network(
+        metric_label=versus.metric_label,
+        store_label=versus.store_label,
+        store_value=versus.store_value,
+        store_display=versus.store_display,
+        network_label=versus.network_label,
+        network_value=versus.network_value,
+        network_display=versus.network_display,
+    )
+    screen.set_metric_trend(metric_label="Cərimə sayı", points=list(data.BENCHMARK_TREND))
+    screen.set_outliers(
+        summary_text=data.BENCHMARK_OUTLIERS.summary_text,
+        rows=list(data.BENCHMARK_OUTLIERS.rows),
+    )
 
 
 def _live_queue(screen: group_b.OperatorQueueScreen) -> None:
@@ -103,6 +142,37 @@ def _shift_planning(screen: group_c.ShiftPlanningScreen) -> None:
             ("Planlaşdırılmış saat", "1 176"),
             ("Açıq növbə", "4"),
             ("Məzuniyyətdə", "1"),
+        ]
+    )
+    # #13 — maket və canlı yol EYNİ mənbədən ad alır (`weekday_name_az`) və
+    # EYNİ setter imzasını işlədir. `preview_screens` öz həftə-günü siyahısını
+    # qursaydı, ISO nömrələmə sürüşməsi maketdə görünməz qalar və yalnız
+    # istehsalatda üzə çıxardı (CLAUDE.md §6 xəbərdarlığı).
+    screen.set_staffing_pattern(
+        [
+            (weekday_name_az(weekday), f"{average:.1f} nəfər")
+            for weekday, average in data.STAFFING_PATTERN
+        ],
+        store_name=data.STORES[0],
+        based_on_weeks=int(DEFAULT_LIMITS[SystemLimitKey.STAFFING_PATTERN_BASED_ON_WEEKS]),
+        calculated_label="hesablandı: 11.08.2026",
+    )
+    # #16 — açarlar canlı yolla EYNİDİR (`id`, `date`, `work_mode`, `store`);
+    # bax `controllers/open_shift.py::_to_admin_row`.
+    screen.set_open_shift_postings(
+        [
+            {
+                "id": "00000000-0000-0000-0000-000000000016",
+                "date": "14.08.2026 · Cüm",
+                "work_mode": "Səhər · 09:00–18:00",
+                "store": data.STORES[0],
+            },
+            {
+                "id": "00000000-0000-0000-0000-000000000017",
+                "date": "16.08.2026 · Baz",
+                "work_mode": "Axşam · 13:00–22:00",
+                "store": data.STORES[1],
+            },
         ]
     )
 
@@ -427,6 +497,9 @@ def _profile(screen: group_g.ProfileScreen) -> None:
             ("08.08 17:55", "Baş ofis PC-02", "Bağlanıb"),
         ]
     )
+    # #20 (kompasos11.md Faza 8) — açarlar `controllers/profile.py::
+    # _performance_rows` ilə EYNİDİR (CLAUDE.md §6).
+    screen.set_performance_history(list(data.PERFORMANCE_REVIEW_HISTORY))
 
 
 def _support(widget: group_e.SupportChatWidget) -> None:
@@ -469,6 +542,31 @@ def _infrastructure(screen: Any) -> None:
 
 def _plugins(screen: Any) -> None:
     screen.set_plugins(list(data.PLUGINS))
+
+
+def _exceptions(screen: Any) -> None:
+    screen.set_exceptions(list(data.EXCEPTIONS))
+
+
+def _announcements(screen: Any) -> None:
+    """#19 (kompasos11.md Faza 8) — açarlar `controllers/announcements.py::
+    _to_admin_row` ilə EYNİDİR (CLAUDE.md §6)."""
+    screen.set_announcements(list(data.ANNOUNCEMENTS))
+
+
+def _performance_reviews(screen: Any) -> None:
+    """#20 (kompasos11.md Faza 8) — açarlar `controllers/performance_review.py`
+    ilə EYNİDİR (CLAUDE.md §6)."""
+    screen.set_employees(list(data.EMPLOYEE_ID_NAMES))
+    screen.set_kpi_catalog(list(data.PERFORMANCE_REVIEW_KPIS))
+    screen.set_period("2026-Q3")
+    screen.set_history(list(data.PERFORMANCE_REVIEW_HISTORY))
+
+
+def _attrition_risk(screen: Any) -> None:
+    """#21 (kompasos11.md Faza 9) — açarlar `controllers/attrition_risk.py::
+    _to_row` ilə EYNİDİR (CLAUDE.md §6)."""
+    screen.set_scores(list(data.ATTRITION_RISK_SCORES))
 
 
 def _dashboard_builder(screen: Any) -> None:
@@ -516,6 +614,10 @@ _POPULATORS: dict[str, Callable[[Any], None]] = {
     "infrastructure": _infrastructure,
     "plugins": _plugins,
     "dashboard_builder": _dashboard_builder,
+    "exceptions": _exceptions,
+    "announcements": _announcements,
+    "performance_reviews": _performance_reviews,
+    "attrition_risk": _attrition_risk,
 }
 
 

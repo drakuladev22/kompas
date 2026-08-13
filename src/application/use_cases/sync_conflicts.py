@@ -35,12 +35,14 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from src.application.root_limits import fallback_int, limit_int
+from src.domain.policies import SystemLimitKey
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
-    from src.domain.interfaces.ports import AuditTrail, Clock
+    from src.domain.interfaces.ports import AuditTrail, Clock, SystemLimits
     from src.domain.value_objects.identifiers import EmployeeId, TenantId
 
 _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
@@ -48,6 +50,14 @@ _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
 RESOLVE_CONFLICT_FLAG = "can_view_employee_reports"
 
 MIN_NOTE_LENGTH = 5
+
+#: İnbox-un bir oxunuşda gətirdiyi konflikt sayı.
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`SystemLimitKey.SYNC_CONFLICT_PAGE_SIZE`, seed: migrations/034). Uzun
+#: offline dövrdən sonra konflikt sayı sıçrayır və HR bir dəfəyə neçəsini
+#: görmək istədiyi quraşdırmadan-quraşdırmaya fərqlənir.
+DEFAULT_INBOX_PAGE_SIZE = fallback_int(SystemLimitKey.SYNC_CONFLICT_PAGE_SIZE)
 
 
 class ConflictResolutionError(KompasOSError):
@@ -115,7 +125,9 @@ AUDIT_CRITICAL_TABLES = frozenset({"leave_requests", "fines", "audit_logs"})
 class SyncConflictRepository(Protocol):
     """`sync_conflicts` cədvəli."""
 
-    def list_open(self, tenant_id: TenantId, *, limit: int = 100) -> list[ConflictItem]: ...
+    def list_open(
+        self, tenant_id: TenantId, *, limit: int = DEFAULT_INBOX_PAGE_SIZE
+    ) -> list[ConflictItem]: ...
 
     def get(self, conflict_id: object) -> ConflictItem | None: ...
 
@@ -141,15 +153,23 @@ class SyncConflictUseCase:
         repository: SyncConflictRepository,
         audit: AuditTrail,
         clock: Clock,
+        limits: SystemLimits | None = None,
     ) -> None:
+        # `limits` İSTƏYƏ BAĞLIDIR: `None` halında səhifə ölçüsü
+        # `DEFAULT_INBOX_PAGE_SIZE` fallback-ıdır — davranış köçürmədən
+        # ƏVVƏLKİ ilə HƏRFƏN eynidir.
         self._repository = repository
         self._audit = audit
         self._clock = clock
+        self._limits = limits
 
     def inbox(self, *, tenant_id: TenantId, actor: Employee) -> list[ConflictItem]:
         """Həll gözləyən konfliktlər — audit-kritik olanlar əvvəldə."""
         self._require(actor)
-        items = self._repository.list_open(tenant_id)
+        items = self._repository.list_open(
+            tenant_id,
+            limit=limit_int(self._limits, tenant_id, SystemLimitKey.SYNC_CONFLICT_PAGE_SIZE),
+        )
         return sorted(items, key=lambda item: (not item.is_audit_critical, item.detected_at))
 
     def open_count(self, *, tenant_id: TenantId, actor: Employee) -> int:
@@ -217,6 +237,7 @@ class SyncConflictUseCase:
 
 __all__ = [
     "AUDIT_CRITICAL_TABLES",
+    "DEFAULT_INBOX_PAGE_SIZE",
     "RESOLVE_CONFLICT_FLAG",
     "ConflictItem",
     "ConflictNotFoundError",

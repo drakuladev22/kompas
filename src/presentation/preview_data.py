@@ -74,6 +74,11 @@ _ADMIN_FLAGS: Final = (
     "can_manage_leave_types",
     "can_switch_db",
     "can_manage_plugins",
+    # #9-un GUI tərəfi (kompasos11.md Faza 5) — "İstisnalar" ekranı
+    # önizləmədə görünsün deyə. Real `ADMIN` rolunda bu flag DATADAN gəlir
+    # (migrations/021, kateqoriya "HR"), burada isə yalnız ekranın maketlə
+    # tutuşdurulması üçün verilir (bax funksiya docstring-i).
+    "can_view_exceptions",
 )
 
 
@@ -203,6 +208,77 @@ SERVER_HEALTH: Final = [
     ("1C — Gəncə", "318 ms", "warning"),
     ("Baza", "11 ms", "success"),
 ]
+
+# --------------------------------------------------------------------------- #
+# #24 Çox-Mağaza Benchmark Dashboard (kompasos11.md Faza 9A)
+# --------------------------------------------------------------------------- #
+# Açarlar `screen_data.py::_populate_benchmark_sections`-in FAKTİKİ ötürdüyü
+# formadadır (CLAUDE.md bölmə 6 — maket və canlı yol EYNİ açarlı olmalıdır).
+# Mağaza ID-ləri UUID DEYİL — önizləmə rejimində drill-down siqnalı heç
+# qoşulmur (`app.py::_attach_dashboard_benchmark` `self._preview`-də erkən
+# çıxır), ona görə oxunaqlı sabit sətir kifayətdir.
+BENCHMARK_METRIC_OPTIONS: Final = [
+    ("FINE_COUNT", "Cərimə sayı"),
+    ("ATTENDANCE_RATE", "Davamiyyət faizi"),
+    ("POINTS_BALANCE", "Xal balansı"),
+    ("OVERTIME_HOURS", "Overtime saatı"),
+    ("TURNOVER_RISK", "Turnover riski"),
+]
+
+#: (mağaza-id, mağaza-adı, dəyər-mətni, trend-oxu, trend-mətni) — ARTIQ sıralanmış.
+BENCHMARK_RANKING: Final = [
+    ("store-28-may", "28 May", "2", "↓", "azalıb"),
+    ("store-sumqayit", "Sumqayıt", "4", "→", "dəyişməyib"),
+    ("store-gence", "Gəncə", "7", "↑", "artıb"),
+]
+
+
+class BenchmarkStoreVsNetwork(NamedTuple):
+    """`set_store_vs_network` sahələri — açıq NamedTuple, `**dict` DEYİL
+
+    (bax `preview_screens.py::_dashboard` şərhi: açıq yazılış səhv-adlı
+    açarı tip yoxlayıcısında tutur)."""
+
+    metric_label: str
+    store_label: str
+    store_value: float
+    store_display: str
+    network_label: str
+    network_value: float
+    network_display: str
+
+
+BENCHMARK_STORE_VS_NETWORK: Final = BenchmarkStoreVsNetwork(
+    metric_label="Cərimə sayı",
+    store_label="28 May",
+    store_value=2.0,
+    store_display="2",
+    network_label="Şəbəkə ortalaması",
+    network_value=4.3,
+    network_display="4.3",
+)
+
+#: (dövr etiketi, dəyər, göstəriləcək mətn) — 6 aylıq nümunə (ROOT parametri
+#: `BENCHMARK_TREND_MONTHS`-un DEFOLTU, hardcode DEYİL).
+BENCHMARK_TREND: Final = [
+    ("2026-03", 6.0, "6"),
+    ("2026-04", 5.0, "5"),
+    ("2026-05", 4.0, "4"),
+    ("2026-06", 5.0, "5"),
+    ("2026-07", 3.0, "3"),
+    ("2026-08", 2.0, "2"),
+]
+
+
+class BenchmarkOutliers(NamedTuple):
+    summary_text: str
+    rows: list[tuple[str, str]]
+
+
+BENCHMARK_OUTLIERS: Final = BenchmarkOutliers(
+    summary_text="Diqqət: 1 filial cərimə sayı göstəricisində ortalamadan 2.0×σ kənardır.",
+    rows=[("Gəncə", "2.4σ yuxarı")],
+)
 
 
 class QueuePreview(NamedTuple):
@@ -726,6 +802,16 @@ EMPLOYEE_NAMES: Final = [
     "R. İsmayılov",
 ]
 
+#: #20 (kompasos11.md Faza 8) — Performans Qiymətləndirməsi formasının işçi
+#: dropdown-u `(id, tam_ad)` cütü gözləyir (`PerformanceReviewScreen.
+#: set_employees`), `EMPLOYEE_NAMES`-in sadə mətn siyahısı bunun üçün
+#: kifayət etmir.
+EMPLOYEE_ID_NAMES: Final = [
+    ("00000000-0000-0000-0000-0000000000a1", "Aysel Quliyeva"),
+    ("00000000-0000-0000-0000-0000000000a2", "Kamran Vəliyev"),
+    ("00000000-0000-0000-0000-0000000000a3", "Nərmin Səfərova"),
+]
+
 STORES: Final = [
     "Bellona 28 May",
     "Yataş Xətai",
@@ -738,6 +824,21 @@ FINE_TYPES: Final = [
     "Forma qaydası",
     "İcazəsiz çıxış",
     "Kassa uyğunsuzluğu",
+]
+
+#: #13 — Növbə Matrisindəki tarixi nümunə kartının maket məzmunu:
+#: (ISO həftə günü, orta işçi sayı). Həftə günlərinin ADI burada YOXDUR —
+#: onu `weekday_name_az()` verir, yəni maket və canlı yol eyni mənbədən
+#: adlanır (CLAUDE.md §6). Rəqəmlər həftə sonuna doğru artır, çünki mağaza
+#: trafiki real olaraq belədir və maket inandırıcı görünməlidir.
+STAFFING_PATTERN: Final[list[tuple[int, float]]] = [
+    (1, 2.1),
+    (2, 2.0),
+    (3, 2.4),
+    (4, 2.6),
+    (5, 3.1),
+    (6, 3.8),
+    (7, 3.5),
 ]
 
 __all__ = [
@@ -757,6 +858,7 @@ __all__ = [
     "ROLES",
     "ROSTER_ROWS",
     "SERVER_HEALTH",
+    "STAFFING_PATTERN",
     "STORES",
     "SWAP_REQUESTS",
     "TENANTS",
@@ -860,3 +962,135 @@ DASHBOARD_WIDGETS: Final = {
 DASHBOARD_ORDER: Final = ["attendance", "fines", "leave_gauge", "points", "health", "tasks"]
 #: `tasks` QƏSDƏN gizlidir — gizli widget-in ekranda necə göründüyü yoxlanılsın.
 DASHBOARD_VISIBLE: Final = {"attendance", "fines", "leave_gauge", "points", "health"}
+
+# --------------------------------------------------------------------------- #
+# İstisnalar (#9, kompasos11.md Faza 5)
+# --------------------------------------------------------------------------- #
+# Açarlar `ExceptionsController._to_row`-un qaytardığı sözlüklə EYNİDİR —
+# ikisi fərqli ad məkanı işlətsəydi, uyğunsuzluq yalnız istehsalatda üzə
+# çıxardı (CLAUDE.md bölmə 6, `menu.py` başlığındakı tarixi qüsur).
+
+EXCEPTIONS: Final = [
+    {
+        "id": "exc-1",
+        "source": "BEHAVIOR_ANOMALY",
+        "source_name": "Davranış Anomaliyası",
+        "employee": "Kamran Vəliyev",
+        "store": "İstikbal Gənclik",
+        "detail": "Son 30 günün orta check-in vaxtından 42 dəqiqə sapma.",
+        "severity": "HIGH",
+        "severity_text": "Yüksək",
+        "date": "12.08.2026 09:15",
+    },
+    {
+        "id": "exc-2",
+        "source": "BEHAVIOR_ANOMALY",
+        "source_name": "Davranış Anomaliyası",
+        "employee": "Nərmin Əliyeva",
+        "store": "Bellona 28 May",
+        "detail": "Son 30 günün orta check-in vaxtından 18 dəqiqə sapma.",
+        "severity": "MEDIUM",
+        "severity_text": "Orta",
+        "date": "11.08.2026 08:52",
+    },
+]
+
+# --------------------------------------------------------------------------- #
+# #19 Elan (Broadcast) — kompasos11.md Faza 8
+# --------------------------------------------------------------------------- #
+# Açarlar `AnnouncementsAdminController._to_admin_row`-un qaytardığı sözlüklə
+# EYNİDİR (CLAUDE.md bölmə 6).
+
+ANNOUNCEMENTS: Final = [
+    {
+        "id": "ann-1",
+        "title": "Bayram iş qrafiki",
+        "scope_text": "Bütün mağazalar",
+        "date": "12.08.2026 09:00",
+        "is_active": "1",
+    },
+    {
+        "id": "ann-2",
+        "title": "Yataş Xətai — inventarizasiya",
+        "scope_text": "Seçilmiş mağazalar",
+        "date": "05.08.2026 14:30",
+        "is_active": "1",
+    },
+    {
+        "id": "ann-3",
+        "title": "Yay saatları (KEÇMİŞ)",
+        "scope_text": "Bütün mağazalar",
+        "date": "01.06.2026 08:00",
+        "is_active": "0",
+    },
+]
+
+# --------------------------------------------------------------------------- #
+# #20 Performans Qiymətləndirməsi — kompasos11.md Faza 8
+# --------------------------------------------------------------------------- #
+# `PERFORMANCE_REVIEW_KPI_CATALOG` (`policies.py` defoltu) ilə EYNİ dörd kod —
+# maket real KPI kataloqu ilə uyğun görünsün deyə (CLAUDE.md bölmə 6).
+
+PERFORMANCE_REVIEW_KPIS: Final = [
+    ("KEYFIYYET", "İş Keyfiyyəti"),
+    ("MEHSULDARLIQ", "Məhsuldarlıq"),
+    ("KOMANDA_ISI", "Komanda İşi"),
+    ("MUSTERI_XIDMETI", "Müştəri Xidməti"),
+]
+
+PERFORMANCE_REVIEW_HISTORY: Final = [
+    {
+        "period": "2026-Q2",
+        "overall_score": "82.50",
+        "reviewer": "Rəşad Məmmədov",
+        "ratings_text": "KEYFIYYET: 4, MEHSULDARLIQ: 4, KOMANDA_ISI: 5, MUSTERI_XIDMETI: 4",
+        "notes": "Komanda işində nümunəvi, satış hədəflərini davamlı yerinə yetirir.",
+    },
+    {
+        "period": "2026-Q1",
+        "overall_score": "70.00",
+        "reviewer": "Rəşad Məmmədov",
+        "ratings_text": "KEYFIYYET: 3, MEHSULDARLIQ: 4, KOMANDA_ISI: 4, MUSTERI_XIDMETI: 3",
+        "notes": "Müştəri xidmətində irəliləyiş lazımdır.",
+    },
+]
+
+# --------------------------------------------------------------------------- #
+# #21 İşdən Çıxma Riski — kompasos11.md Faza 9
+# --------------------------------------------------------------------------- #
+# Açarlar `controllers/attrition_risk.py::_to_row`-un qaytardığı sözlüklə
+# EYNİDİR (CLAUDE.md bölmə 6 — maket və canlı yol EYNİ açarları işlədir).
+
+ATTRITION_RISK_SCORES: Final = [
+    {
+        "employee": "Nərmin Əliyeva",
+        "store": "Bellona 28 May",
+        "score": "78",
+        "band_text": "Yüksək risk",
+        "is_high_risk": "1",
+        "factors_text": (
+            "Son 3 ayın yarımlarında cərimə sayı 1 → 4 (artım: 3). • "
+            "Son 3 ayda 2 icazəsiz davamiyyət pozuntusu qeydə alınıb. • "
+            "Cari ay icazə istifadəsi aylıq limitin 85%-i."
+        ),
+    },
+    {
+        "employee": "Kamran Hüseynov",
+        "store": "Yataş Xətai",
+        "score": "42",
+        "band_text": "Normal",
+        "is_high_risk": "0",
+        "factors_text": (
+            "Staj 1.2 ay — 3 aylıq yeni-işçi həddindən azdır (onboarding riski). • "
+            "Cari ay icazə istifadəsi aylıq limitin 30%-i."
+        ),
+    },
+    {
+        "employee": "Aygün Rzayeva",
+        "store": "Bellona 28 May",
+        "score": "12",
+        "band_text": "Normal",
+        "is_high_risk": "0",
+        "factors_text": "Son 3 ayın yarımlarında cərimə sayı 2 → 2 (artım: 0).",
+    },
+]

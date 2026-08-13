@@ -29,18 +29,45 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import TYPE_CHECKING, Final, Protocol
 
+from src.application.root_limits import fallback_int_tuple, limit_int_tuple
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.notifications import NotificationCategory
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
     from datetime import datetime
+
+    from src.domain.interfaces.ports import SystemLimits
+    from src.domain.value_objects.identifiers import TenantId
 
 _log = get_logger(__name__)
 _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
 
 #: Xatırlatma günləri: mənfi = bitmədən ƏVVƏL, müsbət = SONRA (modul başlığı).
-REMINDER_OFFSETS: Final[tuple[int, ...]] = (-7, -3, -1, 1, 7)
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`SystemLimitKey.LICENSE_PAYMENT_REMINDER_OFFSET_DAYS`, seed: migrations/034).
+#: Cədvəl TƏK SƏTİRDƏ saxlanılır ("-7,-3,-1,1,7"), beş ayrı açarda YOX: beş
+#: mərhələ BİRGƏ bir xatırlatma cədvəli təşkil edir və ayrı açarlarda Root
+#: onları yanlış sıraya (məs. T+7-ni T-7-dən əvvələ) yaza bilərdi —
+#: `EMPLOYEE_DOCUMENT_EXPIRY_WARNING_DAYS` ilə eyni əsaslandırma.
+REMINDER_OFFSETS: Final[tuple[int, ...]] = fallback_int_tuple(
+    SystemLimitKey.LICENSE_PAYMENT_REMINDER_OFFSET_DAYS
+)
+
+
+def reminder_offsets(limits: SystemLimits | None, tenant_id: TenantId) -> tuple[int, ...]:
+    """Xatırlatma cədvəlini ROOT-dan oxuyur (port yoxdursa fallback).
+
+    NİYƏ AYRICA FUNKSİYA: Master Lisenziya Paneli kirayəçi kontekstindən
+    KƏNARDA işləyir (bütün müştərilərin sətirlərini bir siyahıda görür) və
+    `system_limits` per-tenant cədvəldir — orada oxunacaq "bir" tenant yoxdur.
+    Ona görə cədvəl `PaymentReminderUseCase`-ə HAZIR şəkildə ötürülür və bu
+    funksiya onu kirayəçi kontekstində hesablayan yeganə yerdir (eyni vəziyyət
+    `developer_console.ConsoleThresholds.from_limits`-dədir).
+    """
+    return limit_int_tuple(limits, tenant_id, SystemLimitKey.LICENSE_PAYMENT_REMINDER_OFFSET_DAYS)
 
 
 @dataclass(frozen=True)
@@ -108,11 +135,16 @@ class ReminderRun:
         return len(self.sent)
 
 
-def build_message(billing: TenantBilling, *, today: date) -> ReminderMessage | None:
+def build_message(
+    billing: TenantBilling, *, today: date, offsets: Sequence[int] | None = None
+) -> ReminderMessage | None:
     """Bugün bu müştəriyə xatırlatma düşürmü.
 
     `None` → bugün onun üçün mərhələ yoxdur. Müddətsiz lisenziya (`None`)
     heç vaxt xatırlatma almır — orada xatırlanacaq tarix yoxdur.
+
+    Args:
+        offsets: ROOT-dan gələn cədvəl; verilməzsə `REMINDER_OFFSETS` fallback-ı.
     """
     days_left = billing.days_until_expiry(today=today)
     if days_left is None:
@@ -120,7 +152,7 @@ def build_message(billing: TenantBilling, *, today: date) -> ReminderMessage | N
 
     # `days_left` müsbətdirsə bitməyə var; offset isə mənfi işarə ilə yazılıb.
     offset = -days_left
-    if offset not in REMINDER_OFFSETS:
+    if offset not in (REMINDER_OFFSETS if offsets is None else tuple(offsets)):
         return None
 
     if offset < 0:
@@ -151,9 +183,22 @@ def build_message(billing: TenantBilling, *, today: date) -> ReminderMessage | N
 class PaymentReminderUseCase:
     """Gündəlik xatırlatma dövrü — idempotent və qismən uğursuzluğa dözümlü."""
 
-    def __init__(self, *, sender: ReminderSender, log: SentReminderLog) -> None:
+    def __init__(
+        self,
+        *,
+        sender: ReminderSender,
+        log: SentReminderLog,
+        offsets: Sequence[int] | None = None,
+    ) -> None:
+        """
+        Args:
+            offsets: ROOT xatırlatma cədvəli (`reminder_offsets()` ilə oxunur).
+                `None` → `REMINDER_OFFSETS` fallback-ı, yəni davranış
+                köçürmədən ƏVVƏLKİ ilə HƏRFƏN eynidir.
+        """
         self._sender = sender
         self._log = log
+        self._offsets = REMINDER_OFFSETS if offsets is None else tuple(offsets)
 
     def run(self, tenants: Iterable[TenantBilling], *, now: datetime) -> ReminderRun:
         """Bugünə düşən bütün xatırlatmaları göndərir.
@@ -166,7 +211,7 @@ class PaymentReminderUseCase:
         run = ReminderRun()
 
         for billing in tenants:
-            message = build_message(billing, today=today)
+            message = build_message(billing, today=today, offsets=self._offsets)
             if message is None:
                 continue
 
@@ -231,4 +276,5 @@ __all__ = [
     "SentReminderLog",
     "TenantBilling",
     "build_message",
+    "reminder_offsets",
 ]

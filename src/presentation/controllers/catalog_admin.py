@@ -99,7 +99,13 @@ class _CatalogAdapter:
     cells: Callable[[Any], str]
     #: Domen sətri → dialoqdakı dəyər sahəsinin ilkin mətni.
     value_of: Callable[[Any], str]
-    #: (mövcud sətir | None, ad, dəyər mətni, aktivlik) → yeni domen sətri.
+    #: (mövcud sətir | None, ad, dəyər mətni, SESSİYA, aktivlik) → domen sətri.
+    #:
+    #: `tenant_id` DEYİL, BÜTÖV SESSİYA ötürülür: icazə növünün müddət tavanı
+    #: ROOT parametridir (`LEAVE_TYPE_MAX_DURATION_MINUTES`) və qurucu onu
+    #: `session.limits`-dən oxumalıdır. Yalnız `tenant_id` versəydik, tavan
+    #: modul fallback-ında qalar, Root onu qaldıra bilməzdi — halbuki ROOT
+    #: ekranında açar GÖRÜNÜR (bax `catalogs._leave_duration_ceiling`).
     build: Callable[[Any, str, str, Any, bool], Any]
     #: Domen sətri → identifikator (deaktivləşdirmə üçün).
     identifier: Callable[[Any], Any]
@@ -212,7 +218,7 @@ class CatalogAdminController:
                     existing,
                     name,
                     value,
-                    session.tenant_id,
+                    session,
                     True if existing is None else bool(existing.is_active),
                 )
                 self._adapter.use_case(session).save(session.tenant_id, self._actor, entry)
@@ -256,7 +262,7 @@ class CatalogAdminController:
                             entry,
                             str(entry.name),
                             self._adapter.value_of(entry),
-                            session.tenant_id,
+                            session,
                             True,
                         ),
                     )
@@ -300,12 +306,12 @@ def _work_mode_value(entry: Any) -> str:
     return "" if schedule is None else f"{schedule.start:%H:%M}–{schedule.end:%H:%M}"
 
 
-def _build_work_mode(existing: Any, name: str, value: str, tenant_id: Any, active: bool) -> Any:
+def _build_work_mode(existing: Any, name: str, value: str, session: Any, active: bool) -> Any:
     from src.domain.value_objects.catalogs import WorkMode  # noqa: PLC0415
 
     return WorkMode(
         name=name,
-        tenant_id=tenant_id,
+        tenant_id=session.tenant_id,
         is_active=active,
         # Deaktiv sətir üçün `deactivated_at` MƏCBURİDİR (`CatalogEntry`
         # ziddiyyətli vəziyyət saxlamır) — mövcud dəyər varsa qorunur.
@@ -323,13 +329,13 @@ def _fine_type_value(entry: Any) -> str:
     return str(entry.standard_amount.amount)
 
 
-def _build_fine_type(existing: Any, name: str, value: str, tenant_id: Any, active: bool) -> Any:
+def _build_fine_type(existing: Any, name: str, value: str, session: Any, active: bool) -> Any:
     from src.domain.value_objects.catalogs import FineType  # noqa: PLC0415
     from src.domain.value_objects.money import Money  # noqa: PLC0415
 
     return FineType(
         name=name,
-        tenant_id=tenant_id,
+        tenant_id=session.tenant_id,
         is_active=active,
         deactivated_at=None if active else _deactivated_at(existing),
         fine_type_id=None if existing is None else existing.fine_type_id,
@@ -345,17 +351,39 @@ def _leave_type_value(entry: Any) -> str:
     return str(entry.default_duration_minutes)
 
 
-def _build_leave_type(existing: Any, name: str, value: str, tenant_id: Any, active: bool) -> Any:
+def _build_leave_type(existing: Any, name: str, value: str, session: Any, active: bool) -> Any:
     from src.domain.value_objects.catalogs import LeaveType  # noqa: PLC0415
 
     return LeaveType(
         name=name,
-        tenant_id=tenant_id,
+        tenant_id=session.tenant_id,
         is_active=active,
         deactivated_at=None if active else _deactivated_at(existing),
         leave_type_id=None if existing is None else existing.leave_type_id,
         default_duration_minutes=_parse_minutes(value),
+        # ROOT tavanı AÇIQ bağlantıdan oxunur: sətir və tavan eyni
+        # tranzaksiyadan gəlməlidir, əks halda Root tavanı elə həmin an
+        # qaldırsaydı yazı köhnə tavanla rədd edilərdi.
+        max_duration_minutes=_root_leave_duration_ceiling(session),
     )
+
+
+def _root_leave_duration_ceiling(session: Any) -> int:
+    """`LEAVE_TYPE_MAX_DURATION_MINUTES` — mənbə `system_limits`.
+
+    Oxu uğursuz olarsa modul fallback-ı qaytarılır: limit sətri olmayan
+    quraşdırmada (miqrasiya hələ tətbiq edilməyib) kataloq ekranı
+    açılmamazlıq etməməlidir.
+    """
+    from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey  # noqa: PLC0415
+
+    key = SystemLimitKey.LEAVE_TYPE_MAX_DURATION_MINUTES
+    fallback = int(DEFAULT_LIMITS[key])
+    try:
+        return int(session.limits.get_int(session.tenant_id, key.value, fallback))
+    except Exception:
+        _error_log.exception("LEAVE_TYPE_CEILING_READ_FAILED")
+        return fallback
 
 
 def _deactivated_at(existing: Any) -> Any:

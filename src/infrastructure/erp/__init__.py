@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from src.infrastructure.erp.health import ErpHealthMonitor, ServerHealth, ServerHealthRow
 from src.infrastructure.erp.matching import (
-    AMBIGUITY_MARGIN,
+    FALLBACK_AMBIGUITY_MARGIN,
     MatchDirectory,
     SalesMatcher,
     name_similarity,
@@ -23,7 +23,7 @@ from src.infrastructure.erp.servers import (
     NoVerifiedBackupError,
 )
 from src.infrastructure.erp.sync_worker import (
-    MAX_PARALLEL_SERVERS,
+    FALLBACK_MAX_PARALLEL_SERVERS,
     ErpSyncManager,
     SalesSyncService,
     SyncCycleReport,
@@ -48,8 +48,8 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 __all__ = [
-    "AMBIGUITY_MARGIN",
-    "MAX_PARALLEL_SERVERS",
+    "FALLBACK_AMBIGUITY_MARGIN",
+    "FALLBACK_MAX_PARALLEL_SERVERS",
     "ConfigBackup",
     "ErpHealthMonitor",
     "ErpServerNotFoundError",

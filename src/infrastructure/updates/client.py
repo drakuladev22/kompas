@@ -47,9 +47,8 @@ import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.updates import (
-    DEFAULT_CHECK_INTERVAL_SECONDS,
-    RETRY_INTERVAL_SECONDS,
     ReleaseChannel,
     UpdateAction,
     UpdateDecision,
@@ -58,6 +57,7 @@ from src.domain.value_objects.updates import (
     Version,
     decide,
 )
+from src.infrastructure.config.limits import InfrastructureLimits
 from src.infrastructure.updates.verification import verify_package
 from src.shared.logger import LogChannel, get_logger
 
@@ -108,8 +108,9 @@ class AutoUpdateClient:
         current_version: str,
         staging_root: Path,
         channel: ReleaseChannel = ReleaseChannel.STABLE,
-        interval_seconds: float = DEFAULT_CHECK_INTERVAL_SECONDS,
-        retry_interval_seconds: float = RETRY_INTERVAL_SECONDS,
+        limits: InfrastructureLimits | None = None,
+        interval_seconds: float | None = None,
+        retry_interval_seconds: float | None = None,
         launcher: Callable[[Sequence[str]], None] | None = None,
         restrict_features_when_mandatory: bool = False,
     ) -> None:
@@ -120,8 +121,22 @@ class AutoUpdateClient:
         self._staging = staging_root / STAGING_DIR_NAME
         self._previous = staging_root / PREVIOUS_DIR_NAME
         self._channel = channel
-        self._interval = interval_seconds
-        self._retry_interval = retry_interval_seconds
+        # RİTM BİR DƏFƏ OXUNUR: arxa fon sapının gözləmə cədvəlidir və sap
+        # yenidən başlayana qədər onsuz da dəyişə bilməz. Açıq arqument ROOT
+        # dəyərindən ÜSTÜNDÜR (`LicenseClient._seconds` ilə eyni qayda),
+        # `limits=None` isə `DEFAULT_LIMITS` fallback-ını verir — yəni
+        # köçürmə davranışı DƏYİŞMİR.
+        window = limits or InfrastructureLimits()
+        self._interval = (
+            interval_seconds
+            if interval_seconds is not None
+            else window.float_of(SystemLimitKey.UPDATE_CHECK_INTERVAL_SECONDS)
+        )
+        self._retry_interval = (
+            retry_interval_seconds
+            if retry_interval_seconds is not None
+            else window.float_of(SystemLimitKey.UPDATE_RETRY_INTERVAL_SECONDS)
+        )
         self._launcher = launcher
         self._restrict_when_mandatory = restrict_features_when_mandatory
 

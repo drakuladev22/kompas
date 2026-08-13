@@ -33,11 +33,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.erp import (
     DEFAULT_PAGE_SIZE,
     ErpError,
     MatchConfidence,
 )
+from src.infrastructure.config.limits import InfrastructureLimits, fallback_int
 from src.infrastructure.erp.matching import SalesMatcher
 from src.shared.logger import LogChannel, get_logger
 
@@ -59,16 +61,24 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
 
+#: HƏR İKİSİ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`ERP_SYNC_MAX_PARALLEL_SERVERS`, `ERP_SYNC_MAX_PAGES_PER_RUN`;
+#: seed: migrations/032). Bu ədədlər yalnız ROOT portu əlçatmaz olduqda işə düşür.
+#:
 #: Eyni anda neçə server sinxronlaşdırılır. Mağaza PC-si zəif ola bilər və
 #: hər worker bir HTTP bağlantısı + bir DB bağlantısı tutur; DB pool-unun
-#: maksimumu 8-dir (`persistence/connection.py`), ona görə hədd ondan
-#: aşağıdır — sync bütün pool-u tutub istifadəçi əməliyyatlarını gözlətməsin.
-MAX_PARALLEL_SERVERS: Final[int] = 4
+#: maksimumu 8-dir (`DB_POOL_MAX_SIZE`), ona görə hədd ondan aşağıdır — sync
+#: bütün pool-u tutub istifadəçi əməliyyatlarını gözlətməsin. İKİSİ DƏ İNDİ
+#: ROOT-dan idarə olunur: hovuzu böyüdən müəssisə paralelliyi də artıra bilməli,
+#: zəif kioskda isə hər ikisini azalda bilməlidir.
+FALLBACK_MAX_PARALLEL_SERVERS: Final[int] = fallback_int(
+    SystemLimitKey.ERP_SYNC_MAX_PARALLEL_SERVERS
+)
 
 #: Bir dövrdə bir serverdən neçə səhifə oxunur. İlk sinxronizasiyada 1C-də
 #: illərlə sənəd ola bilər; hamısını bir dövrdə çəkmək dövrü saatlarla
 #: uzadardı. Qalan sənədlər növbəti dövrdə davam edir (kursor saxlanılır).
-MAX_PAGES_PER_RUN: Final[int] = 10
+FALLBACK_MAX_PAGES_PER_RUN: Final[int] = fallback_int(SystemLimitKey.ERP_SYNC_MAX_PAGES_PER_RUN)
 
 
 @dataclass
@@ -150,20 +160,38 @@ class SalesSyncService:
         tenant_id: TenantId | None = None,
         points: PointsAwarder | None = None,
         page_size: int = DEFAULT_PAGE_SIZE,
-        max_pages: int = MAX_PAGES_PER_RUN,
+        max_pages: int | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
+        """
+        Args:
+            max_pages: AÇIQ üstünlük — verilərsə ROOT dəyəri OXUNMUR.
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback-lar.
+        """
         self._servers = servers
         self._tenant_id = tenant_id
         self._connectors = connectors
         self._sales = sales
-        self._matcher = SalesMatcher(directory)
+        self._limits = limits or InfrastructureLimits()
+        self._matcher = SalesMatcher(directory, limits=self._limits)
         # `None` → xal modulu qoşulmayıb (məs. Feature Toggle söndürülüb).
         # Sinxronizasiya bundan ASILI DEYİL: satış sətirləri yenə yazılır,
         # sadəcə xal verilmir. Əks halda xal modulunun söndürülməsi bütün
         # 1C sinxronizasiyasını dayandırardı.
         self._points = points
         self._page_size = page_size
-        self._max_pages = max_pages
+        self._explicit_max_pages = max_pages
+
+    def _max_pages_value(self) -> int:
+        """Dövr başına səhifə tavanı — DÖVRÜN BAŞINDA oxunur.
+
+        İlk sinxronizasiyada admin tavanı müvəqqəti qaldırıb geridə qalmış
+        arxivi tez çəkmək istəyə bilər; yenidən başlatma tələb etmək bu
+        əməliyyatı lazımsız yerə çətinləşdirərdi.
+        """
+        if self._explicit_max_pages is not None:
+            return self._explicit_max_pages
+        return self._limits.int_of(SystemLimitKey.ERP_SYNC_MAX_PAGES_PER_RUN)
 
     def _award_points(self, written: Sequence[tuple[SalesTransactionId, MatchResult]]) -> int:
         """Yeni yazılmış sətirlərə xal verir (bölmə 6).
@@ -209,7 +237,7 @@ class SalesSyncService:
 
         connector = self._connectors.for_server(server_id)
         try:
-            for _ in range(self._max_pages):
+            for _ in range(self._max_pages_value()):
                 batch = connector.fetch_sales(cursor, page_size=self._page_size)
                 if not batch:
                     break
@@ -273,11 +301,24 @@ class ErpSyncManager:
         *,
         servers: ErpServerRegistry,
         service_factory: Callable[[], SalesSyncService],
-        max_parallel: int = MAX_PARALLEL_SERVERS,
+        max_parallel: int | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
+        """
+        Args:
+            max_parallel: AÇIQ üstünlük — verilərsə ROOT dəyəri OXUNMUR.
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback.
+        """
         self._servers = servers
         self._service_factory = service_factory
-        self._max_parallel = max_parallel
+        self._explicit_max_parallel = max_parallel
+        self._limits = limits or InfrastructureLimits()
+
+    def _max_parallel_value(self) -> int:
+        """Paralel worker sayı — HƏR DÖVRDƏ oxunur (dövrlər arası dəyişə bilər)."""
+        if self._explicit_max_parallel is not None:
+            return self._explicit_max_parallel
+        return self._limits.int_of(SystemLimitKey.ERP_SYNC_MAX_PARALLEL_SERVERS)
 
     def run_cycle(self, *, now: datetime | None = None) -> SyncCycleReport:
         started = now or datetime.now(UTC)
@@ -286,7 +327,7 @@ class ErpSyncManager:
             _log.info("ERP_SYNC_NO_SERVERS")
             return SyncCycleReport(started_at=started, finished_at=started)
 
-        workers = min(self._max_parallel, len(targets))
+        workers = min(self._max_parallel_value(), len(targets))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="erp-sync") as pool:
             reports = list(pool.map(lambda server: self._sync_isolated(server, started), targets))
 
@@ -353,7 +394,7 @@ def _tally(report: SyncReport, results: Sequence[MatchResult]) -> None:
 
 
 __all__ = [
-    "MAX_PARALLEL_SERVERS",
+    "FALLBACK_MAX_PARALLEL_SERVERS",
     "ErpSyncManager",
     "SalesSyncService",
     "SyncCycleReport",

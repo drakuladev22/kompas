@@ -47,6 +47,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
+from src.domain.policies import SystemLimitKey
+from src.infrastructure.config.limits import InfrastructureLimits, fallback_float
 from src.shared.logger import LogChannel, get_logger
 
 _log = get_logger(__name__)
@@ -73,14 +75,30 @@ DEFAULT_SERVERS: Final[tuple[str, ...]] = (
     "time.windows.com",
     "time.google.com",
 )
-DEFAULT_MAX_DRIFT_SECONDS: Final[float] = 60.0
-DEFAULT_POLL_INTERVAL_SECONDS: Final[float] = 300.0
-DEFAULT_TIMEOUT_SECONDS: Final[float] = 3.0
+#: BEŞİ DƏ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`. Sürüşmə həddi ARTIQ
+#: ROOT parametri idi (`NTP_MAX_DRIFT_SECONDS`, `schema.sql`); qalan dördü
+#: migrations/032 ilə əlavə olundu (`NTP_POLL_INTERVAL_SECONDS`,
+#: `NTP_QUERY_TIMEOUT_SECONDS`, `NTP_SAMPLE_TTL_SECONDS`,
+#: `NTP_MAX_ROUND_TRIP_SECONDS`). Bu ədədlər yalnız ROOT portu əlçatmaz
+#: olduqda işə düşür.
+#:
+#: NİYƏ ROOT PARAMETRİDİR: mağaza şəbəkəsi UDP/123-ü ləng ötürə bilər (proxy,
+#: mobil modem) və 3 saniyəlik taymaut belə yerlərdə HƏMİŞƏ ölçməsiz nəticə
+#: verərdi — bu isə "vaxt yoxlanıla bilmir" xəbərdarlığının daimi görünməsi
+#: deməkdir. Protokol sabitləri (paket ölçüsü, port 123, stratum hüdudları,
+#: fraksiya böləni) isə YUXARIDA qalır: onlar RFC 4330 tələbidir, siyasət deyil.
+FALLBACK_MAX_DRIFT_SECONDS: Final[float] = fallback_float(SystemLimitKey.NTP_MAX_DRIFT_SECONDS)
+FALLBACK_POLL_INTERVAL_SECONDS: Final[float] = fallback_float(
+    SystemLimitKey.NTP_POLL_INTERVAL_SECONDS
+)
+FALLBACK_TIMEOUT_SECONDS: Final[float] = fallback_float(SystemLimitKey.NTP_QUERY_TIMEOUT_SECONDS)
 #: Bu müddətdən köhnə ölçmə "təzə" sayılmır (verified=False olur).
-DEFAULT_SAMPLE_TTL_SECONDS: Final[float] = 1800.0
+FALLBACK_SAMPLE_TTL_SECONDS: Final[float] = fallback_float(SystemLimitKey.NTP_SAMPLE_TTL_SECONDS)
 #: Şəbəkə gecikməsi bundan böyükdürsə ölçmə etibarsızdır (ölçü xətası
 #: sürüşmənin özündən böyük ola bilər).
-MAX_ACCEPTABLE_DELAY_SECONDS: Final[float] = 2.0
+FALLBACK_MAX_ACCEPTABLE_DELAY_SECONDS: Final[float] = fallback_float(
+    SystemLimitKey.NTP_MAX_ROUND_TRIP_SECONDS
+)
 
 
 class NtpError(Exception):
@@ -109,8 +127,29 @@ class SntpClient:
     paketidir və əlavə asılılıq tədarük zənciri riskini artırır.
     """
 
-    def __init__(self, *, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> None:
-        self._timeout = timeout
+    def __init__(
+        self,
+        *,
+        timeout: float | None = None,
+        limits: InfrastructureLimits | None = None,
+    ) -> None:
+        """
+        Args:
+            timeout: AÇIQ üstünlük — verilərsə ROOT dəyəri OXUNMUR.
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback-lar.
+        """
+        self._explicit_timeout = timeout
+        self._limits = limits or InfrastructureLimits()
+
+    def _timeout_seconds(self) -> float:
+        """Soket taymautu — SORĞU ANINDA oxunur (klient uzun ömürlüdür)."""
+        if self._explicit_timeout is not None:
+            return self._explicit_timeout
+        return self._limits.float_of(SystemLimitKey.NTP_QUERY_TIMEOUT_SECONDS)
+
+    def _max_acceptable_delay(self) -> float:
+        """Qəbul edilən maksimum gediş-dönüş vaxtı — ölçmə ANINDA oxunur."""
+        return self._limits.float_of(SystemLimitKey.NTP_MAX_ROUND_TRIP_SECONDS)
 
     def query(self, server: str, *, port: int = NTP_PORT) -> NtpSample:
         """Bir serverdən ölçmə alır. Uğursuzluqda `NtpError`."""
@@ -118,7 +157,7 @@ class SntpClient:
         packet[0] = NTP_CLIENT_HEADER
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(self._timeout)
+        sock.settimeout(self._timeout_seconds())
         try:
             t1 = time.time()
             monotonic_start = time.monotonic()
@@ -156,7 +195,7 @@ class SntpClient:
 
         offset = ((receive - t1) + (transmit - t4)) / 2.0
         delay = max(0.0, (t4 - t1) - (transmit - receive))
-        if delay > MAX_ACCEPTABLE_DELAY_SECONDS:
+        if delay > self._max_acceptable_delay():
             raise NtpError(f"{server}: gecikmə çox böyükdür ({delay:.2f} s)")
 
         return NtpSample(
@@ -180,14 +219,26 @@ class NtpDriftChecker:
         *,
         servers: tuple[str, ...] = DEFAULT_SERVERS,
         client: SntpClient | None = None,
-        max_drift_seconds: float = DEFAULT_MAX_DRIFT_SECONDS,
-        poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
-        sample_ttl_seconds: float = DEFAULT_SAMPLE_TTL_SECONDS,
+        max_drift_seconds: float | None = None,
+        poll_interval_seconds: float | None = None,
+        sample_ttl_seconds: float | None = None,
+        limits: InfrastructureLimits | None = None,
         machine_name: str = "",
         on_drift: object = None,
     ) -> None:
+        """
+        Args:
+            max_drift_seconds / poll_interval_seconds / sample_ttl_seconds:
+                AÇIQ üstünlük — verilərsə ROOT dəyəri OXUNMUR. `None` = hər
+                istifadədə `system_limits`-dən oxunur.
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback-lar.
+        """
         self._servers = servers
-        self._client = client or SntpClient()
+        self._limits = limits or InfrastructureLimits()
+        self._client = client or SntpClient(limits=self._limits)
+        # `_max_drift` MANDALLA (`set_max_drift_seconds`) da təyin edilə bilir:
+        # ROOT ekranı həddi dəyişəndə kontroller onu dərhal ötürür və o an
+        # dəyər AÇIQ verilmiş sayılır.
         self._max_drift = max_drift_seconds
         self._poll_interval = poll_interval_seconds
         self._sample_ttl = sample_ttl_seconds
@@ -263,7 +314,8 @@ class NtpDriftChecker:
         return None
 
     def _accept(self, sample: NtpSample) -> None:
-        exceeded = abs(sample.offset_seconds) > self._max_drift
+        max_drift = self._max_drift_value()
+        exceeded = abs(sample.offset_seconds) > max_drift
         with self._lock:
             self._sample = sample
             self._consecutive_failures = 0
@@ -276,7 +328,7 @@ class NtpDriftChecker:
                 "TIME_DRIFT_DETECTED",
                 extra={
                     "drift_seconds": round(sample.offset_seconds, 3),
-                    "max_allowed": self._max_drift,
+                    "max_allowed": max_drift,
                     "ntp_server": sample.server,
                     "machine_name": self._machine_name,
                     "impact": "vaxt-kritik əməliyyatlar bloklanır",
@@ -323,9 +375,30 @@ class NtpDriftChecker:
         if sample is None:
             return None
         age = time.monotonic() - sample.measured_at_monotonic
-        return sample if age <= self._sample_ttl else None
+        return sample if age <= self._sample_ttl_value() else None
 
     # ---------------------------- arxa fon sapı ------------------------------ #
+
+    def _max_drift_value(self) -> float:
+        """Qüvvədə olan sürüşmə həddi.
+
+        AÇIQ təyin edilibsə (konstruktor arqumenti və ya `set_max_drift_
+        seconds`) o qalır — kontroller ROOT dəyərini artıq oxuyub ötürüb.
+        Əks halda hədd BURADA, ölçmə anında oxunur.
+        """
+        if self._max_drift is not None:
+            return self._max_drift
+        return self._limits.float_of(SystemLimitKey.NTP_MAX_DRIFT_SECONDS)
+
+    def _poll_interval_value(self) -> float:
+        if self._poll_interval is not None:
+            return self._poll_interval
+        return self._limits.float_of(SystemLimitKey.NTP_POLL_INTERVAL_SECONDS)
+
+    def _sample_ttl_value(self) -> float:
+        if self._sample_ttl is not None:
+            return self._sample_ttl
+        return self._limits.float_of(SystemLimitKey.NTP_SAMPLE_TTL_SECONDS)
 
     def set_max_drift_seconds(self, value: float) -> None:
         """Həddi `system_limits`-dən (NTP_MAX_DRIFT_SECONDS) yeniləyir."""
@@ -344,7 +417,7 @@ class NtpDriftChecker:
                 "is_fresh": fresh is not None,
                 "is_alarmed": self._alarm_drift is not None,
                 "consecutive_failures": self._consecutive_failures,
-                "max_drift_seconds": self._max_drift,
+                "max_drift_seconds": self._max_drift_value(),
             }
 
     def start(self) -> None:
@@ -354,7 +427,7 @@ class NtpDriftChecker:
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, name="ntp-drift-checker", daemon=True)
         self._thread.start()
-        _log.info("NTP_CHECKER_STARTED", extra={"interval_seconds": self._poll_interval})
+        _log.info("NTP_CHECKER_STARTED", extra={"interval_seconds": self._poll_interval_value()})
 
     def stop(self, *, timeout: float = 5.0) -> None:
         self._stop_event.set()
@@ -370,7 +443,9 @@ class NtpDriftChecker:
                 self.poll()
             except Exception as exc:  # arxa fon sapı heç vaxt ölməməlidir
                 _log.error("NTP_POLL_CRASHED", extra={"error": str(exc)})
-            self._stop_event.wait(self._poll_interval)
+            # Aralıq HƏR DÖVRDƏ yenidən oxunur: Root onu dəyişəndə növbəti
+            # gözləmə artıq yeni dəyərlə olur, yenidən başlatma tələb olunmur.
+            self._stop_event.wait(self._poll_interval_value())
 
 
 def _to_ntp(unix_seconds: float) -> tuple[int, int]:
@@ -386,8 +461,8 @@ def _from_ntp(seconds: int, fraction: int) -> float:
 
 
 __all__ = [
-    "DEFAULT_MAX_DRIFT_SECONDS",
     "DEFAULT_SERVERS",
+    "FALLBACK_MAX_DRIFT_SECONDS",
     "NTP_UNIX_DELTA",
     "NtpDriftChecker",
     "NtpError",

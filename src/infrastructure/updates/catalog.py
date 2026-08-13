@@ -42,12 +42,18 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.updates import (
     MAX_PACKAGE_BYTES,
     ReleaseChannel,
     ReleaseInfo,
     UpdateUnavailableError,
     Version,
+)
+from src.infrastructure.config.limits import (
+    InfrastructureLimits,
+    fallback_float,
+    fallback_int,
 )
 from src.shared.logger import get_logger
 
@@ -64,10 +70,27 @@ SUPABASE_ANON_KEY_ENV: Final[str] = "KOMPASOS_SUPABASE_ANON_KEY"
 UPDATE_BUCKET_ENV: Final[str] = "KOMPASOS_UPDATE_BUCKET"
 DEFAULT_BUCKET: Final[str] = "app-updates"
 
-DOWNLOAD_TIMEOUT_SECONDS: Final[float] = 300.0
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`UPDATE_DOWNLOAD_TIMEOUT_SECONDS`, seed: migrations/032). Mağazanın
+#: kanalı zəifdirsə 5 dəqiqə paketi endirməyə çatmır və yenilənmə sonsuz
+#: təkrar cəhd dövrünə düşərdi.
+FALLBACK_DOWNLOAD_TIMEOUT_SECONDS: Final[float] = fallback_float(
+    SystemLimitKey.UPDATE_DOWNLOAD_TIMEOUT_SECONDS
+)
 DOWNLOAD_CHUNK: Final[int] = 256 * 1024
 #: İmzalı linkin ömrü — yükləmə üçün kifayət, paylaşmaq üçün qısa.
-SIGNED_URL_TTL_SECONDS: Final[int] = 60 * 60
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`UPDATE_SIGNED_URL_TTL_SECONDS`, seed: migrations/032).
+FALLBACK_SIGNED_URL_TTL_SECONDS: Final[int] = fallback_int(
+    SystemLimitKey.UPDATE_SIGNED_URL_TTL_SECONDS
+)
+
+#: Kataloq sorğusunun oxuduğu sətir tavanı — FALLBACK; HƏQİQİ MƏNBƏ
+#: `system_limits` (`UPDATE_CATALOG_FETCH_LIMIT`). Sorğu son N sətri gətirir
+#: və İLK OXUNA BİLƏNİ seçir (bax `latest` docstring-i); N nə qədər böyükdürsə
+#: yararsız sətirlərə qarşı dözüm bir o qədər artır, sorğu isə ağırlaşır.
+FALLBACK_CATALOG_FETCH_LIMIT: Final[int] = fallback_int(SystemLimitKey.UPDATE_CATALOG_FETCH_LIMIT)
 
 _LATEST_SQL: Final[str] = """
     SELECT version_number, channel, storage_path, sha256_hash, size_bytes,
@@ -75,7 +98,7 @@ _LATEST_SQL: Final[str] = """
       FROM app_versions
      WHERE channel = %s AND published_at IS NOT NULL
      ORDER BY published_at DESC
-     LIMIT 20
+     LIMIT %s
 """
 
 #: Miqrasiya 009-dan ƏVVƏLKİ sxem. Klient `.exe` ilə baza miqrasiyası ayrı-ayrı
@@ -89,7 +112,7 @@ _LATEST_SQL_LEGACY: Final[str] = """
       FROM app_releases
      WHERE channel = %s AND published_at IS NOT NULL
      ORDER BY published_at DESC
-     LIMIT 20
+     LIMIT %s
 """
 
 
@@ -105,6 +128,7 @@ class SupabaseReleaseCatalog:
         bucket: str = "",
         client: httpx.Client | None = None,
         use_signed_url: bool = False,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
         self._database = database
         self._base_url = (base_url or os.environ.get(SUPABASE_URL_ENV, "")).rstrip("/")
@@ -112,6 +136,18 @@ class SupabaseReleaseCatalog:
         self._bucket = bucket or os.environ.get(UPDATE_BUCKET_ENV, "") or DEFAULT_BUCKET
         self._http = client
         self._use_signed_url = use_signed_url
+        self._limits = limits or InfrastructureLimits()
+
+    def _max_package_bytes(self) -> int:
+        """Yüklənəcək paketin yuxarı həddi — mənbə `system_limits`.
+
+        `MAX_PACKAGE_BYTES` modul sabiti YALNIZ fallback-dır (limit portu
+        ötürülməyən çağırış yolları üçün). Sıfır/mənfi dəyər həddi SÖNDÜRMÜR,
+        fallback-a qaytarır: səhv konfiqurasiya diski dolduran yükləməyə
+        icazə verməməlidir (`google_drive._max_upload_bytes` ilə eyni qayda).
+        """
+        limit = self._limits.int_of(SystemLimitKey.UPDATE_MAX_PACKAGE_BYTES)
+        return limit if limit > 0 else MAX_PACKAGE_BYTES
 
     # -------------------------------- kataloq -------------------------------- #
 
@@ -126,7 +162,10 @@ class SupabaseReleaseCatalog:
         21 filialı köhnə versiyada saxlaması demək olardı.
         """
         try:
-            rows = self._fetch(tenant_id, _LATEST_SQL, (channel.value,))
+            # `LIMIT` PARAMETRLƏŞDİRİLİB (`%s`), sətir birləşdirmə YOXDUR —
+            # CLAUDE.md §4 SQL qaydası. Dəyər onsuz da klamp edilmiş tam ədəddir.
+            fetch_limit = self._limits.int_of(SystemLimitKey.UPDATE_CATALOG_FETCH_LIMIT)
+            rows = self._fetch(tenant_id, _LATEST_SQL, (channel.value, fetch_limit))
         except UpdateUnavailableError:
             rows = self._fetch_legacy(tenant_id, channel)
 
@@ -157,7 +196,8 @@ class SupabaseReleaseCatalog:
         Hər iki cədvəl yoxdursa xəta YUXARI ötürülür — bu, artıq həqiqi
         nasazlıqdır (bağlantı yoxdur, icazə yoxdur) və gizlədilməməlidir.
         """
-        rows = self._fetch(tenant_id, _LATEST_SQL_LEGACY, (channel.value,))
+        fetch_limit = self._limits.int_of(SystemLimitKey.UPDATE_CATALOG_FETCH_LIMIT)
+        rows = self._fetch(tenant_id, _LATEST_SQL_LEGACY, (channel.value, fetch_limit))
         _log.warning(
             "UPDATE_CATALOG_LEGACY_SCHEMA",
             extra={
@@ -202,7 +242,10 @@ class SupabaseReleaseCatalog:
         headers = self._auth_headers()
         destination.parent.mkdir(parents=True, exist_ok=True)
         written = 0
-        client = self._http or httpx.Client(timeout=DOWNLOAD_TIMEOUT_SECONDS)
+        # Taymaut ENDİRMƏ ANINDA oxunur — klient hər endirmədə qurulur.
+        client = self._http or httpx.Client(
+            timeout=self._limits.float_of(SystemLimitKey.UPDATE_DOWNLOAD_TIMEOUT_SECONDS)
+        )
         try:
             url = (
                 self._signed_url(release.storage_path, client)
@@ -215,16 +258,22 @@ class SupabaseReleaseCatalog:
                         f"Paket yüklənmədi (HTTP {response.status_code})",
                         context={"status_code": response.status_code, "path": release.storage_path},
                     )
+                # Hədd DÖVRƏDƏN ƏVVƏL bir dəfə oxunur: hər 64 KB blokda
+                # `system_limits`-ə sorğu getsəydi, 500 MB-lıq paket minlərlə
+                # əlavə sorğu demək olardı. Root dəyəri yükləmənin ORTASINDA
+                # dəyişsə, cari yükləmə köhnə həddi ilə bitir — növbəti dəfə
+                # yenisi tətbiq olunur.
+                max_bytes = self._max_package_bytes()
                 with destination.open("wb") as handle:
                     for chunk in response.iter_bytes(DOWNLOAD_CHUNK):
                         written += len(chunk)
-                        if written > MAX_PACKAGE_BYTES:
+                        if written > max_bytes:
                             # Limit yükləmə ZAMANI tətbiq olunur — disk dolmur.
                             handle.close()
                             destination.unlink(missing_ok=True)
                             raise UpdateUnavailableError(
                                 "Paket gözlənilən ölçüdən böyükdür",
-                                context={"limit_bytes": MAX_PACKAGE_BYTES},
+                                context={"limit_bytes": max_bytes},
                             )
                         handle.write(chunk)
         except UpdateUnavailableError:
@@ -262,7 +311,9 @@ class SupabaseReleaseCatalog:
             response = client.post(
                 endpoint,
                 headers=self._auth_headers(),
-                json={"expiresIn": SIGNED_URL_TTL_SECONDS},
+                json={
+                    "expiresIn": self._limits.int_of(SystemLimitKey.UPDATE_SIGNED_URL_TTL_SECONDS)
+                },
             )
             response.raise_for_status()
             signed = str(response.json().get("signedURL") or "")
@@ -281,7 +332,7 @@ class SupabaseReleaseCatalog:
 
 __all__ = [
     "DEFAULT_BUCKET",
-    "SIGNED_URL_TTL_SECONDS",
+    "FALLBACK_SIGNED_URL_TTL_SECONDS",
     "SUPABASE_ANON_KEY_ENV",
     "SUPABASE_URL_ENV",
     "UPDATE_BUCKET_ENV",

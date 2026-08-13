@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.layout_utils import clear_layout
@@ -47,9 +48,20 @@ if TYPE_CHECKING:
 
 #: PIN uzunluğu (bölmə 9 — 4 rəqəm).
 PIN_LENGTH: Final = 4
-#: Maketdəki xəbərdarlıq: 3 səhv cəhddən sonra 5 dəqiqə blok.
-MAX_ATTEMPTS: Final = 3
-LOCKOUT_MINUTES: Final = 5
+
+#: PIN siyasətinin ekran tərəfi — HƏR İKİSİ FALLBACK-dır, HƏQİQİ MƏNBƏ
+#: `system_limits` (`PIN_MAX_FAILED_ATTEMPTS`, `PIN_LOCKOUT_MINUTES`;
+#: `schema.sql` §24 seed edir, `authentication.PinHandshakeUseCase` oxuyur).
+#:
+#: NİYƏ MAKETDƏKİ 3/5 SAXLANILMADI: maket "3 cəhd → 5 dəqiqə" yazırdı,
+#: sistemin FAKTİKİ siyasəti isə həmişə 5 cəhd → 15 dəqiqə olub (bölmə 2 və
+#: `DEFAULT_LIMITS`). Yəni ekrandakı ədədlər bloklamanın həqiqi həddi ilə
+#: ZİDD idi — istifadəçiyə yalan deyən mətn. İndi ədəd tək mənbədən gəlir.
+#:
+#: NİYƏ EKRAN ÖZÜ OXUMUR: ekranlar yalnız `theme` alır (CLAUDE.md §6) və bazanı
+#: TANIMIR; canlı dəyəri çağıran ötürür (`show_lockout(minutes=...)`).
+FALLBACK_PIN_MAX_ATTEMPTS: Final = int(DEFAULT_LIMITS[SystemLimitKey.PIN_MAX_FAILED_ATTEMPTS])
+FALLBACK_PIN_LOCKOUT_MINUTES: Final = int(DEFAULT_LIMITS[SystemLimitKey.PIN_LOCKOUT_MINUTES])
 
 
 # --------------------------------------------------------------------------- #
@@ -262,7 +274,22 @@ class PinPadScreen(QWidget):
         self._dots.set_error(False)
 
     def show_attempt_error(self, remaining: int) -> None:
-        """Yanlış PIN — neçə cəhd qaldığını göstərir."""
+        """Yanlış PIN — neçə cəhd qaldığını göstərir.
+
+        ──────────────────────────────────────────────────────────────────────
+        CANLI AXIN BUNU ÇAĞIRMIR — SƏBƏB STRUKTURDUR
+        ──────────────────────────────────────────────────────────────────────
+        Kiosk PIN-i ANONİMDİR: `PinHandshakeUseCase.authenticate` uyğun gəlməyən
+        PIN üçün `AuthenticationError` atır və HANSI işçinin cəhd etdiyini
+        BİLDİRMİR (mağazada 235 nəfər ola bilər; "kimin PIN-i yanlışdır"
+        sualının cavabı sızma olardı). "Qalan cəhd sayı" isə işçi-başına
+        sayğacdır (`employees.pin_failed_attempts`) — terminal onu bilmədən
+        göstərə bilməz.
+
+        Ona görə canlı yol `show_message(GENERIC_PIN_FAILURE)` işlədir
+        (`app.start_kiosk::on_pin`). Bu metod maket/e2e yoludur və `remaining`
+        DƏYƏRİNİ ÇAĞIRANDAN alır — ekranda ədəd BƏRKİDİLMİR.
+        """
         self._message.setText(f"PIN yanlışdır — {remaining} cəhd qaldı")
         self._message.setStyleSheet(f"color: {self._theme.color('--color-danger')};")
         self._dots.set_error(True)
@@ -280,8 +307,23 @@ class PinPadScreen(QWidget):
         self._dots.set_error(True)
         self.reset()
 
-    def show_lockout(self, minutes: int = LOCKOUT_MINUTES) -> None:
-        """Terminal bloklandı — klaviatura söndürülür."""
+    def show_lockout(self, minutes: int = FALLBACK_PIN_LOCKOUT_MINUTES) -> None:
+        """Terminal bloklandı — klaviatura söndürülür.
+
+        ──────────────────────────────────────────────────────────────────────
+        CANLI AXIN BUNU DA ÇAĞIRMIR — VƏ BU, QƏSDƏNDİR
+        ──────────────────────────────────────────────────────────────────────
+        Bloklama İŞÇİ-BAŞINADIR (`employees.pin_locked_until`), terminal isə
+        PAYLAŞILANdır: bir işçinin bloklanmasına görə klaviaturanı söndürsək,
+        həmin mağazanın BÜTÜN növbəsi 15 dəqiqə işə başlaya bilməzdi — yəni
+        bir nəfərin səhvi mağaza miqyaslı dayanmaya çevrilərdi. Canlı yol
+        `AccountLockedError`-u `show_message()` ilə göstərir: bloklanan işçi
+        səbəbi görür, qalanlar isə işləməyə davam edir.
+
+        Metod maket/e2e yolu üçün saxlanılır; `minutes` defoltu ROOT açarından
+        gəlir ki, gələcək bir çağıran onu ötürməyi unutsa belə ekrandakı ədəd
+        faktiki siyasətlə ZİDD olmasın.
+        """
         self._locked = True
         self._message.setText(
             f"Terminal {minutes} dəqiqə bloklandı. Mağaza rəhbərinizə müraciət edin."
@@ -316,6 +358,18 @@ class EmployeeHomeScreen(QWidget):
         photo_change_requested: "Şəkli Dəyiş".
         logout_requested: "Çıxış".
         tasks_requested / rewards_requested / appeal_requested: kart keçidləri.
+        open_shift_claim_requested: `[Bu Növbəni Götür]` (#16 — elan id-si).
+
+    ──────────────────────────────────────────────────────────────────────────
+    "AÇIQ NÖVBƏLƏR" KARTI NİYƏ STATUS DÜYMƏSİNDƏN AYRIDIR
+    ──────────────────────────────────────────────────────────────────────────
+    Bölmə 3-ün "statusa uyğun TƏK düymə" qaydası İŞ GÜNÜ AXINININA aiddir
+    (`[İşə Başladım]` → `[İcazə İstəyirəm]` → `[Mən Qayıtdım]`) — orada
+    məqsəd işçini bir addıma yönəltməkdir. Açıq növbə isə həmin axının
+    hissəsi DEYİL: o, GƏLƏCƏK bir günə aiddir və işçinin bugünkü statusundan
+    asılı deyil. Onu status düyməsinə qatsaydıq, "Mağazadayam" vəziyyətində
+    işçi ya icazə istəyə, ya növbə götürə bilərdi — ikisi bir düyməyə
+    sığmaz.
     """
 
     action_requested = Signal(object)
@@ -324,6 +378,7 @@ class EmployeeHomeScreen(QWidget):
     tasks_requested = Signal()
     rewards_requested = Signal()
     appeal_requested = Signal()
+    open_shift_claim_requested = Signal(str)
 
     def __init__(
         self,
@@ -345,7 +400,13 @@ class EmployeeHomeScreen(QWidget):
 
         layout.addWidget(self._build_header(full_name, position_name, store_name))
         layout.addWidget(self._build_status_card())
-        layout.addWidget(self._build_cards_row(), 1)
+        layout.addWidget(self._build_cards_row())
+        # #19 Elan (Broadcast, kompasos11.md Faza 8) — kartların ALTINDA, TAM
+        # ENLİ: elan sayı dəyişkəndir (0-dan bir neçəyədək) və mətn uzun ola
+        # bilər, dörd-sütunlu kartın darlığında kəsilərdi. Genişlənən stretch
+        # BURAYA keçib (əvvəl `_build_cards_row`-dadır idi) ki, boş qalan
+        # şaquli sahəni bu kart tutsun.
+        layout.addWidget(self._build_announcements_card(), 1)
 
     # ------------------------------- başlıq ---------------------------------- #
 
@@ -447,6 +508,7 @@ class EmployeeHomeScreen(QWidget):
         layout.addWidget(self._build_tasks_card(), 1)
         layout.addWidget(self._build_points_card(), 1)
         layout.addWidget(self._build_fines_card(), 1)
+        layout.addWidget(self._build_open_shifts_card(), 1)
         return container
 
     def _build_tasks_card(self) -> Card:
@@ -556,14 +618,170 @@ class EmployeeHomeScreen(QWidget):
         self._fines_deadline.setVisible(True)
         self._appeal_button.setVisible(appeal_days_left > 0)
 
+    # --------------------------- açıq növbələr (#16) -------------------------- #
+
+    def _build_open_shifts_card(self) -> Card:
+        card = Card(padding=22, spacing=12)
+
+        head = QWidget()
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(0, 0, 0, 0)
+        head_layout.addWidget(title_label("Açıq Növbələr", size=16))
+        head_layout.addWidget(stretch())
+        self._open_shift_count = title_label("0", size=16)
+        head_layout.addWidget(self._open_shift_count)
+        card.add(head)
+        card.add(Divider())
+
+        self._open_shift_body = QVBoxLayout()
+        self._open_shift_body.setSpacing(10)
+        holder = QWidget()
+        holder.setLayout(self._open_shift_body)
+        card.add(holder)
+
+        self._open_shift_hint = body_label(
+            "Hazırda sizin üçün açıq növbə yoxdur.",
+            size=13,
+        )
+        card.add(self._open_shift_hint)
+
+        card.body().addStretch(1)
+        return card
+
+    def set_open_shifts(self, shifts: list[dict[str, str]]) -> None:
+        """Açıq növbə elanlarını göstərir (#16).
+
+        Args:
+            shifts: `id`, `date`, `work_mode` açarları olan sözlüklər. Açarlar
+                maket və canlı yolda EYNİDİR (CLAUDE.md §6).
+
+        Hər sətrin ÖZ düyməsi var: tək bir "götür" düyməsi olsaydı, işçi
+        hansı növbəni götürdüyünü seçə bilməzdi.
+        """
+        clear_layout(self._open_shift_body)
+        self._open_shift_count.setText(str(len(shifts)))
+        self._open_shift_hint.setVisible(not shifts)
+
+        for shift in shifts:
+            self._open_shift_body.addWidget(self._build_open_shift_row(shift))
+
+    def _build_open_shift_row(self, shift: dict[str, str]) -> QWidget:
+        row = QWidget()
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        layout.addWidget(body_label(shift["date"], size=13))
+        layout.addWidget(muted_label(shift["work_mode"], size=12))
+
+        posting_id = shift["id"]
+        take = action_button("Bu Növbəni Götür")
+        take.setMinimumHeight(44)  # bölmə 9 — toxunma hədəfinin minimumu
+        take.clicked.connect(
+            lambda _=False, key=posting_id: self.open_shift_claim_requested.emit(key)
+        )
+        layout.addWidget(take)
+        return row
+
+    def set_open_shift_message(self, message: str) -> None:
+        """Tutma cəhdinin nəticəsi — YARIŞI UDUZAN İŞÇİ BUNU GÖRÜR (#16).
+
+        Uduzan sükutla qalmamalıdır: düymə basıldı, siyahı yeniləndi və növbə
+        yoxa çıxdı — izahsız bu, "sistem işləmir" kimi qavranılardı. Mətn
+        kontrollerdən gəlir (`error.user_message`), ekran onu YENİDƏN
+        yazmır — bir mesajın iki mənbəyi olmamalıdır.
+        """
+        self._open_shift_hint.setText(message or "Hazırda sizin üçün açıq növbə yoxdur.")
+        self._open_shift_hint.setVisible(True)
+
+    # -------------------------------- elanlar (#19) ---------------------------- #
+
+    def _build_announcements_card(self) -> Card:
+        """ "Elanlar" kartı — #19 (kompasos11.md Faza 8).
+
+        BİR-TƏRƏFLİDİR: bu kartda "Cavab Yaz" və ya oxşar düymə YOXDUR və
+        ƏLAVƏ EDİLMİR — dəstək çatından (`SupportChatWidget`) fərqli olaraq
+        elan yalnız OXUNUR (modul başlığındakı "Açıq Növbələr" kartının
+        struktur ikizidir, lakin BURADA heç bir `[...]_requested` siqnalı
+        yoxdur, çünki işçinin bu kartda edə biləcəyi HEÇ BİR əməliyyat yoxdur).
+        """
+        card = Card(padding=22, spacing=12)
+
+        head = QWidget()
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(0, 0, 0, 0)
+        head_layout.addWidget(title_label("Elanlar", size=16))
+        head_layout.addWidget(stretch())
+        self._announcement_count = title_label("0", size=16)
+        head_layout.addWidget(self._announcement_count)
+        card.add(head)
+        card.add(Divider())
+
+        self._announcement_body = QVBoxLayout()
+        self._announcement_body.setSpacing(12)
+        holder = QWidget()
+        holder.setLayout(self._announcement_body)
+        card.add(holder)
+
+        self._announcement_hint = body_label("Hazırda aktiv elan yoxdur.", size=13)
+        card.add(self._announcement_hint)
+
+        card.body().addStretch(1)
+        return card
+
+    def set_announcements(self, announcements: list[dict[str, str]]) -> None:
+        """Aktiv elanları göstərir (#19).
+
+        Args:
+            announcements: `title`, `message`, `scope_text`, `date` açarları
+                olan sözlüklər — ən yeni elan ƏVVƏLDƏ. Açarlar maket
+                (`preview_screens`) və canlı yolda (`controllers/
+                announcements.py`) EYNİDİR (CLAUDE.md §6).
+        """
+        clear_layout(self._announcement_body)
+        self._announcement_count.setText(str(len(announcements)))
+        self._announcement_hint.setVisible(not announcements)
+
+        for item in announcements:
+            self._announcement_body.addWidget(self._build_announcement_row(item))
+
+    def _build_announcement_row(self, item: dict[str, str]) -> QWidget:
+        row = QWidget()
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        head = QWidget()
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(0, 0, 0, 0)
+        head_layout.setSpacing(8)
+        head_layout.addWidget(body_label(item.get("title", ""), size=13))
+        head_layout.addWidget(stretch())
+        scope_text = item.get("scope_text", "")
+        if scope_text:
+            head_layout.addWidget(mono_label(scope_text, muted=True, size=11))
+        layout.addWidget(head)
+
+        # `body_label` (`muted_label` DEYİL): elan mətni sərbəst uzunluqdadır
+        # və `muted_label` sətir sarğısı (word wrap) TƏTBİQ ETMİR — uzun elan
+        # kartın kənarından kəsilib itərdi.
+        message = body_label(item.get("message", ""), size=12)
+        message.setStyleSheet(f"color: {self._theme.color('--color-text-secondary')};")
+        layout.addWidget(message)
+        date_text = item.get("date", "")
+        if date_text:
+            layout.addWidget(mono_label(date_text, muted=True, size=11))
+
+        return row
+
     @property
     def status(self) -> WorkerStatus:
         return self._status
 
 
 __all__ = [
-    "LOCKOUT_MINUTES",
-    "MAX_ATTEMPTS",
+    "FALLBACK_PIN_LOCKOUT_MINUTES",
+    "FALLBACK_PIN_MAX_ATTEMPTS",
     "PIN_LENGTH",
     "EmployeeHomeScreen",
     "PinDots",

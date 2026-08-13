@@ -46,7 +46,9 @@ import threading
 import traceback
 from typing import TYPE_CHECKING, Any, Final
 
+from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.licensing import CrashReport, anonymous_tenant_ref
+from src.infrastructure.config.limits import InfrastructureLimits, fallback_int
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
@@ -58,7 +60,14 @@ _log = get_logger(__name__)
 _error_log = get_logger(__name__, channel=LogChannel.ERROR)
 
 #: Eyni barmaq izi üçün bir sessiyada göndərilən maksimum hesabat.
-MAX_REPORTS_PER_FINGERPRINT: Final[int] = 3
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`CRASH_MAX_REPORTS_PER_FINGERPRINT`, seed: migrations/032). Diaqnostika
+#: dövründə hazırlayıcı eyni çökmənin daha çox nüsxəsini görmək istəyə bilər;
+#: sabit 3 bunu yalnız yeni buraxılışla mümkün edərdi.
+FALLBACK_MAX_REPORTS_PER_FINGERPRINT: Final[int] = fallback_int(
+    SystemLimitKey.CRASH_MAX_REPORTS_PER_FINGERPRINT
+)
 #: Barmaq izinə daxil olan ən dərin çərçivə sayı. Çox olsa, eyni bug fərqli
 #: çağırış yollarından gəldikdə ayrı qruplara bölünərdi.
 FINGERPRINT_FRAMES: Final[int] = 5
@@ -129,13 +138,20 @@ class CrashReporter:
         tenant_id: TenantId,
         app_version: str,
         enabled: bool = True,
-        max_per_fingerprint: int = MAX_REPORTS_PER_FINGERPRINT,
+        max_per_fingerprint: int | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
+        """
+        Args:
+            max_per_fingerprint: AÇIQ üstünlük — verilərsə ROOT dəyəri OXUNMUR.
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback.
+        """
         self._sink = sink
         self._reference = anonymous_tenant_ref(tenant_id)
         self._app_version = app_version
         self._enabled = enabled
-        self._max_per_fingerprint = max_per_fingerprint
+        self._explicit_max_per_fingerprint = max_per_fingerprint
+        self._limits = limits or InfrastructureLimits()
         self._lock = threading.Lock()
         self._counts: dict[str, int] = {}
         self._os_version = _os_label()
@@ -201,17 +217,24 @@ class CrashReporter:
         """Tutulmuş (handled) istisna üçün qısa yol."""
         return self.report(type(exc), exc, exc.__traceback__)
 
+    def _max_per_fingerprint(self) -> int:
+        """Tavan — HƏR ÇÖKMƏDƏ oxunur (reporter tətbiqin ömrü boyu yaşayır)."""
+        if self._explicit_max_per_fingerprint is not None:
+            return self._explicit_max_per_fingerprint
+        return self._limits.int_of(SystemLimitKey.CRASH_MAX_REPORTS_PER_FINGERPRINT)
+
     def _allow(self, fingerprint: str) -> bool:
+        limit = self._max_per_fingerprint()
         with self._lock:
             seen = self._counts.get(fingerprint, 0)
-            if seen >= self._max_per_fingerprint:
+            if seen >= limit:
                 return False
             self._counts[fingerprint] = seen + 1
-            first_over_limit = seen + 1 == self._max_per_fingerprint
+            first_over_limit = seen + 1 == limit
         if first_over_limit:
             _log.info(
                 "CRASH_REPORT_RATE_LIMITED",
-                extra={"fingerprint": fingerprint, "limit": self._max_per_fingerprint},
+                extra={"fingerprint": fingerprint, "limit": limit},
             )
         return True
 
@@ -256,8 +279,8 @@ def install_crash_reporting(reporter: CrashReporter) -> None:
 
 
 __all__ = [
+    "FALLBACK_MAX_REPORTS_PER_FINGERPRINT",
     "FINGERPRINT_FRAMES",
-    "MAX_REPORTS_PER_FINGERPRINT",
     "MAX_TRACE_CHARS",
     "CrashReporter",
     "fingerprint_of",

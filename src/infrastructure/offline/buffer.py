@@ -45,6 +45,12 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
+from src.domain.policies import SystemLimitKey
+from src.infrastructure.config.limits import (
+    InfrastructureLimits,
+    fallback_float,
+    fallback_int_tuple,
+)
 from src.shared.logger import get_logger
 
 if TYPE_CHECKING:
@@ -55,7 +61,23 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 
 #: Cəhd sayına görə gözləmə (spesifikasiya bölmə 5: 30s → 2dq → 10dq).
-BACKOFF_SCHEDULE_SECONDS: Final[tuple[int, ...]] = (30, 120, 600)
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`OFFLINE_RETRY_BACKOFF_SECONDS`, seed: migrations/032). Cədvəl vergüllü
+#: siyahıdır, çünki addımların SIRASI mənalıdır (bax
+#: `EMPLOYEE_DOCUMENT_EXPIRY_WARNING_DAYS` əsaslandırması).
+FALLBACK_BACKOFF_SCHEDULE_SECONDS: Final[tuple[int, ...]] = fallback_int_tuple(
+    SystemLimitKey.OFFLINE_RETRY_BACKOFF_SECONDS
+)
+
+#: SQLite kilid gözləmə taymautu — FALLBACK; HƏQİQİ MƏNBƏ `system_limits`
+#: (`OFFLINE_SQLITE_TIMEOUT_SECONDS`). Bufer faylı antivirus taramasına və ya
+#: yavaş diskə düşəndə 10 saniyə çatmaya bilər; taymaut bitəndə `sqlite3`
+#: "database is locked" atır və YAZI İTİR — məhz bu, offline-first-un
+#: qorumalı olduğu haldır.
+FALLBACK_SQLITE_TIMEOUT_SECONDS: Final[float] = fallback_float(
+    SystemLimitKey.OFFLINE_SQLITE_TIMEOUT_SECONDS
+)
 
 #: Bu cədvəllərdə "sonuncu yazan qalib gəlir" QADAĞANDIR (bölmə 5).
 #:
@@ -152,15 +174,30 @@ class OfflineBuffer:
         db_path: Path | str,
         *,
         encryption: EncryptionService,
-        backoff_schedule: tuple[int, ...] = BACKOFF_SCHEDULE_SECONDS,
+        backoff_schedule: tuple[int, ...] | None = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
+        """
+        Args:
+            backoff_schedule: AÇIQ üstünlük — verilərsə ROOT dəyəri OXUNMUR.
+            limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback-lar.
+
+        SQLite taymautu BURADA — bağlantı qurularkən — həll olunur, çünki
+        `sqlite3.connect()` onu sonradan qəbul etmir. Bufer prosesin ömrü
+        boyu bir dəfə açılır; Root dəyişikliyi növbəti başlanğıcda qüvvəyə
+        minir (backoff cədvəli isə hər cəhddə oxunur).
+        """
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._encryption = encryption
-        self._backoff = backoff_schedule
+        self._explicit_backoff = backoff_schedule
+        self._limits = limits or InfrastructureLimits()
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(
-            self._path, check_same_thread=False, isolation_level=None, timeout=10.0
+            self._path,
+            check_same_thread=False,
+            isolation_level=None,
+            timeout=self._limits.float_of(SystemLimitKey.OFFLINE_SQLITE_TIMEOUT_SECONDS),
         )
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -168,6 +205,18 @@ class OfflineBuffer:
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
         _log.info("OFFLINE_BUFFER_OPENED", extra={"path": str(self._path)})
+
+    def _backoff_schedule(self) -> tuple[int, ...]:
+        """Təkrar cəhd cədvəli — HƏR UĞURSUZLUQDA oxunur.
+
+        Bufer prosesin bütün ömrü boyu açıq qalır; cədvəli konstruktorda
+        dondursaydıq, Root-un dəyişikliyi yalnız tətbiq yenidən açılanda
+        qüvvəyə minərdi — halbuki dəyişiklik məhz uzun-sürən offline
+        dövründə lazım olur.
+        """
+        if self._explicit_backoff is not None:
+            return self._explicit_backoff
+        return self._limits.int_tuple_of(SystemLimitKey.OFFLINE_RETRY_BACKOFF_SECONDS)
 
     def close(self) -> None:
         with self._lock:
@@ -293,7 +342,8 @@ class OfflineBuffer:
         with self._lock, self._transaction() as conn:
             row = conn.execute("SELECT attempts FROM outbox WHERE id = ?", (entry_id,)).fetchone()
             attempts = (row["attempts"] if row else 0) + 1
-            delay = self._backoff[min(attempts - 1, len(self._backoff) - 1)]
+            schedule = self._backoff_schedule()
+            delay = schedule[min(attempts - 1, len(schedule) - 1)]
             next_at = moment + timedelta(seconds=delay)
             conn.execute(
                 """UPDATE outbox
@@ -455,7 +505,7 @@ class _SqliteTransaction:
             self._conn.execute("ROLLBACK")
 
 
-def iter_backoff(schedule: tuple[int, ...] = BACKOFF_SCHEDULE_SECONDS) -> Iterator[int]:
+def iter_backoff(schedule: tuple[int, ...] = FALLBACK_BACKOFF_SCHEDULE_SECONDS) -> Iterator[int]:
     """Cədvəli verir, sonuncu dəyəri təkrarlayır (sonsuz geri çəkilmə yoxdur)."""
     yield from schedule
     while True:
@@ -464,7 +514,8 @@ def iter_backoff(schedule: tuple[int, ...] = BACKOFF_SCHEDULE_SECONDS) -> Iterat
 
 __all__ = [
     "AUDIT_CRITICAL_TABLES",
-    "BACKOFF_SCHEDULE_SECONDS",
+    "FALLBACK_BACKOFF_SCHEDULE_SECONDS",
+    "FALLBACK_SQLITE_TIMEOUT_SECONDS",
     "BufferedWrite",
     "OfflineBuffer",
     "Operation",

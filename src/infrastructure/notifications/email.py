@@ -36,6 +36,8 @@ from email.message import EmailMessage as MimeMessage
 from email.utils import formataddr
 from typing import TYPE_CHECKING, Final
 
+from src.domain.policies import SystemLimitKey
+from src.infrastructure.config.limits import InfrastructureLimits, fallback_float
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import get_logger
 
@@ -51,10 +53,17 @@ SMTP_USER_ENV: Final[str] = "KOMPASOS_SMTP_USER"
 SMTP_PASSWORD_ENV: Final[str] = "KOMPASOS_SMTP_PASSWORD"  # noqa: S105
 SMTP_FROM_ENV: Final[str] = "KOMPASOS_SMTP_FROM"
 
+#: PORTLAR KÖÇÜRÜLMÜR: 587/465 SMTP STANDARTIDIR (RFC 6409 / implicit TLS),
+#: müəssisə siyasəti deyil — onları Root panelindən dəyişmək mənasızdır,
+#: qeyri-standart port isə onsuz da `KOMPASOS_SMTP_PORT` ilə verilir.
 DEFAULT_SMTP_PORT: Final[int] = 587
 #: Bu portda TLS bağlantının ƏVVƏLİNDƏ başlayır (STARTTLS deyil).
 IMPLICIT_TLS_PORT: Final[int] = 465
-DEFAULT_TIMEOUT_SECONDS: Final[float] = 15.0
+#: TAYMAUT isə köçürülür — FALLBACK-dır, HƏQİQİ MƏNBƏ `system_limits`
+#: (`EMAIL_SMTP_TIMEOUT_SECONDS`, seed: migrations/032). Uzaq SMTP relay-i
+#: (məs. xarici provayder + zəif kanal) 15 saniyəyə çatmaya bilər və hər
+#: bildiriş taymautla bitərdi.
+FALLBACK_TIMEOUT_SECONDS: Final[float] = fallback_float(SystemLimitKey.EMAIL_SMTP_TIMEOUT_SECONDS)
 #: Göndərənin görünən adı — qutuda "KompasOS" kimi tanınsın.
 SENDER_DISPLAY_NAME: Final[str] = "KompasOS"
 
@@ -92,7 +101,8 @@ class EmailConfig:
     username: str = ""
     password: str = ""
     sender: str = ""
-    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    #: `None` = taymaut ROOT-dan (`EMAIL_SMTP_TIMEOUT_SECONDS`) oxunur.
+    timeout_seconds: float | None = None
 
     def __repr__(self) -> str:
         return (
@@ -157,11 +167,23 @@ class SmtpEmailSender:
         config: EmailConfig | None = None,
         *,
         transport: object = None,
+        limits: InfrastructureLimits | None = None,
     ) -> None:
         self._config = config
         # Testdə `smtplib.SMTP` əvəzinə saxta obyekt verilir — real şəbəkə
         # bağlantısı olmadan bütün axın (STARTTLS, login, send) yoxlanılır.
         self._transport = transport
+        self._limits = limits or InfrastructureLimits()
+
+    def _timeout_for(self, config: EmailConfig) -> float:
+        """Soket taymautu — HƏR GÖNDƏRİŞDƏ həll olunur.
+
+        Konfiqurasiyada açıq ədəd varsa O QALIR (mühit dəyişəni ilə verilmiş
+        xüsusi quraşdırma); əks halda ROOT dəyəri oxunur.
+        """
+        if config.timeout_seconds is not None:
+            return config.timeout_seconds
+        return self._limits.float_of(SystemLimitKey.EMAIL_SMTP_TIMEOUT_SECONDS)
 
     @property
     def is_configured(self) -> bool:
@@ -220,11 +242,10 @@ class SmtpEmailSender:
     def _open(self, config: EmailConfig, context: ssl.SSLContext) -> smtplib.SMTP:
         if self._transport is not None:
             return self._transport(config)  # type: ignore[operator, no-any-return]
+        timeout = self._timeout_for(config)
         if config.uses_implicit_tls:
-            return smtplib.SMTP_SSL(
-                config.host, config.port, timeout=config.timeout_seconds, context=context
-            )
-        return smtplib.SMTP(config.host, config.port, timeout=config.timeout_seconds)
+            return smtplib.SMTP_SSL(config.host, config.port, timeout=timeout, context=context)
+        return smtplib.SMTP(config.host, config.port, timeout=timeout)
 
 
 def _build_mime(message: OutgoingEmail, config: EmailConfig) -> MimeMessage:

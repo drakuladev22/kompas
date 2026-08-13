@@ -14,10 +14,12 @@ from typing import Any
 import pytest
 
 from src.domain.value_objects.authorization import HardlockLevel
+from src.domain.value_objects.catalogs import MAX_LEAVE_DURATION_MINUTES
 from src.domain.value_objects.identifiers import EmployeeId, StoreId, TenantId
 from src.infrastructure.persistence.config_repositories import (
     PostgresCameraAssignmentRepository,
     PostgresFeatureToggles,
+    PostgresLeaveTypeRepository,
     PostgresPermissionFlagRepository,
     PostgresShiftRepository,
     PostgresSystemLimits,
@@ -243,3 +245,106 @@ def test_duplicate_flag_creation_is_not_silently_swallowed() -> None:
     sql, _ = conn.executed[-1]
     assert "INSERT INTO permission_flags" in sql
     assert "ON CONFLICT" not in sql
+
+
+# --------------------------------------------------------------------------- #
+# İcazə növünün ROOT tavanı (Faza 10.2, üçüncü dalğa)
+# --------------------------------------------------------------------------- #
+#
+# NİYƏ OXU YOLU DA TAVANI BİLMƏLİDİR: `LeaveType` tavanı `__post_init__`-də
+# yoxlayır və obyekt həm YAZI anında, həm də bazadan BƏRPA edilərkən qurulur.
+# Root tavanı qaldırıb 900 dəqiqəlik növ yaratsaydı, növbəti oxu modul
+# fallback-ı (720) ilə həmin sətri RƏDD edərdi — yəni kataloq ekranı öz
+# yazdığı sətri geri oxuya bilməzdi. Aşağıdakı testlər bu halqanı bağlayır.
+
+
+class _RoutedCursor:
+    """SQL-in ilk açar sözünə görə fərqli sətir dəsti qaytaran kursor."""
+
+    def __init__(self, routes: dict[str, list[dict[str, Any]]], log: list[str]) -> None:
+        self._routes = routes
+        self._log = log
+        self._rows: list[dict[str, Any]] = []
+        self.rowcount = 0
+
+    def __enter__(self) -> _RoutedCursor:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+        flat = " ".join(sql.split())
+        self._log.append(flat)
+        table = "system_limits" if "system_limits" in flat else "leave_types"
+        self._rows = self._routes.get(table, [])
+
+    def fetchone(self) -> dict[str, Any] | None:
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self) -> list[dict[str, Any]]:
+        return self._rows
+
+
+class _RoutedConnection:
+    def __init__(self, routes: dict[str, list[dict[str, Any]]]) -> None:
+        self.routes = routes
+        self.executed: list[str] = []
+
+    def cursor(self) -> _RoutedCursor:
+        return _RoutedCursor(self.routes, self.executed)
+
+
+def _leave_type_rows(*minutes: int) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": uuid.uuid4(),
+            "tenant_id": TENANT,
+            "name_az": f"Növ {index}",
+            "default_duration_minutes": value,
+            "is_active": True,
+        }
+        for index, value in enumerate(minutes)
+    ]
+
+
+def test_leave_type_read_path_uses_the_root_ceiling() -> None:
+    """Root tavanı 1200-dürsə, 900 dəqiqəlik sətir OXUNA bilməlidir."""
+    conn = _RoutedConnection(
+        {
+            "system_limits": [{"limit_value": "1200"}],
+            "leave_types": _leave_type_rows(900),
+        }
+    )
+    repo = PostgresLeaveTypeRepository(conn, _Context(TENANT))  # type: ignore[arg-type]
+
+    entries = repo.list_all(TENANT, include_inactive=True)
+
+    assert [entry.default_duration_minutes for entry in entries] == [900]
+
+
+def test_leave_type_read_path_falls_back_when_the_limit_row_is_missing() -> None:
+    """Limit sətri yoxdursa modul fallback-ı işləyir — davranış köhnə ilə eyni."""
+    conn = _RoutedConnection(
+        {"system_limits": [], "leave_types": _leave_type_rows(MAX_LEAVE_DURATION_MINUTES)}
+    )
+    repo = PostgresLeaveTypeRepository(conn, _Context(TENANT))  # type: ignore[arg-type]
+
+    assert repo.max_duration_minutes(TENANT) == MAX_LEAVE_DURATION_MINUTES
+    assert len(repo.list_all(TENANT)) == 1
+
+
+def test_leave_type_ceiling_is_read_once_per_query_not_per_row() -> None:
+    """Onlarla sətirlik kataloq üçün limit sorğusu BİR dəfə getməlidir."""
+    conn = _RoutedConnection(
+        {
+            "system_limits": [{"limit_value": "1200"}],
+            "leave_types": _leave_type_rows(30, 45, 60, 900),
+        }
+    )
+    repo = PostgresLeaveTypeRepository(conn, _Context(TENANT))  # type: ignore[arg-type]
+
+    repo.list_all(TENANT)
+
+    limit_queries = [sql for sql in conn.executed if "system_limits" in sql]
+    assert len(limit_queries) == 1

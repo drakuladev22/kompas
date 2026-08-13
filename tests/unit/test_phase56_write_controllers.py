@@ -254,10 +254,16 @@ class _SalesScreen:
         self.sales: list[dict[str, str]] = []
         self.total = ""
         self.errors: list[tuple[str, str]] = []
+        #: «Zəif uyğunluq» rəng həddi ARTIQ ROOT-dandır (Faza 10.2) — kontroller
+        #: onu hər doldurmada ötürür, ona görə sahtə də qəbul etməlidir.
+        self.low_confidence: int | None = None
 
     def set_sales(self, sales: list[dict[str, str]], *, total_amount: str) -> None:
         self.sales = sales
         self.total = total_amount
+
+    def set_low_confidence_threshold(self, percent: int) -> None:
+        self.low_confidence = percent
 
     def show_error(self, *, title: str, message: str) -> None:
         self.errors.append((title, message))
@@ -395,6 +401,10 @@ class _ProfileScreen:
     def set_sessions(self, sessions: list[tuple[str, str, str]]) -> None:
         self.sessions = sessions
 
+    def set_performance_history(self, rows: list[dict[str, str]]) -> None:
+        """#20 (kompasos11.md Faza 8) — bax `_PerformanceReviews` şərhi."""
+        self.performance_history = rows
+
     def show_error(self, *, title: str, message: str) -> None:
         self.errors.append((title, message))
 
@@ -472,12 +482,26 @@ class _ProfileUow:
         return _PermissionFlagCatalog()
 
 
+class _PerformanceReviews:
+    """`performance_reviews` use case-i — #20 (kompasos11.md Faza 8).
+
+    Boş siyahı qaytarır: bu fayl profil YAZI axınını (ad dəyişikliyi) sınayır,
+    performans tarixçəsi onun əhatəsindən kənardır. Metod olmasaydı
+    `ProfileController.refresh` `AttributeError` alıb xəta yoluna düşərdi
+    (`_ProfileConnection` şərhindəki eyni əsaslandırma).
+    """
+
+    def list_own(self, *, tenant_id: Any, employee: Any) -> list[Any]:
+        return []
+
+
 class _ProfileSession:
     def __init__(self, employee: Any, users: _Users) -> None:
         self.tenant_id = TENANT
         self.users = users
         self.uow = _ProfileUow(employee)
         self.employee_profile = _EmployeeProfileAccess()
+        self.performance_reviews = _PerformanceReviews()
         self.commits = 0
 
     def commit(self) -> None:

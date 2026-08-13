@@ -11,7 +11,18 @@ tarixi kimi verir və mühasibatlıq dövrü də bu iki nöqtəyə bağlıdır. 
 tərəfindən dəyişdirilə bilsəydi, bir tenant-da iyunda, digərində avqustda
 sıfırlanma olardı və "xalım niyə itdi?" sualı hər tenant üçün fərqli cavab
 tələb edərdi. Ona görə burada sabitdir; TƏNZİMLƏNƏN olan yalnız bildiriş
-qabaqcadanlığıdır (14 gün defolt, `system_limits` ilə uzadıla bilər).
+qabaqcadanlığıdır — `SystemLimitKey.SALES_POINTS_RESET_NOTICE_DAYS`
+(defolt 14 gün, seed: migrations/033).
+
+──────────────────────────────────────────────────────────────────────────────
+BU FAYLDA ARTIQ SƏRBƏST ƏDƏD YOXDUR (Faza 10.2 düzəlişi)
+──────────────────────────────────────────────────────────────────────────────
+Üç dəyər — xal kursu, etiraz pəncərəsi və bildiriş qabaqcadanlığı — əvvəl
+burada ədədlə yazılırdı. İkisinin şərhi hətta "ROOT-dan idarə olunur" DEYİRDİ,
+halbuki uyğun `SystemLimitKey` MÖVCUD DEYİLDİ: yəni sənəd doğru, kod yanlış
+idi və heç bir test bu fərqi tutmurdu. İndi üçü də `DEFAULT_LIMITS`-dən
+oxunur (naxış: `domain.labor_rules.LaborLimits.defaults()`) və bu modul
+sabitləri YALNIZ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits` cədvəlidir.
 
 ──────────────────────────────────────────────────────────────────────────────
 SIFIRLANMA NİYƏ "HARD RESET"-dir, AMMA TARİXÇƏ SİLİNMİR
@@ -31,23 +42,46 @@ from decimal import Decimal
 from enum import Enum
 from typing import Final
 
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.scheduling import require_aware
 from src.shared.exceptions import KompasOSError
 
-#: Sıfırlanma ayları — 1 Yanvar və 1 İyul (bölmə 6).
+#: Sıfırlanma ayları — 1 Yanvar və 1 İyul (bölmə 6). ROOT PARAMETRİ DEYİL:
+#: mühasibatlıq dövrü bu iki nöqtəyə bağlıdır (bax modul başlığı).
 RESET_MONTHS: Final[tuple[int, int]] = (1, 7)
-#: Sıfırlanmadan neçə gün əvvəl işçiyə bildiriş gedir (bölmə 6).
-DEFAULT_RESET_NOTICE_DAYS: Final[int] = 14
-#: Xal etirazı üçün pəncərə — cərimə ilə EYNİ (bölmə 6: "eyni məntiqlə").
-POINTS_DISPUTE_WINDOW_HOURS: Final[int] = 72
 
-#: Neçə AZN brutto satış 1 xal qazandırır (defolt). ROOT İdarə Mərkəzindən
-#: `POINTS_PER_CURRENCY_UNIT` limiti ilə dəyişdirilir.
+#: Sıfırlanmadan neçə gün əvvəl işçiyə bildiriş gedir (bölmə 6).
+#: FALLBACK — HƏQİQİ MƏNBƏ `system_limits.SALES_POINTS_RESET_NOTICE_DAYS`
+#: (seed: migrations/033); bu dəyər yalnız limit portu olmayan çağırış
+#: yollarında (saf domen testi, offline ilk işə düşmə) işlənir.
+DEFAULT_RESET_NOTICE_DAYS: Final[int] = int(
+    DEFAULT_LIMITS[SystemLimitKey.SALES_POINTS_RESET_NOTICE_DAYS]
+)
+
+#: Xal etirazı üçün pəncərə (saat).
+#: FALLBACK — HƏQİQİ MƏNBƏ `system_limits.SALES_POINTS_DISPUTE_WINDOW_HOURS`.
+#:
+#: NİYƏ CƏRİMƏ AÇARINDAN AYRIDIR: defolt cərimə ilə EYNİDİR (72 — bölmə 6
+#: "eyni məntiqlə" tələbi), lakin açar ayrıdır. Bağlı olsaydılar, Root cərimə
+#: etiraz pəncərəsini uzadanda xal pəncərəsi də SÜKUTLA uzanardı — halbuki
+#: sayğaclar fərqli andan başlayır (xal `awarded_at`-dan, cərimə `publish()`
+#: -dan) və biri pul kəsintisi, digəri mükafat kursudur. Əvvəlki kod isə nə
+#: bağlı, nə də idarə olunan idi: şərh "cərimə ilə EYNİ" deyirdi, ədəd isə
+#: burada donmuşdu və cərimə pəncərəsi dəyişəndə 72-də qalırdı.
+POINTS_DISPUTE_WINDOW_HOURS: Final[int] = int(
+    DEFAULT_LIMITS[SystemLimitKey.SALES_POINTS_DISPUTE_WINDOW_HOURS]
+)
+
+#: Neçə AZN brutto satış 1 xal qazandırır.
+#: FALLBACK — HƏQİQİ MƏNBƏ `system_limits.SALES_POINTS_CURRENCY_PER_POINT`
+#: (ROOT İdarə Mərkəzi ekranında görünür, dəyişikliyi audit-lənir).
 #:
 #: NİYƏ "hər N AZN-ə 1 xal", "hər satışa 1 xal" DEYİL: ikincisi satıcını
 #: bir böyük satışı bir neçə çekə bölməyə həvəsləndirərdi və 1C-dəki sənəd
 #: sayı süni şişərdi. Məbləğ-əsaslı qayda belə oyunu mənasız edir.
-DEFAULT_CURRENCY_PER_POINT: Final[Decimal] = Decimal("100")
+DEFAULT_CURRENCY_PER_POINT: Final[Decimal] = Decimal(
+    DEFAULT_LIMITS[SystemLimitKey.SALES_POINTS_CURRENCY_PER_POINT]
+)
 
 
 def points_for_amount(

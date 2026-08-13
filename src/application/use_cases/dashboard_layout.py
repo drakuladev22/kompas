@@ -113,6 +113,45 @@ WIDGET_CATALOG: Final[tuple[DashboardWidget, ...]] = (
         description_az="Sizə təyin olunmuş və təsdiq gözləyən tapşırıqlar.",
         feature_module="tasks",
     ),
+    # --- #24 Çox-Mağaza Benchmark Dashboard (kompasos11.md Faza 9A) --------- #
+    #
+    # DÖRDÜ DƏ `can_export_reports` İLƏ QAPILANIR — `menu.py`-dakı
+    # "Hesabatlar" maddəsinin eyni flag-i (schema.sql §23 rol-defolt
+    # cədvəlində DƏQİQ Root/CEO/Admin/HR_Admin dördlüyünə verilib,
+    # Mağaza_Meneceri-də YOXDUR). Yeni flag YARADILMADI (bax `application.
+    # use_cases.multi_store_benchmark` modul başlığı) — kataloqun ÖZÜ
+    # süzülür ("GÖRMƏK = SƏLAHİYYƏTİN OLMASI", modul başlığı), yəni
+    # Mağaza_Meneceri bu dörd widget-i Panel Qurucusunda GÖRMÜR və
+    # düzülüşünə ƏLAVƏ EDƏ BİLMİR.
+    DashboardWidget(
+        key="ranking_table",
+        title_az="Çox-Mağaza Reytinq Cədvəli",
+        description_az=(
+            "Bütün filialları seçilmiş göstəriciyə (cərimə/davamiyyət/xal/"
+            "overtime/turnover) görə ən yaxşıdan ən pisə sıralayır."
+        ),
+        required_flag="can_export_reports",
+    ),
+    DashboardWidget(
+        key="store_vs_network",
+        title_az="Mağaza — Şəbəkə Ortalaması",
+        description_az="Tək mağazanın göstəricisini şəbəkə ortalaması ilə yan-yana müqayisə edir.",
+        required_flag="can_export_reports",
+    ),
+    DashboardWidget(
+        key="metric_trend",
+        title_az="Zaman-üzrə Trend",
+        description_az="Seçilmiş göstəricinin son aylar üzrə dəyişimi, filial üzrə süzülə bilər.",
+        required_flag="can_export_reports",
+    ),
+    DashboardWidget(
+        key="benchmark_outliers",
+        title_az="Kritik-Kənar (Outlier) Kartı",
+        description_az=(
+            "Şəbəkə ortalamasından statistik əhəmiyyətli dərəcədə kənar mağazaları tapır."
+        ),
+        required_flag="can_export_reports",
+    ),
 )
 
 #: Defolt düzülüş — istifadəçi heç nə qurmayıbsa göstərilən sıra.
