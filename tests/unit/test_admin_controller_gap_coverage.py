@@ -59,7 +59,23 @@ class _DeniedError(KompasOSError):
 
 
 def _actor() -> Any:
-    return type("_Actor", (), {"id": EmployeeId(uuid.uuid4())})()
+    """Minimal aktor sahtəsi.
+
+    `has_permission` İcazə Matrisi üçün lazımdır: kontroller aktorun effektiv
+    flag dəstini ekrana ötürür ki, aktorda OLMAYAN icazə xanası deaktiv
+    göstərilsin (Self-Escalation Guard-ın görüntü qarşılığı). Sahtə həmişə
+    `True` qaytarır — bu faylın testlərinin mövzusu həmin görüntü qaydası
+    deyil, kontrollerin məlumat axınıdır; qaydanın öz testi
+    `test_hierarchy_guard_role_flags.py`-dədir.
+    """
+    return type(
+        "_Actor",
+        (),
+        {
+            "id": EmployeeId(uuid.uuid4()),
+            "has_permission": lambda _self, _code, *, now: True,
+        },
+    )()
 
 
 class _Context:

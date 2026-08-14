@@ -41,10 +41,21 @@ HARDLOCK XANALARI GÖRÜNÜR, LAKİN BASILA BİLMİR
 belədir (bax sinif docstring-i): "sənin görməyə icazən yoxdur" deyil, "bu
 icazə heç kim tərəfindən dəyişdirilə bilməz". Kontroller həmin qərara
 TOXUNMUR — sadəcə `hardlock` bayrağını kataloqdan olduğu kimi ötürür.
+
+──────────────────────────────────────────────────────────────────────────────
+AKTORDA OLMAYAN İCAZƏ DƏ BASILA BİLMİR
+──────────────────────────────────────────────────────────────────────────────
+Self-Escalation Guard (`_apply_flags`) aktorun özündə olmayan flag-i rola
+verməsini rədd edir, lakin admin bunu yalnız "Yadda Saxla"-dan SONRA görürdü:
+bütün seçim geri qaytarılırdı və hansı xananın rədd edildiyi bəlli olmurdu.
+Kontroller aktorun effektiv flag dəstini onsuz da bilir, ona görə həmin
+məlumat matris sətrinin beşinci sahəsi kimi ekrana ÖTÜRÜLÜR. Yoxlamanın ÖZÜ
+burada təkrarlanmır — qərar yenə use case-dədir.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from src.shared.exceptions import KompasOSError
@@ -137,7 +148,7 @@ class PermissionMatrixController:
 
         try:
             with self._context.session(user_id=self._actor.id) as session:
-                groups = _flag_groups(session, position)
+                groups = _flag_groups(session, position, actor=self._actor)
         except Exception:
             _error_log.exception("PERMISSION_FLAGS_LOAD_FAILED", extra={"role": role_code})
             screen.show_error(
@@ -302,20 +313,36 @@ def _flag_labels(session: Session) -> dict[str, str]:
 
 
 def _flag_groups(
-    session: Session, position: Any
-) -> list[tuple[str, list[tuple[str, str, bool, bool]]]]:
+    session: Session, position: Any, *, actor: Employee | None = None
+) -> list[tuple[str, list[tuple[str, str, bool, bool, bool]]]]:
     """Kataloqu ekranın gözlədiyi qruplara çevirir.
 
     Format `PermissionMatrixScreen.set_matrix`-in FAKTİKİ oxuduğudur:
-    `(kateqoriya, [(flag, etiket, aktiv, hardlock)])` — maket yolundakı
-    `preview_data.PERMISSION_GROUPS` ilə EYNİ struktur.
+    `(kateqoriya, [(flag, etiket, aktiv, hardlock, aktorda_var)])` — maket
+    yolundakı `preview_data.PERMISSION_GROUPS` ilə EYNİ struktur.
+
+    ──────────────────────────────────────────────────────────────────────────
+    BEŞİNCİ SAHƏ QAYDA DEYİL, MƏLUMATDIR
+    ──────────────────────────────────────────────────────────────────────────
+    `aktorda_var` Self-Escalation Guard-ın TƏKRARI deyil: qərar yenə də
+    `_apply_flags`-dədir və istisna atır. Burada sadəcə həmin qərarın GİRİŞİ —
+    aktorun effektiv flag dəsti — ekrana ötürülür ki, admin rədd ediləcək
+    xananı işarələməmişdən əvvəl görsün. Yoxlamanı ekrana köçürsəydik qayda
+    üçüncü nüsxəyə sahib olardı və biri dəyişəndə digərləri arxada qalardı.
+
+    Args:
+        actor: Matrisi açan istifadəçi. `None` YALNIZ aktor kontekstinin
+            olmadığı çağırışlar üçündür (maket/test); belə halda heç bir xana
+            ƏLAVƏ olaraq deaktiv edilmir. Bu, təhlükəsizlik güzəşti deyil —
+            sahə yalnız GÖRÜNTÜNÜ idarə edir, yazını isə use case rədd edir.
     """
     from src.domain.value_objects.authorization import HardlockLevel  # noqa: PLC0415
 
     labels = _flag_labels(session)
     granted = set(position.granted_flags)
+    now = datetime.now(UTC)
 
-    grouped: dict[str, list[tuple[str, str, bool, bool]]] = {}
+    grouped: dict[str, list[tuple[str, str, bool, bool, bool]]] = {}
     for flag in session.uow.repository("permission_flags").list_all():
         category = flag.category or OTHER_CATEGORY
         grouped.setdefault(category, []).append(
@@ -324,6 +351,7 @@ def _flag_groups(
                 labels.get(flag.code, flag.code),
                 flag.code in granted,
                 flag.hardlock is not HardlockLevel.NONE,
+                actor is None or actor.has_permission(flag.code, now=now),
             )
         )
 

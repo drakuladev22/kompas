@@ -63,6 +63,7 @@ if TYPE_CHECKING:
         PermissionFlagRepository,
         PositionRepository,
     )
+    from src.domain.value_objects.authorization import PermissionFlag
     from src.domain.value_objects.identifiers import PositionId, TenantId
 
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
@@ -213,13 +214,39 @@ class PositionManagementUseCase:
 
         Fərqli yanaşma (yalnız dəyişənləri göndərmək) ekranı vəziyyət
         izləməyə məcbur edərdi; matris onsuz da bütün xanaları göndərir.
+
+        ──────────────────────────────────────────────────────────────────────
+        ÜÇ QAPI, ÜÇÜ DƏ AYRIDIR
+        ──────────────────────────────────────────────────────────────────────
+        1. `can_manage_positions` — ÜMUMİYYƏTLƏ rol redaktə edə bilirmi;
+        2. STRICT HIERARCHY GUARD — MƏHZ BU rolu redaktə edə bilirmi;
+        3. Self-Escalation + hardlock + anti-fraud — MƏHZ BU flag-i verə
+           bilirmi (`_apply_flags` → `Position.grant`).
+
+        Uzun müddət yalnız 1 və 3 var idi. Nəticə: `can_manage_positions`
+        sahibi (defolt `Root` VƏ `CEO`) ÖZ pilləsindən yuxarı rolun flag
+        dəstini redaktə edə bilirdi — praktikada CEO `Root` rolundan hardlock
+        flag-lərini çıxara bilərdi. Qapı 3 bunu tutmurdu, çünki o, VERİLƏN
+        flag-ə baxır; hücum isə GERİ ALMA yolundadır və orada heç bir yoxlama
+        yox idi.
+
+        Yoxlama BURADA da, `Position.revoke()` içində də var. Təkrar deyil:
+        bura BÜTÜN əməliyyat üçün bir dəfə işləyir (flag dəsti boş olsa belə,
+        yəni "hamısını sil" halında da), entity isə hər sətir üçün — ekranı
+        yan keçən kod birbaşa `revoke()` çağırsa qapı yenə bağlıdır.
         """
         self._require_permission(actor)
         position = self._require_position(position_id)
+        # (a) STRICT HIERARCHY GUARD — hədəf rol aktordan CİDDİ ŞƏKİLDƏ aşağı
+        #     olmalıdır (SEC-006: bərabər pillə də bloklanır, yalnız Root azaddır).
+        position.assert_may_be_edited_by(actor.position)
         before = sorted(position.granted_flags)
 
         for code in before:
-            position.revoke(code)
+            # (b) MÜTLƏQ ROOT_ONLY yoxlaması `revoke()`-un içindədir və
+            #     iyerarxiya nəticəsindən ASILI DEYİL. Kataloq tərifi ona görə
+            #     ötürülür ki, `hardlock` səviyyəsi yalnız orada yaşayır.
+            position.revoke(self._require_flag(code), actor_position=actor.position)
         granted = self._apply_flags(position, flag_codes, actor=actor)
         self._positions.save(position)
 
@@ -301,18 +328,21 @@ class PositionManagementUseCase:
         flag-ləri rola verə bilər. Bu, `permission_guards.py`-dakı fərdi
         override qaydasının rol tərəfindəki qarşılığıdır — onsuz CEO özündə
         olmayan bir flag-i custom rola qoyub həmin rolu özünə təyin edə bilərdi.
+
+        STRICT HIERARCHY GUARD burada da çağırılır, çünki bu metod İKİ yoldan
+        gəlir: `set_role_flags` (orada onsuz da yoxlanılıb) və `create_role`.
+        İkincisi olmasaydı boşluq açıq qalardı — aktor öz pilləsində (və ya
+        ondan yuxarıda) YENİ rol yaradıb ona flag doldura bilərdi, halbuki
+        `position_permissions` üzərindəki DB trigger-i həmin sətri rədd edərdi.
+        İki qatın FƏRQLİ qərar verməsi ən pis haldır: ekran "yazıldı" deyər,
+        baza isə anlaşılmaz `psycopg` xətası qaytarardı.
         """
         now = self._clock.now()
         applied: set[str] = set()
+        position.assert_may_be_edited_by(actor.position)
 
         for code in flag_codes:
-            flag = self._flags.get(code)
-            if flag is None:
-                raise PositionManagementError(
-                    f"'{code}' icazə flag-i kataloqda yoxdur",
-                    user_message="Seçilmiş icazə mövcud deyil.",
-                    context={"flag": code},
-                )
+            flag = self._require_flag(code)
             if not actor.has_permission(code, now=now):
                 _security_log.warning(
                     "POSITION_SELF_ESCALATION_BLOCKED",
@@ -322,11 +352,34 @@ class PositionManagementUseCase:
                     f"SELF-ESCALATION: özünüzdə olmayan '{code}' flag-ini rola verə bilməzsiniz",
                     context={"actor_id": str(actor.id), "flag": code},
                 )
+            # MÜTLƏQ ROOT_ONLY: `grant()`-dakı hardlock yoxlaması yalnız HƏDƏF
+            # roluna baxır, bu isə AKTORU da yoxlayır (CEO Root rolunda belə
+            # bir flag-ə toxuna bilməz) və hər iki istiqamətdə — verəndə də,
+            # alanda da — eyni qaydadır.
+            position.assert_root_only_flag_allowed(flag, actor_position=actor.position)
             # Hardlock + anti-fraud + kamera qaydaları burada işə düşür.
             position.grant(flag)
             applied.add(code)
 
         return applied
+
+    def _require_flag(self, code: str) -> PermissionFlag:
+        """Kataloq tərifi — `hardlock` səviyyəsinin YEGANƏ mənbəyi.
+
+        Kataloqda olmayan koda "hardlock yoxdur" deyə bilmərik: bu, qorumasız
+        keçid olardı. Kodun kataloqda olması onsuz da DB-də məcburidir
+        (`position_permissions.flag_code` → `permission_flags(code)` FK), yəni
+        buraya düşən naməlum kod məlumat pozulmasıdır və aydın istisna ilə
+        dayandırılır.
+        """
+        flag = self._flags.get(code)
+        if flag is None:
+            raise PositionManagementError(
+                f"'{code}' icazə flag-i kataloqda yoxdur",
+                user_message="Seçilmiş icazə mövcud deyil.",
+                context={"flag": code},
+            )
+        return flag
 
     def _require_position(self, position_id: PositionId) -> Position:
         position = self._positions.get(position_id)

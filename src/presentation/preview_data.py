@@ -416,35 +416,45 @@ ROLES: Final = [
     ("accountant", "Mühasib", 4),
 ]
 
+#: Matris sətri: (flag, etiket, aktiv, hardlock, AKTORDA VAR).
+#:
+#: BEŞİNCİ SAHƏ MAKETDƏ DƏ REALDIR — CLAUDE.md §6: "maket və canlı yol EYNİ
+#: açarları işlətməlidir". Sahə canlı yolda `PermissionMatrixController`
+#: tərəfindən aktorun effektiv flag dəstindən doldurulur; burada isə maketin
+#: fərz etdiyi aktor (`HR_Admin`) üçün əl ilə yazılıb. `False` olan iki sətir
+#: qəsdəndir: onlarsız maket "aktorda olmayan icazə" vəziyyətini HEÇ VAXT
+#: göstərməzdi və həmin görüntü qüsuru yalnız istehsalatda üzə çıxardı.
 PERMISSION_GROUPS: Final = [
     (
         "Davamiyyət və İcazə",
         [
-            ("can_view_leave", "İcazə sorğusuna baxmaq", True, False),
-            ("can_approve_leave", "İcazə təsdiqləmək", True, False),
-            ("can_delete_attendance", "Giriş/çıxış qeydini silmək", False, True),
-            ("can_fill_daily_attendance", "Tabeli təsdiqləmək", True, False),
-            ("can_override_return_time", "Vaxtı manual dəyişmək", False, False),
-            ("can_approve_dual_control_override", "Cüt nəzarət təsdiqi", False, True),
+            ("can_view_leave", "İcazə sorğusuna baxmaq", True, False, True),
+            ("can_approve_leave", "İcazə təsdiqləmək", True, False, True),
+            ("can_delete_attendance", "Giriş/çıxış qeydini silmək", False, True, True),
+            ("can_fill_daily_attendance", "Tabeli təsdiqləmək", True, False, True),
+            # Anti-fraud flag-i: maketdəki HR_Admin aktorunda YOXDUR.
+            ("can_override_return_time", "Vaxtı manual dəyişmək", False, False, False),
+            ("can_approve_dual_control_override", "Cüt nəzarət təsdiqi", False, True, True),
         ],
     ),
     (
         "Cərimə və Etiraz",
         [
-            ("can_issue_fines", "Cərimə yaratmaq", False, False),
-            ("can_view_appeals", "Etirazlara baxmaq", True, False),
-            ("can_approve_leave_appeal", "Etirazı qəbul/rədd etmək", True, False),
-            ("can_manage_fine_types", "Cərimə tariflərini dəyişmək", False, False),
-            ("can_delete_fines", "Cəriməni silmək", False, True),
-            ("can_export_reports", "Cərimə hesabatı ixracı", True, False),
+            # Kamera-xüsusi flag: HR_Admin onu daşımır, deməli paylaya da bilməz.
+            ("can_issue_fines", "Cərimə yaratmaq", False, False, False),
+            ("can_view_appeals", "Etirazlara baxmaq", True, False, True),
+            ("can_approve_leave_appeal", "Etirazı qəbul/rədd etmək", True, False, True),
+            ("can_manage_fine_types", "Cərimə tariflərini dəyişmək", False, False, True),
+            ("can_delete_fines", "Cəriməni silmək", False, True, True),
+            ("can_export_reports", "Cərimə hesabatı ixracı", True, False, True),
         ],
     ),
     (
         "Sistem",
         [
-            ("can_manage_erp_servers", "ERP server idarəetməsi", False, True),
-            ("can_manage_backups", "Ehtiyat nüsxə / Bərpa", False, True),
-            ("can_view_audit_logs", "Audit jurnalına baxmaq", True, False),
+            ("can_manage_erp_servers", "ERP server idarəetməsi", False, True, True),
+            ("can_manage_backups", "Ehtiyat nüsxə / Bərpa", False, True, True),
+            ("can_view_audit_logs", "Audit jurnalına baxmaq", True, False, True),
         ],
     ),
 ]

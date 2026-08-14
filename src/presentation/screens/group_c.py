@@ -482,6 +482,15 @@ class PermissionMatrixScreen(Screen):
     həmin icazənin ümumiyyətlə mövcud olmadığını düşünər və nə üçün
     işlədiyini başa düşməzdi. Maket də bunu izah edir: "Qıfıllı icazələr
     hardlock-dur — yalnız ROOT İdarə Mərkəzindən dəyişdirilir."
+
+    ──────────────────────────────────────────────────────────────────────
+    İKİNCİ DEAKTİV NÖV: AKTORDA OLMAYAN İCAZƏ
+    ──────────────────────────────────────────────────────────────────────
+    Qıfıldan başqa bir səbəblə də xana basıla bilmir: Self-Escalation Guard
+    aktora ÖZÜNDƏ OLMAYAN flag-i paylamağa icazə vermir. Bu, gizlətmə
+    qaydasının istisnası deyil — flag mövcuddur və rolda ola bilər, sadəcə
+    ONU verən konkret istifadəçi deyil. Gizlətsəydik admin matrisi natamam
+    sanardı; boz xana isə səbəbi tooltip-də açıq deyir.
     """
 
     role_selected = Signal(str)
@@ -646,12 +655,25 @@ class PermissionMatrixScreen(Screen):
     def set_matrix(
         self,
         role_name: str,
-        groups: list[tuple[str, list[tuple[str, str, bool, bool]]]],
+        groups: list[tuple[str, list[tuple[str, str, bool, bool, bool]]]],
     ) -> None:
         """Matrisi qurur.
 
         Args:
-            groups: (kateqoriya adı, [(flag, etiket, aktiv, hardlock)]).
+            groups: (kateqoriya adı, [(flag, etiket, aktiv, hardlock, aktorda_var)]).
+
+        ──────────────────────────────────────────────────────────────────────
+        BEŞİNCİ SAHƏ — `aktorda_var` (aktorun ÖZÜNDƏ olan flag)
+        ──────────────────────────────────────────────────────────────────────
+        Backend `PositionManagementUseCase._apply_flags`-dəki Self-Escalation
+        Guard aktorun özündə OLMAYAN flag-i rola verməsini onsuz da rədd edir.
+        Lakin admin xananı işarələyib "Yadda Saxla" basana qədər bunu BİLMİRDİ:
+        bütün seçim geri qaytarılır və o, hansı xananın günahkar olduğunu
+        tapmağa çalışırdı. Deaktiv xana həmin qərarı seçimdən ƏVVƏL göstərir.
+
+        Ekran heç nə HESABLAMIR — Self-Escalation Guard-ın məntiqi burada
+        TƏKRARLANMIR; kontroller aktorun flag dəstini onsuz da bilir və hazır
+        nəticəni ötürür. Əks halda qayda ÜÇÜNCÜ nüsxəyə sahib olardı.
         """
         clear_layout(self._groups_layout)
         self._checkboxes.clear()
@@ -668,7 +690,7 @@ class PermissionMatrixScreen(Screen):
             grid.setHorizontalSpacing(24)
             grid.setVerticalSpacing(10)
 
-            for index, (flag, label, enabled, hardlock) in enumerate(items):
+            for index, (flag, label, enabled, hardlock, actor_owns) in enumerate(items):
                 total_count += 1
                 if enabled:
                     active_count += 1
@@ -679,6 +701,12 @@ class PermissionMatrixScreen(Screen):
                     box.setEnabled(False)
                     box.setIcon(icons.icon("lock", self.theme.color("--color-text-muted")))
                     box.setToolTip("Hardlock — yalnız ROOT İdarə Mərkəzindən dəyişdirilir")
+                elif not actor_owns:
+                    # QIFIL İKONU QOYULMUR — səbəb fərqlidir və istifadəçi ikiuclu
+                    # siqnal almamalıdır: qıfıl "heç kim dəyişə bilməz", boz xana
+                    # isə "SƏN verə bilməzsən" deməkdir. Fərqi tooltip açır.
+                    box.setEnabled(False)
+                    box.setToolTip("Bu icazə sizdə yoxdur — başqasına verə bilməzsiniz")
                 self._checkboxes[flag] = box
                 grid.addWidget(box, index // 2, index % 2)
 
