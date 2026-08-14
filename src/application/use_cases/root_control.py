@@ -113,6 +113,15 @@ class LimitView:
     description_az: str = ""
     min_value: str | None = None
     max_value: str | None = None
+    #: Sətir `system_limits`-də FAKTİKİ olaraq varmı.
+    #:
+    #: `False` = dəyər `DEFAULT_LIMITS`-dən tamamlanıb (köhnə bazada yeni açar).
+    #: Bunu `description_az`-ın içinə mətn kimi yazsaydıq, həmin sahə HƏM
+    #: etiket, HƏM vəziyyət daşıyardı və ekran etiketi bazadan oxumağa
+    #: keçəndə (`controllers/root_control.limit_row`) bütün belə sətirlər eyni
+    #: "Defolt dəyər (bazada yazılmayıb)" adı ilə görünərdi — yəni Root
+    #: parametrləri bir-birindən ayıra bilməzdi.
+    is_stored: bool = True
 
     @property
     def is_known_key(self) -> bool:
@@ -177,7 +186,7 @@ class RootControlUseCase:
                     LimitView(
                         key=key.value,
                         value=DEFAULT_LIMITS[key],
-                        description_az="Defolt dəyər (bazada yazılmayıb)",
+                        is_stored=False,
                     )
                 )
                 continue

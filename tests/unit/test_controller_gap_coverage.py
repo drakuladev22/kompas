@@ -674,9 +674,30 @@ class _RootScreen:
 
 
 class _LimitView:
-    def __init__(self, key: str, value: str) -> None:
+    """`RootControlUseCase.LimitView`-un sahtəsi.
+
+    İzah/diapazon sahələri DEFOLTLA BOŞDUR: kontroller onları ötürsə də,
+    bu testlərin sualı başqadır (yazı yolu, boş dəyər, registry xətası) və
+    boş izah `LIMIT_LABELS` ehtiyat yolunu işə salır — yəni sahtə real
+    davranışın ən dar variantını modelləşdirir.
+    """
+
+    def __init__(
+        self,
+        key: str,
+        value: str,
+        *,
+        description_az: str = "",
+        min_value: str | None = None,
+        max_value: str | None = None,
+        is_stored: bool = True,
+    ) -> None:
         self.key = key
         self.value = value
+        self.description_az = description_az
+        self.min_value = min_value
+        self.max_value = max_value
+        self.is_stored = is_stored
 
 
 class _ModuleView:
@@ -789,6 +810,55 @@ def test_limit_row_keeps_a_non_numeric_value_as_text() -> None:
 def test_an_unknown_limit_key_is_shown_under_its_own_name() -> None:
     """Bazada köhnə sətir qala bilər — GİZLƏTMƏK onu görünməz problem edərdi."""
     assert limit_row("kohne_acar", "5") == ("kohne_acar", "kohne_acar", "5", 0, 0, "")
+
+
+def test_limit_row_prefers_the_database_description_to_the_curated_table() -> None:
+    """Etiketin mənbəyi `system_limits.description_az`-dır (kompas1.md Faza 9).
+
+    ƏL İLƏ YAZILMIŞ CƏDVƏL NİYƏ İKİNCİ SIRADADIR: `LIMIT_LABELS` 17 sətirdir,
+    `SystemLimitKey` isə 166 — yəni cədvəl ilk mənbə qalsaydı, hər yeni ROOT
+    parametri ekranda TEXNİKİ KODU ilə görünərdi. Baza sətri isə hər
+    miqrasiyada məcburi seed edilir (aşağıdakı paritet testi bunu qapıya
+    çevirib), ona görə üstündür.
+    """
+    key, label, value, low, high, suffix = limit_row(
+        SystemLimitKey.LATE_TOLERANCE_MINUTES.value,
+        "12",
+        description_az="Gecikmə tolerantlığı (bazadan)",
+        min_value="0",
+        max_value="60",
+    )
+
+    assert key == SystemLimitKey.LATE_TOLERANCE_MINUTES.value
+    assert label == "Gecikmə tolerantlığı (bazadan)"
+    # Diapazon da bazadan gəlir — `LIMIT_LABELS` 0–240 deyir, sətir 0–60.
+    assert (value, low, high, suffix) == (12, 0, 60, "dəq")
+
+
+def test_limit_row_ignores_a_decimal_bound_that_no_spin_box_can_show() -> None:
+    """`min_value = "0.1"` ədəd deyil — ehtiyat diapazon qalır, sətir çökmür."""
+    _, _, value, low, high, _ = limit_row(
+        SystemLimitKey.LATE_TOLERANCE_MINUTES.value,
+        "30",
+        description_az="Gecikmə tolerantlığı",
+        min_value="0.1",
+        max_value="240",
+    )
+
+    assert (value, low, high) == (30, 0, 240)
+
+
+def test_limit_row_flags_a_limit_that_is_not_stored_in_the_database() -> None:
+    """Defoltla tamamlanan sətir GÖRÜNÜR, amma «hələ yazılmayıb» kimi.
+
+    `LimitView.is_stored` mətn yerinə bayraqdır: vəziyyəti `description_az`-a
+    yazsaydıq, bütün belə sətirlər ekranda EYNİ adla görünərdi.
+    """
+    _, label, _, _, _, _ = limit_row(
+        SystemLimitKey.LATE_TOLERANCE_MINUTES.value, "30", is_stored=False
+    )
+
+    assert label == "Gecikmə tolerantlığı — defolt (bazada yazılmayıb)"
 
 
 def test_every_feature_module_has_an_azerbaijani_label() -> None:

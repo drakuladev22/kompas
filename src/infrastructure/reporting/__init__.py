@@ -7,6 +7,7 @@ Bu paket yalnız hazır sətirləri faylа çevirir.
 from src.infrastructure.reporting.excel import (
     ATTENDANCE_HEADERS,
     BONUS_PENALTY_HEADERS,
+    NOTE_HEADER,
     ExcelExportError,
     ExcelReportWriter,
 )
@@ -14,6 +15,7 @@ from src.infrastructure.reporting.excel import (
 __all__ = [
     "ATTENDANCE_HEADERS",
     "BONUS_PENALTY_HEADERS",
+    "NOTE_HEADER",
     "ExcelExportError",
     "ExcelReportWriter",
 ]

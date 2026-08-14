@@ -1038,19 +1038,27 @@ class ScreenDataBinder:
 
         # Bölmə 6 LOCK MEXANİZMİ: pəncərəsi hələ açıq cərimələr bu ayın
         # export-una DÜŞMÜR — ekran bunu AÇIQ göstərməlidir.
-        facts = session.report_facts.sales_facts(
-            session.tenant_id,
-            start=today.replace(day=1),
-            end=today,
-        )
-        fines = session.uow.fines.list_exportable(session.tenant_id, now=datetime.now(UTC))
+        #
+        # `list_exportable` DEYİL, `list_in_range` (kompas1.md Faza 8): birinci
+        # metod üç LOCK şərtini SQL-də tətbiq edir və artıq tutulmuş cərimələri
+        # ÜMUMİYYƏTLƏ qaytarmır — nəticədə `already_exported_count` həmişə sıfır
+        # olardı və üst-üstə düşən aralıqda atlanan cərimə ekranda GÖRÜNMƏZDİ
+        # (bax `ports.py::RangeScopedFineReader` başlığı). LOCK ZƏİFLƏMİR:
+        # qərarı yenə `Fine.is_exportable(now=...)` verir.
+        start = today.replace(day=1)
+        facts = session.report_facts.sales_facts(session.tenant_id, start=start, end=today)
+        fines = session.uow.fines.list_in_range(session.tenant_id, start=start, end=today)
         selection = session.reports.build_bonus_penalty(
             actor=self._actor,
             facts=facts,
             fines=fines,
             now=datetime.now(UTC),
         )
-        screen.set_lock_summary(selection.deferred_fine_count)
+        screen.set_lock_summary(
+            selection.deferred_fine_count,
+            already_exported=selection.already_exported_count,
+            overlap_notice=selection.overlap_notice_az() or "",
+        )
 
 
 # --------------------------------------------------------------------------- #

@@ -644,6 +644,9 @@ class KompasApplication:
         from src.presentation.screens.attrition_risk import (  # noqa: PLC0415
             AttritionRiskScreen,
         )
+        from src.presentation.screens.bulk_operations import (  # noqa: PLC0415
+            BulkOperationsScreen,
+        )
         from src.presentation.screens.field_reports import (  # noqa: PLC0415
             FieldReportScreen,
         )
@@ -664,6 +667,11 @@ class KompasApplication:
             (group_b.OperatorQueueScreen, self._attach_camera_queue),
             (group_h.CatalogScreen, lambda widget: self._attach_catalog_admin(key, widget)),
             (group_h.HelpCenterScreen, self._attach_help_center),
+            # kompas1.md Faza 8 — export təcrübəsi. Ekranın DÖVR/LOCK məlumatı
+            # `_binders()`-dəki `_reports`-dan gəlməyə DAVAM EDİR; kontroller
+            # YALNIZ doğrulama/düzəliş/müqayisə bölməsini bağlayır (`users` və
+            # `shift_planning` ilə eyni hibrid naxış).
+            (group_h.ReportExportScreen, self._attach_report_export),
             # Faza 5/6 yazı yolları — hər biri öz use case-inə bağlanır.
             (group_c.PermissionMatrixScreen, self._attach_permission_matrix),
             # #7 POS Səlahiyyət Siyasəti (sənədləşdirmə, Faza 4) — "···"
@@ -696,6 +704,10 @@ class KompasApplication:
             # ekranıdır, lakin baxış audit-ləndiyi üçün ÖZ kontrolleri var
             # (bax `controllers/attrition_risk.py` başlığı).
             (AttritionRiskScreen, self._attach_attrition_risk),
+            # #29 Toplu Əməliyyatlar (kompas1.md Faza 5) — CSV idxalı + mağaza
+            # şablonu HƏR İKİSİ HƏM oxuyur, HƏM yazır (bax `controllers/
+            # bulk_operations.py` başlığı).
+            (BulkOperationsScreen, self._attach_bulk_operations),
             # #26+#27 Sahə hesabatları (kompas1.md Faza 3) — İKİ menyu açarı,
             # BİR ekran sinfi. `key` ötürülür, çünki `isinstance` «Mağaza
             # Auditi» ilə «İnsident Bildirişi»ni ayırd edə bilmir — üç kataloq
@@ -782,6 +794,39 @@ class KompasApplication:
         if not isinstance(screen, AnnouncementsScreen):  # pragma: no cover - tip qoruyucusu
             return
         AnnouncementsAdminController(self._context, self._current_employee).attach(screen)
+
+    def _attach_report_export(self, screen: QWidget) -> None:
+        """ "Aylıq Hesabatlar" ekranının export təcrübəsini bağlayır (Faza 8).
+
+        Ekran HİBRİDDİR: dövr etiketi və LOCK xülasəsi `ScreenDataBinder.
+        _reports`-dan (yalnız oxu), doğrulama/düzəliş/müqayisə isə bu
+        kontrollerdən gəlir (bax `controllers/report_export.py` başlığı).
+        """
+        from src.presentation.controllers.report_export import (  # noqa: PLC0415
+            ReportExportController,
+        )
+        from src.presentation.screens.group_h import ReportExportScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, ReportExportScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        ReportExportController(self._context, self._current_employee).attach(screen)
+
+    def _attach_bulk_operations(self, screen: QWidget) -> None:
+        """ "Toplu Əməliyyatlar" ekranını use case-lərə bağlayır (#29, Faza 5)."""
+        from src.presentation.controllers.bulk_operations import (  # noqa: PLC0415
+            BulkOperationsController,
+        )
+        from src.presentation.screens.bulk_operations import (  # noqa: PLC0415
+            BulkOperationsScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, BulkOperationsScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        BulkOperationsController(self._context, self._current_employee).attach(screen)
 
     def _attach_performance_review(self, screen: QWidget) -> None:
         """ "Performans Qiymətləndirmələri" ekranını use case-ə bağlayır (#20, Faza 8)."""
@@ -999,15 +1044,27 @@ class KompasApplication:
         UsersEmployeeDocumentController(self._context, self._current_employee).attach(screen)
 
     def _attach_open_shift_market(self, screen: QWidget) -> None:
-        """Növbə Planlama ekranının "Açıq Növbə Bazarı" kartını bağlayır (#16).
+        """Növbə Planlama ekranının yazı/kataloq kontrollerlərini bağlayır.
 
         Matrisin ÖZÜ toxunulmur: onun canlı məlumatı `ScreenDataBinder.
-        _shift_planning`-dən gəlməyə davam edir. Bu kontroller yalnız elan
-        kartını (oxu + yazı) idarə edir — hibrid bağlama, `users` ekranı ilə
-        eyni naxış.
+        _shift_planning`-dən gəlməyə davam edir. Burada İKİ kontroller
+        qoşulur — hibrid bağlama, `users` ekranı ilə eyni naxış:
+
+          * `ShiftMatrixOpenShiftController` — "Açıq Növbə Bazarı" kartı (#16,
+            oxu + yazı).
+          * `ShiftMatrixWorkModeController` — toolbar-dakı İş Rejimi seçicisi
+            (Faza 7, YALNIZ oxu). Ayrı sinif olmasının səbəbi öz modulunun
+            başlığındadır.
+
+        METOD ADI DƏYİŞMİR: o, ekran açarı ↔ bağlayıcı xəritəsində qeydə
+        alınıb (`tests/unit/test_screen_binding_coverage.py`) və adı
+        dəyişdirmək qapını sındırardı — halbuki dəyişən yalnız MƏZMUNdur.
         """
         from src.presentation.controllers.open_shift import (  # noqa: PLC0415
             ShiftMatrixOpenShiftController,
+        )
+        from src.presentation.controllers.shift_matrix import (  # noqa: PLC0415
+            ShiftMatrixWorkModeController,
         )
         from src.presentation.screens.group_c import ShiftPlanningScreen  # noqa: PLC0415
 
@@ -1016,6 +1073,7 @@ class KompasApplication:
         if not isinstance(screen, ShiftPlanningScreen):  # pragma: no cover - tip qoruyucusu
             return
         ShiftMatrixOpenShiftController(self._context, self._current_employee).attach(screen)
+        ShiftMatrixWorkModeController(self._context, self._current_employee).attach(screen)
 
     def _attach_erp_servers(self, screen: QWidget) -> None:
         """1C server panelini `ErpConnectionWizardUseCase`-ə bağlayır (bölmə 7).
@@ -1160,6 +1218,9 @@ class KompasApplication:
         from src.presentation.screens.attrition_risk import (  # noqa: PLC0415
             AttritionRiskScreen,
         )
+        from src.presentation.screens.bulk_operations import (  # noqa: PLC0415
+            BulkOperationsScreen,
+        )
         from src.presentation.screens.field_reports import (  # noqa: PLC0415
             FieldReportScreen,
         )
@@ -1227,6 +1288,7 @@ class KompasApplication:
             "sales_points": lambda: group_f.SalesPointsScreen(theme),
             "unassigned_sales": lambda: group_f.UnassignedSalesScreen(theme, employees=sales_names),
             "users": lambda: group_c.UsersScreen(theme),
+            "bulk_operations": lambda: BulkOperationsScreen(theme),
             "permissions": lambda: group_c.PermissionMatrixScreen(theme),
             "erp_servers": lambda: group_d.ErpServersScreen(theme),
             "backups": lambda: group_d.BackupScreen(theme),
@@ -1275,6 +1337,7 @@ class KompasApplication:
             "daily_roster": "Bellona 28 May · 12 Avqust 2026",
             "fines": "Avqust 2026 · Bellona 28 May",
             "users": "235 nəfər · 21 filial",
+            "bulk_operations": "CSV işçi idxalı · mağaza şablonu",
             "reports": "Avqust 2026 · iki ayrı fayl",
             "work_modes": "Növbə şablonları",
             "fine_types": "Standart məbləğlər · anti-fraud",

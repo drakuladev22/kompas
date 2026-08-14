@@ -136,6 +136,12 @@ def _shift_planning(screen: group_c.ShiftPlanningScreen) -> None:
         for offset, name in enumerate(data.EMPLOYEE_NAMES)
     ]
     screen.set_month("Avqust 2026", stores=list(data.STORES), mode="5/2")
+    # Faza 7 — İş Rejimi seçicisi maketdə də DOLU olmalıdır: boş dropdown
+    # "funksiya işləmir" kimi oxunardı. Açarlar maket ID-ləridir; canlı yolda
+    # eyni setter `work_modes` kataloqunun UUID-lərini alır
+    # (`controllers/shift_matrix.py`) — CLAUDE.md §6 "eyni açar" qaydası.
+    screen.set_work_modes(list(data.WORK_MODE_CHOICES))
+    screen.set_work_mode_norm(data.WORK_MODE_NORM_LABEL)
     screen.set_matrix(days, rows)
     screen.set_summary(
         [
@@ -515,9 +521,37 @@ def _notifications(widget: group_g.NotificationPanel) -> None:
 
 
 def _reports(screen: Any) -> None:
+    """Bölmə 6 + kompas1.md Faza 8 — açarlar `controllers/report_export.py`
+    (`_role_rows`, `_finding_rows`, `_comparison_rows`, `_correction_rows`) ilə
+    HƏRFƏN EYNİDİR (CLAUDE.md §6).
+
+    `set_correction_access(allowed=True)` maketdə QƏSDƏN AÇIQDIR: dizayn
+    baxışında bölmə görünməlidir. CANLI yolda o, `can_manage_export_
+    corrections` flag-inə bağlıdır (bax `ReportExportController.attach`) —
+    yəni maket "hər şey görünür" halını, canlı yol isə səlahiyyəti göstərir.
+    """
     screen.set_period("Avqust 2026")
-    # Etiraz pəncərəsi hələ açıq olan cərimələr — bölmə 6 LOCK mexanizmi.
-    screen.set_lock_summary(4)
+    # Bölmə 6 LOCK mexanizmi — İKİ AYRI səbəb: 4 cərimənin etiraz pəncərəsi
+    # hələ açıqdır, 2-si isə ARTIQ əvvəlki dövrdə tutulub (Faza 7, üst-üstə
+    # düşən aralıq). Maket hər iki cümləni göstərir ki, dizayn baxışında
+    # ikisinin bir yerdə necə oxunduğu görünsün.
+    screen.set_lock_summary(
+        4,
+        already_exported=data.EXPORT_ALREADY_EXPORTED_COUNT,
+        overlap_notice=data.EXPORT_OVERLAP_NOTICE,
+    )
+
+    # `[Tam Ay]` DEFOLTDUR — canlı yolda `ReportExportController.attach()`
+    # EYNİ setter-i eyni arqumentlə çağırır (CLAUDE.md §6).
+    screen.set_range_selection(custom=False)
+    screen.set_range_message("")
+    screen.set_role_options(list(data.EXPORT_ROLE_OPTIONS), selected="")
+    screen.set_correction_access(allowed=True)
+    screen.set_validation_findings(list(data.EXPORT_VALIDATION_FINDINGS))
+    screen.set_period_comparison(
+        list(data.EXPORT_PERIOD_COMPARISON), caption=data.EXPORT_COMPARISON_CAPTION
+    )
+    screen.set_corrections(list(data.EXPORT_CORRECTIONS))
 
 
 def _work_modes(screen: Any) -> None:
@@ -615,6 +649,19 @@ def _incident_report(screen: Any) -> None:
     )
 
 
+def _bulk_operations(screen: Any) -> None:
+    """#29 (kompas1.md Faza 5) — açarlar `controllers/bulk_operations.py`
+    ilə EYNİDİR (CLAUDE.md §6)."""
+    screen.set_preview(
+        total_rows=data.BULK_IMPORT_PREVIEW_TOTAL_ROWS,
+        valid_count=data.BULK_IMPORT_PREVIEW_VALID_COUNT,
+        error_count=data.BULK_IMPORT_PREVIEW_ERROR_COUNT,
+        errors=list(data.BULK_IMPORT_PREVIEW_ERRORS),
+        truncated_extra=data.BULK_IMPORT_PREVIEW_TRUNCATED_EXTRA,
+    )
+    screen.set_templates(list(data.STORE_TEMPLATES))
+
+
 def _dashboard_builder(screen: Any) -> None:
     screen.set_widgets(
         dict(data.DASHBOARD_WIDGETS),
@@ -667,6 +714,7 @@ _POPULATORS: dict[str, Callable[[Any], None]] = {
     "performance_reviews": _performance_reviews,
     "attrition_risk": _attrition_risk,
     "annual_leave": _annual_leave,
+    "bulk_operations": _bulk_operations,
 }
 
 

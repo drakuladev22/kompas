@@ -70,6 +70,10 @@ EXPECTED_JOBS: Final = (
     # İDEMPOTENTDİR (haqq TƏYİN edilir, artırılmır).
     ("ANNUAL_LEAVE_YEAR_ROLLOVER", JobCadence.DAILY, JobWeight.LIGHT),
     ("FINE_EXPIRE_STALE", JobCadence.HOURLY, JobWeight.LIGHT),
+    # #30 (kompas1.md Faza 6) — planlaşdırılmış icra xülasəsi. `DAILY`:
+    # `JobCadence`-də `WEEKLY` yoxdur, "bu gün DUE-dur?" sualını use case-in
+    # `run()`-u özü verir (bax `executive_digest.py::_due_window`).
+    ("EXECUTIVE_DIGEST_RUN", JobCadence.DAILY, JobWeight.LIGHT),
     ("NIGHTLY_BACKUP", JobCadence.DAILY, JobWeight.HEAVY),
 )
 
@@ -152,6 +156,13 @@ class _AnnualLeave(_RecordingUseCase):
         return self._record("annual_leave.run_year_rollover", tenant_id=tenant_id, now=now)
 
 
+class _ExecutiveDigest(_RecordingUseCase):
+    def run(self, *, tenant_id: TenantId, now: datetime, scheduled_for: datetime) -> Any:
+        return self._record(
+            "executive_digest.run", tenant_id=tenant_id, now=now, scheduled_for=scheduled_for
+        )
+
+
 class _Benchmark:
     """`active_stores()` — kadr nümunəsi işinin mağaza siyahısı mənbəyi."""
 
@@ -202,6 +213,7 @@ class _FakeSession:
                 forfeited_days=Decimal("18.00"),
             ),
         )
+        self.executive_digest = _ExecutiveDigest(calls, result=_Report(evaluated=3, sent=2))
         self.uow = _SessionUow(_Benchmark({STORE_A: "Mağaza A", STORE_B: "Mağaza B"}))
 
     def commit(self) -> None:
@@ -404,6 +416,7 @@ def test_the_runner_is_a_single_instance_per_context() -> None:
         ("ATTRITION_RISK_RECALC", "attrition_risk.recalculate_all"),
         ("ANNUAL_LEAVE_YEAR_ROLLOVER", "annual_leave.run_year_rollover"),
         ("FINE_EXPIRE_STALE", "fine_appeals.expire_stale"),
+        ("EXECUTIVE_DIGEST_RUN", "executive_digest.run"),
     ],
 )
 def test_each_handler_calls_its_use_case_method(job_key: str, expected_call: str) -> None:

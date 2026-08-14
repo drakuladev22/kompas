@@ -91,6 +91,28 @@ AnnualLeaveRequestId = NewType("AnnualLeaveRequestId", uuid.UUID)
 #: `entity_id`-si məhz odur: `EmployeeId` yazılsaydı, "2025-ci ilin balansı"
 #: ilə "2026-cı ilin balansı" audit izində fərqlənməzdi.
 AnnualLeaveBalanceId = NewType("AnnualLeaveBalanceId", uuid.UUID)
+#: Toplu əməliyyat jurnalının sətri (#29, kompas1.md Faza 5, `bulk_import_log`).
+#: Ayrıca tip: audit `entity_id`-sində `EmployeeId` ilə qarışdırılsaydı, "hansı
+#: TOPLU idxal dəyişdi?" sualı icraçının öz ID-si ilə qarışa bilərdi — halbuki
+#: bir icraçı eyni gündə bir neçə toplu idxal apara bilər.
+BulkImportLogId = NewType("BulkImportLogId", uuid.UUID)
+#: Mağaza şablonu sətri (#29, `store_templates`). Ayrıca tip: `based_on_store_id`
+#: (`StoreId`) İLƏ EYNİ çağırışda gəzir (`apply()` mənbə mağazanı OXUYUR, şablonu
+#: TƏTBİQ edir) — ikisini qarışdırmaq səhv mağazanı "mənbə" kimi göstərə bilərdi.
+StoreTemplateId = NewType("StoreTemplateId", uuid.UUID)
+#: Planlaşdırılmış icra xülasəsinin konfiqurasiya sətri (#30, kompas1.md
+#: Faza 6, `executive_digest_config`). Ayrıca tip: audit `entity_id`-sində
+#: `EmployeeId`/`TenantId` ilə qarışdırılsaydı, "hansı KONFİQURASİYA sətri
+#: dəyişdi?" sualı (bir kirayəçidə rol+tezlik başına bir neçə sətir ola bilər)
+#: cavabsız qalardı.
+ExecutiveDigestConfigId = NewType("ExecutiveDigestConfigId", uuid.UUID)
+#: Export-öncəsi ƏL İLƏ düzəliş sətri (HR-D, kompas1.md Faza 8,
+#: `export_manual_corrections`). Ayrıca tip: sətir HƏM işçiyə (`employee_id`),
+#: HƏM düzəlişi edənə (`corrected_by`) bağlıdır və audit `entity_id`-si məhz
+#: DÜZƏLİŞİN özüdür. `EmployeeId` yazılsaydı, "hansı düzəliş geri götürüldü?"
+#: sualı cavabsız qalardı — bir işçinin eyni günü üçün bir neçə ardıcıl düzəliş
+#: sətri ola bilər (düzəliş DƏYİŞMİR, yenisi YAZILIR — migrations/037 başlığı).
+ExportCorrectionId = NewType("ExportCorrectionId", uuid.UUID)
 
 # --- Dəstək (bölmə 8) ------------------------------------------------------- #
 SupportTicketId = NewType("SupportTicketId", uuid.UUID)
@@ -220,17 +242,36 @@ def new_annual_leave_balance_id() -> AnnualLeaveBalanceId:
     return AnnualLeaveBalanceId(uuid.uuid4())
 
 
+def new_bulk_import_log_id() -> BulkImportLogId:
+    return BulkImportLogId(uuid.uuid4())
+
+
+def new_store_template_id() -> StoreTemplateId:
+    return StoreTemplateId(uuid.uuid4())
+
+
+def new_executive_digest_config_id() -> ExecutiveDigestConfigId:
+    return ExecutiveDigestConfigId(uuid.uuid4())
+
+
+def new_export_correction_id() -> ExportCorrectionId:
+    return ExportCorrectionId(uuid.uuid4())
+
+
 __all__ = [
     "AnnouncementId",
     "AnnualLeaveBalanceId",
     "AnnualLeaveRequestId",
     "AppealId",
     "AttendanceRecordId",
+    "BulkImportLogId",
     "DailySheetId",
     "EmployeeDocumentId",
     "EmployeeId",
     "ErpServerId",
     "ExceptionId",
+    "ExecutiveDigestConfigId",
+    "ExportCorrectionId",
     "FieldReportId",
     "FieldReportItemId",
     "FineId",
@@ -251,6 +292,7 @@ __all__ = [
     "ShiftAssignmentId",
     "ShiftSwapRequestId",
     "StoreId",
+    "StoreTemplateId",
     "SupportMessageId",
     "SupportTicketId",
     "TaskId",
@@ -261,10 +303,13 @@ __all__ = [
     "new_annual_leave_request_id",
     "new_appeal_id",
     "new_attendance_record_id",
+    "new_bulk_import_log_id",
     "new_daily_sheet_id",
     "new_employee_document_id",
     "new_employee_id",
     "new_exception_id",
+    "new_executive_digest_config_id",
+    "new_export_correction_id",
     "new_field_report_id",
     "new_field_report_item_id",
     "new_fine_id",
@@ -280,6 +325,7 @@ __all__ = [
     "new_shift_assignment_id",
     "new_shift_swap_request_id",
     "new_store_id",
+    "new_store_template_id",
     "new_support_message_id",
     "new_support_ticket_id",
     "new_task_id",

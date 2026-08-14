@@ -52,6 +52,8 @@ from src.domain.value_objects.exception_signals import (
     ExceptionSource,
     RuleEvaluationContext,
 )
+from src.domain.value_objects.executive_digest import ExecutiveDigestConfig
+from src.domain.value_objects.export_corrections import ExportCorrection
 from src.domain.value_objects.field_reports import (
     FieldReportCategory,
     FieldReportTemplate,
@@ -63,10 +65,12 @@ from src.domain.value_objects.identifiers import (
     AnnualLeaveRequestId,
     AppealId,
     AttendanceRecordId,
+    BulkImportLogId,
     EmployeeDocumentId,
     EmployeeId,
     ErpServerId,
     ExceptionId,
+    ExecutiveDigestConfigId,
     FieldReportId,
     FieldReportItemId,
     FineId,
@@ -80,6 +84,7 @@ from src.domain.value_objects.identifiers import (
     RewardId,
     ShiftSwapRequestId,
     StoreId,
+    StoreTemplateId,
     TaskId,
     TenantId,
     WorkModeId,
@@ -101,6 +106,7 @@ from src.domain.value_objects.staffing_signals import (
     StoreDayHeadcount,
 )
 from src.domain.value_objects.storage import ImageSize, StorageReference
+from src.domain.value_objects.store_templates import StoreTemplate
 from src.shared.event_bus import DomainEvent
 
 # --------------------------------------------------------------------------- #
@@ -562,6 +568,47 @@ class FineRepository(Protocol):
         ...
 
     def save(self, fine: Fine) -> None: ...
+
+
+@runtime_checkable
+class RangeScopedFineReader(Protocol):
+    """Seçilmiş tarix aralığındakı BÜTÜN cərimələr (kompas1.md Faza 8).
+
+    ──────────────────────────────────────────────────────────────────────────
+    AYRI PROTOKOL, `FineRepository`-yə METOD ƏLAVƏSİ DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    `PlanFactProvider`-in Faza 7-dəki qərarı ilə EYNİ: mövcud protokola metod
+    əlavə etmək onu ödəyən HƏR sinfi (o cümlədən testlərdəki sahtələri) dərhal
+    uyğunsuz edərdi — halbuki icazə/cərimə axınının bu məlumata ehtiyacı
+    yoxdur. Eyni repository sinfi hər iki protokolu ödəyir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ SÜZGƏC YOXDUR — VƏ NİYƏ BU, LOCK-U ZƏİFLƏTMİR
+    ──────────────────────────────────────────────────────────────────────────
+    `list_exportable` üç şərti SQL-də tətbiq edir (status, pəncərə, əvvəlki
+    export). Bu metod isə aralığa düşən HƏR cərimə sətrini qaytarır — çünki
+    çağıran tərəf `MonthlyReportUseCase.build_bonus_penalty`-dir və o, üç
+    KATEQORİYA hesablayır:
+
+        * TUTULAN     — `Fine.is_exportable(now=...)` `True` deyir;
+        * TƏXİRƏ SALINAN — 72 saatlıq etiraz pəncərəsi HƏLƏ AÇIQ
+          (`open_appeal_count`);
+        * ARTIQ TUTULMUŞ — `exported_period` doludur, üst-üstə düşən aralıq
+          (`already_exported_count` + `already_exported_periods`).
+
+    Son iki kateqoriya SQL-də kəsilsəydi, sayğaclar HƏMİŞƏ sıfır olardı və
+    atlama SÜKUTLA baş verərdi — məhz `reporting.py` başlığının qadağan etdiyi
+    hal ("ATLANMA SÜKUTLA BAŞ VERMİR").
+
+    QƏRAR VERƏN YER DƏYİŞMİR: hansı cərimənin TUTULA BİLDİYİNİ yenə yalnız
+    `Fine.is_exportable(now=...)` müəyyən edir. Bu metod yalnız «hansı
+    cərimələrə BAXILIR» sualını cavablandırır (Struktur Qərar D).
+
+    Aralıq `fine_date` üzrədir — cərimənin AİD OLDUĞU gün, yazıldığı an yox:
+    gecikmiş yazılan cərimə hadisənin baş verdiyi dövrə düşməlidir.
+    """
+
+    def list_in_range(self, tenant_id: TenantId, *, start: date, end: date) -> list[Fine]: ...
 
 
 @runtime_checkable
@@ -1338,6 +1385,172 @@ class AnnualLeaveRequestRepository(Protocol):
 
 
 # --------------------------------------------------------------------------- #
+# #29 Toplu Əməliyyatlar (kompas1.md Faza 5)
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class BulkImportLogRepository(Protocol):
+    """`bulk_import_log` (migrations/037) — HƏR toplu əməliyyatın AQREQAT izi.
+
+    İKİ-FAZALI YAZI QƏSDƏNDİR (bax `application/use_cases/bulk_operations.py`
+    başlığı, "TRANZAKSİYA SƏRHƏDİ"): `start()` əməliyyat BAŞLAYANDA
+    `finished_at = NULL` ilə sətir açır, `finish()` isə sonda YEKUN rəqəmləri
+    yazır. Proses arada çökərsə sətir `finished_at = NULL` qalır — bu, GİZLİ
+    DEYİL, Root panelində "yarımçıq qalıb" kimi görünür (bax `chk_bulk_import_
+    counts`/`finished_at` şərhi, migrations/037).
+
+    `DELETE` heç vaxt YOXDUR: cədvəldə `REVOKE DELETE` var (audit qeydidir).
+    """
+
+    def start(
+        self,
+        *,
+        log_id: BulkImportLogId,
+        tenant_id: TenantId,
+        import_type: str,
+        performed_by: EmployeeId,
+        file_ref: str | None,
+        row_count: int,
+        performed_at: datetime,
+    ) -> None: ...
+
+    def finish(
+        self,
+        *,
+        log_id: BulkImportLogId,
+        success_count: int,
+        error_count: int,
+        error_summary: str | None,
+        finished_at: datetime,
+    ) -> None: ...
+
+    def list_recent(self, tenant_id: TenantId, *, limit: int = 50) -> list[dict[str, object]]:
+        """Root panelinin "son toplu əməliyyatlar" siyahısı (`idx_bulk_import_log_recent`).
+
+        `dict` qaytarır, tam entity DEYİL: bu, YALNIZ-OXU hesabat sətridir,
+        heç bir domen qaydası daşımır (`WorkModeCatalogUseCase.list_for_
+        management`-dən fərqli olaraq buranın yazma tərəfi YOXDUR).
+        """
+        ...
+
+
+@runtime_checkable
+class StoreTemplateRepository(Protocol):
+    """`store_templates` (migrations/037) — bax `StoreTemplate` başlığı.
+
+    `save()` YALNIZ YARADIR (`ON CONFLICT (id) DO NOTHING` naxışı): şablon
+    yarandıqdan sonra `config_snapshot` DƏYİŞMİR — yeni versiya YENİ şablon
+    kimi qeydə alınır (`export_manual_corrections`-dakı "düzəliş YENİ sətirdir"
+    qaydası ilə eyni ruh, migrations/037 başlığı).
+    """
+
+    def get(self, template_id: StoreTemplateId) -> StoreTemplate | None: ...
+
+    def list_for_tenant(
+        self, tenant_id: TenantId, *, include_inactive: bool = False
+    ) -> list[StoreTemplate]: ...
+
+    def save(self, tenant_id: TenantId, entry: StoreTemplate) -> None: ...
+
+    def deactivate(
+        self, tenant_id: TenantId, template_id: StoreTemplateId, *, changed_by: EmployeeId
+    ) -> None: ...
+
+
+# --------------------------------------------------------------------------- #
+# #30 Planlaşdırılmış İcra Xülasəsi (kompas1.md Faza 6)
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class ExecutiveDigestConfigRepository(Protocol):
+    """`executive_digest_config` — kimə, nə tezlikdə, hansı metriklərlə.
+
+    `list_route_recipients` `FieldReportRepository`-dəkinin AYRI NÜSXƏSİDİR
+    (bilərəkdən — bax `infrastructure/persistence/executive_digest_
+    repository.py` başlığı): iki bounded-context bir-birini ÇAĞIRMIR, kiçik
+    sorğu təkrarı bunun ödənişidir.
+    """
+
+    def get(self, config_id: ExecutiveDigestConfigId) -> ExecutiveDigestConfig | None: ...
+
+    def list_for_tenant(
+        self, tenant_id: TenantId, *, include_inactive: bool = False
+    ) -> list[ExecutiveDigestConfig]:
+        """İdarəetmə ekranı (`include_inactive=True`) VƏ planlayıcı
+        (`include_inactive=False`) EYNİ metoddan bəslənir."""
+        ...
+
+    def save(self, entry: ExecutiveDigestConfig) -> ExecutiveDigestConfig:
+        """UPSERT — `ON CONFLICT (tenant_id, recipient_role, frequency)`.
+
+        Yaradılmış/yenilənmiş sətri (DB-nin verdiyi `id` daxil) qaytarır —
+        çağıran tərəf yeni sətrin İD-sini AYRICA sorğu ilə axtarmamalıdır.
+        """
+        ...
+
+    def deactivate(
+        self, tenant_id: TenantId, config_id: ExecutiveDigestConfigId, *, changed_by: EmployeeId
+    ) -> None: ...
+
+    def mark_sent(
+        self, tenant_id: TenantId, config_id: ExecutiveDigestConfigId, *, sent_at: datetime
+    ) -> None:
+        """`last_sent_at`-i yeniləyir — planlayıcının TƏKRAR-GÖNDƏRMƏ qapısı
+        (bax `application/use_cases/executive_digest.py` başlığı)."""
+        ...
+
+    def list_route_recipients(self, tenant_id: TenantId, *, role_code: str) -> list[EmployeeId]:
+        """Rol kodunu AKTİV işçilərə çevirir (`FieldReportRepository.
+        list_route_recipients` ilə EYNİ sorğu naxışı, `store_id` süzgəci
+        YOXDUR: xülasə mağaza-səviyyəli deyil, şəbəkə-miqyaslıdır)."""
+        ...
+
+
+# --------------------------------------------------------------------------- #
+# HR-D Export düzəlişləri (kompas1.md Faza 8)
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class ExportCorrectionRepository(Protocol):
+    """`export_manual_corrections` (migrations/037 §10).
+
+    NİYƏ `update()`/`delete()` YOXDUR — VƏ BU, UNUDULMA DEYİL: miqrasiya həmin
+    iki hüququ tətbiq rolundan AÇIQ ŞƏKİLDƏ geri alır ("düzəlişin özü düzəldilə
+    bilsəydi, kim nəyi nəyə dəyişdi izi geri yazıla bilərdi"). Portda belə bir
+    metod olsaydı, o, hər çağırışda DB xətası ilə bitərdi — yəni müqavilə
+    yalan danışardı. Yenidən düzəliş `save()`-in YENİ sətridir.
+
+    `list_for_range` `tenant_id`-ni AÇIQ arqument kimi alır (RLS-ə ƏLAVƏ ikinci
+    qat, CLAUDE.md §6) və `export_type` ilə süzülür: davamiyyət faylının
+    düzəlişi premiya faylına tətbiq olunmamalıdır.
+    """
+
+    def save(self, entry: ExportCorrection) -> None:
+        """Yeni düzəliş sətrini YAZIR — mövcud sətri YENİLƏMİR."""
+        ...
+
+    def list_for_range(
+        self,
+        tenant_id: TenantId,
+        *,
+        export_type: str,
+        start: date,
+        end: date,
+    ) -> list[ExportCorrection]:
+        """Aralığa düşən düzəlişlər — `corrected_at` üzrə ARTAN sırada.
+
+        Sıra MÜQAVİLƏNİN BİR HİSSƏSİDİR, təsadüf deyil: eyni sahəyə bir neçə
+        düzəliş varsa, SONUNCU qalib gəlir (`export_preflight.apply_
+        corrections`). Sıra qeyri-müəyyən olsaydı, tətbiq olunan dəyər hər
+        oxuda dəyişə bilərdi.
+        """
+        ...
+
+
+# --------------------------------------------------------------------------- #
 # #19 Elan (Broadcast) (kompasos11.md Faza 8)
 # --------------------------------------------------------------------------- #
 
@@ -1841,6 +2054,7 @@ __all__ = [
     "AttritionRiskScoreRepository",
     "AuditTrail",
     "BehaviorBaselineRepository",
+    "BulkImportLogRepository",
     "CameraAssignmentRepository",
     "CheckInHistoryProvider",
     "Clock",
@@ -1854,6 +2068,8 @@ __all__ = [
     "ExceptionRepository",
     "ExceptionRule",
     "ExceptionSourceCatalog",
+    "ExecutiveDigestConfigRepository",
+    "ExportCorrectionRepository",
     "FeatureToggles",
     "FieldReportCatalog",
     "FieldReportRepository",
@@ -1874,6 +2090,7 @@ __all__ = [
     "PerformanceReviewRepository",
     "PermissionFlagRepository",
     "PositionRepository",
+    "RangeScopedFineReader",
     "ReadOnlyModeController",
     "RewardRepository",
     "RowLockingAttendance",
@@ -1883,6 +2100,7 @@ __all__ = [
     "ScheduledJobRepository",
     "ShiftRepository",
     "ShiftSwapRepository",
+    "StoreTemplateRepository",
     "SystemLimits",
     "TaskRepository",
     "UnitOfWork",

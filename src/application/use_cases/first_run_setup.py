@@ -145,12 +145,18 @@ class SetupOutcome:
 
 @runtime_checkable
 class StoreWriter(Protocol):
-    """`stores` cədvəlinə yazma — minimal port.
+    """`stores` cədvəlinə yazma (+ bir dar oxuma) — minimal port.
 
     Ayrıca tam `StoreRepository` yaratmaq əvəzinə burada minimal protokol
     saxlanılır, çünki mağaza YARATMAQ yalnız iki yerdə baş verir: bu sihirbaz
     və İnfrastruktur paneli. Oxuma tərəfi isə mövcud sorğularda `JOIN` ilə
     həll olunur — ayrıca aqreqat repo-su hələ heç yerdə lazım deyil.
+
+    `get_id_by_code()` NİYƏ ƏLAVƏ OLUNUB (kompas1.md Faza 5, #29): toplu işçi
+    idxalının CSV-si insan-oxunaqlı mağaza KODU daşıyır (`stores.code`), UUID
+    YOX — HR bir işçinin `store_id`-sini əzbər bilmir. Bu, protokolun "minimal"
+    fəlsəfəsini pozmur: hələ də TƏK cədvəl, TƏK sinif (`PostgresStoreWriter`)
+    — sadəcə YARADIR + bir sətri TAPIR, tam `list`/`update` YOXDUR.
     """
 
     def create(
@@ -163,6 +169,8 @@ class StoreWriter(Protocol):
         brand: str,
         address: str,
     ) -> None: ...
+
+    def get_id_by_code(self, tenant_id: TenantId, code: str) -> StoreId | None: ...
 
 
 class FirstRunSetupUseCase:

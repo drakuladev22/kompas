@@ -663,6 +663,20 @@ class PostgresStoreWriter(_BaseRepository):
             (store_id, tenant_id, code, name, brand, address or None),
         )
 
+    def get_id_by_code(self, tenant_id: TenantId, code: str) -> StoreId | None:
+        """Toplu idxal CSV-sindəki insan-oxunaqlı mağaza kodunu UUID-ə çevirir.
+
+        `is_active` süzgəci QƏSDƏN YOXDUR: deaktiv mağazaya işçi təyin etmək
+        istəyi ekran/tətbiq qatının biznes qərarıdır (məs. bağlanmış filialın
+        arxiv işçisi), bu port isə YALNIZ "bu kod haraya işarələyir?" sualına
+        cavab verir.
+        """
+        row = self._fetch_one(
+            "SELECT id FROM stores WHERE tenant_id = %s AND code = %s",
+            (tenant_id, code),
+        )
+        return row["id"] if row else None
+
 
 __all__ = [
     "STRUCTURAL_CONFIRMATION_REQUIRED",

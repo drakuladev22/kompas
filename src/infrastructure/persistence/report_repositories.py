@@ -31,6 +31,28 @@ Bölmə 6, FAYL 1: "Faktiki İşlənilən Gün Sayı (yuxarıdakı Morning Check
 `🟢 Verified` qeydlərinə əsaslanır)". Yəni mənbə Gündəlik Tabel DEYİL —
 tabel menecerin təsdiqidir, davamiyyət qeydi isə kamera-təsdiqli faktdır.
 Tabel təsdiqlənməsə belə maaş hesablanmalıdır.
+
+──────────────────────────────────────────────────────────────────────────────
+`plan_facts` NİYƏ AQREQAT DEYİL, GÜN-GÜN DETALDIR (Faza 7)
+──────────────────────────────────────────────────────────────────────────────
+Yuxarıdakı iki metod `GROUP BY` ilə 235 sətrə enir; `plan_facts` isə hər işçi
+üçün hər günü ayrıca qaytarır. Bu, yuxarıdakı əsaslandırmaya ZİDD DEYİL —
+başqa sualı cavablandırır:
+
+  * "neçə iş günü planlaşdırılıb?" — SAY, `count(*)` kifayətdir.
+  * "neçə NORMA SAAT planlaşdırılıb?" — hər günün ÖZ iş rejimi lazımdır,
+    çünki rejim gün-gün dəyişə bilər (səhər növbəsindən gecə növbəsinə keçid)
+    və hər rejimin saat müddəti fərqlidir.
+
+Cəmi SQL-də (`sum(end_time - start_time)`) hesablamaq mümkün idi, lakin rədd
+edildi: gecə növbəsində fərq MƏNFİ çıxır (06:00 − 22:00) və hüquqi gündəlik
+tavanla sıxılma da SQL-də təkrarlanmalı olardı. Hər ikisi artıq domendədir
+(`TimeRange.duration`, `work_norm.calculate_work_norm`) — SQL-də ikinci
+nüsxəsi iki mənbə yaradardı.
+
+Həcm hesabı: 31 gün × 235 işçi ≈ 7000 sətir, yəni bir ekran yüklənməsinin
+oxuduğu adi cədvəl ölçüsü. Aralığın uzunluğunu isə ROOT parametri cilovlayır
+(`REPORT_RANGE_MAX_DAYS`, seed: migrations/043).
 """
 
 from __future__ import annotations
@@ -41,13 +63,16 @@ from typing import TYPE_CHECKING, Any
 
 from src.application.use_cases.reporting import (
     EmployeeAttendanceFacts,
+    EmployeePlanFacts,
     EmployeeSalesFacts,
 )
 from src.domain.value_objects.money import Money
+from src.domain.value_objects.scheduling import DEFAULT_TIMEZONE, TimeRange
+from src.domain.work_norm import EmploymentWindow, PlannedDay
 from src.infrastructure.persistence.repositories import _BaseRepository
 
 if TYPE_CHECKING:
-    from src.domain.value_objects.identifiers import StoreId, TenantId
+    from src.domain.value_objects.identifiers import EmployeeId, StoreId, TenantId
 
 
 class PostgresReportFactProvider(_BaseRepository):
@@ -118,6 +143,101 @@ class PostgresReportFactProvider(_BaseRepository):
             for row in rows
         ]
 
+    # -------------------- FAYL 1 — DİNAMİK NORMA (Faza 7) -------------------- #
+
+    def plan_facts(
+        self,
+        tenant_id: TenantId,
+        *,
+        start: date,
+        end: date,
+        store_id: StoreId | None = None,
+    ) -> list[EmployeePlanFacts]:
+        """Shift Matrix planı + məşğulluq pəncərəsi — işçi başına bir struktur.
+
+        ──────────────────────────────────────────────────────────────────────
+        `LEFT JOIN`, `INNER JOIN` YOX
+        ──────────────────────────────────────────────────────────────────────
+        Planı olmayan işçi də SƏTİR QAYTARIR (`shift_date IS NULL`): onun
+        norması 0-dır və bu, HR üçün "plan qurulmayıb" siqnalıdır. `INNER
+        JOIN` həmin işçini siyahıdan tamamilə çıxarardı və problem GÖRÜNMƏZ
+        qalardı.
+
+        ──────────────────────────────────────────────────────────────────────
+        `work_modes` SÜZÜLMÜR (`is_active` ŞƏRTİ YOXDUR) — QƏSDƏN
+        ──────────────────────────────────────────────────────────────────────
+        Deaktiv edilmiş iş rejimi KEÇMİŞ növbələrdə oxunmağa davam etməlidir
+        (`catalogs.py` soft delete əsaslandırması). Aktivlik şərti qoyulsaydı,
+        rejim deaktiv edilən kimi keçmiş ayların norma saatı sükutla dəyişərdi
+        — yəni artıq imzalanmış hesabat yenidən çıxarılanda FƏRQLİ rəqəm
+        verərdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        MƏŞĞULLUQ PƏNCƏRƏSİ VƏ SAAT QURŞAĞI
+        ──────────────────────────────────────────────────────────────────────
+        `deactivated_at` `TIMESTAMPTZ`-dir; onu birbaşa `::date`-ə çevirmək
+        sessiya qurşağından asılı olardı və UTC-də gecə saat 22:00-da çıxan
+        işçinin son iş günü BİR GÜN İRƏLİ sürüşərdi. Ona görə mağazanın öz
+        qurşağı tətbiq olunur — `overtime_repositories.py`-dakı eyni naxış.
+
+        `hire_date` `DATE`-dir və çevrilməyə ehtiyacı yoxdur.
+        """
+        rows = self._fetch_all(
+            """
+            SELECT e.id                                  AS employee_id,
+                   e.hire_date                           AS hire_date,
+                   e.is_active                           AS is_active,
+                   (e.deactivated_at AT TIME ZONE COALESCE(s.timezone, %s))::date
+                                                         AS ended_on,
+                   sa.shift_date                         AS shift_date,
+                   sa.is_off_day                         AS is_off_day,
+                   wm.start_time                         AS start_time,
+                   wm.end_time                           AS end_time
+            FROM employees e
+            LEFT JOIN stores s ON s.id = e.store_id
+            LEFT JOIN shift_assignments sa
+                   ON sa.employee_id = e.id
+                  AND sa.shift_date BETWEEN %s AND %s
+            LEFT JOIN work_modes wm ON wm.id = sa.work_mode_id
+            WHERE e.tenant_id = %s
+              AND (%s::uuid IS NULL OR e.store_id = %s::uuid)
+            ORDER BY e.id, sa.shift_date
+            """,
+            (DEFAULT_TIMEZONE, start, end, tenant_id, store_id, store_id),
+        )
+
+        plans: dict[EmployeeId, list[PlannedDay]] = {}
+        windows: dict[EmployeeId, EmploymentWindow] = {}
+        for row in rows:
+            employee_id: EmployeeId = row["employee_id"]
+            if employee_id not in windows:
+                windows[employee_id] = EmploymentWindow(
+                    started_on=row["hire_date"],
+                    # AKTİV işçinin bitmə tarixi YOXDUR: `deactivated_at`
+                    # köhnə bir dayandırmadan qalmış ola bilər və onu son
+                    # gün saymaq işçini öz normasından məhrum edərdi.
+                    ended_on=None if row["is_active"] else row["ended_on"],
+                )
+                plans[employee_id] = []
+            if row["shift_date"] is None:
+                continue
+            plans[employee_id].append(
+                PlannedDay(
+                    day=row["shift_date"],
+                    is_off_day=bool(row["is_off_day"]),
+                    schedule=_time_range(row["start_time"], row["end_time"]),
+                )
+            )
+
+        return [
+            EmployeePlanFacts(
+                employee_id=employee_id,
+                planned_days=tuple(plans[employee_id]),
+                employment=window,
+            )
+            for employee_id, window in windows.items()
+        ]
+
     # ------------------------------- FAYL 2 ---------------------------------- #
 
     def sales_facts(
@@ -172,6 +292,23 @@ class PostgresReportFactProvider(_BaseRepository):
             )
             for row in rows
         ]
+
+
+def _time_range(start: Any, end: Any) -> TimeRange | None:
+    """`work_modes` saatlarını `TimeRange`-ə çevirir.
+
+    `None` qaytarılan İKİ hal var və hər ikisi qanunidir:
+      * növbəyə iş rejimi TƏYİN EDİLMƏYİB (`work_mode_id IS NULL` — istirahət
+        günü və ya sərbəst gün);
+      * rejimin başlanğıcı və bitməsi EYNİDİR — `TimeRange` bunu qəbul etmir
+        (24 saatlıq növbə ilə 0 saatlıq növbə fərqləndirilə bilməzdi).
+
+    Hər iki halda gündəlik norma hüquqi normadan götürülür
+    (`work_norm.calculate_work_norm`) — hesabat çökmür, rəqəm uydurulmur.
+    """
+    if start is None or end is None or start == end:
+        return None
+    return TimeRange(start=start, end=end)
 
 
 def _as_decimal(raw: Any) -> Decimal:

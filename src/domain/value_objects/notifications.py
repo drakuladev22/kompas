@@ -218,6 +218,16 @@ TENANT_NOTIFICATION_AUDIENCE: Final[dict[str, tuple[str, ...]]] = {
     # ona görə tenant-broadcast-dır və auditoriyası auditi APARA BİLƏN
     # roldur — bildirişin tələb etdiyi əməliyyatı qoruyan flag-in ÖZÜ.
     "FIELD_REPORT_AUDIT_DUE": ("can_conduct_store_audit",),
+    # `ExecutiveDigestUseCase._deliver` (#30, kompas1.md Faza 6): rola marşrutlanmış
+    # sətir ŞƏXSİ olduğu üçün bu cədvəldən ASILI DEYİL (bax fayl başlığı "ŞƏXSİ
+    # SƏTİR"). BU sətir YALNIZ EHTİYAT yolunu qapayır: `recipient_role`
+    # boşdursa/həmin roldan aktiv işçi yoxdursa, xülasə tenant-broadcast kimi
+    # gedir. Auditoriya `can_configure_executive_digest`-dir — CƏMİ Root/CEO
+    # (migrations/038, ROOT_CEO hardlock səviyyə 2): şəbəkə-miqyaslı cərimə/
+    # istisna/overtime/turnover rəqəmləri EHTİYAT yolunda belə YALNIZ xülasəni
+    # KONFİQURASİYA EDƏ BİLƏN roldadır — süzgəcsiz sətir FAIL-OPEN olardı və
+    # hər `Satıcı` bu göstəriciləri görərdi.
+    "EXECUTIVE_DIGEST_DELIVERED": ("can_configure_executive_digest",),
     # ─────────────────────────────────────────────────────────────────────
     # `MONTHLY_FINES_PUBLISHED` BURAYA QƏSDƏN SALINMIR — ONU SÜZMƏYİN.
     # ─────────────────────────────────────────────────────────────────────

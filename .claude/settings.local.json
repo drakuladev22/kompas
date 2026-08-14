@@ -1,7 +1,32 @@
 {
   "permissions": {
     "allow": [
-      "PowerShell(winget install *)"
+      "PowerShell(winget install *)",
+      "Bash(gh run *)",
+      "Bash(grep -o \"KOMPASOS_PRIVATE_SERVER_DSN=.\\\\{0,12\\\\}\" .env)",
+      "Bash(grep -o \"SUPABASE_URL=.\\\\{0,20\\\\}\" .env)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m pytest tests/unit/test_phase1_schema_extension.py tests/unit/test_migration_preamble.py -q)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m pytest tests/unit/test_phase1_schema_extension.py -q)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m ruff check src/ tests/ scripts/)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m ruff format --check tests/unit/test_phase1_schema_extension.py)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m mypy src)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m ruff format tests/unit/test_phase1_schema_extension.py)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m pytest tests/ -q)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe \"C:/Users/Drakula/AppData/Local/Temp/claude/C--Users-Drakula-Desktop-KompasOS/13332ea5-fa88-43e5-8c40-d2d543434fae/scratchpad/sqlcheck.py\" database/migrations/018_pos_policy_and_exception_engine.sql database/migrations/019_shift_intelligence_tables.sql database/migrations/020_hr_lifecycle_tables.sql database/migrations/003_fine_review_and_profile.sql)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe \"C:/Users/Drakula/AppData/Local/Temp/claude/C--Users-Drakula-Desktop-KompasOS/13332ea5-fa88-43e5-8c40-d2d543434fae/scratchpad/sqlcheck.py\" database/migrations/018_pos_policy_and_exception_engine.sql database/migrations/019_shift_intelligence_tables.sql database/migrations/020_hr_lifecycle_tables.sql)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m ruff format --check src/ tests/ scripts/)",
+      "Bash(export PYTHONIOENCODING=utf-8)",
+      "Bash(.venv/Scripts/python.exe -m ruff check src/ tests/ scripts/)",
+      "Bash(.venv/Scripts/python.exe -m mypy src)",
+      "Bash(.venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/ -q)",
+      "Bash(.venv/Scripts/python.exe -m ruff check src/)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/unit/test_exception_engine.py -q)",
+      "Bash(.venv/Scripts/python.exe -m ruff format src/ tests/ scripts/)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/unit --cov=src/domain --cov=src/shared --cov=src/infrastructure/security --cov-fail-under=85 -q)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/unit --cov=src/domain --cov=src/shared --cov=src/infrastructure/security -q)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/unit/test_exception_engine.py -q --cov=src/domain/exception_rules --cov=src/domain/entities/exception_record --cov=src/domain/value_objects/exception_signals)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/unit/test_persistence_gap_coverage.py -q)"
     ]
   }
 }

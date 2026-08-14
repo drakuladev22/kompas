@@ -260,6 +260,31 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         icon="users",
     ),
     MenuEntry(
+        key="bulk_operations",
+        title_az="Toplu Əməliyyatlar",
+        # #29 (kompas1.md Faza 5) — CSV işçi idxalı + mağaza şablonu.
+        #
+        # NİYƏ «İstifadəçilər»dən (110) DƏRHAL SONRA: hər ikisi işə-qəbul
+        # axınının hissəsidir — HR yeni filial açanda ƏVVƏLCƏ şablon tətbiq
+        # edir (bax `screens/bulk_operations.py`), SONRA həmin filialın
+        # onlarla işçisini CSV ilə yükləyir. `users` fərdi işçi əlavəsidir,
+        # bu isə onun TOPLU forması — ayrı-ayrı yerlərdə dursaydılar, "yeni
+        # filial necə qurulur?" sualının cavabı menyunun iki ucuna bölünərdi.
+        #
+        # NİYƏ İKİ AYRI MADDƏ YOX: CSV idxalı VƏ mağaza şablonu EYNİ TƏK
+        # flag-ə bağlıdır (`can_perform_bulk_operations`, backend-də də TƏK
+        # modul faylı — `bulk_operations.py` başlığı). `field_reports`-dan
+        # FƏRQLİ olaraq burada iki AYRI şablon KATEQORİYASI yoxdur ki, iki
+        # açar tələb olunsun — bax `screens/bulk_operations.py` başlığı.
+        #
+        # FEATURE TOGGLE YOXDUR: yüksək-təsirli, YALNIZ Root/CEO/Admin
+        # defoltlu əməliyyatdır (hardlock səviyyəsi), "modul" kimi
+        # söndürülə bilməz — `announcements`/`annual_leave` ilə eyni qərar.
+        required_flag="can_perform_bulk_operations",
+        order=112,
+        icon="users",
+    ),
+    MenuEntry(
         key="permissions",
         title_az="İcazə Matrisi",
         # `can_manage_permissions` DEYİL — o, YALNIZ `Root`-a hardlock-dur

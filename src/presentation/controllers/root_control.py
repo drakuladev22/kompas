@@ -50,6 +50,13 @@ _error_log = get_logger(__name__, channel=LogChannel.ERROR)
 #: Diapazon ekranın QSpinBox-u üçündür və məhdudlaşdırıcı DEYİL: bazada
 #: kənarda dəyər varsa `limit_row` diapazonu genişləndirir (bax orada).
 #: Bu cədvəl tərcümədir, siyasət deyil — həqiqi defolt `DEFAULT_LIMITS`-dədir.
+#:
+#: BU CƏDVƏL ARTIQ ETİKETİN ƏSAS MƏNBƏYİ DEYİL (kompas1.md Faza 9). Etiket
+#: və diapazon ƏVVƏLCƏ `system_limits` sətrindən (`description_az`,
+#: `min_value`, `max_value`) oxunur — bax `limit_row`. Buradakı sətirlər
+#: yalnız İKİ boşluğu doldurur: (1) `system_limits`-də ŞƏKİLÇİ sütunu yoxdur,
+#: ona görə vahid ("dəq", "saat", "AZN/dəq") yalnız buradan gələ bilər;
+#: (2) sətir hələ seed edilməyibsə (yeni açar, köhnə baza) ehtiyat tərcümə.
 LIMIT_LABELS: dict[SystemLimitKey, tuple[str, int, int, str]] = {
     SystemLimitKey.MONTHLY_LEAVE_MINUTES_LIMIT: ("Aylıq icazə müddəti limiti", 0, 10_000, "dəq"),
     SystemLimitKey.FINE_APPEAL_WINDOW_HOURS: ("Cərimə etiraz pəncərəsi", 1, 8_760, "saat"),
@@ -150,7 +157,14 @@ class RootControlController:
 
         screen.set_limits(
             [
-                limit_row(view.key, view.value)
+                limit_row(
+                    view.key,
+                    view.value,
+                    description_az=view.description_az,
+                    min_value=view.min_value,
+                    max_value=view.max_value,
+                    is_stored=view.is_stored,
+                )
                 for view in control.list_limits(tenant_id=tenant_id, actor=self._actor)
             ]
         )
@@ -315,28 +329,97 @@ def _module_label(value: str) -> str:
     return MODULE_LABELS.get(module, value)
 
 
-def limit_row(key_text: str, value: str) -> tuple[str, str, int | str, int, int, str]:
+def _bound_or(raw: str | None, fallback: int) -> int:
+    """`system_limits.min_value`/`max_value` → tam ədəd, alınmasa ehtiyat.
+
+    Sütun TEXT-dir və DECIMAL limitlərdə "0.1" kimi dəyər saxlayır. Belə
+    limit onsuz da QSpinBox-a düşmür (dəyərin özü ədəd deyil, sahə mətndir),
+    ona görə burada `int()` uğursuzluğu XƏTA DEYİL — sadəcə "bu hədd
+    spin-qutu üçün deyil" deməkdir və ehtiyat diapazon qalır.
+    """
+    if raw is None:
+        return fallback
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return fallback
+
+
+def limit_row(
+    key_text: str,
+    value: str,
+    *,
+    description_az: str = "",
+    min_value: str | None = None,
+    max_value: str | None = None,
+    is_stored: bool = True,
+) -> tuple[str, str, int | str, int, int, str]:
     """Bir limiti ekranın gözlədiyi sətrə çevirir.
 
     Ədədə çevrilməyən dəyər (məs. "LEAVE_TYPE", "0.00") MƏTN kimi qalır —
     ekran onun üçün sətir sahəsi qurur.
+
+    ──────────────────────────────────────────────────────────────────────────
+    ETİKET NİYƏ ƏVVƏLCƏ BAZADAN OXUNUR
+    ──────────────────────────────────────────────────────────────────────────
+    `system_limits` sətri onsuz da `description_az`, `min_value`, `max_value`
+    daşıyır (schema.sql §-də sütunlar, hər miqrasiyada seed edilir) və
+    `LimitView` onları ekrana qədər gətirir. Əvvəllər bu funksiya yalnız
+    `(key, value)` alırdı, yəni həmin üç sütun SÜKUTLA atılırdı və etiket
+    `LIMIT_LABELS`-dən — ƏL İLƏ yazılmış 17 sətirlik cədvəldən — gəlirdi.
+    Nəticə: 166 açarın 149-u ROOT ekranında `EXPORT_STORE_ANOMALY_MIN_EMPLOYEES`
+    kimi TEXNİKİ KOD görünürdü (bölmə 4: interfeys dili Azərbaycancadır) və
+    hamısı eyni 0–1 000 000 diapazonu ilə açılırdı — yəni faizlik parametrə
+    500 000 yazmaq mümkün idi.
+
+    Bu, `test_root_control_lists_every_key_without_a_curated_allowlist`-in
+    açar SİYAHISI üçün qadağan etdiyi naxışın etiket variantıdır: əl ilə
+    saxlanan cədvəl yeni parametrləri sükutla arxada qoyur. Ona görə mənbə
+    sırası indi belədir — baza sətri → `LIMIT_LABELS` → açarın öz kodu.
+
+    ŞƏKİLÇİ İSTİSNADIR: `system_limits`-də vahid sütunu YOXDUR, ona görə
+    "dəq"/"saat"/"AZN/dəq" yalnız `LIMIT_LABELS`-dən gələ bilər. Vahid üçün
+    sütun əlavə etmək bütün seed sətirlərini yenidən yazmaq demək olardı,
+    halbuki vahid tərcümə məsələsidir — siyasət deyil.
+
+    Args:
+        key_text: `system_limits.limit_key`.
+        value: Cari dəyər (mətn kimi — tip bazada `value_type`-dadır).
+        description_az: Baza sətrinin Azərbaycanca izahı; boşdursa ehtiyat
+            mənbələr işə düşür.
+        min_value: Baza sətrinin aşağı həddi (mətn); ədədə çevrilməzsə
+            nəzərə alınmır.
+        max_value: Baza sətrinin yuxarı həddi (mətn); eyni qayda.
+        is_stored: Sətir `system_limits`-də varmı. `False` olanda etiketə
+            xəbərdarlıq şəkilçisi qoşulur — Root dəyəri dəyişməmişdən əvvəl
+            onun hələ defolt olduğunu görməlidir.
     """
     key = _limit_key_or_none(key_text)
     if key is None:
-        # Kodun tanımadığı açar: etiket = açarın özü, sahə mətn.
-        return (key_text, key_text, value, 0, 0, "")
+        # Kodun tanımadığı açar: etiket = baza izahı, yoxdursa açarın özü.
+        # Sahə mətndir, çünki kod onun tipini bilmir.
+        return (key_text, description_az.strip() or key_text, value, 0, 0, "")
 
-    label, minimum, maximum, suffix = LIMIT_LABELS.get(key, (key.value, 0, 1_000_000, ""))
+    fallback_label, minimum, maximum, suffix = LIMIT_LABELS.get(key, (key.value, 0, 1_000_000, ""))
+    label = description_az.strip() or fallback_label
+    if not is_stored:
+        label = f"{label} — defolt (bazada yazılmayıb)"
+    minimum = _bound_or(min_value, minimum)
+    maximum = _bound_or(max_value, maximum)
     try:
         number = int(value)
     except (TypeError, ValueError):
         return (key.value, label, value, 0, 0, suffix)
 
-    # Bazadakı dəyər etiket cədvəlindəki diapazondan kənardadırsa, diapazon
-    # GENİŞLƏNİR. Əks halda QSpinBox dəyəri sükutla kəsər və Root ekranda
-    # bazadakından FƏRQLİ rəqəm görərdi — sonra "Tətbiq Et" onu pozardı.
-    low = min(minimum, number)
-    high = max(maximum, number)
+    # Bazadakı dəyər diapazondan kənardadırsa, diapazon GENİŞLƏNİR. Əks halda
+    # QSpinBox dəyəri sükutla kəsər və Root ekranda bazadakından FƏRQLİ rəqəm
+    # görərdi — sonra "Tətbiq Et" onu pozardı.
+    #
+    # `min`/`max` cütü tərs seed sətrini də zərərsizləşdirir (`min_value` >
+    # `max_value`): QSpinBox belə diapazonda hər iki həddi aşağı dəyərə
+    # sıxışdırar və sahə redaktə edilə bilməz olardı.
+    low = min(minimum, maximum, number)
+    high = max(minimum, maximum, number)
     return (key.value, label, number, low, high, suffix)
 
 

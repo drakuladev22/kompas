@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -45,6 +45,7 @@ from src.domain.value_objects.identifiers import (
     new_daily_sheet_id,
 )
 from src.domain.value_objects.money import Money
+from src.domain.value_objects.scheduling import DEFAULT_TIMEZONE, TimeRange
 from src.infrastructure.persistence.exception_repositories import (
     PostgresExceptionRepository,
     PostgresExceptionSourceCatalog,
@@ -986,6 +987,115 @@ def test_reversed_points_are_excluded_by_the_query_itself() -> None:
     repo.sales_facts(TENANT, start=date(2026, 8, 1), end=date(2026, 8, 31))
 
     assert "pl.status = 'ACTIVE'" in conn.executed[-1][0]
+
+
+# --------------------------------------------------------------------------- #
+# Plan faktları — Faza 7 (dinamik norma + pro-rata mənbəyi)
+# --------------------------------------------------------------------------- #
+
+
+def _plan_row(**overrides: Any) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "employee_id": ACTOR,
+        "hire_date": None,
+        "is_active": True,
+        "ended_on": None,
+        "shift_date": date(2026, 8, 3),
+        "is_off_day": False,
+        "start_time": time(9, 0),
+        "end_time": time(18, 0),
+    }
+    row.update(overrides)
+    return row
+
+
+def test_plan_rows_are_grouped_per_employee_with_their_schedules() -> None:
+    rows = [
+        _plan_row(shift_date=date(2026, 8, 3)),
+        _plan_row(shift_date=date(2026, 8, 4), is_off_day=True, start_time=None, end_time=None),
+    ]
+    repo, _ = _build(PostgresReportFactProvider, [("FROM employees", rows)])
+
+    facts = repo.plan_facts(TENANT, start=date(2026, 8, 1), end=date(2026, 8, 31))
+
+    assert len(facts) == 1
+    assert len(facts[0].planned_days) == 2
+    assert facts[0].planned_days[0].schedule == TimeRange(start=time(9, 0), end=time(18, 0))
+    assert facts[0].planned_days[1].is_off_day is True
+    assert facts[0].planned_days[1].schedule is None
+
+
+def test_an_employee_without_any_plan_row_still_yields_an_empty_plan() -> None:
+    """`LEFT JOIN` — planı olmayan işçi siyahıdan DÜŞMÜR (norma 0 siqnalı)."""
+    repo, _ = _build(PostgresReportFactProvider, [("FROM employees", [_plan_row(shift_date=None)])])
+
+    facts = repo.plan_facts(TENANT, start=date(2026, 8, 1), end=date(2026, 8, 31))
+
+    assert facts[0].planned_days == ()
+    assert facts[0].employment.started_on is None
+
+
+def test_an_active_employee_never_gets_an_employment_end_date() -> None:
+    """Köhnə `deactivated_at` qalığı aktiv işçini öz normasından məhrum etməməlidir."""
+    rows = [_plan_row(is_active=True, ended_on=date(2026, 8, 10), hire_date=date(2026, 8, 5))]
+    repo, _ = _build(PostgresReportFactProvider, [("FROM employees", rows)])
+
+    window = repo.plan_facts(TENANT, start=date(2026, 8, 1), end=date(2026, 8, 31))[0].employment
+
+    assert window.started_on == date(2026, 8, 5)
+    assert window.ended_on is None
+
+
+def test_a_deactivated_employee_carries_its_last_day() -> None:
+    rows = [_plan_row(is_active=False, ended_on=date(2026, 8, 10))]
+    repo, _ = _build(PostgresReportFactProvider, [("FROM employees", rows)])
+
+    window = repo.plan_facts(TENANT, start=date(2026, 8, 1), end=date(2026, 8, 31))[0].employment
+
+    assert window.ended_on == date(2026, 8, 10)
+
+
+def test_the_plan_query_reads_deactivation_in_the_store_timezone() -> None:
+    """UTC-də gecə çıxan işçinin son iş günü BİR GÜN sürüşməməlidir."""
+    repo, conn = _build(PostgresReportFactProvider, [("FROM employees", [])])
+
+    repo.plan_facts(TENANT, start=date(2026, 8, 1), end=date(2026, 8, 31))
+
+    sql, params = conn.executed[-1]
+    assert "AT TIME ZONE COALESCE(s.timezone, %s)" in sql
+    assert params[0] == DEFAULT_TIMEZONE
+
+
+def test_the_plan_query_does_not_filter_out_deactivated_work_modes() -> None:
+    """Soft delete: keçmiş növbənin rejimi «naməlum»a çevrilməməlidir."""
+    repo, conn = _build(PostgresReportFactProvider, [("FROM employees", [])])
+
+    repo.plan_facts(TENANT, start=date(2026, 8, 1), end=date(2026, 8, 31))
+
+    sql = conn.executed[-1][0]
+    assert "LEFT JOIN work_modes wm ON wm.id = sa.work_mode_id" in sql
+    assert "wm.is_active" not in sql
+
+
+def test_a_degenerate_work_mode_becomes_an_unscheduled_day() -> None:
+    """Başlanğıc = bitmə: `TimeRange` qəbul etmir — hesabat çökmür, `None` olur."""
+    rows = [_plan_row(start_time=time(9, 0), end_time=time(9, 0))]
+    repo, _ = _build(PostgresReportFactProvider, [("FROM employees", rows)])
+
+    facts = repo.plan_facts(TENANT, start=date(2026, 8, 1), end=date(2026, 8, 31))
+
+    assert facts[0].planned_days[0].schedule is None
+
+
+def test_the_plan_query_passes_the_store_filter_twice() -> None:
+    store_id = uuid.uuid4()
+    repo, conn = _build(PostgresReportFactProvider, [("FROM employees", [])])
+
+    repo.plan_facts(TENANT, start=date(2026, 8, 1), end=date(2026, 8, 31), store_id=store_id)
+
+    params = conn.executed[-1][1]
+    assert params[-1] == store_id
+    assert params[-2] == store_id
 
 
 # --------------------------------------------------------------------------- #

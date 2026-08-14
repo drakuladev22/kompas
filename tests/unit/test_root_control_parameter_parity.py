@@ -26,6 +26,11 @@ ayrı-ayrılıqda qırıla bilər:
   3. SQL seed — `schema.sql` və ya bir miqrasiya onu MÖVCUD kirayəçiyə
      əlavə edir. (Olmasa GUI-dan dəyişiklik saxlanmır.)
 
+DÖRDÜNCÜ HALQA (kompas1.md Faza 9): sətrin `description_az` sütunu. Üç halqa
+da bütöv ola bilər, HALBUKİ Root ekranda `EXPORT_STORE_ANOMALY_MIN_EMPLOYEES`
+kimi texniki kod görər — yəni parametr texniki olaraq idarə olunan, praktiki
+olaraq isə oxunmayan qalar (bölmə 4: interfeys dili Azərbaycancadır).
+
 ──────────────────────────────────────────────────────────────────────────────
 NİYƏ `list_limits` DAVRANIŞI DA YOXLANILIR
 ──────────────────────────────────────────────────────────────────────────────
@@ -47,6 +52,12 @@ from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 _DATABASE_DIR: Final[Path] = _REPO_ROOT / "database"
 _COMPOSITION: Final[Path] = _REPO_ROOT / "src" / "presentation" / "composition.py"
+
+#: `description_az` axtarışının pəncərəsi — bir `VALUES` sətri bundan uzun deyil.
+_DESCRIPTION_SEARCH_CHARS: Final[int] = 400
+
+#: "İnsan üçün yazılmış mətn" sayılan minimum uzunluq (bax `_seeded_description_of`).
+_MIN_DESCRIPTION_CHARS: Final[int] = 8
 
 
 def _seed_sources() -> str:
@@ -78,6 +89,81 @@ def test_every_system_limit_key_is_seeded_by_sql() -> None:
         key.value for key in SystemLimitKey if not re.search(rf"'{re.escape(key.value)}'", blob)
     )
     assert not missing, f"Heç bir SQL faylında seed edilməyən açar(lar): {missing}"
+
+
+def _seeded_description_of(key_value: str, blob: str) -> str | None:
+    """Açarın seed sətrindəki Azərbaycanca izahı (tapılmasa `None`).
+
+    SQL-i AST ilə deyil, MƏTN kimi oxuyuruq: alternativ tam SQL parseri
+    əlavə etmək olardı, halbuki burada sual sadədir — "bu açarın yazıldığı
+    `VALUES` sətrində insan üçün yazılmış bir mətn varmı". Axtarış açarın
+    sətrindən sonrakı hissə ilə məhdudlaşır və növbəti sətrin `(`-i görünəndə
+    dayanır, ona görə qonşu açarın izahını səhvən bu açara YAZMIR.
+
+    "İnsan mətni" meyarı: ən azı 8 simvol VƏ bir boşluq. Bu, `'INTEGER'`,
+    `'DAILY'`, `'100'` kimi texniki dəyərləri kənarda saxlayır — onların heç
+    birində boşluq yoxdur.
+    """
+    for match in re.finditer(rf"'{re.escape(key_value)}'", blob):
+        window = blob[match.end() : match.end() + _DESCRIPTION_SEARCH_CHARS]
+        segment = window.split("\n\n", maxsplit=1)[0]
+        next_tuple = re.search(r"\)\s*,?\s*\n\s*\(", segment)
+        if next_tuple:
+            segment = segment[: next_tuple.start()]
+        for candidate in re.findall(r"'([^']*)'", segment):
+            if len(candidate) >= _MIN_DESCRIPTION_CHARS and " " in candidate:
+                return candidate
+    return None
+
+
+def test_every_seeded_limit_carries_an_azerbaijani_description() -> None:
+    """İzahsız sətir ROOT ekranında TEXNİKİ KOD kimi görünür.
+
+    ──────────────────────────────────────────────────────────────────────────
+    BU QAPI NİYƏ ƏLAVƏ OLUNDU
+    ──────────────────────────────────────────────────────────────────────────
+    kompas1.md Faza 9 auditində məlum oldu ki, `controllers/root_control.py`
+    etiketi 17 sətirlik ƏL İLƏ yazılmış `LIMIT_LABELS` cədvəlindən oxuyur və
+    baza sətrinin `description_az` sütununu SÜKUTLA atır. Nəticədə 166
+    açarın 149-u ekranda ingiliscə kod adı ilə görünürdü.
+
+    Kontroller düzəldildi (etiket əvvəlcə bazadan oxunur), lakin düzəliş
+    yalnız SƏTİRDƏ izah VARSA işləyir. Ona görə izahın mövcudluğu artıq
+    qapıdır: yeni açar izahsız seed edilsə, bu test qırılır — reqressiya
+    ekranda görünməzdən əvvəl.
+    """
+    blob = _seed_sources()
+    missing = sorted(
+        key.value for key in SystemLimitKey if _seeded_description_of(key.value, blob) is None
+    )
+    assert not missing, (
+        "Seed sətrində Azərbaycanca `description_az` olmayan açar(lar): "
+        f"{missing} — ROOT ekranında texniki kod kimi görünəcəklər."
+    )
+
+
+def test_the_root_screen_reads_its_labels_from_the_limit_row() -> None:
+    """Kontroller `LimitView`-un üç sütununu ekrana ÖTÜRMƏLİDİR.
+
+    Mənbə mətnini oxuyuruq, çünki alternativ — sahta sessiya ilə tam
+    kontrolleri qurmaq — yalnız sahtənin doldurulmasını yoxlayardı. Sual isə
+    quruluşa aiddir: `_fill` sətri `limit_row(view.key, view.value)`-a geri
+    qayıtsa, izah və diapazon YENİDƏN atılar və qüsur səssizcə qayıdar.
+    """
+    source = (_REPO_ROOT / "src" / "presentation" / "controllers" / "root_control.py").read_text(
+        encoding="utf-8"
+    )
+
+    for fragment in (
+        "description_az=view.description_az",
+        "min_value=view.min_value",
+        "max_value=view.max_value",
+        "is_stored=view.is_stored",
+    ):
+        assert fragment in source, (
+            f"`_fill` artıq `{fragment}` ötürmür — ROOT ekranı limitin "
+            "bazadakı izahını/diapazonunu itirir."
+        )
 
 
 def test_root_control_lists_every_key_without_a_curated_allowlist() -> None:
@@ -195,6 +281,29 @@ def test_the_expansion_added_its_root_parameters() -> None:
         ("PERFORMANCE_", "#20 Performans qiymətləndirməsi"),
         ("ATTRITION_", "#21 Turnover riski"),
         ("BENCHMARK_", "#24 Benchmark paneli"),
+    ):
+        assert any(key.startswith(prefix) for key in present), (
+            f"{feature} üçün heç bir `{prefix}*` ROOT parametri yoxdur — "
+            "funksiya tam hardcode qalıb."
+        )
+
+
+def test_the_hr_operations_expansion_added_its_root_parameters() -> None:
+    """kompas1.md-nin (#26–#30 + export) parametrləri yerindədir.
+
+    Yuxarıdakı test ilə eyni əsaslandırma: SAY deyil, PREFİKS yoxlanılır.
+    Burada əlavə bir səbəb də var — bu genişlənmə İKİ fərqli qatda parametr
+    yaradıb (hesablama və export təcrübəsi) və birinin unudulması digərini
+    yaşıl saxlayardı.
+    """
+    present = {key.value for key in SystemLimitKey}
+    for prefix, feature in (
+        ("FIELD_REPORT_", "#26+#27 Sahə hesabatı (audit + insident)"),
+        ("ANNUAL_LEAVE_", "#28 İllik məzuniyyət balansı"),
+        ("BULK_IMPORT_", "#29 Toplu əməliyyatlar"),
+        ("EXECUTIVE_DIGEST_", "#30 Planlaşdırılmış icra xülasəsi"),
+        ("REPORT_RANGE_", "Faza 7 tarix-aralığı export"),
+        ("EXPORT_", "Faza 8 pre-export doğrulama və düzəliş"),
     ):
         assert any(key.startswith(prefix) for key in present), (
             f"{feature} üçün heç bir `{prefix}*` ROOT parametri yoxdur — "

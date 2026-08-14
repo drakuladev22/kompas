@@ -22,6 +22,20 @@ FAYL ADI NİYƏ DÖVR AÇARINI DAŞIYIR
 `Davamiyyet_2026-08.xlsx` — iki fərqli ayın faylı eyni qovluqda qarışmasın.
 Latın hərfləri ilə: fayl adı Windows/e-poçt/1C arasında gəzir və `ə/ı/ş`
 bəzi köhnə sistemlərdə pozulur. Fayl DAXİLİ isə tam Azərbaycan dilindədir.
+
+──────────────────────────────────────────────────────────────────────────────
+«QEYD» SÜTUNU NİYƏ SONUNCUDUR VƏ NİYƏ BOŞ OLA BİLƏR (kompas1.md Faza 8, E)
+──────────────────────────────────────────────────────────────────────────────
+Sütun hər iki fayla ƏLAVƏ edilib, mövcud sütunların SIRASI isə DƏYİŞMƏYİB:
+mühasibin `SUM(G:G)` kimi hazır düsturları, 1C idxal şablonları və pul
+formatının bağlı olduğu hərflər (D, G) yerində qalmalıdır. Yeni sütunu ortaya
+salmaq hamısını sükutla sürüşdürərdi.
+
+Məzmun İSTƏYƏ BAĞLIDIR (`notes=None` → sütun var, xanalar boş). Mənbəyi
+`export_manual_corrections`-dır (`export_preflight.notes_for()`) — yəni faylda
+görünən hər qeydin arxasında müəllif, vaxt və MƏCBURİ səbəb var. Ayrıca
+"sərbəst qeyd" sahəsi QƏSDƏN yaradılmadı: audit-siz ikinci mətn kanalı
+"düzəldilib, amma niyə bilinmir" halını geri gətirərdi.
 """
 
 from __future__ import annotations
@@ -38,13 +52,28 @@ from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from src.application.use_cases.reporting import (
         AttendanceRow,
         BonusPenaltyRow,
         ReportPeriod,
+        ReportRange,
     )
+    from src.domain.value_objects.identifiers import EmployeeId
+
+    #: Fayl adı və başlıq sətri üçün lazım olan YEGANƏ müqavilə: `key` + `label_az()`.
+    #: `ReportPeriod` (tam ay) və `ReportRange` (Faza 7, xüsusi aralıq) ikisi də
+    #: onu ödəyir. Yazıcı hansı formanın seçildiyini BİLMƏMƏLİDİR — bilsəydi,
+    #: hər yeni dövr tipi bu modulda `if` budağı tələb edərdi.
+    ExportPeriod = ReportPeriod | ReportRange
 
 _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
+
+#: Hər iki faylın SONUNCU sütunu (kompas1.md Faza 8, bənd E) — bax modul
+#: başlığı. Sabit ayrıca elan olunur ki, iki başlıq siyahısında mətn
+#: fərqlənməsin ("Qeyd" ↔ "Qeydlər" kimi sürüşmə auditdə çaşqınlıq yaradardı).
+NOTE_HEADER: Final = "Qeyd"
 
 #: FAYL 1 sütunları — bölmə 6-dakı ardıcıllıqla.
 ATTENDANCE_HEADERS: Final[tuple[str, ...]] = (
@@ -56,6 +85,7 @@ ATTENDANCE_HEADERS: Final[tuple[str, ...]] = (
     "Faktiki İşlənilən Gün Sayı",
     "Off-Day Sayı",
     "İcazəsiz Qayıb",
+    NOTE_HEADER,
 )
 
 #: FAYL 2 sütunları — bölmə 6-dakı ardıcıllıqla.
@@ -70,6 +100,7 @@ BONUS_PENALTY_HEADERS: Final[tuple[str, ...]] = (
     "Təsdiqlənmiş Cərimə Sayı",
     "Premiyadan Tutulacaq Yekun Cərimə Məbləği",
     "Etiraz Pəncərəsi",
+    NOTE_HEADER,
 )
 
 _MONEY_FORMAT: Final[str] = '#,##0.00" AZN"'
@@ -93,14 +124,26 @@ class ExcelReportWriter:
 
     # ------------------------------- FAYL 1 ---------------------------------- #
 
-    def write_attendance(self, rows: list[AttendanceRow], *, period: ReportPeriod) -> Path:
-        """Aylıq Davamiyyət Hesabatı — YALNIZ fiks maaş üçün."""
+    def write_attendance(
+        self,
+        rows: list[AttendanceRow],
+        *,
+        period: ExportPeriod,
+        notes: Mapping[EmployeeId, str] | None = None,
+    ) -> Path:
+        """Aylıq Davamiyyət Hesabatı — YALNIZ fiks maaş üçün.
+
+        `notes` DEFOLT `None` — mövcud çağırış yerləri (və testlər) DƏYİŞMƏDƏN
+        işləməyə davam edir; sütun yaranır, xanalar boş qalır (bax modul
+        başlığı).
+        """
         workbook = Workbook()
         sheet = workbook.active
         if sheet is None:  # pragma: no cover — openpyxl həmişə vərəq yaradır
             raise ExcelExportError("Boş iş kitabı yaradıla bilmədi")
         sheet.title = "Davamiyyət"
 
+        lookup = notes or {}
         self._write_headers(sheet, ATTENDANCE_HEADERS)
         for row in rows:
             sheet.append(
@@ -113,6 +156,7 @@ class ExcelReportWriter:
                     row.actual_worked_days,
                     row.off_days,
                     row.unauthorized_absences,
+                    lookup.get(row.employee_id, ""),
                 ]
             )
 
@@ -129,7 +173,13 @@ class ExcelReportWriter:
 
     # ------------------------------- FAYL 2 ---------------------------------- #
 
-    def write_bonus_penalty(self, rows: list[BonusPenaltyRow], *, period: ReportPeriod) -> Path:
+    def write_bonus_penalty(
+        self,
+        rows: list[BonusPenaltyRow],
+        *,
+        period: ExportPeriod,
+        notes: Mapping[EmployeeId, str] | None = None,
+    ) -> Path:
         """Premiya & Cərimə Hesabatı — cərimələr PREMİYADAN tutulur."""
         workbook = Workbook()
         sheet = workbook.active
@@ -137,6 +187,7 @@ class ExcelReportWriter:
             raise ExcelExportError("Boş iş kitabı yaradıla bilmədi")
         sheet.title = "Premiya və Cərimə"
 
+        lookup = notes or {}
         self._write_headers(sheet, BONUS_PENALTY_HEADERS)
         for row in rows:
             sheet.append(
@@ -153,6 +204,7 @@ class ExcelReportWriter:
                         if row.has_deferred_fines
                         else "Bağlı"
                     ),
+                    lookup.get(row.employee_id, ""),
                 ]
             )
 
@@ -234,6 +286,7 @@ class ExcelReportWriter:
 __all__ = [
     "ATTENDANCE_HEADERS",
     "BONUS_PENALTY_HEADERS",
+    "NOTE_HEADER",
     "ExcelExportError",
     "ExcelReportWriter",
 ]

@@ -834,6 +834,26 @@ FINE_TYPES: Final = [
     "Kassa uyğunsuzluğu",
 ]
 
+#: Faza 7 — Növbə Matrisindəki İŞ REJİMİ seçicisinin maket məzmunu:
+#: `(work_mode_id, etiket)`. Canlı yol eyni formanı `work_modes` kataloqundan
+#: qurur (`controllers/shift_matrix.py::refresh`). Siyahıda GECƏ NÖVBƏSİ
+#: qəsdən var: maket onu göstərmirsə, `is_overnight` yolunun ekranda necə
+#: göründüyü heç vaxt gözlə yoxlanmazdı.
+WORK_MODE_CHOICES: Final[list[tuple[str, str]]] = [
+    ("00000000-0000-0000-0000-0000000000b1", "Səhər · 09:00–18:00"),
+    ("00000000-0000-0000-0000-0000000000b2", "Axşam · 13:00–22:00"),
+    ("00000000-0000-0000-0000-0000000000b3", "Gecə · 22:00–06:00"),
+    ("00000000-0000-0000-0000-0000000000b4", "Növbəli 2/2 · Sərbəst növbə"),
+]
+
+#: Seçicinin yanındakı nişan — gündəlik norma `bitmə − başlanğıc` fərqindən
+#: çıxır (`domain/work_norm.daily_norm_hours`). 09:00–18:00 = 9 saat, hüquqi
+#: gündəlik norma isə 8-dir: maket məhz SIXILMA halını göstərir ki, mətnin
+#: özü də (artıq hissə aşım jurnalında) gözlə yoxlana bilsin.
+WORK_MODE_NORM_LABEL: Final[str] = (
+    "İş Rejimi: 09:00–18:00 · norma 8.00 saat/gün (plan 9 saat, artıq hissə aşım jurnalında)"
+)
+
 #: #13 — Növbə Matrisindəki tarixi nümunə kartının maket məzmunu:
 #: (ISO həftə günü, orta işçi sayı). Həftə günlərinin ADI burada YOXDUR —
 #: onu `weekday_name_az()` verir, yəni maket və canlı yol eyni mənbədən
@@ -872,6 +892,8 @@ __all__ = [
     "TENANTS",
     "UNASSIGNED_SALES",
     "USERS",
+    "WORK_MODE_CHOICES",
+    "WORK_MODE_NORM_LABEL",
     "DashboardSummary",
     "QueuePreview",
     "build_admin",
@@ -1280,3 +1302,161 @@ ANNUAL_LEAVE_PENDING: Final = [
         "submitted": "11.08.2026 17:12",
     },
 ]
+
+# --------------------------------------------------------------------------- #
+# #29 Toplu Əməliyyatlar — kompas1.md Faza 5
+# --------------------------------------------------------------------------- #
+# Açarlar `controllers/bulk_operations.py::_preview_payload`/`_to_template_
+# rows`-un qaytardığı sözlüklərlə EYNİDİR (CLAUDE.md bölmə 6).
+
+#: `BulkOperationsScreen.set_preview(**...)` — `errors` xaric qalan sahələr
+#: TİPLİDİR (str yox), çünki setter imzası `int` gözləyir (bax `bulk_
+#: operations.py` ekran modulu). Boş fayl/başlıq-yalnız halı BURADA GÖSTƏRİLMİR
+#: — o, `total_rows=0` ilə AYRI budaqdır və maketin məqsədi ADİ (qismən
+#: uğurlu) nəticəni nümayiş etdirməkdir.
+BULK_IMPORT_PREVIEW_TOTAL_ROWS: Final = 4
+BULK_IMPORT_PREVIEW_VALID_COUNT: Final = 2
+BULK_IMPORT_PREVIEW_ERROR_COUNT: Final = 2
+BULK_IMPORT_PREVIEW_TRUNCATED_EXTRA: Final = 0
+BULK_IMPORT_PREVIEW_ERRORS: Final = [
+    {"row": "2", "message": "Rol tapılmadı və ya deaktivdir: KASSIR2"},
+    {"row": "4", "message": "Bu istifadəçi adı artıq mövcuddur: e.mammadov"},
+]
+
+STORE_TEMPLATES: Final = [
+    {
+        "id": "st-1",
+        "name": "Standart Supermarket",
+        "source_store": "Bellona 28 May",
+        "setting_count": "2",
+        "captured_at": "2026-07-01",
+        "status": "Aktiv",
+    },
+    {
+        "id": "st-2",
+        "name": "Kiçik Format (köhnə)",
+        "source_store": "Bellona 6 Mikrorayon",
+        "setting_count": "2",
+        "captured_at": "2026-05-14",
+        "status": "Deaktiv",
+    },
+]
+
+# --------------------------------------------------------------------------- #
+# Export təcrübəsi (pre-export doğrulama, müqayisə, düzəliş) — kompas1.md Faza 8
+# --------------------------------------------------------------------------- #
+# Açarlar `controllers/report_export.py`-dakı `_role_rows` / `_finding_rows` /
+# `_comparison_rows` / `_correction_rows` funksiyalarının qaytardığı
+# sözlüklərlə HƏRFƏN EYNİDİR (CLAUDE.md bölmə 6). Maketin öz ad məkanını
+# qurması layihədə artıq bir dəfə qüsura çevrilib (bax `menu.py` başlığı) —
+# burada həmin səhv təkrarlanmır.
+
+#: `set_role_options()` — siyahı CANLI yolda `positions` kataloqundan gəlir;
+#: maketdə isə real quraşdırmanın tipik rolları göstərilir. «Bütün rollar»
+#: sətri BURADA YOXDUR: onu ekranın özü əlavə edir (bax `_build_role_filter`).
+EXPORT_ROLE_OPTIONS: Final = [
+    {"code": "KAMERA_NEZARETCISI", "name": "Kamera Nəzarətçisi"},
+    {"code": "MAGAZA_MENECERI", "name": "Mağaza Meneceri"},
+    {"code": "SATICI", "name": "Satıcı"},
+]
+
+#: `set_validation_findings()` — DÖRD qaydanın hər biri maketdə TƏMSİL OLUNUR
+#: ki, dizayn nəzərdən keçirilərkən heç bir hal görünməmiş qalmasın
+#: (`domain/export_validation.py::ExportValidationCode`).
+EXPORT_VALIDATION_FINDINGS: Final = [
+    {
+        "rule": "Aralıqdan çox iş günü",
+        "subject": "Kamran Vəliyev",
+        "detail": (
+            "34 iş günü qeydə alınıb, aralıq isə cəmi 31 təqvim günüdür — "
+            "davamiyyət qeydlərində təkrar sətir ola bilər."
+        ),
+    },
+    {
+        "rule": "Deaktiv işçi tabeldə",
+        "subject": "Elvin Məmmədov",
+        "detail": (
+            "İşçi DEAKTİVDİR, lakin tabeldə hərəkət var: 6 iş günü, "
+            "1 icazəsiz qayıb. Deaktivləşdirmə tarixini yoxlayın."
+        ),
+    },
+    {
+        "rule": "0 gün / 0 qayıb ziddiyyəti",
+        "subject": "Nigar Əliyeva",
+        "detail": (
+            "22 gün planlaşdırılıb, lakin nə bir iş günü, nə də icazəsiz qayıb "
+            "qeydə alınıb — kamera təsdiqi və ya məzuniyyət qeydi çatışmır."
+        ),
+    },
+    {
+        "rule": "Mağazada anomal qayıb",
+        "subject": "İstikbal Gənclik",
+        "detail": (
+            "İcazəsiz qayıb nisbəti 18.4% — ROOT həddi 15.0%. 17 qayıb / 92 norma gün, 5 işçi."
+        ),
+    },
+]
+
+#: `set_period_comparison()` — «əhəmiyyətli fərq» nişanı ROOT həddindən
+#: (`EXPORT_PERIOD_DELTA_SIGNIFICANT`, defolt 3) asılıdır; maketdə həm aşan,
+#: həm aşmayan sətir var ki, hər iki nişan tonu görünsün.
+EXPORT_PERIOD_COMPARISON: Final = [
+    {
+        "metric": "İcazəsiz qayıb",
+        "current": "17",
+        "previous": "14",
+        "delta": "+3",
+        "significant": "1",
+    },
+    {
+        "metric": "Faktiki işlənilən gün",
+        "current": "612",
+        "previous": "610",
+        "delta": "+2",
+        "significant": "",
+    },
+    {
+        "metric": "Norma iş günləri",
+        "current": "648",
+        "previous": "648",
+        "delta": "0",
+        "significant": "",
+    },
+    {
+        "metric": "Off-day sayı",
+        "current": "184",
+        "previous": "180",
+        "delta": "+4",
+        "significant": "1",
+    },
+]
+
+#: `set_period_comparison(caption=...)` — hansı dövrlə müqayisə edildiyi AÇIQ
+#: yazılır ("keçən ay" fərziyyəsi səhv olardı, bax `export_preflight.py`).
+EXPORT_COMPARISON_CAPTION: Final = "Müqayisə dövrü: 01.07.2026 – 31.07.2026 (eyni uzunluqda)."
+
+#: `set_corrections()` — hər sətrin SƏBƏBİ var və olmalıdır (məcburi sahə).
+EXPORT_CORRECTIONS: Final = [
+    {
+        "employee": "Kamran Vəliyev",
+        "date": "2026-08-04",
+        "change": "Faktiki işlənilən gün: 34 → 31",
+        "reason": "Kassa sistemində təkrar giriş qeydi aşkarlandı, HR aktı 2026/114.",
+    },
+    {
+        "employee": "Nigar Əliyeva",
+        "date": "2026-08-11",
+        "change": "Xəstəlik vərəqəsi kadrlar şöbəsinə gec təqdim olunub.",
+        "reason": "Vərəqə 11.08 tarixli, sistemə 13.08-də daxil edilib.",
+    },
+]
+
+#: `set_lock_summary(already_exported=..., overlap_notice=...)` — üst-üstə
+#: düşən aralıq (Faza 7). Cümlə CANLI yolda `BonusPenaltySelection.
+#: overlap_notice_az()`-dan gəlir; maket onun EYNİ formasını daşıyır ki,
+#: dizayn baxışında sətir uzunluğu real halla üst-üstə düşsün.
+EXPORT_ALREADY_EXPORTED_COUNT: Final = 2
+EXPORT_OVERLAP_NOTICE: Final = (
+    "2 cərimə bu aralığa düşür, lakin artıq əvvəlki dövr(lər)də tutulub "
+    "(2026-07) — təkrar tutulmur."
+)

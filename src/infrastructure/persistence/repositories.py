@@ -925,6 +925,30 @@ class PostgresFineRepository(_BaseRepository):
         )
         return [fine_from_row(row) for row in rows]
 
+    def list_in_range(self, tenant_id: TenantId, *, start: date, end: date) -> list[Fine]:
+        """`RangeScopedFineReader` — aralığa düşən BÜTÜN cərimələr (Faza 8).
+
+        NİYƏ HEÇ BİR LOCK ŞƏRTİ YOXDUR: əsaslandırma tam olaraq
+        `domain/interfaces/ports.py::RangeScopedFineReader` başlığındadır —
+        üç kateqoriyanın (tutulan / təxirə salınan / artıq tutulmuş) hər üçü
+        hesablana bilsin deyə. Qərarı `Fine.is_exportable(now=...)` verir,
+        bu sorğu YALNIZ namizədləri gətirir.
+
+        `fine_date` üzrə süzülür (yazılma anı `created_at` YOX): gecikmiş
+        yazılan cərimə hadisənin baş verdiyi dövrə düşməlidir, əks halda
+        aralıqların sərhədində cərimə bir dövrdən digərinə sükutla sürüşərdi.
+
+        `status` süzgəci də yoxdur — `PENDING_REVIEW` sətri `Fine.is_
+        exportable()` tərəfindən onsuz da rədd edilir və onu SQL-də kəsmək
+        həmin qərarı iki yerə yayardı.
+        """
+        rows = self._fetch_all(
+            self._SELECT
+            + " WHERE tenant_id = %s AND fine_date BETWEEN %s AND %s ORDER BY fine_date",
+            (tenant_id, start, end),
+        )
+        return [fine_from_row(row) for row in rows]
+
     # -------------------------- Drive sübut sütunları ------------------------ #
     #
     # NİYƏ BUNLAR `save()`-dan KEÇMİR

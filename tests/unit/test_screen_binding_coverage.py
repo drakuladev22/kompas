@@ -80,6 +80,10 @@ CONTROLLER_BOUND: Final[dict[str, str]] = {
     # icraya götür / bağla) və hər yazıdan sonra siyahını yenidən oxuyur.
     "store_audit": "_attach_field_reports",
     "incident_report": "_attach_field_reports",
+    # #29 Toplu Əməliyyatlar (kompas1.md Faza 5) — CSV idxalı + mağaza şablonu
+    # HƏR İKİSİ HƏM oxuyur, HƏM yazır (bax `controllers/bulk_operations.py`
+    # başlığı) — `announcements`/`annual_leave` ilə eyni qərar.
+    "bulk_operations": "_attach_bulk_operations",
 }
 
 #: Həm `_binders()`-də, HƏM DƏ `_attach_*` ilə bağlanan açarlar.
@@ -107,12 +111,18 @@ CONTROLLER_BOUND: Final[dict[str, str]] = {
 #: (yazı YOXDUR, YALNIZ metrik dəyişəndə YENİDƏN oxu və naviqasiya) — ona
 #: görə ÖZ kontrolleri yox, YALNIZ bir `_attach_*` siqnal bağlaması var
 #: (bax `app.py::_attach_dashboard_benchmark` başlığı).
+#: «Aylıq Hesabatlar» da belədir (kompas1.md Faza 8): dövr etiketi və LOCK
+#: xülasəsi (72 saatlıq etiraz pəncərəsi) `_reports` binder-indən DƏYİŞMƏDƏN
+#: oxunur, ekrana ƏLAVƏ edilmiş pre-export doğrulama bölməsi isə həm oxuyur,
+#: həm yazır (manual düzəliş) və hər yazıdan sonra siyahını yenidən oxuyur —
+#: ona görə ÖZ kontrolleri var (bax `controllers/report_export.py` başlığı).
 HYBRID_BOUND: Final[dict[str, str]] = {
     "help": "_attach_help_center",
     "health": "_attach_health",
     "users": "_attach_users_pos_threshold",
     "shift_planning": "_attach_open_shift_market",
     "dashboard": "_attach_dashboard_benchmark",
+    "reports": "_attach_report_export",
 }
 
 #: Kontrolleri olmayan, lakin örtüyə birbaşa bağlanan ekran: Ayarlar temanı

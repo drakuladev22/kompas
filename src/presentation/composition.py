@@ -76,6 +76,10 @@ if TYPE_CHECKING:
     from src.application.use_cases.audit_query import AuditQueryUseCase
     from src.application.use_cases.backup_access import BackupAccessUseCase
     from src.application.use_cases.behavior_baseline import BehaviorBaselineUseCase
+    from src.application.use_cases.bulk_operations import (
+        BulkEmployeeImportUseCase,
+        StoreTemplateUseCase,
+    )
     from src.application.use_cases.catalog_management import (
         FineTypeCatalogUseCase,
         LeaveTypeCatalogUseCase,
@@ -88,6 +92,8 @@ if TYPE_CHECKING:
     from src.application.use_cases.employee_profile import EmployeeProfileAccessUseCase
     from src.application.use_cases.erp_connection import ErpConnectionWizardUseCase
     from src.application.use_cases.exception_engine import ExceptionEngineUseCase
+    from src.application.use_cases.executive_digest import ExecutiveDigestUseCase
+    from src.application.use_cases.export_preflight import ExportPreflightUseCase
     from src.application.use_cases.field_reports import FieldReportUseCase
     from src.application.use_cases.fine_management import (
         FineAppealUseCase,
@@ -118,7 +124,8 @@ if TYPE_CHECKING:
     from src.application.use_cases.support_chat import SupportChatUseCase
     from src.application.use_cases.sync_conflicts import SyncConflictUseCase
     from src.application.use_cases.task_workflow import TaskWorkflowUseCase
-    from src.application.use_cases.user_management import UserManagementUseCase
+    from src.application.use_cases.user_management import EmployeeDraft, UserManagementUseCase
+    from src.domain.entities.employee import Employee
     from src.domain.interfaces.ports import NtpVerifier
     from src.domain.value_objects.identifiers import EmployeeId, TenantId
     from src.infrastructure.licensing.client import LicenseClient
@@ -530,6 +537,40 @@ class Session:
     # girişidir (bax `_register_scheduled_jobs`).
     annual_leave: AnnualLeaveUseCase
 
+    # --- #29 Toplu Əməliyyatlar (kompas1.md Faza 5) -------------------------- #
+    #
+    # CSV işçi idxalı VƏ mağaza şablonu AYRI SAHƏLƏRDİR (iki AYRI use case),
+    # lakin İKİSİ DƏ `can_perform_bulk_operations`-a bağlıdır (bax
+    # `bulk_operations.py` başlığı). CSV idxalının SƏTİR-SƏTİR yazı yolu
+    # (`create_employee()`-ə çağırış) `_build_session`-dəki
+    # `_bulk_create_employee_row` closure-udur — bax orada, "TRANZAKSİYA
+    # SƏRHƏDİ".
+    bulk_employee_import: BulkEmployeeImportUseCase
+    store_templates: StoreTemplateUseCase
+
+    # --- #30 Planlaşdırılmış İcra Xülasəsi (kompas1.md Faza 6) --------------- #
+    #
+    # İKİ YOLU VAR: `configure`/`deactivate`/`list_for_management` Root Control
+    # Center-in `can_configure_executive_digest` yazı yoludur, `run()` isə
+    # `EXECUTIVE_DIGEST_RUN` gecəlik işinin girişidir (bax `_register_
+    # scheduled_jobs`). Metriklər YENİ hesablanmır — `multi_store_benchmark`
+    # provayderi VƏ `exceptions` portu ÇAĞIRILIR (bax use case modul başlığı,
+    # "1C SƏRHƏDİ").
+    executive_digest: ExecutiveDigestUseCase
+
+    # --- HR-D/A/E/F/G Export təcrübəsi (kompas1.md Faza 8) ------------------ #
+    #
+    # `reports` (MonthlyReportUseCase) ilə YAN-YANA, ONDAN ASILI DEYİL: sətir
+    # hesablaması ORADA qalır (Faza 7-nin `work_norm` zənciri toxunulmur), bu
+    # sahə isə həmin sətirlərin ÜZƏRİNDƏ dörd yeni sual verir — şübhəli sətir,
+    # manual düzəliş, dövr-müqayisəsi, rol filtri.
+    #
+    # İKİ AYRI SAHƏ NİYƏ: `reports` YALNIZ oxuyur və heç bir cədvələ yazmır;
+    # bu isə `export_manual_corrections`-a YAZIR və audit doğurur. Birləşdirmək
+    # hesabat çıxarmaq (mühasib) ilə tabeli dəyişmək (HR) məsuliyyətlərini
+    # bir obyektdə qarışdırardı.
+    export_preflight: ExportPreflightUseCase
+
     def commit(self) -> None:
         self.uow.commit()
 
@@ -542,6 +583,18 @@ class Session:
     def report_facts(self) -> Any:
         """Hesabat rəqəmlərinin SQL mənbəyi."""
         return self.uow.repository("report_facts")
+
+    @property
+    def export_roster(self) -> Any:
+        """Kadr vəziyyəti + rol kodu (kompas1.md Faza 8, bəndlər A və G).
+
+        `report_facts` ilə EYNİ obyektə YÖNƏLMİR: bu, `export_correction_
+        repository.py`-dəki AYRI sinifdir. Səbəb orada izah olunub — biri PUL
+        sətirlərinin, digəri META məlumatın (kim aktivdir, kim nəyi düzəldib)
+        mənbəyidir və birinin sorğusuna toxunmaq digərinin rəqəmini
+        dəyişməməlidir.
+        """
+        return self.uow.repository("export_roster")
 
     @property
     def limits(self) -> Any:
@@ -1265,6 +1318,29 @@ class ApplicationContext:
                 JobCadence.HOURLY,
                 JobWeight.LIGHT,
             ),
+            # #30 — planlaşdırılmış icra xülasəsi (kompas1.md Faza 6). YENİ
+            # cron/taymer YAZILMIR: mövcud planlayıcıya BİR sətir qeydiyyat
+            # (`ExecutiveDigestUseCase.run`, bax onun modul başlığı).
+            #
+            # SIRA SONUNCUDUR, TƏSADÜF DEYİL: `BEHAVIOR_BASELINE_RECALC`,
+            # `EXCEPTION_ENGINE_RUN`, `ATTRITION_RISK_RECALC` bu sıradan
+            # ƏVVƏLDƏDİR — xülasə həmin işlərin BUGÜNKÜ yenidən-hesablanmış
+            # nəticəsini (açıq istisna sayı, turnover balı) OXUYUR. Tərsinə
+            # qeyd etsəydik, xülasə DÜNƏNKİ ədədlərlə göndərilərdi.
+            #
+            # `DAILY`: `JobCadence`-də `WEEKLY` YOXDUR (`job_runner.py`
+            # başlığı) — iş HƏR GÜN işə düşür, HƏFTƏLİK konfiqurasiyanın bu
+            # gün DUE olub-olmadığını `run()`-un ÖZÜ qərarlaşdırır (bax
+            # `executive_digest.py::_due_window`).
+            #
+            # `LIGHT`: DB oxu (bir neçə aqreqat sorğu) + e-poçt — GUI axınını
+            # dondurmur (`FIELD_REPORT_AUDIT_REMINDER` ilə eyni çəki qərarı).
+            (
+                "EXECUTIVE_DIGEST_RUN",
+                self._job_executive_digest,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
             ("NIGHTLY_BACKUP", self._job_nightly_backup, JobCadence.DAILY, JobWeight.HEAVY),
         ):
             runner.register(ScheduledJob(key=key, handler=handler, cadence=cadence, weight=weight))
@@ -1384,6 +1460,20 @@ class ApplicationContext:
             session.commit()
         return f"{closed} etiraz cavabsız bağlandı"
 
+    def _job_executive_digest(self, context: Any) -> str:
+        """#30 — planlaşdırılmış icra xülasəsi (bax `_register_scheduled_jobs`).
+
+        `context.scheduled_for` ötürülür, `context.now` DEYİL — həftəlik
+        tezliyin "bu gün DUE-durmu?" sualı MAĞAZANIN yerli təqvim gününə
+        əsaslanır (bax `ExecutiveDigestUseCase.run` docstring-i).
+        """
+        with self.session() as session:
+            report = session.executive_digest.run(
+                tenant_id=context.tenant_id, now=context.now, scheduled_for=context.scheduled_for
+            )
+            session.commit()
+        return f"{report.evaluated} konfiqurasiyadan {report.sent}-i göndərildi"
+
     def _job_nightly_backup(self, context: Any) -> str:
         """Gecəlik ehtiyat nüsxə + saxlama müddəti bitmiş faylların təmizliyi.
 
@@ -1444,6 +1534,10 @@ class ApplicationContext:
             BehaviorAnomalyRule,
             BehaviorBaselineUseCase,
         )
+        from src.application.use_cases.bulk_operations import (  # noqa: PLC0415
+            BulkEmployeeImportUseCase,
+            StoreTemplateUseCase,
+        )
         from src.application.use_cases.catalog_management import (  # noqa: PLC0415
             FineTypeCatalogUseCase,
             LeaveTypeCatalogUseCase,
@@ -1475,6 +1569,12 @@ class ApplicationContext:
         )
         from src.application.use_cases.exception_engine import (  # noqa: PLC0415
             ExceptionEngineUseCase,
+        )
+        from src.application.use_cases.executive_digest import (  # noqa: PLC0415
+            ExecutiveDigestUseCase,
+        )
+        from src.application.use_cases.export_preflight import (  # noqa: PLC0415
+            ExportPreflightUseCase,
         )
         from src.application.use_cases.field_reports import (  # noqa: PLC0415
             FieldReportUseCase,
@@ -1562,6 +1662,7 @@ class ApplicationContext:
             trust_store_from_env,
         )
         from src.infrastructure.security.encryption import EncryptionService  # noqa: PLC0415
+        from src.infrastructure.security.hashing import HashingService  # noqa: PLC0415
         from src.shared.saga_orchestrator import SagaOrchestrator  # noqa: PLC0415
 
         repo = uow.repository
@@ -1676,6 +1777,77 @@ class ApplicationContext:
             toggles=repo("toggles"),
         )
 
+        # İSTİFADƏÇİ İDARƏETMƏSİ YEREL DƏYİŞƏNDİR, çünki İKİ yerdə lazımdır:
+        # həm `Session.users` (Users ekranı), həm də toplu CSV idxalının
+        # sətir-sətir yazı yolu (`_bulk_create_employee_row` aşağıda). İkinci
+        # nüsxə qursaydıq, eyni Dual-Control deadlock qoruyucusu İKİ AYRI
+        # obyektdə yaşayardı (`sales_points`/`overtime_tracking` ilə eyni
+        # əsaslandırma).
+        users = UserManagementUseCase(
+            employees=uow.employees,
+            credentials=uow.employees,
+            audit=audit,
+            clock=clock,
+            camera_assignments=repo("camera_assignments"),
+            # Rol dəyişikliyində anti-fraud override-larını süzmək üçün.
+            flags=repo("permission_flags"),
+            # PIN/şifrə sıfırlaması sahibinə bildiriş göndərir (bölmə 2).
+            notifier=notifier,
+            # Son Dual-Control təsdiqçisi itiriləndə xəbərdarlıq (bölmə 3).
+            deadlock_guard=DualControlDeadlockGuardUseCase(uow.employees, notifier),
+        )
+
+        def _bulk_create_employee_row(
+            *,
+            tenant_id: TenantId,
+            actor: Employee,
+            employee_id: EmployeeId,
+            draft: EmployeeDraft,
+            initial_password: str,
+        ) -> Employee:
+            """Toplu CSV idxalının SƏTİR-SƏTİR yazı yolu (#29).
+
+            HƏR ÇAĞIRIŞ ÖZ TRANZAKSİYASINDADIR (bax `bulk_operations.py`
+            başlığı, "TRANZAKSİYA SƏRHƏDİ"): uğurlu sətir DƏRHAL commit
+            olunur, ona görə növbəti sətrin uğursuzluğu ONU geri qaytarmır
+            (QİSMƏN İDXAL). Uğursuz sətirdə tranzaksiya ROLLBACK edilir ki,
+            `uow` TƏMİZ vəziyyətdə növbəti sətrə keçsin — əks halda
+            PostgreSQL-in "aborted transaction" vəziyyəti QALAN BÜTÜN
+            sətirləri də uğursuz edərdi.
+            """
+            try:
+                created = users.create_employee(
+                    tenant_id=tenant_id,
+                    actor=actor,
+                    employee_id=employee_id,
+                    draft=draft,
+                    initial_password=initial_password,
+                )
+            except Exception:
+                uow.rollback()
+                raise
+            uow.commit()
+            return created
+
+        bulk_employee_import = BulkEmployeeImportUseCase(
+            employees=uow.employees,
+            positions=uow.positions,
+            stores=repo("stores"),
+            create_employee_row=_bulk_create_employee_row,
+            # `HashingService` `application/use_cases/authentication.py`-də
+            # DƏ birbaşa idxal olunur (təkrar YOX) — müvəqqəti şifrə
+            # generasiyası üçün. `session_limits`: eyni `InfrastructureLimits`
+            # örtüyü `kiosk.py`/`app.py`-dakı giriş axınının işlətdiyi ilə
+            # EYNİDİR (şifrə siyasəti bir yerdə dəyişir).
+            hashing=HashingService(limits=session_limits),
+            bulk_log=repo("bulk_import_log"),
+            audit=audit,
+            clock=clock,
+            # `BULK_IMPORT_MAX_ROWS` / `BULK_IMPORT_PREVIEW_ERROR_LIMIT` —
+            # Root-dan idarə olunur (seed: migrations/041).
+            limits=repo("limits"),
+        )
+
         return Session(
             uow=uow,
             tenant_id=self._tenant_id,
@@ -1762,7 +1934,27 @@ class ApplicationContext:
             ),
             tasks=task_workflow,
             sales_points=sales_points,
-            reports=MonthlyReportUseCase(),
+            # `limits`: Faza 7 — `[Xüsusi Aralıq]` seçiminin maksimum uzunluğu
+            # (`REPORT_RANGE_MAX_DAYS`) və norma saatın hüquqi tavanı
+            # (`OVERTIME_DAILY_NORM_HOURS`) ROOT-dandır. Port ötürülməsəydi,
+            # parametr ROOT ekranında görünər, lakin TƏSİRSİZ qalardı
+            # (`test_root_control_parameter_parity` bu boşluğu qapıya çevirib).
+            reports=MonthlyReportUseCase(limits=repo("limits")),
+            # kompas1.md Faza 8 — export təcrübəsi. `reports` ilə YAN-YANA
+            # dayanır, lakin ONU ƏVƏZ ETMİR: sətirləri yenə `reports` hesablayır,
+            # bu use case yalnız onların üzərində doğrulama/düzəliş/müqayisə
+            # aparır (bax `export_preflight.py` başlığı).
+            #
+            # `limits`: dörd ROOT parametri (anomaliya faizi, minimum işçi sayı,
+            # əhəmiyyətli fərq həddi, səbəbin minimum uzunluğu) — seed:
+            # migrations/044.
+            export_preflight=ExportPreflightUseCase(
+                corrections=repo("export_corrections"),
+                roster=repo("export_roster"),
+                audit=audit,
+                clock=clock,
+                limits=repo("limits"),
+            ),
             audit_query=AuditQueryUseCase(
                 reader=repo("audit_reader"),
                 audit=audit,
@@ -1772,19 +1964,9 @@ class ApplicationContext:
                 # şəbəkəyə/GUI-yə uyğun olduğu quraşdırmadan asılıdır.
                 limits=repo("limits"),
             ),
-            users=UserManagementUseCase(
-                employees=uow.employees,
-                credentials=uow.employees,
-                audit=audit,
-                clock=clock,
-                camera_assignments=repo("camera_assignments"),
-                # Rol dəyişikliyində anti-fraud override-larını süzmək üçün.
-                flags=repo("permission_flags"),
-                # PIN/şifrə sıfırlaması sahibinə bildiriş göndərir (bölmə 2).
-                notifier=notifier,
-                # Son Dual-Control təsdiqçisi itiriləndə xəbərdarlıq (bölmə 3).
-                deadlock_guard=DualControlDeadlockGuardUseCase(uow.employees, notifier),
-            ),
+            # `users` YUXARIDA yerli dəyişən kimi qurulub — bax orada
+            # ("İKİ yerdə lazımdır", toplu CSV idxalı ilə paylaşılır).
+            users=users,
             permission_guard=PermissionHierarchyGuardUseCase(audit=audit, clock=clock),
             positions=PositionManagementUseCase(
                 positions=uow.positions,
@@ -2025,6 +2207,36 @@ class ApplicationContext:
                 balances=repo("annual_leave_balances"),
                 requests=repo("annual_leave_requests"),
                 shifts=repo("shifts"),
+                limits=repo("limits"),
+                audit=audit,
+                clock=clock,
+                notifier=notifier,
+            ),
+            # `bulk_employee_import` YUXARIDA yerli dəyişən kimi qurulub —
+            # `_bulk_create_employee_row` closure-u `uow`/`users`-ə bağlıdır.
+            bulk_employee_import=bulk_employee_import,
+            store_templates=StoreTemplateUseCase(
+                templates=repo("store_templates"),
+                # EYNİ port `FirstRunSetupUseCase`-in İSTİFADƏ ETDİYİ port —
+                # mağaza yaratmağın İKİNCİ yolu İCAD EDİLMİR (bax
+                # `bulk_operations.py` başlığı).
+                stores=repo("stores"),
+                bulk_log=repo("bulk_import_log"),
+                audit=audit,
+                clock=clock,
+            ),
+            # #30 Planlaşdırılmış İcra Xülasəsi (kompas1.md Faza 6) — MÖVCUD
+            # `multi_store_benchmark`/`exceptions` portları ÇAĞIRILIR, YENİ
+            # hesablama qurulmur (bax use case modul başlığı, "1C SƏRHƏDİ").
+            # `facts=repo("executive_digest_facts")`: EYNİ obyekt `configs=`
+            # ilə (bax `connection.py`-dakı `executive_digest` yerli dəyişəni),
+            # yəni gecikən-check-in sayı VƏ konfiqurasiya EYNİ tranzaksiyada
+            # oxunur.
+            executive_digest=ExecutiveDigestUseCase(
+                configs=repo("executive_digest_config"),
+                facts=repo("executive_digest_facts"),
+                benchmark=repo("multi_store_benchmark"),
+                exceptions=repo("exceptions"),
                 limits=repo("limits"),
                 audit=audit,
                 clock=clock,

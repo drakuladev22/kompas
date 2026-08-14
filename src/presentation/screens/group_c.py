@@ -1282,10 +1282,25 @@ class ShiftPlanningScreen(Screen):
         month_changed: (-1 və ya +1).
         open_shift_post_requested: "Açıq Növbə Elan Et" (#16).
         open_shift_cancel_requested: Elanın "Ləğv Et" düyməsi (#16, elan id-si).
+        work_mode_selected: İş Rejimi dropdown-unda seçim (Faza 7, `work_mode_id`).
 
     #16 (AÇIQ NÖVBƏ BAZARI) MATRİSƏ TOXUNMUR: kart matrisin ALTINA əlavə
     olunur, `set_matrix`/`LEGEND`/şablon məntiqi olduğu kimi qalır. Kartın
     ÖZÜ ayrı moduldadır (`screens/open_shift.py`) — səbəb orada yazılıb.
+
+    ──────────────────────────────────────────────────────────────────────────
+    İŞ REJİMİ DROPDOWN-U (Faza 7) — NƏ ƏLAVƏ OLUNDU, NƏ OLUNMADI
+    ──────────────────────────────────────────────────────────────────────────
+    ƏLAVƏ OLUNDU: `work_modes` kataloqundan gələn seçici + seçilmiş rejimin
+    GÜNDƏLİK NORMA SAATINI göstərən nişan. Norma saat kataloqda SÜTUN kimi
+    saxlanmır — `bitmə − başlanğıc` fərqindən hesablanır
+    (`domain/work_norm.daily_norm_hours`), ona görə ekranda göstərilən rəqəm
+    hesabatdakı ilə eyni funksiyadan gəlir.
+
+    ƏLAVƏ OLUNMADI: təyinetmə məntiqi. Növbənin yazılması yenə
+    `ShiftPlanningUseCase.assign_work_day` → `apply_assignment`-dədir və bu
+    ekran ona BİR SƏTİR belə əlavə etmir; dropdown yalnız «hansı şablon
+    seçilib» sualının cavabını verir (`selected_work_mode_id()`).
     """
 
     template_selected = Signal(str)
@@ -1293,6 +1308,7 @@ class ShiftPlanningScreen(Screen):
     month_changed = Signal(int)
     open_shift_post_requested = Signal()
     open_shift_cancel_requested = Signal(str)
+    work_mode_selected = Signal(str)
 
     #: Növbə kodları (maketdəki izah sətri).
     LEGEND: Final = (
@@ -1358,6 +1374,17 @@ class ShiftPlanningScreen(Screen):
         self._store_combo.setFixedWidth(220)
         layout.addWidget(self._store_combo)
 
+        # Faza 7 — İş Rejimi SEÇİCİSİ. Mağaza seçicisi ilə eyni `variant="form"`
+        # xassəsi qəsdəndir: yeni rəng cütü yaranmır, kontrast qapısı (130 cüt)
+        # olduğu kimi qalır.
+        self._mode_combo = QComboBox()
+        self._mode_combo.setProperty("variant", "form")
+        self._mode_combo.setFixedWidth(220)
+        self._mode_combo.currentIndexChanged.connect(self._emit_work_mode)
+        layout.addWidget(self._mode_combo)
+
+        # Nişan artıq şablonun ADINI deyil, ondan ÇIXAN gündəlik normanı
+        # göstərir — seçim ilə maaş hesablaması arasındakı əlaqə görünən olur.
         self._mode_label = Chip("İş Rejimi: 5/2", "info")
         layout.addWidget(self._mode_label)
 
@@ -1454,10 +1481,61 @@ class ShiftPlanningScreen(Screen):
         return self._staffing_card
 
     def set_month(self, label: str, *, stores: list[str], mode: str) -> None:
+        """DAVRANIŞI DƏYİŞMƏYİB — maket və canlı yol eyni imza ilə çağırır.
+
+        `mode` mətni dropdown-a TOXUNMUR: seçici canlı kataloqdan
+        (`set_work_modes`) dolur, bu isə yalnız nişan mətnidir. İkisini
+        birləşdirmək maket rejimində uydurma `work_mode_id` yaradardı.
+        """
         self._month_label.setText(label)
         if stores and self._store_combo.count() == 0:
             self._store_combo.addItems(stores)
         self._mode_label.setText(f"İş Rejimi: {mode}")
+
+    # --------------------------- İş Rejimi seçicisi -------------------------- #
+
+    def set_work_modes(self, modes: list[tuple[str, str]]) -> None:
+        """Dropdown-u kataloqdan doldurur — `(work_mode_id, etiket)`.
+
+        SİQNAL BLOKLANIR: `addItem` hər dəfə `currentIndexChanged` doğurur və
+        doldurma zamanı yayılan siqnal kontrolleri hələ seçilməmiş dəyərlə
+        işə salardı. Doldurma bitdikdən SONRA bir dəfə — və yalnız siyahı boş
+        deyilsə — yayılır.
+        """
+        blocked = self._mode_combo.blockSignals(True)
+        try:
+            self._mode_combo.clear()
+            for mode_id, label in modes:
+                self._mode_combo.addItem(label, mode_id)
+        finally:
+            self._mode_combo.blockSignals(blocked)
+        if modes:
+            self._emit_work_mode()
+
+    def selected_work_mode_id(self) -> str:
+        """Cari seçim — növbə təyinetməsi bu dəyəri oxuyur (boşdursa `""`)."""
+        data = self._mode_combo.currentData()
+        return "" if data is None else str(data)
+
+    def select_work_mode(self, work_mode_id: str) -> bool:
+        """Seçimi PROQRAM YOLU ilə dəyişir; tapılmasa `False` qaytarır.
+
+        Sükutla ilk elementə düşmür: tapılmayan rejim (məs. kataloqdan
+        çıxarılmış şablon) seçilsəydi, istifadəçi BAŞQA bir rejimi seçdiyini
+        bilmədən növbə təyin edərdi.
+        """
+        index = self._mode_combo.findData(work_mode_id)
+        if index < 0:
+            return False
+        self._mode_combo.setCurrentIndex(index)
+        return True
+
+    def set_work_mode_norm(self, text: str) -> None:
+        """Seçilmiş rejimin gündəlik normasını nişanda göstərir."""
+        self._mode_label.setText(text)
+
+    def _emit_work_mode(self) -> None:
+        self.work_mode_selected.emit(self.selected_work_mode_id())
 
     def set_matrix(
         self,

@@ -650,6 +650,97 @@ class SystemLimitKey(str, Enum):
     # Defolt seçimin əsaslandırması `migrations/037`-dəki `deducted_days`
     # şərhindədir və `AnnualLeaveUseCase._deducted_days`-də təkrarlanır.
     ANNUAL_LEAVE_DAY_COUNT_MODE = "ANNUAL_LEAVE_DAY_COUNT_MODE"
+    # --- #29 TOPLU ƏMƏLİYYATLAR (seed: migrations/041) ------------------------ #
+    #
+    # İKİSİ DƏ ROOT PARAMETRİDİR, struktur zəmanət DEYİL (CLAUDE.md §5): nə
+    # anti-fraud, nə hardlock qaydası — `can_perform_bulk_operations`-un ÖZÜ
+    # artıq DELEGABLE hardlock (səviyyə 3) ilə qorunur (migrations/038); bu
+    # ikisi YALNIZ əməliyyat həcminin döşəməsidir.
+    #
+    # MAKSIMUM FAYL ÖLÇÜSÜ ÜÇÜN AYRI AÇAR QƏSDƏN YOXDUR: mövcud
+    # `MAX_UPLOAD_SIZE_BYTES` (defolt 5 MB, `google_drive.MAX_UPLOAD_BYTES`
+    # fallback-ının güzgüsü) artıq sübut ŞƏKİLLƏRİ üçün Root-dan idarə olunan
+    # döşəmədir; CSV mətn faylı üçün fərqli (adətən daha kiçik) hədd lazım
+    # DEYİL — 300 sətirlik işçi CSV-si bir neçə on KB-dır, şəkil kvotasından
+    # min qat kiçikdir. İkinci açar yaratmaq eyni sualı ("faylım nə qədər ola
+    # bilər?") iki fərqli cavabla verər və Root-u çaşdırardı.
+    #
+    # Sətir tavanı NİYƏ VAR: `bulk_import_log`-da `REVOKE DELETE` var (audit
+    # qeydidir) — səhvən 50,000 sətirlik fayl yüklənsə, yarım saat sürən idxanı
+    # LƏĞV ETMƏK MÜMKÜN DEYİL, yalnız GÖZLƏMƏK olar. Tavan bu riski YÜKLƏMƏ
+    # ANINDA kəsir, idxal başlamazdan ƏVVƏL.
+    BULK_IMPORT_MAX_ROWS = "BULK_IMPORT_MAX_ROWS"
+    # Önizləmə ekranında göstərilən XƏTA sətri sayının tavanı. 300 sətirlik
+    # fayldan 250-si səhv poçt formatı ilə uğursuz olsa, ekranın 250 sətri
+    # BİRDƏN göstərməsi faydalı DEYİL — HR "ilk N səhv"i görüb faylın ÜMUMİ
+    # nasazlığını (məs. səhv ayırıcı seçilib) anlayır və faylı düzəldib YENİDƏN
+    # yükləyir. Aqreqat rəqəm (`error_count`) ISƏ HƏMİŞƏ TAM göstərilir — yalnız
+    # SƏTİR-SƏTİR siyahı kəsilir.
+    BULK_IMPORT_PREVIEW_ERROR_LIMIT = "BULK_IMPORT_PREVIEW_ERROR_LIMIT"
+    # --- #30 Planlaşdırılmış İcra Xülasəsi (seed: migrations/042) ------------- #
+    #
+    # ÜÇÜ DƏ SİYASƏTDİR, `executive_digest_config` SƏTRİNİN SÜTUNU DEYİL —
+    # ətraflı əsaslandırma `domain/value_objects/executive_digest.py` modul
+    # başlığındadır ("İKİ HƏQİQƏT MƏNBƏYİ ARASINDAKI SƏRHƏD").
+    #
+    # Yeni sətir yaradılanda `frequency` AÇIQ VERİLMƏSƏ tətbiq olunan defolt
+    # (`ExecutiveDigestUseCase._resolve_frequency`) — `LEAVE_ALLOWANCE_SOURCE`
+    # ilə EYNİ "defolt mənbə konfiqurasiya edilir" naxışı (BR-001, OQ-001).
+    EXECUTIVE_DIGEST_DEFAULT_FREQUENCY = "EXECUTIVE_DIGEST_DEFAULT_FREQUENCY"
+    # Toggle-lənə bilən metrik açarlarının KATALOQU — vergüllü siyahı naxışı
+    # `EMPLOYEE_DOCUMENT_EXPIRY_WARNING_DAYS` ilə EYNİDİR (kompas1.md açıq
+    # tələbi). `configure()` yalnız BU siyahıdakı açarları qəbul edir; `run()`
+    # göndərmə anında YENİDƏN yoxlayır — kataloqdan çıxmış açar mövcud sətirdə
+    # sükutla ATLANIR, sətir ÖZÜ pozulmur (Feature Toggle-ın retroaktiv təsir
+    # ETMƏMƏSİ qaydası ilə eyni fəlsəfə).
+    EXECUTIVE_DIGEST_METRIC_CATALOG = "EXECUTIVE_DIGEST_METRIC_CATALOG"
+    # `JobCadence`-də `WEEKLY` YOXDUR (`job_runner.py`: "ÜÇÜNCÜ VARİANT
+    # YOXDUR") — HƏFTƏLİK tezlikli xülasə HANSI gün göndərilsin sualının
+    # YEGANƏ cavabı budur (ISO həftə günü, 1=Bazar ertəsi..7=Bazar).
+    EXECUTIVE_DIGEST_WEEKLY_WEEKDAY = "EXECUTIVE_DIGEST_WEEKLY_WEEKDAY"
+    # --- Faza 7 — HESABAT TARİX ARALIĞI (seed: migrations/043) --------------- #
+    #
+    # PERFORMANS QORUYUCUSUDUR, struktur zəmanət DEYİL (CLAUDE.md §5): export
+    # ekranı `[Tam Ay]`-dan `[Xüsusi Aralıq]`-a genişləndikdə istifadəçi
+    # "2020-01-01 – 2030-12-31" yaza bilər. Həmin sorğu 21 filialın 235 işçisi
+    # üzrə ~2.5 milyon davamiyyət/plan sətrini bir aqreqasiyada tarayardı və
+    # GUI dondurardı.
+    #
+    # HARDCODE QADAĞANDIR: hədd quraşdırmadan asılıdır — 3 mağazalı kirayəçi
+    # rahatlıqla iki illik aralıq çıxara bilər, 21 mağazalı isə yox. Ona görə
+    # ədəd kodda deyil, ROOT sətrindədir.
+    #
+    # NİYƏ GÜN, NİYƏ AY: aralıq artıq günlə ifadə olunur (`ReportRange`), ay
+    # ilə ifadə etmək dəyişən uzunluqlu ayları (28–31) yenidən gün sayına
+    # çevirməyi tələb edərdi — yəni eyni parametr iki fərqli mənaya gələrdi.
+    REPORT_RANGE_MAX_DAYS = "REPORT_RANGE_MAX_DAYS"
+    # --- Faza 8 — EXPORT TƏCRÜBƏSİ (seed: migrations/044) --------------------- #
+    #
+    # DÖRDÜ DƏ SİYASƏTDİR, struktur zəmanət DEYİL (CLAUDE.md §5): heç biri
+    # anti-fraud vəzifə ayrılığına, hardlock-a və ya Self-Escalation Guard-a
+    # toxunmur — export axınının HƏSSASLIĞINI tənzimləyir.
+    #
+    # «Anomal yüksək icazəsiz-qayıb» faizi. HARDCODE QADAĞANDIR, çünki normal
+    # səviyyə quraşdırmadan asılıdır: mövsümi işçi ilə işləyən şəbəkədə 15%
+    # adi, sabit heyətli mağazada 5% artıq təhlükə siqnalıdır. Sabit ədəd
+    # birinci şəbəkədə hər ay yalançı siqnal, ikincidə isə SÜKUT verərdi.
+    EXPORT_STORE_ABSENCE_ANOMALY_PCT = "EXPORT_STORE_ABSENCE_ANOMALY_PCT"
+    # Anomaliya hesablanması üçün mağazadakı MİNİMUM işçi sayı. Bir nəfərlik
+    # filialda tək işçinin bir günlük qayıbı nisbəti 100%-ə qaldırır və qayda
+    # hər ay «anomaliya» deyərdi — statistik cəhətdən mənasız siqnal isə bütün
+    # doğrulama ekranının etibarını aşındırır (`BEHAVIOR_BASELINE_MIN_SAMPLE_
+    # SIZE` ilə eyni əsaslandırma).
+    EXPORT_STORE_ANOMALY_MIN_EMPLOYEES = "EXPORT_STORE_ANOMALY_MIN_EMPLOYEES"
+    # Dövr-üzrə müqayisədə «ƏHƏMİYYƏTLİ fərq» sayılan hədd (mütləq say).
+    # kompas1.md Faza 8, bənd F-in AÇIQ ROOT tələbi. Hədd olmadan ekran hər
+    # ±1 fərqi qırmızı göstərərdi və HR onları görməzdən gəlməyə öyrəşərdi.
+    EXPORT_PERIOD_DELTA_SIGNIFICANT = "EXPORT_PERIOD_DELTA_SIGNIFICANT"
+    # Manual düzəlişin səbəb sahəsinin MİNİMUM uzunluğu. DB-də `>= 10` CHECK-i
+    # var (migrations/037), lakin o, ABSURD cavabı kəsən DÖŞƏMƏDİR — həqiqi
+    # siyasət burada: audit tələbi sərtləşəndə Root onu 10-dan 40-a qaldıra
+    # bilməlidir, miqrasiya gözləmədən (`EXCEPTION_REVIEW_NOTE_MIN_LENGTH` ilə
+    # eyni naxış). DÖŞƏMƏDƏN AŞAĞI düşmək mümkün deyil: `min_value = 10`.
+    EXPORT_CORRECTION_REASON_MIN_LENGTH = "EXPORT_CORRECTION_REASON_MIN_LENGTH"
 
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
@@ -1029,6 +1120,60 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # `WORKING_DAYS`: balansdan yalnız İŞ günləri çıxılır — istirahət günü
     # Shift Matrix-dən oxunur (migrations/037 `deducted_days` şərhi).
     SystemLimitKey.ANNUAL_LEAVE_DAY_COUNT_MODE: "WORKING_DAYS",
+    # --- #29 toplu əməliyyatlar (seed: 041) ----------------------------------- #
+    #
+    # 300 sətir: bir mağaza şəbəkəsinin illik işə-qəbul dalğası (yeni filial +
+    # mövsümi işçi) praktikada bundan az olur; tavan REVOKE-DELETE audit
+    # cədvəlinin yükünü YÜKLƏMƏ ANINDA kəsən qoruyucudur, gündəlik norma deyil.
+    SystemLimitKey.BULK_IMPORT_MAX_ROWS: "300",
+    # 50 sətir: ekranın bir səhifədə rahat oxuna bilən xəta siyahısı. Aqreqat
+    # say (`error_count`) tavan aşılsa belə TAM göstərilir — yalnız sətir-sətir
+    # DETAL siyahısı kəsilir.
+    SystemLimitKey.BULK_IMPORT_PREVIEW_ERROR_LIMIT: "50",
+    # --- #30 İcra xülasəsi (seed: 042) ---------------------------------------- #
+    #
+    # `DAILY`: gündəlik ritm ən "təhlükəsiz" defoltdur — Root heç nə seçməsə
+    # belə, ilk konfiqurasiya sükutla AYLARLA gecikməz (`WEEKLY`/`MONTHLY`
+    # defolt olsaydı, ilk göndəriş bir həftə/ay gözləyərdi).
+    SystemLimitKey.EXECUTIVE_DIGEST_DEFAULT_FREQUENCY: "DAILY",
+    # Beş açar — `kompas1.md`-nin açıq nümunələri (cərimə-sayı, açıq-istisna-
+    # sayı, gecikən-check-in-sayı) VƏ mövcud use case-lərdə ARTIQ hesablanan
+    # iki əlavə göstərici (overtime, turnover — `multi_store_benchmark.py`
+    # provayderindən BİRBAŞA, YENİ hesablama YOXDUR).
+    SystemLimitKey.EXECUTIVE_DIGEST_METRIC_CATALOG: (
+        "FINE_COUNT,OPEN_EXCEPTION_COUNT,LATE_CHECK_IN_COUNT,OVERTIME_HOURS,TURNOVER_RISK"
+    ),
+    # 1 = Bazar ertəsi: iş həftəsinin İLK günü — həftəlik xülasə keçən HƏFTƏNİ
+    # (bazar ertəsindən əvvəlki 7 gün) yekunlaşdıraraq iş həftəsinin başında
+    # göndərilir, iş həftəsinin ORTASINDA yox.
+    SystemLimitKey.EXECUTIVE_DIGEST_WEEKLY_WEEKDAY: "1",
+    # --- Faza 7 Hesabat aralığı (seed: 043) ----------------------------------- #
+    #
+    # 366 gün = bir SƏNƏD ili (uzun il daxil). Defolt məhz bu rəqəmdir, çünki
+    # HR-in ən uzun qanuni sorğusu «illik yekun»dur; ondan uzun aralıq isə
+    # hesabat deyil, ARXİV sorğusudur və onun yeri Developer Panelidir.
+    # Tam-ay yolu bu hədddən HEÇ VAXT təsirlənmir (31 ≤ 366).
+    SystemLimitKey.REPORT_RANGE_MAX_DAYS: "366",
+    # --- Faza 8 Export təcrübəsi (seed: 044) ---------------------------------- #
+    #
+    # 15%: bir mağazada planlaşdırılmış hər 100 iş günündən 15-i icazəsiz qayıb
+    # deməkdir — bu, artıq fərdi hadisə deyil, İDARƏETMƏ problemidir və HR-in
+    # export-dan ƏVVƏL baxmalı olduğu siqnaldır. Defolt qəsdən "yumşaqdır":
+    # sərt defolt (məs. 5%) ilk aydan onlarla yalançı siqnal verər və ekran
+    # etibarını itirərdi.
+    SystemLimitKey.EXPORT_STORE_ABSENCE_ANOMALY_PCT: "15.0",
+    # 3 işçi — `BEHAVIOR_BASELINE_MIN_SAMPLE_SIZE` (5 gün) ilə eyni fəlsəfə:
+    # bundan az müşahidə ilə "mağaza anomaliyası" demək statistik cəhətdən
+    # əsassızdır. 3 nəfər bir növbənin minimum heyətidir.
+    SystemLimitKey.EXPORT_STORE_ANOMALY_MIN_EMPLOYEES: "3",
+    # 3 hadisə: keçən dövrlə müqayisədə ±1/±2 fərq adi dalğalanmadır (bir
+    # xəstəlik, bir növbə dəyişikliyi), ±3 isə artıq meyldir. kompas1.md-nin
+    # öz nümunəsi də məhz "+3"-dür.
+    SystemLimitKey.EXPORT_PERIOD_DELTA_SIGNIFICANT: "3",
+    # 10 simvol — `EXCEPTION_REVIEW_NOTE_MIN_LENGTH` və `FineAppeal` ilə EYNİ
+    # dəyər; həm də `export_manual_corrections.reason` CHECK-inin döşəməsi ilə
+    # üst-üstə düşür, yəni defolt halda kod və DB eyni cavabı verir.
+    SystemLimitKey.EXPORT_CORRECTION_REASON_MIN_LENGTH: "10",
 }
 
 

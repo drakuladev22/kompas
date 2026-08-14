@@ -417,6 +417,10 @@ class PostgresUnitOfWork:
         from src.infrastructure.persistence.benchmark_repository import (  # noqa: PLC0415
             PostgresMultiStoreBenchmarkRepository,
         )
+        from src.infrastructure.persistence.bulk_operations_repository import (  # noqa: PLC0415
+            PostgresBulkImportLogRepository,
+            PostgresStoreTemplateRepository,
+        )
         from src.infrastructure.persistence.catalog_repositories import (  # noqa: PLC0415
             PostgresFineTypeRepository,
             PostgresRewardRepository,
@@ -439,6 +443,12 @@ class PostgresUnitOfWork:
         from src.infrastructure.persistence.exception_repositories import (  # noqa: PLC0415
             PostgresExceptionRepository,
             PostgresExceptionSourceCatalog,
+        )
+        from src.infrastructure.persistence.executive_digest_repository import (  # noqa: PLC0415
+            PostgresExecutiveDigestConfigRepository,
+        )
+        from src.infrastructure.persistence.export_correction_repository import (  # noqa: PLC0415
+            PostgresExportCorrectionRepository,
         )
         from src.infrastructure.persistence.field_report_repositories import (  # noqa: PLC0415
             PostgresFieldReportCatalog,
@@ -507,6 +517,16 @@ class PostgresUnitOfWork:
         # literalının İÇİNDƏ ikinci dəfə qurmaq həm iki ayrı bağlantı təhlükəsi
         # yaradardı, həm də oxucuya "bunlar EYNİ obyektdir" faktını gizlədərdi.
         attrition = PostgresAttritionRepository(conn, self._context)
+        # #30 (kompas1.md Faza 6) — EYNİ naxış: TƏK nüsxə İKİ açarla
+        # ("executive_digest_config", "executive_digest_facts") qeydiyyatdan
+        # keçir (bax `executive_digest_repository.py` başlığı).
+        executive_digest = PostgresExecutiveDigestConfigRepository(conn, self._context)
+        # kompas1.md Faza 8 (HR-D) — ÜÇÜNCÜ dəfə EYNİ naxış: tək nüsxə iki
+        # açarla ("export_corrections", "export_roster"). İkisi bir sinifdədir,
+        # çünki düzəliş yazıldıqdan SONRA doğrulama həmin (hələ commit
+        # olunmamış) sətri görməlidir — bax `export_correction_repository.py`
+        # başlığı.
+        export_corrections = PostgresExportCorrectionRepository(conn, self._context)
         # HAMISI EYNİ BAĞLANTIDADIR — bu, təsadüf deyil: bir use case bir neçə
         # repo-ya toxunur (məs. icazə təsdiqi status + cərimə + audit yazır) və
         # onlar EYNİ tranzaksiyada olmalıdır. Ayrı bağlantı işlətsəydik,
@@ -618,6 +638,29 @@ class PostgresUnitOfWork:
             # bir-birini ÇAĞIRMIR (bax `entities/annual_leave.py` başlığı).
             "annual_leave_balances": PostgresAnnualLeaveBalanceRepository(conn, self._context),
             "annual_leave_requests": PostgresAnnualLeaveRequestRepository(conn, self._context),
+            # --- #29 Toplu Əməliyyatlar (kompas1.md Faza 5) --------------------
+            # Eyni bağlantıda: CSV idxalının YEKUN jurnal sətri (`finish()`) və
+            # ƏMƏLİYYAT səviyyəli audit sətri BİR tranzaksiyada olmalıdır — bax
+            # `application/use_cases/bulk_operations.py` başlığı (TRANZAKSİYA
+            # SƏRHƏDİ). Fərdi sətirlərin özü isə `composition.py`-dəki
+            # `_bulk_create_employee_row` closure-u vasitəsilə AYRI-AYRI
+            # commit olunur.
+            "bulk_import_log": PostgresBulkImportLogRepository(conn, self._context),
+            "store_templates": PostgresStoreTemplateRepository(conn, self._context),
+            # --- #30 Planlaşdırılmış İcra Xülasəsi (kompas1.md Faza 6) ---------
+            # TƏK nüsxə İKİ açarla qeydiyyatdan keçir (`PostgresAttritionRepository`
+            # ilə EYNİ naxış, yuxarı bax "attrition_signals"/"attrition_scores"
+            # şərhi): konfiqurasiya sətri VƏ gecikən-check-in sayı EYNİ
+            # tranzaksiyada oxunur — ikinci bağlantı lazım deyil.
+            "executive_digest_config": executive_digest,
+            "executive_digest_facts": executive_digest,
+            # --- HR-D Export düzəlişləri (kompas1.md Faza 8) -------------------
+            # Düzəliş sətri VƏ kadr vəziyyəti EYNİ bağlantıdadır — MƏCBURİDİR:
+            # düzəliş + audit sətri bir tranzaksiyada olmalıdır (audit istisna
+            # udmur, CLAUDE.md §5), doğrulama isə həmin tranzaksiya daxilində
+            # yeni sətri dərhal görməlidir.
+            "export_corrections": export_corrections,
+            "export_roster": export_corrections,
             # Bildirişin YAZISI `PostgresNotifier`-dədir (öz tranzaksiyası ilə);
             # burada qeydiyyatdan keçən yalnız OXU və "oxundu" işarəsidir.
             "notifications": PostgresNotificationRepository(conn, self._context),
