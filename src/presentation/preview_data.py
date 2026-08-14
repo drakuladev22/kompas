@@ -24,7 +24,7 @@ from typing import Final, NamedTuple
 
 from src.domain.entities.employee import Employee
 from src.domain.entities.position import Position
-from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
+from src.domain.policies import DEFAULT_LIMITS, BreakAllowance, BreakKind, SystemLimitKey
 from src.domain.value_objects.authorization import (
     HardlockLevel,
     PermissionFlag,
@@ -215,6 +215,26 @@ SERVER_HEALTH: Final = [
     ("1C — Bakı", "42 ms", "success"),
     ("1C — Gəncə", "318 ms", "warning"),
     ("Baza", "11 ms", "success"),
+]
+
+#: Nahar/Çay gündəlik həddini aşanlar (nahar.md GUI, bənd 2).
+#:
+#: MƏTN `BreakAllowance.warning_az()`-DAN QURULUR, əl ilə yazılmır — canlı
+#: yolda HR məhz bu ifadəni görür və maket ondan fərqlənsəydi, dizayn
+#: baxışında qüsur görünməz qalardı (bax modul başlığındakı ad-məkanı qaydası).
+BREAK_OVERUSE: Final = [
+    (
+        "K. Vəliyev",
+        BreakAllowance(
+            kind=BreakKind.TEA, duration_minutes=15, daily_count=2, used_count=3
+        ).warning_az(),
+    ),
+    (
+        "N. Səfərova",
+        BreakAllowance(
+            kind=BreakKind.LUNCH, duration_minutes=60, daily_count=1, used_count=2
+        ).warning_az(),
+    ),
 ]
 
 # --------------------------------------------------------------------------- #

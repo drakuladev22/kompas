@@ -652,6 +652,10 @@ def test_a_padded_time_string_is_still_accepted() -> None:
 class _RootScreen:
     def __init__(self) -> None:
         self.limits: list[Any] = []
+        #: «Fasilə Parametrləri» bölməsi (nahar.md) — AYRICA saxlanılır,
+        #: çünki testlər ümumi siyahının həmin dörd açarı DAŞIMADIĞINI də
+        #: yoxlaya bilməlidir (hər açar yalnız bir bölmədə redaktə olunur).
+        self.break_limits: list[Any] = []
         self.modules: list[Any] = []
         self.registry: list[Any] = []
         self.errors: list[tuple[str, str]] = []
@@ -659,6 +663,9 @@ class _RootScreen:
 
     def set_limits(self, rows: list[Any]) -> None:
         self.limits = rows
+
+    def set_break_limits(self, rows: list[Any]) -> None:
+        self.break_limits = rows
 
     def set_modules(self, rows: list[Any]) -> None:
         self.modules = rows

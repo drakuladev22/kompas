@@ -741,6 +741,27 @@ class SystemLimitKey(str, Enum):
     # bilməlidir, miqrasiya gözləmədən (`EXCEPTION_REVIEW_NOTE_MIN_LENGTH` ilə
     # eyni naxış). DÖŞƏMƏDƏN AŞAĞI düşmək mümkün deyil: `min_value = 10`.
     EXPORT_CORRECTION_REASON_MIN_LENGTH = "EXPORT_CORRECTION_REASON_MIN_LENGTH"
+    # --- NAHAR / ÇAY FASİLƏSİ (nahar.md, seed: migrations/045) --------------- #
+    #
+    # DÖRDÜ DƏ ROOT PARAMETRİDİR VƏ BU, TAPŞIRIĞIN AÇIQ TƏLƏBİDİR: Nahar/Çay
+    # ümumi İcazə Növləri Kataloqundan (HR_Admin, `can_manage_leave_types`)
+    # FƏRQLİ olaraq sistemin təməlindədir və yalnız `can_manage_system_limits`
+    # sahibi — mövcud hardlock qaydasına görə YALNIZ Root — dəyişə bilər.
+    #
+    # MÜDDƏT PARAMETRLƏRİ CƏRİMƏ DÜSTURUNA QOŞULMUR (nahar.md §MƏNTİQ, bənd 3
+    # — əvvəlcədən verilmiş qərar): `Delay`/`Total` hesablaması mövcud qaydada
+    # `LeaveAllowancePolicy`-dən (BR-001) qidalanır. Buradakı dəqiqə yalnız
+    # İşçi Ana Ekranındakı «Nahar fasiləniz: 60 dəqiqə» göstəricisidir.
+    # Birləşdirmək cazibədar görünür, LAKİN onda Root informativ mətni
+    # dəyişəndə işçinin cəriməsi də dəyişərdi — yəni məlumatlandırıcı sahə
+    # sükutla pul qərarına çevrilərdi.
+    LUNCH_BREAK_DURATION_MINUTES = "LUNCH_BREAK_DURATION_MINUTES"
+    # SAY-HƏDDİ BLOKLAMIR (nahar.md-nin açıq göstərişi): aşılanda yalnız
+    # xəbərdarlıq göstərilir, STEP1 davam edir. Eyni fəlsəfə layihədə artıq
+    # var — `MonthlyLeaveUsage` (aylıq 240 dəq.) da bloklamır.
+    LUNCH_BREAK_DAILY_COUNT = "LUNCH_BREAK_DAILY_COUNT"
+    TEA_BREAK_DURATION_MINUTES = "TEA_BREAK_DURATION_MINUTES"
+    TEA_BREAK_DAILY_COUNT = "TEA_BREAK_DAILY_COUNT"
 
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
@@ -1174,6 +1195,22 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # dəyər; həm də `export_manual_corrections.reason` CHECK-inin döşəməsi ilə
     # üst-üstə düşür, yəni defolt halda kod və DB eyni cavabı verir.
     SystemLimitKey.EXPORT_CORRECTION_REASON_MIN_LENGTH: "10",
+    # --- Nahar / Çay fasiləsi (seed: 045) ------------------------------------ #
+    #
+    # 60 dəqiqə: `schema.sql` §24 hər kirayəçiyə «Nahar Fasiləsi» icazə növünü
+    # məhz 60 dəqiqə ilə seed edir. nahar.md 45 təklif edir, lakin İKİ ədədin
+    # ilk gündən fərqlənməsi işçidə "hansı doğrudur?" sualı yaradardı —
+    # informativ göstərici ilə BR-001 güzəşti eyni başlanğıc nöqtəsindən
+    # ayrılmalıdır. Fərqləndirmək AÇIQ Root qərarı olmalıdır, defolt yox.
+    SystemLimitKey.LUNCH_BREAK_DURATION_MINUTES: "60",
+    # 1 dəfə: nahar bir iş günündə bir dəfədir — bu, mağaza praktikasının özü
+    # qədər sabitdir. Aşılma yenə də bloklanmır, sadəcə görünür.
+    SystemLimitKey.LUNCH_BREAK_DAILY_COUNT: "1",
+    # 15 dəqiqə / 2 dəfə: qısa fasilənin standart forması (səhər və günorta).
+    # «Çay Fasiləsi» icazə növü migrations/045-də məhz 15 dəqiqə ilə yaranır,
+    # yəni burada da eyni cüt saxlanılır.
+    SystemLimitKey.TEA_BREAK_DURATION_MINUTES: "15",
+    SystemLimitKey.TEA_BREAK_DAILY_COUNT: "2",
 }
 
 
@@ -1329,6 +1366,217 @@ class DelayFinePolicy:
 
 
 # --------------------------------------------------------------------------- #
+# NAHAR / ÇAY FASİLƏSİ (nahar.md)
+# --------------------------------------------------------------------------- #
+#
+# NİYƏ BU MODULDA, `value_objects/catalogs.py`-DA YOX
+# ...........................................................................
+# `BreakKind` hər bir növü İKİ `SystemLimitKey`-ə bağlayır (müddət + say).
+# Onu `catalogs.py`-a yazsaydıq, həmin fayl `policies`-i idxal etdiyi üçün
+# bağlantı cədvəli asılılığın SƏHV tərəfində qalardı: kataloq sətri limit
+# açarını tanıyardı, halbuki əlaqə əksinədir — LİMİT açarı fasilə növünün
+# xüsusiyyətidir. Bu modul isə yarpaqdır (bax modul başlığı) və hər iki
+# tərəfdən oxuna bilər.
+
+
+class BreakKind(str, Enum):
+    """Sistem fasiləsinin növü — `leave_types.break_kind` ilə eyni siyahı.
+
+    ──────────────────────────────────────────────────────────────────────────
+    ÜMUMİ İCAZƏ NÖVLƏRİNDƏN FƏRQİ
+    ──────────────────────────────────────────────────────────────────────────
+    İcazə Növləri Kataloqu HR_Admin-in sərbəst genişləndirdiyi siyahıdır
+    ("Bank işi", "Şəxsi iş"). Nahar və Çay isə nahar.md-yə görə sistemin
+    TƏMƏLİNDƏ olan, hər kirayəçidə mütləq mövcud və YALNIZ Root-un idarə
+    etdiyi xüsusi qatdır. Ona görə bu siyahı GUI-dan genişlənmir: yeni növ
+    əlavə etmək iki yeni `SystemLimitKey` və bir miqrasiya deməkdir.
+    """
+
+    LUNCH = "LUNCH"
+    TEA = "TEA"
+
+    @property
+    def label_az(self) -> str:
+        """İstifadəçiyə göstərilən ad (bölmə 9: yeganə interfeys dili)."""
+        return "Nahar fasiləsi" if self is BreakKind.LUNCH else "Çay fasiləsi"
+
+    @property
+    def possessive_label_az(self) -> str:
+        """«Nahar fasiləniz» — ikinci şəxs mənsubiyyət forması.
+
+        AYRICA XÜSUSİYYƏTDİR, ŞƏKİLÇİ ƏLAVƏSİ DEYİL: `label_az` onsuz da
+        üçüncü şəxs mənsubiyyət daşıyır ("fasilə-si"), ona "-niz" qoşmaq
+        "fasiləsiniz" kimi səhv forma verərdi. Azərbaycan dilində düzgün
+        forma şəkilçinin ƏVƏZLƏNMƏSİDİR, əlavəsi yox.
+        """
+        return "Nahar fasiləniz" if self is BreakKind.LUNCH else "Çay fasiləniz"
+
+    @property
+    def duration_key(self) -> SystemLimitKey:
+        """Müddət parametrinin ROOT açarı."""
+        if self is BreakKind.LUNCH:
+            return SystemLimitKey.LUNCH_BREAK_DURATION_MINUTES
+        return SystemLimitKey.TEA_BREAK_DURATION_MINUTES
+
+    @property
+    def daily_count_key(self) -> SystemLimitKey:
+        """Gündəlik say-həddinin ROOT açarı."""
+        if self is BreakKind.LUNCH:
+            return SystemLimitKey.LUNCH_BREAK_DAILY_COUNT
+        return SystemLimitKey.TEA_BREAK_DAILY_COUNT
+
+
+#: Azərbaycan dilində sıra sayı şəkilçisi — son rəqəmin saitinə görə.
+#:
+#: TƏK ŞƏKİLÇİ İŞLƏMİR: "3-cü" (üçüncü) ilə "2-ci" (ikinci) fərqlidir və
+#: səhv şəkilçi işçiyə göstərilən xəbərdarlığı savadsız göstərərdi. Cədvəl
+#: 1–9 üçün son rəqəmə baxır (11, 12 … eyni qayda ilə işləyir: "11-ci").
+_ORDINAL_SUFFIX_AZ: Final[dict[int, str]] = {
+    1: "ci",  # birinci
+    2: "ci",  # ikinci
+    3: "cü",  # üçüncü
+    4: "cü",  # dördüncü
+    5: "ci",  # beşinci
+    6: "cı",  # altıncı
+    7: "ci",  # yeddinci
+    8: "ci",  # səkkizinci
+    9: "cu",  # doqquzuncu
+}
+
+#: Onluqlar ayrıca cədvəldədir, çünki onların şəkilçisi son rəqəmdən (0)
+#: deyil, onluğun ÖZ adından gəlir: "10-cu" (onuncu), "20-ci" (iyirminci).
+_ORDINAL_SUFFIX_AZ_TENS: Final[dict[int, str]] = {
+    10: "cu",  # onuncu
+    20: "ci",  # iyirminci
+    30: "cu",  # otuzuncu
+    40: "cı",  # qırxıncı
+    50: "ci",  # əllinci
+    60: "cı",  # altmışıncı
+    70: "ci",  # yetmişinci
+    80: "ci",  # səksəninci
+    90: "cı",  # doxsanıncı
+}
+
+
+def ordinal_az(number: int) -> str:
+    """`3` → `"3-cü"`. Cədvəldən kənar hallarda ən çox yayılan şəkilçi qalır.
+
+    Fallback ("ci") praktikada işə düşmür — gündəlik fasilə sayı iki rəqəmi
+    keçmir — lakin funksiya sıra sayı gözlənilən HƏR yerdə çağırıla bilsin
+    deyə istisna ATMIR: xəbərdarlıq mətninin qrammatikası heç bir halda
+    əməliyyatı dayandırmamalıdır.
+    """
+    if number <= 0:
+        return str(number)
+    if number % 10 == 0:
+        return f"{number}-{_ORDINAL_SUFFIX_AZ_TENS.get(number % 100, 'cu')}"
+    return f"{number}-{_ORDINAL_SUFFIX_AZ.get(number % 10, 'ci')}"
+
+
+@dataclass(frozen=True)
+class BreakAllowance:
+    """Bir fasilə növünün ROOT parametrləri + həmin günkü istifadə.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ BLOKLAMIR (nahar.md §MƏNTİQ, bənd 2 — açıq göstəriş)
+    ──────────────────────────────────────────────────────────────────────────
+    Say-həddi aşılanda əməliyyat DAVAM EDİR; yalnız işçi ekranında və HR
+    panelində xəbərdarlıq görünür. Səbəb tapşırıqda yazılıb: real mağaza
+    əməliyyatının qəfil bloklanmasının qarşısını almaq. Eyni istiqamət
+    layihədə artıq var — `MonthlyLeaveUsage` (aylıq 240 dəq.) da yalnız
+    xəbərdarlıq edir, `ScheduleConflict` də.
+
+    ──────────────────────────────────────────────────────────────────────────
+    `duration_minutes` CƏRİMƏYƏ TƏSİR ETMİR
+    ──────────────────────────────────────────────────────────────────────────
+    Bu sinif `LeavePenalty`-yə HEÇ VAXT ötürülmür və `LeaveAllowancePolicy`
+    ilə qarışdırılmamalıdır: müddət yalnız «Nahar fasiləniz: 60 dəqiqə»
+    göstəricisi üçündür (nahar.md bənd 3).
+    """
+
+    kind: BreakKind
+    duration_minutes: int
+    daily_count: int
+    used_count: int = 0
+
+    def __post_init__(self) -> None:
+        if self.duration_minutes < 0:
+            raise ValueError("Fasilə müddəti mənfi ola bilməz")
+        if self.daily_count < 0:
+            raise ValueError("Gündəlik fasilə sayı mənfi ola bilməz")
+        if self.used_count < 0:
+            raise ValueError("İstifadə olunmuş fasilə sayı mənfi ola bilməz")
+
+    @property
+    def is_exceeded(self) -> bool:
+        """Hədd aşılıbmı.
+
+        `daily_count = 0` "bu kirayəçidə həmin fasilə nəzərdə tutulmayıb"
+        deməkdir və HƏR istifadə aşılma sayılır — söndürmənin AÇIQ yolu
+        məhz budur (migrations/045 `min_value = 0` izahı). `MonthlyLeaveUsage`
+        0-ı "limitsiz" kimi oxuyur, çünki orada 0 dəqiqəlik icazə büdcəsi
+        heç bir mağazada mənalı deyil; burada isə 0 fasilə tam mənalıdır.
+        """
+        return self.used_count > self.daily_count
+
+    @property
+    def remaining_count(self) -> int:
+        """Qalan haqq — mənfi olmur (aşılma `is_exceeded` ilə bildirilir)."""
+        return max(0, self.daily_count - self.used_count)
+
+    def duration_label_az(self) -> str:
+        """«Nahar fasiləniz: 60 dəqiqə» — işçi ekranının məlumat sətri."""
+        return f"{self.kind.possessive_label_az}: {self.duration_minutes} dəqiqə"
+
+    def usage_label_az(self) -> str:
+        """«Bu gün: 1/2 çay fasiləsi istifadə edilib» (nahar.md GUI, bənd 2)."""
+        return (
+            f"Bu gün: {self.used_count}/{self.daily_count} "
+            f"{self.kind.label_az.lower()} istifadə edilib"
+        )
+
+    def warning_az(self) -> str:
+        """«3-cü çay fasiləsi (limit: 2)» — hədd aşılmayıbsa boş sətir.
+
+        Boş sətir qaytarmaq istisna atmaqdan üstündür: çağıran tərəf ekran
+        kodudur və "xəbərdarlıq varmı?" sualını `if` ilə soruşmalıdır, `try`
+        ilə yox.
+        """
+        if not self.is_exceeded:
+            return ""
+        return (
+            f"{ordinal_az(self.used_count)} {self.kind.label_az.lower()} "
+            f"(limit: {self.daily_count})"
+        )
+
+    @classmethod
+    def from_limits(
+        cls, kind: BreakKind, limits: dict[str, str], *, used_count: int = 0
+    ) -> BreakAllowance:
+        """`system_limits` lüğətindən qurur (naməlum/pozuq dəyər → defolt).
+
+        Pozuq sətir istisna ATMIR: `system_limits.limit_value` `TEXT`-dir və
+        birbaşa SQL ilə ora "abc" yazıla bilər. Belə bir sətrə görə İşçi Ana
+        Ekranının açılmaması qüsurun cəzasını səhv adama verərdi.
+        """
+        return cls(
+            kind=kind,
+            duration_minutes=_limit_as_int(limits, kind.duration_key),
+            daily_count=_limit_as_int(limits, kind.daily_count_key),
+            used_count=max(0, used_count),
+        )
+
+
+def _limit_as_int(limits: dict[str, str], key: SystemLimitKey) -> int:
+    """`system_limits` sətrini tam ədədə çevirir; alınmasa `DEFAULT_LIMITS`."""
+    raw = limits.get(key.value, DEFAULT_LIMITS[key])
+    try:
+        return max(0, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        return int(DEFAULT_LIMITS[key])
+
+
+# --------------------------------------------------------------------------- #
 # Feature Toggle-lar (bölmə 3)
 # --------------------------------------------------------------------------- #
 
@@ -1397,10 +1645,13 @@ class PerformanceReviewPeriodType(str, Enum):
 
 __all__ = [
     "DEFAULT_LIMITS",
+    "BreakAllowance",
+    "BreakKind",
     "DelayFinePolicy",
     "FeatureModule",
     "LeaveAllowancePolicy",
     "LeaveAllowanceSource",
     "PerformanceReviewPeriodType",
     "SystemLimitKey",
+    "ordinal_az",
 ]

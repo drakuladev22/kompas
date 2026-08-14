@@ -1214,6 +1214,7 @@ class RootControlScreen(Screen):
         super().__init__(theme, parent=parent)
         self._limit_inputs: dict[str, QSpinBox] = {}
         self._limit_texts: dict[str, QLineEdit] = {}
+        self._break_inputs: dict[str, QSpinBox] = {}
         self._module_toggles: dict[str, ToggleSwitch] = {}
         self._structural: set[str] = set()
 
@@ -1240,6 +1241,8 @@ class RootControlScreen(Screen):
         self._limits.add(limits_holder)
         self.add(self._limits)
 
+        self.add(self._build_break_card())
+
         self._modules = Card(padding=20, spacing=14)
         self._modules.add(title_label("Modul açarları", size=15))
         self._modules_rows = QVBoxLayout()
@@ -1254,6 +1257,64 @@ class RootControlScreen(Screen):
 
         self.add(self._build_registry())
         self.body().addStretch(1)
+
+    def _build_break_card(self) -> Card:
+        """«Fasilə Parametrləri» — Nahar/Çay (nahar.md GUI, bənd 1).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ AYRICA BÖLMƏ, «DİNAMİK LİMİTLƏR» SİYAHISINDA DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Texniki cəhətdən bu dörd açar da adi `system_limits` sətridir və
+        yuxarıdakı siyahıda AVTOMATİK görünərdi. Lakin nahar.md onları
+        adbaad ayrıca ekran bölməsi kimi tələb edir və səbəb praktikdir:
+        166 limitlik siyahıda «nahar neçə dəqiqədir?» sualının cavabını
+        tapmaq üçün Root sürüşdürüb axtarmalı olardı.
+
+        HƏR AÇAR YALNIZ BİR YERDƏ REDAKTƏ OLUNUR: kontroller bu dörd sətri
+        yuxarıdakı siyahıdan ÇIXARIB bura yönəldir (bax
+        `controllers/root_control._fill`). İki yerdə göstərsəydik, iki
+        müxtəlif dəyər yazıb «Tətbiq Et» basmaq mümkün olardı və hansının
+        qazandığı düymələrin sırasından asılı qalardı.
+        """
+        card = Card(padding=20, spacing=14)
+        card.add(title_label("Fasilə Parametrləri", size=15))
+        card.add(
+            muted_label(
+                "Nahar və Çay fasilələri ümumi «İcazə Növləri» kataloqundan AYRIDIR — "
+                "onları yalnız Root dəyişə bilər."
+            )
+        )
+
+        self._break_rows = QVBoxLayout()
+        self._break_rows.setSpacing(12)
+        holder = QWidget()
+        holder.setLayout(self._break_rows)
+        card.add(holder)
+
+        card.add(Divider())
+        card.add(
+            muted_label(
+                "Müddət yalnız işçi ekranındakı məlumat göstəricisidir — gecikmə/cərimə "
+                "düsturuna TƏSİR ETMİR. Gündəlik say həddi aşılanda əməliyyat "
+                "BLOKLANMIR, yalnız xəbərdarlıq göstərilir."
+            )
+        )
+
+        save_row = QWidget()
+        save_layout = QHBoxLayout(save_row)
+        save_layout.setContentsMargins(0, 0, 0, 0)
+        save_layout.addWidget(stretch())
+        save = action_button("Yadda Saxla")
+        # Yalnız BU bölmənin sahələri göndərilir. Ümumi «Tətbiq Et» də onları
+        # daşıyır (`collected()`), yəni Root hansı düyməni basdığından asılı
+        # olmayaraq eyni nəticəni alır — sadəcə bu düymə daha yaxındır.
+        save.clicked.connect(lambda: self.applied.emit({"limits": self._collected_breaks()}))
+        save_layout.addWidget(save)
+        card.add(save_row)
+        return card
+
+    def _collected_breaks(self) -> dict[str, int | str]:
+        return {key: spin.value() for key, spin in self._break_inputs.items()}
 
     def _build_registry(self) -> Card:
         card = Card(padding=20, spacing=14)
@@ -1324,31 +1385,63 @@ class RootControlScreen(Screen):
         self._limit_inputs.clear()
         self._limit_texts.clear()
 
-        for key, label, value, minimum, maximum, suffix in limits:
-            row = QWidget()
-            layout = QHBoxLayout(row)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(12)
-            layout.addWidget(body_label(label, size=13, wrap=False))
-            layout.addWidget(stretch())
-
-            if isinstance(value, int):
-                spin = QSpinBox()
-                spin.setProperty("variant", "form")
-                spin.setRange(minimum, maximum)
-                spin.setValue(value)
-                spin.setSuffix(f" {suffix}")
-                spin.setFixedWidth(160)
-                self._limit_inputs[key] = spin
-                layout.addWidget(spin)
-            else:
-                field = QLineEdit(value)
-                field.setProperty("variant", "form")
-                field.setFixedWidth(160)
-                self._limit_texts[key] = field
-                layout.addWidget(field)
-            self._limits_rows.addWidget(row)
+        for entry in limits:
+            self._limits_rows.addWidget(self._limit_row_widget(entry, numbers=self._limit_inputs))
         self.show_content()
+
+    def set_break_limits(self, limits: list[tuple[str, str, int | str, int, int, str]]) -> None:
+        """«Fasilə Parametrləri» bölməsi — `set_limits` ilə EYNİ sətir formatı.
+
+        Format qəsdən eynidir: kontroller iki siyahını bir mənbədən
+        (`RootControlUseCase.list_limits`) qurur və yalnız BÖLÜR. Ayrı format
+        seçsəydik, `description_az`/`min_value`/`max_value` zənciri ikinci
+        dəfə yazılmalı olardı və biri düzəldiləndə digəri arxada qalardı
+        (`test_root_control_parameter_parity` məhz bu naxışı qoruyur).
+        """
+        clear_layout(self._break_rows)
+        self._break_inputs.clear()
+
+        for entry in limits:
+            self._break_rows.addWidget(self._limit_row_widget(entry, numbers=self._break_inputs))
+
+    def _limit_row_widget(
+        self,
+        entry: tuple[str, str, int | str, int, int, str],
+        *,
+        numbers: dict[str, QSpinBox],
+    ) -> QWidget:
+        """Bir limit sətri — ədəd üçün spin, mətn üçün sətir sahəsi.
+
+        `numbers` HANSI lüğətə yazılacağını təyin edir: eyni widget qurucusu
+        həm ümumi siyahıya, həm də fasilə bölməsinə xidmət edir. Mətn sahələri
+        HƏMİŞƏ `_limit_texts`-ə düşür, çünki fasilə parametrlərinin dördü də
+        ədəddir və oraya mətn sətri düşsəydi, bu, sxem xətası olardı — onu
+        gizlətmək əvəzinə ümumi kanalda göstərmək daha dürüstdür.
+        """
+        key, label, value, minimum, maximum, suffix = entry
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+        layout.addWidget(body_label(label, size=13, wrap=False))
+        layout.addWidget(stretch())
+
+        if isinstance(value, int):
+            spin = QSpinBox()
+            spin.setProperty("variant", "form")
+            spin.setRange(minimum, maximum)
+            spin.setValue(value)
+            spin.setSuffix(f" {suffix}")
+            spin.setFixedWidth(160)
+            numbers[key] = spin
+            layout.addWidget(spin)
+        else:
+            field = QLineEdit(value)
+            field.setProperty("variant", "form")
+            field.setFixedWidth(160)
+            self._limit_texts[key] = field
+            layout.addWidget(field)
+        return row
 
     def set_modules(self, modules: list[tuple[str, str, bool, bool]]) -> None:
         """`modules`: (açar, etiket, aktiv, struktur-kritik)."""
@@ -1433,6 +1526,10 @@ class RootControlScreen(Screen):
         limits: dict[str, int | str] = {
             key: spin.value() for key, spin in self._limit_inputs.items()
         }
+        # Fasilə bölməsi də ÜMUMİ «Tətbiq Et»-ə daxildir: Root iki ayrı düymə
+        # basmağa məcbur qalmamalıdır. Öz «Yadda Saxla» düyməsi isə yalnız bu
+        # dördünü göndərir — hər ikisi eyni `set_limit` yolundan keçir.
+        limits.update(self._collected_breaks())
         limits.update({key: field.text().strip() for key, field in self._limit_texts.items()})
         return {
             "limits": limits,

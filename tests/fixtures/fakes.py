@@ -14,7 +14,7 @@ from src.domain.entities.attendance_record import AttendanceRecord, CheckInStatu
 from src.domain.entities.employee import Employee
 from src.domain.entities.fine import Fine, FineSource, FineStatus
 from src.domain.entities.leave_request import LeaveRequest, LeaveStatus
-from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
+from src.domain.policies import DEFAULT_LIMITS, BreakKind, SystemLimitKey
 from src.domain.value_objects.identifiers import (
     AttendanceRecordId,
     EmployeeId,
@@ -336,11 +336,65 @@ class InMemoryEmployees:
 
 
 class FakeLeaveTypes:
-    def __init__(self, durations: dict[LeaveTypeId, int] | None = None) -> None:
+    def __init__(
+        self,
+        durations: dict[LeaveTypeId, int] | None = None,
+        break_kinds: dict[LeaveTypeId, BreakKind] | None = None,
+    ) -> None:
         self.durations = durations or {}
+        #: Nahar/Çay nişanı (nahar.md). DEFOLT BOŞDUR — nişansız növ sayğaca
+        #: düşmür, yəni mövcud testlərin davranışı DƏYİŞMİR.
+        self.break_kinds = break_kinds or {}
 
     def get_default_duration(self, leave_type_id: LeaveTypeId) -> int | None:
         return self.durations.get(leave_type_id)
+
+    def break_kind_of(self, leave_type_id: LeaveTypeId) -> BreakKind | None:
+        return self.break_kinds.get(leave_type_id)
+
+
+class InMemoryBreakUsage:
+    """`daily_break_usage` sahtəsi — atomikliyi Python lüğəti təmin edir.
+
+    Real repo UPSERT ilə işləyir (bax `break_usage_repository.py` başlığı);
+    burada eyni MÜQAVİLƏ saxlanılır: `record_use` YENİ dəyəri qaytarır və
+    sətir yoxdursa 1-dən başlayır.
+    """
+
+    def __init__(self) -> None:
+        self.counts: dict[tuple[EmployeeId, date, BreakKind], int] = {}
+        self.last_used: dict[tuple[EmployeeId, date, BreakKind], datetime] = {}
+
+    def record_use(
+        self,
+        tenant_id: TenantId,
+        employee_id: EmployeeId,
+        *,
+        kind: BreakKind,
+        on_date: date,
+        at: datetime,
+    ) -> int:
+        del tenant_id  # RLS sahtədə yoxdur; imza real portla eyni qalır
+        key = (employee_id, on_date, kind)
+        self.counts[key] = self.counts.get(key, 0) + 1
+        self.last_used[key] = at
+        return self.counts[key]
+
+    def count_for_day(self, employee_id: EmployeeId, *, kind: BreakKind, on_date: date) -> int:
+        return self.counts.get((employee_id, on_date, kind), 0)
+
+    def usage_for_day(self, employee_id: EmployeeId, *, on_date: date) -> dict[BreakKind, int]:
+        return {kind: self.counts.get((employee_id, on_date, kind), 0) for kind in BreakKind}
+
+    def usage_rows_for_day(
+        self, tenant_id: TenantId, *, on_date: date
+    ) -> list[tuple[EmployeeId, BreakKind, int]]:
+        del tenant_id
+        return [
+            (employee_id, kind, count)
+            for (employee_id, day, kind), count in self.counts.items()
+            if day == on_date and count > 0
+        ]
 
 
 class FakeShifts:
@@ -386,6 +440,7 @@ __all__ = [
     "FakeShifts",
     "FakeSystemLimits",
     "InMemoryAttendance",
+    "InMemoryBreakUsage",
     "InMemoryEmployees",
     "InMemoryExceptions",
     "InMemoryFines",

@@ -205,6 +205,7 @@ class ScreenDataBinder:
         self._dashboard_leaders(session, screen, today=today)
         self._dashboard_health(session, screen)
         self._dashboard_benchmark(session, screen)
+        self._dashboard_break_overuse(session, screen, today=today)
 
     def _dashboard_summary(
         self, session: Session, screen: Any, *, today: date, fine_totals: tuple[str, str]
@@ -387,6 +388,67 @@ class ScreenDataBinder:
                     _HEALTH_TONES.get(str(row["health"]), "warning"),
                 )
                 for row in rows
+            ]
+        )
+
+    def _dashboard_break_overuse(self, session: Session, screen: Any, *, today: date) -> None:
+        """Nahar/Çay gündəlik həddini aşanlar (nahar.md GUI, bənd 2).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ BİRBAŞA SQL DEYİL, USE CASE ÜZƏRİNDƏN
+        ──────────────────────────────────────────────────────────────────────
+        Bu bölmə `_dashboard_summary`/`_dashboard_leave`-dən FƏRQLƏNİR: orada
+        yalnız SAYĞAC göstərilir, burada isə QƏRAR var — "hədd aşılıbmı?".
+        Həmin qərar ROOT parametrindən (`LUNCH_BREAK_DAILY_COUNT` /
+        `TEA_BREAK_DAILY_COUNT`) asılıdır və `BreakAllowance.is_exceeded`-də
+        yaşayır. SQL-ə `count_used > <hədd>` yazsaydıq, qayda İKİ yerdə
+        olardı və Root dəyəri dəyişəndə panel köhnə həddi göstərməyə davam
+        edərdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        SƏLAHİYYƏT: `can_view_employee_reports`
+        ──────────────────────────────────────────────────────────────────────
+        Siyahı AD-BAAD işçi göstərir, yəni aqreqat deyil, fərdi məlumatdır.
+        `_dashboard_benchmark`-dakı eyni qısa-dövrə: flag yoxdursa bölmə
+        doldurulmur və ekranda GÖRÜNMÜR (bölmə 3: "GÖRMƏK = SƏLAHİYYƏTİN
+        OLMASI"). `set_break_overuse([])` AÇIQ çağırılır — əvvəlki dolu
+        vəziyyət ekranda qalmasın deyə (panel yenidən oxunanda rol dəyişmiş
+        ola bilər).
+        """
+        from src.application.use_cases.employee_profile import (  # noqa: PLC0415
+            VIEW_EMPLOYEE_REPORTS_FLAG,
+        )
+
+        if not self._actor.has_permission(VIEW_EMPLOYEE_REPORTS_FLAG, now=datetime.now(UTC)):
+            screen.set_break_overuse([])
+            return
+
+        usages = session.leave_verification.break_overuse_for_day(
+            tenant_id=session.tenant_id, on_date=today
+        )
+        if not usages:
+            screen.set_break_overuse([])
+            return
+
+        # ADLAR BİR SORĞUDA: sətir başına `employees.get()` çağırmaq 21
+        # filialın həddi aşan işçiləri üçün onlarla gediş-gəliş demək olardı.
+        rows = session.uow.connection.execute(
+            """
+            SELECT id, first_name, last_name
+              FROM employees
+             WHERE tenant_id = %s AND id = ANY(%s)
+            """,
+            (session.tenant_id, [usage.employee_id for usage in usages]),
+        ).fetchall()
+        names = {row["id"]: _full_name(row) for row in rows}
+
+        screen.set_break_overuse(
+            [
+                (
+                    names.get(usage.employee_id, "Naməlum işçi"),
+                    usage.allowance.warning_az(),
+                )
+                for usage in usages
             ]
         )
 

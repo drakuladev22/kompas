@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
     from src.domain.entities.employee import Employee
     from src.domain.value_objects.credentials import Username
-    from src.domain.value_objects.identifiers import EmployeeId, TenantId
+    from src.domain.value_objects.identifiers import EmployeeId, LeaveTypeId, TenantId
     from src.infrastructure.persistence.mappers import Credentials
     from src.presentation.composition import ApplicationContext
     from src.presentation.controllers.auth import AuthController
@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from src.presentation.controllers.kiosk import KioskController, KioskOutcome
     from src.presentation.controllers.sales_review import SalesReviewController
     from src.presentation.controllers.screen_data import ScreenDataBinder
+    from src.presentation.screens.group_a_kiosk import EmployeeHomeScreen
     from src.presentation.widgets.worker_status import WorkerStatus
 
 _log = get_logger(__name__)
@@ -1564,6 +1565,11 @@ class KompasApplication:
         def refresh(status_outcome: KioskOutcome) -> None:
             if status_outcome.status is not None:
                 home.set_status(status_outcome.status)
+            # Fasilə sayğacı HƏR əməliyyatdan sonra yenilənir (nahar.md):
+            # STEP1 onu artırır, STEP2/STEP3 isə göstəricini dəyişmir — lakin
+            # ayrı-ayrı yollar yazsaydıq, biri unudulanda ekran köhnə rəqəmi
+            # göstərərdi və işçi "2-ci fasilə" xəbərdarlığını görməzdi.
+            home.set_break_options(controller.break_options(employee))
 
         def on_action(status: WorkerStatus) -> None:
             """Statusa uyğun TƏK əməliyyat (bölmə 3).
@@ -1574,11 +1580,19 @@ class KompasApplication:
             if status is WorkerStatus.NOT_STARTED:
                 refresh(controller.start_day(employee))
             elif status is WorkerStatus.VERIFIED:
-                refresh(controller.request_leave(employee))
+                # Fasilə növü EKRANDAN gəlir, statusdan yox: `[İcazə İstəyirəm]`
+                # eyni düymədir, seçim isə işçinindir. Boş sətir = «Ümumi
+                # icazə», yəni bugünkü davranışın eynisi (`leave_type_id=None`).
+                refresh(
+                    controller.request_leave(employee, leave_type_id=_leave_type_id_or_none(home))
+                )
             elif status is WorkerStatus.OUTSIDE:
                 refresh(controller.claim_return(employee))
 
         home.action_requested.connect(on_action)
+        # İLK DOLDURMA: işçi haqqını fasiləni istifadə etməmişdən ƏVVƏL
+        # görməlidir ("Nahar fasiləniz: 60 dəqiqə · Bu gün: 0/1").
+        home.set_break_options(controller.break_options(employee))
         home.logout_requested.connect(lambda: kiosk.set_content(pin_pad))
 
         # #16 — "Açıq Növbələr" kartının ÖZ kontrolleri var (CLAUDE.md §6):
@@ -1773,6 +1787,29 @@ def run(
 
     _log.info("GUI_STARTED", extra={"preview": preview, "kiosk": kiosk})
     return app.exec()
+
+
+def _leave_type_id_or_none(home: EmployeeHomeScreen) -> LeaveTypeId | None:
+    """İşçi ekranındakı fasilə seçimini `LeaveTypeId`-yə çevirir (nahar.md).
+
+    Boş sətir — «Ümumi icazə» — `None` olur, yəni STEP1 bu günə qədərki
+    davranışını saxlayır. Pozuq UUID də `None`-a düşür: ekran onu yalnız
+    kontrollerin verdiyi siyahıdan götürür, lakin seçimin mənbəyi gələcəkdə
+    dəyişsə, kiosk ÇÖKMƏMƏLİDİR — paylaşılan cihazda bir işçinin səhv seçimi
+    bütün mağazanı bloklaya bilməz (`controllers/kiosk.py` başlığı).
+    """
+    import uuid  # noqa: PLC0415
+
+    from src.domain.value_objects.identifiers import LeaveTypeId as _LeaveTypeId  # noqa: PLC0415
+
+    raw = str(home.selected_break_leave_type_id() or "").strip()
+    if not raw:
+        return None
+    try:
+        return _LeaveTypeId(uuid.UUID(raw))
+    except ValueError:
+        _log.warning("KIOSK_BREAK_SELECTION_INVALID", extra={"value": raw})
+        return None
 
 
 def _build_kiosk_controller(context: ApplicationContext) -> KioskController | None:

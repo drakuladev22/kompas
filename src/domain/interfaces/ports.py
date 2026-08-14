@@ -35,6 +35,7 @@ from src.domain.entities.position import Position
 from src.domain.entities.sales_points import PointsEntry, RewardRedemption
 from src.domain.entities.shift import ShiftAssignment, ShiftSwapRequest
 from src.domain.entities.task import Task
+from src.domain.policies import BreakKind
 from src.domain.value_objects.authorization import PermissionFlag
 from src.domain.value_objects.behavior_signals import BehaviorBaseline, CheckInObservation
 from src.domain.value_objects.catalogs import FineType, LeaveType, WorkMode
@@ -627,6 +628,84 @@ class LeaveTypeRepository(Protocol):
         self, tenant_id: TenantId, leave_type_id: LeaveTypeId, *, changed_by: EmployeeId
     ) -> None:
         """SOFT DELETE — tarixi qeydlərə toxunmur (bölmə 4)."""
+        ...
+
+    def break_kind_of(self, leave_type_id: LeaveTypeId) -> BreakKind | None:
+        """Seçilmiş icazə növü sistem fasiləsidirmi (`leave_types.break_kind`).
+
+        STEP1 hansı sayğacı artıracağını məhz bundan öyrənir. `None` = adi
+        icazə növü, sayğaca DÜŞMÜR (nahar.md: Nahar/Çay ümumi kataloqdan
+        AYRI, xüsusi bir qatdır).
+
+        NİYƏ `list_all()` ÜZƏRİNDƏN AXTARILMIR: STEP1 bir sətir üçün bütün
+        kataloqu oxumamalıdır — tək açarla gedən sorğu həm ucuz, həm də
+        deaktiv edilmiş növ üçün də doğru cavab verir (kataloq siyahısı
+        defolt yalnız aktivləri gətirir).
+        """
+        ...
+
+
+# --------------------------------------------------------------------------- #
+# Nahar / Çay fasiləsinin gündəlik sayğacı (nahar.md)
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class DailyBreakUsageRepository(Protocol):
+    """`daily_break_usage` — gündə neçə dəfə fasilə başladığının sayğacı.
+
+    ──────────────────────────────────────────────────────────────────────────
+    BU PORT HEÇ NƏ BLOKLAMIR
+    ──────────────────────────────────────────────────────────────────────────
+    Say-həddi ROOT parametridir (`BreakAllowance`) və aşılma yalnız
+    XƏBƏRDARLIQ doğurur (nahar.md §MƏNTİQ, bənd 2 — açıq göstəriş). Ona görə
+    burada nə "artıra bilərəmmi?" sualı, nə də hədd arqumenti var: repository
+    sayır, siyasət isə domendə qiymətləndirilir.
+    """
+
+    def record_use(
+        self,
+        tenant_id: TenantId,
+        employee_id: EmployeeId,
+        *,
+        kind: BreakKind,
+        on_date: date,
+        at: datetime,
+    ) -> int:
+        """Sayğacı BİR vahid artırır və YENİ dəyəri qaytarır.
+
+        ATOMİK OLMALIDIR (UPSERT): iki kiosk terminalı eyni anda STEP1
+        göndərsə, "oxu → artır → yaz" ardıcıllığı bir artımı itirərdi və
+        işçi limitə çatmadan xəbərdarlıq görməzdi.
+
+        Yeni dəyərin QAYTARILMASI da qəsdidir: çağıran tərəf ekranda dərhal
+        "3-cü çay fasiləsi" yaza bilsin deyə ikinci sorğu ATMAMALIDIR —
+        aralıqda başqa terminal sayğacı yenidən artıra bilər.
+        """
+        ...
+
+    def count_for_day(self, employee_id: EmployeeId, *, kind: BreakKind, on_date: date) -> int:
+        """Həmin gün üçün tək növün sayğacı (sətir yoxdursa 0)."""
+        ...
+
+    def usage_for_day(self, employee_id: EmployeeId, *, on_date: date) -> dict[BreakKind, int]:
+        """Hər iki növün sayğacı — İşçi Ana Ekranı ikisini birlikdə göstərir.
+
+        Sətri olmayan növ `0` ilə qaytarılır: ekran "məlumat yoxdur" ilə
+        "hələ istifadə edilməyib" arasında fərq qoymamalıdır.
+        """
+        ...
+
+    def usage_rows_for_day(
+        self, tenant_id: TenantId, *, on_date: date
+    ) -> list[tuple[EmployeeId, BreakKind, int]]:
+        """HR panelinin gündəlik icmalı — kirayəçi üzrə bütün sayğaclar.
+
+        HƏDD BURADA TƏTBİQ EDİLMİR: sorğu bütün sətirləri gətirir, aşılmanı
+        isə `BreakAllowance.is_exceeded` müəyyən edir. Əks halda hədd İKİ
+        yerdə — SQL-də və domendə — yaşayardı və Root dəyəri dəyişəndə biri
+        arxada qalardı.
+        """
         ...
 
 
@@ -2059,6 +2138,7 @@ __all__ = [
     "CheckInHistoryProvider",
     "Clock",
     "DailyAttendanceSheetRepository",
+    "DailyBreakUsageRepository",
     "DatabaseMigrator",
     "EmployeeRepository",
     "ErpConnectorFactory",

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Final
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
+    QComboBox,
     QGridLayout,
     QHBoxLayout,
     QPushButton,
@@ -410,6 +411,12 @@ class EmployeeHomeScreen(QWidget):
 
         layout.addWidget(self._build_header(full_name, position_name, store_name))
         layout.addWidget(self._build_status_card())
+        # FASİLƏ KARTI STATUS KARTININ DƏRHAL ALTINDADIR (nahar.md GUI, bənd 2):
+        # seçim `[İcazə İstəyirəm]` düyməsindən ƏVVƏL edilir və ikisi arasında
+        # başqa kart olsaydı, işçi düyməni basandan sonra "nə seçmişdim?"
+        # sualı ilə qalardı. Açıq Növbələr/İllik Məzuniyyət kartlarından
+        # FƏRQLİ olaraq bu, günün axınının bir hissəsidir.
+        layout.addWidget(self._build_break_card())
         layout.addWidget(self._build_cards_row())
         # #19 Elan (Broadcast, kompasos11.md Faza 8) — kartların ALTINDA, TAM
         # ENLİ: elan sayı dəyişkəndir (0-dan bir neçəyədək) və mətn uzun ola
@@ -506,6 +513,112 @@ class EmployeeHomeScreen(QWidget):
         # "Gözlənilir…" vəziyyətində düymə var, amma basıla bilməz — işçi
         # operatorun təsdiqini gözləyir və təkrar sorğu göndərməməlidir.
         self._action.setEnabled(status.is_actionable)
+
+    # ---------------------------- fasilə seçimi -------------------------------- #
+
+    def _build_break_card(self) -> QWidget:
+        """Nahar/Çay seçimi + gündəlik göstərici (nahar.md GUI, bənd 2).
+
+        ──────────────────────────────────────────────────────────────────────
+        «ÜMUMİ İCAZƏ» NİYƏ SİYAHIDA QALIR VƏ NİYƏ DEFOLTDUR
+        ──────────────────────────────────────────────────────────────────────
+        STEP1 bu günə qədər `leave_type_id=None` göndərirdi. Defolt seçimi
+        Nahar etsəydik, MÖVCUD davranış sükutla dəyişərdi: bank işinə çıxan
+        işçinin sorğusu nahar sayılar, sayğac səhv artar və BR-001 güzəşti
+        gözlənilmədən tətbiq olunardı. «Ümumi icazə» = bugünkü davranışın
+        eynisi; Nahar/Çay isə İŞÇİNİN AÇIQ seçimidir.
+
+        ──────────────────────────────────────────────────────────────────────
+        KART BOŞ SİYAHIDA GİZLƏNİR
+        ──────────────────────────────────────────────────────────────────────
+        Fasilə növləri hələ seed edilməyibsə (köhnə baza, miqrasiya tətbiq
+        olunmayıb) kart ümumiyyətlə görünmür — ekran bugünkü halında qalır.
+        Boş açılan siyahı «sistem xarabdır» kimi oxunardı.
+        """
+        card = Card(padding=22, spacing=12)
+        card.add(muted_label("Fasilə növü"))
+
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(12)
+
+        self._break_combo = QComboBox()
+        self._break_combo.setProperty("variant", "form")
+        self._break_combo.setMinimumWidth(280)
+        self._break_combo.currentIndexChanged.connect(self._on_break_changed)
+        row_layout.addWidget(self._break_combo)
+
+        self._break_warning = Chip("", "warning")
+        self._break_warning.setVisible(False)
+        row_layout.addWidget(self._break_warning)
+        row_layout.addWidget(stretch())
+        card.add(row)
+
+        self._break_detail = body_label("", size=14)
+        self._break_detail.setStyleSheet(f"color: {self._theme.color('--color-text-secondary')};")
+        card.add(self._break_detail)
+
+        #: Açılan siyahının sırası ilə eyni sıralı seçim məlumatı.
+        #: `QComboBox.itemData` əvəzinə ayrıca siyahı saxlanılır, çünki
+        #: `currentIndexChanged` siyahı təmizlənərkən də işə düşür və
+        #: `itemData(-1)` `None` qaytarardı — sətir isə həmişə lazımdır.
+        self._break_options: list[dict[str, str]] = []
+        self._break_card = card
+        card.setVisible(False)
+        return card
+
+    def set_break_options(self, options: list[dict[str, str]]) -> None:
+        """`options`: `leave_type_id`, `label`, `detail`, `warning` açarları.
+
+        SEÇİM QORUNUR: siyahı hər STEP1-dən sonra yenidən doldurulur (sayğac
+        dəyişib) və işçinin seçimi sıfırlansaydı, ardıcıl iki çay fasiləsi
+        üçün seçimi hər dəfə təkrarlamalı olardı.
+        """
+        previous = self.selected_break_leave_type_id()
+
+        # «Ümumi icazə» HƏMİŞƏ birincidir və siyahıdan gəlmir — o, fasilə
+        # deyil, fasilənin YOXLUĞUdur (bax `_build_break_card` başlığı).
+        self._break_options = [
+            {"leave_type_id": "", "label": "Ümumi icazə", "detail": "", "warning": ""},
+            *options,
+        ]
+        self._break_card.setVisible(bool(options))
+
+        self._break_combo.blockSignals(True)
+        self._break_combo.clear()
+        self._break_combo.addItems([option["label"] for option in self._break_options])
+        index = next(
+            (
+                position
+                for position, option in enumerate(self._break_options)
+                if option["leave_type_id"] == previous
+            ),
+            0,
+        )
+        self._break_combo.setCurrentIndex(index)
+        self._break_combo.blockSignals(False)
+        self._apply_break_detail(index)
+
+    def selected_break_leave_type_id(self) -> str:
+        """Seçilmiş fasilənin `leave_type_id`-si; «Ümumi icazə» üçün boş sətir."""
+        index = self._break_combo.currentIndex()
+        if 0 <= index < len(self._break_options):
+            return self._break_options[index]["leave_type_id"]
+        return ""
+
+    def _on_break_changed(self, index: int) -> None:
+        self._apply_break_detail(index)
+
+    def _apply_break_detail(self, index: int) -> None:
+        option = self._break_options[index] if 0 <= index < len(self._break_options) else None
+        detail = option["detail"] if option else ""
+        warning = option["warning"] if option else ""
+        self._break_detail.setText(
+            detail or "Fasilə seçmədən davam etsəniz sorğu ümumi icazə kimi qeydə alınır."
+        )
+        self._break_warning.setText(warning)
+        self._break_warning.setVisible(bool(warning))
 
     # ------------------------------- kartlar ---------------------------------- #
 

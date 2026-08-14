@@ -33,7 +33,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from src.domain.entities.shift import ShiftAssignment, ShiftSource
-from src.domain.policies import SystemLimitKey
+from src.domain.policies import BreakKind, SystemLimitKey
 from src.domain.value_objects.authorization import HardlockLevel, PermissionFlag
 from src.domain.value_objects.catalogs import MAX_LEAVE_DURATION_MINUTES, LeaveType
 
@@ -309,6 +309,23 @@ class PostgresPermissionFlagRepository(_BaseRepository):
 # --------------------------------------------------------------------------- #
 
 
+def _break_kind_or_none(raw: object) -> BreakKind | None:
+    """`leave_types.break_kind` sütununu domen enum-una çevirir.
+
+    NAMƏLUM DƏYƏR İSTİSNA ATMIR: sütun `TEXT`-dir və `CHECK` onu iki dəyərlə
+    məhdudlaşdırsa da, gələcək bir miqrasiya üçüncü növ əlavə edə bilər. Köhnə
+    tətbiq həmin sətri "adi icazə növü" kimi oxuyub işləməyə davam etməlidir —
+    kataloq ekranının bütövlükdə açılmaması qüsurun cəzasını istifadəçiyə
+    verərdi (`_limit_key_or_none` ilə eyni fəlsəfə).
+    """
+    if raw is None:
+        return None
+    try:
+        return BreakKind(str(raw))
+    except ValueError:
+        return None
+
+
 class PostgresLeaveTypeRepository(_BaseRepository):
     """İcazə növləri kataloqu (`leave_types`)."""
 
@@ -343,7 +360,7 @@ class PostgresLeaveTypeRepository(_BaseRepository):
         aktivləşdirə bilməlidir.
         """
         sql = """
-            SELECT id, tenant_id, name_az, default_duration_minutes, is_active
+            SELECT id, tenant_id, name_az, default_duration_minutes, is_active, break_kind
             FROM leave_types
             WHERE tenant_id = %s
         """
@@ -412,10 +429,25 @@ class PostgresLeaveTypeRepository(_BaseRepository):
             extra={"leave_type_id": str(leave_type_id), "changed_by": str(changed_by)},
         )
 
+    def break_kind_of(self, leave_type_id: LeaveTypeId) -> BreakKind | None:
+        """Seçilmiş növ sistem fasiləsidirmi (nahar.md, migrations/045).
+
+        `is_active` ŞƏRTİ QOYULMUR: sual "bu sətir hansı fasilədir", "seçilə
+        bilərmi" DEYİL. HR növü deaktiv edəndən sonra da köhnə ekrandan gələn
+        sorğu doğru sayğaca düşməlidir — əks halda sayğac səssizcə yanlış
+        növə yazılardı.
+        """
+        row = self._fetch_one(
+            "SELECT break_kind FROM leave_types WHERE id = %s AND tenant_id = %s",
+            (leave_type_id, self._tenant),
+        )
+        return _break_kind_or_none(row.get("break_kind") if row else None)
+
     @staticmethod
     def _hydrate(row: dict[str, Any], ceiling: int) -> LeaveType:
         is_active = bool(row.get("is_active", True))
         return LeaveType(
+            break_kind=_break_kind_or_none(row.get("break_kind")),
             # ROOT tavanı ötürülür — bax `max_duration_minutes()` başlığı.
             max_duration_minutes=ceiling,
             name=str(row["name_az"]),

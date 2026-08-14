@@ -96,7 +96,30 @@ LIMIT_LABELS: dict[SystemLimitKey, tuple[str, int, int, str]] = {
     ),
     SystemLimitKey.DEVELOPER_CRASH_ROW_LIMIT: ("Çökmə cədvəlinin sətir tavanı", 1, 200, "sətir"),
     SystemLimitKey.DEVELOPER_TICKET_ROW_LIMIT: ("Dəstək cədvəlinin sətir tavanı", 1, 200, "sətir"),
+    # --- Nahar / Çay fasiləsi (nahar.md) ------------------------------------ #
+    #
+    # ETİKETLƏR BURADA QISADIR: bu dördü öz bölməsində («Fasilə Parametrləri»)
+    # göstərilir və başlıq onsuz da kontekst verir. Baza sətrindəki uzun
+    # `description_az` yenə də üstünlük təşkil edir (bax `limit_row`) — bu
+    # sətirlər yalnız seed edilməmiş köhnə baza üçün ehtiyatdır. Diapazonlar
+    # migrations/045-dəki `min_value`/`max_value` ilə eynidir.
+    SystemLimitKey.LUNCH_BREAK_DURATION_MINUTES: ("Nahar fasiləsinin müddəti", 1, 480, "dəq"),
+    SystemLimitKey.LUNCH_BREAK_DAILY_COUNT: ("Nahar — gündə neçə dəfə", 0, 10, "dəfə"),
+    SystemLimitKey.TEA_BREAK_DURATION_MINUTES: ("Çay fasiləsinin müddəti", 1, 480, "dəq"),
+    SystemLimitKey.TEA_BREAK_DAILY_COUNT: ("Çay — gündə neçə dəfə", 0, 10, "dəfə"),
 }
+
+#: «Fasilə Parametrləri» bölməsinə yönələn açarlar (nahar.md GUI, bənd 1).
+#:
+#: SIRA MƏNALIDIR: ekranda «müddət → say» cütü hər fasilə üçün yan-yana
+#: durur, çünki Root onları BİRLİKDƏ dəyişir ("nahar 45 dəqiqə, gündə 1").
+#: Əlifba sırası ("DAILY_COUNT" → "DURATION") həmin cütü qırardı.
+BREAK_LIMIT_KEYS: tuple[SystemLimitKey, ...] = (
+    SystemLimitKey.LUNCH_BREAK_DURATION_MINUTES,
+    SystemLimitKey.LUNCH_BREAK_DAILY_COUNT,
+    SystemLimitKey.TEA_BREAK_DURATION_MINUTES,
+    SystemLimitKey.TEA_BREAK_DAILY_COUNT,
+)
 
 #: Modul açarı → Azərbaycanca etiket.
 MODULE_LABELS: dict[FeatureModule, str] = {
@@ -155,8 +178,16 @@ class RootControlController:
         tenant_id = session.tenant_id
         control = session.root_control
 
-        screen.set_limits(
-            [
+        # HƏR AÇAR YALNIZ BİR BÖLMƏYƏ DÜŞÜR (bax `_build_break_card` başlığı):
+        # fasilə açarları ümumi siyahıdan ÇIXARILIR, qalanı olduğu kimi qalır.
+        # Bu, `test_root_control_lists_every_key_without_a_curated_allowlist`-in
+        # qadağan etdiyi «əl ilə seçilmiş siyahı» DEYİL — use case yenə də
+        # BÜTÜN açarları qaytarır; burada yalnız hansı KARTA düşdüyü həll
+        # olunur və yeni açar defolt olaraq ümumi siyahıda görünür.
+        break_keys = {key.value for key in BREAK_LIMIT_KEYS}
+        rows = [
+            (
+                view.key,
                 limit_row(
                     view.key,
                     view.value,
@@ -164,9 +195,16 @@ class RootControlController:
                     min_value=view.min_value,
                     max_value=view.max_value,
                     is_stored=view.is_stored,
-                )
-                for view in control.list_limits(tenant_id=tenant_id, actor=self._actor)
-            ]
+                ),
+            )
+            for view in control.list_limits(tenant_id=tenant_id, actor=self._actor)
+        ]
+        screen.set_limits([row for key, row in rows if key not in break_keys])
+        # Ekranda göstərilmə sırası `BREAK_LIMIT_KEYS`-dən gəlir, bazanın
+        # qaytardığı sıradan yox — «müddət → say» cütü pozulmasın deyə.
+        by_key = dict(rows)
+        screen.set_break_limits(
+            [by_key[key.value] for key in BREAK_LIMIT_KEYS if key.value in by_key]
         )
         screen.set_modules(
             [
@@ -423,4 +461,10 @@ def limit_row(
     return (key.value, label, number, low, high, suffix)
 
 
-__all__ = ["LIMIT_LABELS", "MODULE_LABELS", "RootControlController", "limit_row"]
+__all__ = [
+    "BREAK_LIMIT_KEYS",
+    "LIMIT_LABELS",
+    "MODULE_LABELS",
+    "RootControlController",
+    "limit_row",
+]

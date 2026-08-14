@@ -42,7 +42,7 @@ from dataclasses import InitVar, dataclass, field
 from datetime import datetime
 from typing import Final
 
-from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
+from src.domain.policies import DEFAULT_LIMITS, BreakKind, SystemLimitKey
 from src.domain.value_objects.identifiers import (
     FineTypeId,
     LeaveTypeId,
@@ -223,6 +223,17 @@ class LeaveType(CatalogEntry):
 
     leave_type_id: LeaveTypeId | None = None
     default_duration_minutes: int = 0
+    #: Sistem fasiləsi nişanı (`leave_types.break_kind`, migrations/045).
+    #:
+    #: `None` = adi icazə növü (HR_Admin-in sərbəst idarə etdiyi kataloq
+    #: sətri). `LUNCH`/`TEA` = nahar.md-nin xüsusi qatı: sətrin ADI və
+    #: MÜDDƏTİ yenə HR-ındır, lakin STRUKTUR ROLU Root-undur və gündəlik
+    #: sayğac (`daily_break_usage`) məhz bu nişana görə artırılır.
+    #:
+    #: NİŞAN NİYƏ SƏTRİN ÜZƏRİNDƏDİR, ADINA GÖRƏ TANINMIR: HR kataloq
+    #: ekranından adı dəyişən kimi ad-əsaslı bağ qırılar və sayğac SÜKUTLA
+    #: dayanardı (ətraflı: `migrations/045` başlığı).
+    break_kind: BreakKind | None = None
     #: ROOT tavanı (`system_limits.LEAVE_TYPE_MAX_DURATION_MINUTES`).
     #:
     #: `InitVar`-dır, SAHƏ DEYİL: tavan icazə növünün XÜSUSİYYƏTİ deyil,

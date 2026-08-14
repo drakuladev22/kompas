@@ -31,6 +31,7 @@ from src.application.use_cases.leave_verification import (
     OperationNotPermittedError,
     TimeDriftError,
 )
+from src.domain.policies import BreakKind
 from src.presentation.widgets.worker_status import WorkerStatus
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
@@ -39,6 +40,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from src.domain.entities.employee import Employee
+    from src.domain.policies import BreakAllowance
+    from src.domain.value_objects.catalogs import LeaveType
     from src.domain.value_objects.identifiers import EmployeeId, LeaveTypeId, StoreId
     from src.presentation.composition import ApplicationContext, Session
 
@@ -166,6 +169,71 @@ class KioskController:
             )
 
         return self._operation(employee, run, success="İcazə sorğunuz qeydə alındı.")
+
+    def break_options(self, employee: Employee) -> list[dict[str, str]]:
+        """Nahar/Çay seçimləri + həmin günkü sayğac (nahar.md GUI, bənd 2).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `KioskController`-DƏ, AYRI KONTROLLERDƏ DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        "Açıq Növbələr" (#16) və "İllik Məzuniyyət" (#28) kartları ÖZ
+        kontrollerlərini aldı, çünki onlar günün axınından KƏNARDIR (gələcək
+        günə aiddir, statusdan asılı deyil). Fasilə seçimi isə məhz günün
+        axınının bir hissəsidir: `[İcazə İstəyirəm]` düyməsinin arqumentidir
+        və hər STEP1-dən sonra yenilənməlidir. Ayrı kontrollerdə yaşasaydı,
+        seçim ilə onu istifadə edən əməliyyat iki fərqli sahibə düşərdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        XƏTA EKRANA ÇIXMIR
+        ──────────────────────────────────────────────────────────────────────
+        Modul başlığındakı qayda burada da qüvvədədir: kiosk PAYLAŞILAN
+        cihazdır. Sayğac oxuna bilmirsə BOŞ siyahı qayıdır — kart gizlənir və
+        işçi ümumi icazə ilə davam edir. Fasilə göstəricisinin olmaması
+        `[İcazə İstəyirəm]` düyməsini bloklamamalıdır.
+        """
+        try:
+            with self._context.session(user_id=employee.id) as session:
+                types = session.uow.repository("leave_types").list_all(self._context.tenant_id)
+                by_kind = {
+                    entry.break_kind: entry for entry in types if entry.break_kind is not None
+                }
+                if not by_kind:
+                    return []
+
+                status = session.leave_verification.break_status(
+                    tenant_id=self._context.tenant_id,
+                    employee_id=employee.id,
+                    on_date=date.today(),  # noqa: DTZ011 — `_status_for` ilə eyni yerli gün
+                )
+                # SIRA `BreakKind` ELANINDAN gəlir (LUNCH, TEA) — bazanın
+                # qaytardığı əlifba sırası "Çay"-ı öndə göstərərdi, halbuki
+                # nahar.md-də və ROOT ekranında sıra Nahar → Çay-dır.
+                return [
+                    self._break_option(by_kind[kind], status[kind])
+                    for kind in BreakKind
+                    if kind in by_kind and kind in status
+                ]
+        except KompasOSError as exc:
+            _log.info("KIOSK_BREAK_OPTIONS_UNAVAILABLE", extra=exc.to_dict())
+            return []
+        except Exception:
+            _log.exception("KIOSK_BREAK_OPTIONS_FAILED")
+            return []
+
+    @staticmethod
+    def _break_option(entry: LeaveType, allowance: BreakAllowance) -> dict[str, str]:
+        """Bir fasilə sətri — ekranın gözlədiyi düz mətn lüğəti.
+
+        ETİKET KATALOQDAN, MÜDDƏT İSƏ ROOT-DAN gəlir və bu, qəsdidir:
+        HR sətrin ADINI dəyişə bilər ("Nahar Fasiləsi" → "Nahar (uzun)"),
+        müddət isə nahar.md-yə görə YALNIZ Root parametridir.
+        """
+        return {
+            "leave_type_id": str(entry.leave_type_id),
+            "label": entry.name,
+            "detail": f"{allowance.duration_label_az()} · {allowance.usage_label_az()}",
+            "warning": allowance.warning_az(),
+        }
 
     def claim_return(self, employee: Employee) -> KioskOutcome:
         """`[Mən Qayıtdım]` — STEP 2 (bölmə 4)."""

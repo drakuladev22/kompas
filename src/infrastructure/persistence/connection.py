@@ -417,6 +417,9 @@ class PostgresUnitOfWork:
         from src.infrastructure.persistence.benchmark_repository import (  # noqa: PLC0415
             PostgresMultiStoreBenchmarkRepository,
         )
+        from src.infrastructure.persistence.break_usage_repository import (  # noqa: PLC0415
+            PostgresDailyBreakUsageRepository,
+        )
         from src.infrastructure.persistence.bulk_operations_repository import (  # noqa: PLC0415
             PostgresBulkImportLogRepository,
             PostgresStoreTemplateRepository,
@@ -559,6 +562,13 @@ class PostgresUnitOfWork:
             "work_modes": PostgresWorkModeRepository(conn, self._context),
             "fine_types": PostgresFineTypeRepository(conn, self._context),
             "leave_types": PostgresLeaveTypeRepository(conn, self._context),
+            # --- Nahar / Çay fasiləsinin gündəlik sayğacı (nahar.md) -----------
+            # `leave_types` VƏ `leave_requests` İLƏ EYNİ BAĞLANTIDA olması
+            # MƏCBURİDİR: STEP1 sorğunu yazır, dərhal ardınca sayğacı artırır
+            # və hər ikisi eyni tranzaksiyada olmalıdır. Ayrı bağlantıda
+            # rollback edilmiş STEP1 sayğacı artırılmış qoyardı — işçi
+            # yaranmamış fasiləyə görə gündəlik haqqını itirərdi.
+            "break_usage": PostgresDailyBreakUsageRepository(conn, self._context),
             "limits": PostgresSystemLimits(conn, self._context),
             "toggles": PostgresFeatureToggles(conn, self._context),
             "permission_flags": PostgresPermissionFlagRepository(conn, self._context),

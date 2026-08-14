@@ -1857,6 +1857,10 @@ class ApplicationContext:
                 employees=uow.employees,
                 leave_types=repo("leave_types"),
                 camera_assignments=repo("camera_assignments"),
+                # Nahar/Çay sayğacı (nahar.md) — `uow`-un EYNİ bağlantısından
+                # gəlir: STEP1-in sorğu yazısı ilə sayğac artımı bir
+                # tranzaksiyada olmalıdır (bax `connection.py`-dakı qeyd).
+                break_usage=repo("break_usage"),
                 clock=clock,
                 ntp=ntp,
                 limits=repo("limits"),

@@ -13,7 +13,7 @@ override kimi vaxt-kritik əməliyyatlar BLOKLANIR.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 from src.domain.entities.fine import Fine, FineSource, FineStatus
 from src.domain.entities.leave_request import LeaveRequest, LeaveStatus
@@ -21,6 +21,7 @@ from src.domain.interfaces.ports import (
     AuditTrail,
     CameraAssignmentRepository,
     Clock,
+    DailyBreakUsageRepository,
     EmployeeRepository,
     FeatureToggles,
     FineRepository,
@@ -33,6 +34,8 @@ from src.domain.interfaces.ports import (
 )
 from src.domain.policies import (
     DEFAULT_LIMITS,
+    BreakAllowance,
+    BreakKind,
     DelayFinePolicy,
     FeatureModule,
     LeaveAllowancePolicy,
@@ -113,6 +116,28 @@ class MonthlyLeaveUsage:
 
 
 @dataclass(frozen=True)
+class EmployeeBreakUsage:
+    """Bir işçinin bir gündəki bir fasilə növü üzrə vəziyyəti.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `ports.py`-DA DEYİL, BURADA
+    ──────────────────────────────────────────────────────────────────────────
+    CLAUDE.md §3: port yalnız domen tipləri qaytarırsa `ports.py`-a gedir.
+    Bu struktur isə TƏTBİQ qatının oxu-modelidir — `employee_id`-ni ROOT
+    parametrləri ilə hesablanmış `BreakAllowance`-a bağlayır, yəni iki qatın
+    birləşməsidir. Onu `ports.py`-a yazsaydıq, domen tətbiq qatının
+    strukturunu tanıyardı (`ReportFactProvider` ilə eyni əsaslandırma).
+    """
+
+    employee_id: EmployeeId
+    allowance: BreakAllowance
+
+    @property
+    def is_exceeded(self) -> bool:
+        return self.allowance.is_exceeded
+
+
+@dataclass(frozen=True)
 class VerificationOutcome:
     """STEP 3-ün nəticəsi."""
 
@@ -138,6 +163,7 @@ class LeaveVerificationUseCase:
         employees: EmployeeRepository,
         leave_types: LeaveTypeRepository,
         camera_assignments: CameraAssignmentRepository,
+        break_usage: DailyBreakUsageRepository,
         clock: Clock,
         ntp: NtpVerifier,
         limits: SystemLimits,
@@ -151,6 +177,7 @@ class LeaveVerificationUseCase:
         self._employees = employees
         self._leave_types = leave_types
         self._camera_assignments = camera_assignments
+        self._break_usage = break_usage
         self._clock = clock
         self._ntp = ntp
         self._limits = limits
@@ -197,21 +224,57 @@ class LeaveVerificationUseCase:
         )
         self._leave_requests.save(request)
 
+        # SAYĞAC SAVE-DƏN SONRADIR: sorğu yaranmadan fasilə "istifadə edilmiş"
+        # sayıla bilməz. İkisi eyni tranzaksiyadadır (GUI sessiyası commit
+        # edir), yəni rollback halında sayğac da geri qayıdır — əks halda
+        # uğursuz STEP1 işçinin gündəlik haqqını yeyərdi.
+        break_usage = self._record_break_use(
+            tenant_id=tenant_id,
+            employee_id=employee_id,
+            leave_type_id=leave_type_id,
+            at=requested_time,
+        )
+
         monthly = self._monthly_usage(employee_id, at=requested_time, tenant_id=tenant_id)
+        after_state: dict[str, object] = {
+            "requested_time": requested_time.isoformat(),
+            "allowance_minutes": allowance,
+            "ntp_verified": ntp_ok,
+            "monthly_used_minutes": monthly.used_minutes,
+            "monthly_limit_minutes": monthly.limit_minutes,
+        }
+        if break_usage is not None:
+            # AUDİTƏ DÜŞÜR, ÇÜNKİ XƏBƏRDARLIQ GÖSTƏRİLİB: "işçiyə limit
+            # aşıldığı bildirildimi?" sualının sonradan cavablana bilməsi üçün
+            # sayğacın həmin andakı dəyəri qeydə alınır. Sayğacın özü sonrakı
+            # günlərdə dəyişir, audit sətri isə dəyişmir.
+            after_state["break_kind"] = break_usage.kind.value
+            after_state["break_used_count"] = break_usage.used_count
+            after_state["break_daily_count"] = break_usage.daily_count
+            after_state["break_limit_exceeded"] = break_usage.is_exceeded
+
         self._audit.record(
             tenant_id=tenant_id,
             actor_id=employee_id,
             action="LEAVE_REQUESTED",
             entity_type="leave_requests",
             entity_id=request.id,
-            after_state={
-                "requested_time": requested_time.isoformat(),
-                "allowance_minutes": allowance,
-                "ntp_verified": ntp_ok,
-                "monthly_used_minutes": monthly.used_minutes,
-                "monthly_limit_minutes": monthly.limit_minutes,
-            },
+            after_state=after_state,
         )
+        if break_usage is not None and break_usage.is_exceeded:
+            # BLOKLAMA YOX, BİLDİRİŞ (nahar.md §MƏNTİQ, bənd 2): işçi mağazadan
+            # çıxıb və əməliyyat davam edir; HR_Admin isə bunu GÖRMƏLİDİR.
+            self._notifier.notify(
+                tenant_id=tenant_id,
+                recipient_id=None,  # HR_Admin + Store Manager
+                category="BREAK_DAILY_LIMIT_EXCEEDED",
+                title_az="Gündəlik fasilə həddi aşılıb",
+                body_az=(
+                    f"İşçi bu gün {break_usage.warning_az()} — "
+                    f"əməliyyat bloklanmadı, yalnız qeydə alındı."
+                ),
+                is_critical=False,
+            )
         if monthly.is_exceeded:
             self._notifier.notify(
                 tenant_id=tenant_id,
@@ -690,6 +753,95 @@ class LeaveVerificationUseCase:
     def _delay_fine_policy(self, tenant_id: TenantId) -> DelayFinePolicy:
         return DelayFinePolicy.from_limits(self._limits.all_for(tenant_id))
 
+    # ------------------------- Nahar / Çay fasiləsi --------------------------- #
+    #
+    # BU ÜÇ METOD MÖVCUD AXINI DƏYİŞMİR — ÜSTÜNƏ QAT ƏLAVƏ EDİR (nahar.md
+    # QIRMIZI XƏTT). `request_leave` imzası, `LeaveRequest` entity-si və
+    # `Delay`/`Total` düsturu olduğu kimi qalır; fasilə sayğacı ayrı cədvəldə
+    # yaşayır və heç bir qərarı BLOKLAMIR.
+
+    def _record_break_use(
+        self,
+        *,
+        tenant_id: TenantId,
+        employee_id: EmployeeId,
+        leave_type_id: LeaveTypeId | None,
+        at: datetime,
+    ) -> BreakAllowance | None:
+        """Seçim sistem fasiləsidirsə sayğacı artırır; deyilsə `None`.
+
+        `None` qaytarmaq SÜKUTLA UĞURSUZLUQ DEYİL: adi icazə növü ("Bank
+        işi") ROOT fasilə parametrlərinə tabe deyil və sayğaca düşməməlidir
+        — nahar.md Nahar/Çay-ı ümumi kataloqdan AYRI qat kimi təyin edir.
+
+        GÜN SEÇİMİ: `at.date()`, yəni möhürün öz günü. Mövcud
+        `_monthly_usage` da eyni prinsiplə (`at.year`, `at.month`) işləyir —
+        iki fərqli təqvim qaydası eyni ekranda ziddiyyətli rəqəmlər verərdi.
+        """
+        if leave_type_id is None:
+            return None
+        kind = self._leave_types.break_kind_of(leave_type_id)
+        if kind is None:
+            return None
+
+        used = self._break_usage.record_use(
+            tenant_id,
+            employee_id,
+            kind=kind,
+            on_date=at.date(),
+            at=at,
+        )
+        allowance = BreakAllowance.from_limits(
+            kind, self._limits.all_for(tenant_id), used_count=used
+        )
+        if allowance.is_exceeded:
+            _log.info(
+                "BREAK_DAILY_LIMIT_EXCEEDED",
+                extra={
+                    "employee_id": str(employee_id),
+                    "break_kind": kind.value,
+                    "used_count": used,
+                    "daily_count": allowance.daily_count,
+                },
+            )
+        return allowance
+
+    def break_status(
+        self, *, tenant_id: TenantId, employee_id: EmployeeId, on_date: date
+    ) -> dict[BreakKind, BreakAllowance]:
+        """İşçi Ana Ekranının göstəricisi — HƏR İKİ növ, həmişə.
+
+        Sətri olmayan növ də `0` istifadə ilə qaytarılır: ekran «Nahar
+        fasiləniz: 60 dəqiqə / Bu gün: 0/1» yazmalıdır, boş qalmamalıdır —
+        işçi haqqının nə olduğunu istifadə etməmişdən ƏVVƏL bilməlidir.
+        """
+        limits = self._limits.all_for(tenant_id)
+        usage = self._break_usage.usage_for_day(employee_id, on_date=on_date)
+        return {
+            kind: BreakAllowance.from_limits(kind, limits, used_count=usage.get(kind, 0))
+            for kind in BreakKind
+        }
+
+    def break_overuse_for_day(
+        self, *, tenant_id: TenantId, on_date: date
+    ) -> list[EmployeeBreakUsage]:
+        """HR_Admin panelinin xəbərdarlıq siyahısı — YALNIZ həddi aşanlar.
+
+        Süzgəc SQL-də deyil, BURADA tətbiq olunur: hədd `system_limits`-dədir
+        və Root onu gün ərzində dəyişə bilər. Sorğuya yazılsaydı, dəyişiklik
+        yalnız növbəti miqrasiyadan sonra təsir edərdi (bax portun izahı).
+        """
+        limits = self._limits.all_for(tenant_id)
+        rows = self._break_usage.usage_rows_for_day(tenant_id, on_date=on_date)
+        usages = [
+            EmployeeBreakUsage(
+                employee_id=employee_id,
+                allowance=BreakAllowance.from_limits(kind, limits, used_count=count),
+            )
+            for employee_id, kind, count in rows
+        ]
+        return [usage for usage in usages if usage.is_exceeded]
+
     def monthly_usage(
         self, *, tenant_id: TenantId, employee_id: EmployeeId, at: datetime
     ) -> MonthlyLeaveUsage:
@@ -712,6 +864,7 @@ class LeaveVerificationUseCase:
 
 
 __all__ = [
+    "EmployeeBreakUsage",
     "LeaveVerificationUseCase",
     "ModuleDisabledError",
     "MonthlyLeaveUsage",

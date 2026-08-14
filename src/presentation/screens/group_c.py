@@ -197,6 +197,14 @@ class DashboardScreen(Screen):
         self._outlier_card, self._outlier_summary, self._outlier_rows = self._build_outlier_card()
         self.add(self._outlier_card)
 
+        # ------------ Nahar/Çay gündəlik həddi (nahar.md GUI, bənd 2) --------- #
+        # Benchmark kartları ilə EYNİ naxış: defolt gizli, yalnız doldurulanda
+        # görünür. FƏRQ bir addım irəlidədir — bu kart BOŞ SİYAHIDA da gizli
+        # qalır, çünki "bu gün heç kim həddi aşmayıb" xəbər deyil. Həmişə
+        # görünən boş kart HR-ı ona baxmamağa öyrədərdi.
+        self._break_card, self._break_rows = self._build_break_overuse_card()
+        self.add(self._break_card)
+
     def _build_ranking_card(self) -> Card:
         card = Card(padding=18, spacing=12)
         head = QWidget()
@@ -262,7 +270,48 @@ class DashboardScreen(Screen):
         card.setVisible(False)
         return card, summary, rows_layout
 
+    def _build_break_overuse_card(self) -> tuple[Card, QVBoxLayout]:
+        card = Card(padding=18, spacing=10)
+        card.add(title_label("Gündəlik fasilə həddini aşanlar", size=15))
+        card.add(
+            muted_label(
+                "Hədd ROOT parametridir və aşılma HEÇ NƏ BLOKLAMIR — bu siyahı yalnız "
+                "məlumatlandırıcıdır."
+            )
+        )
+        rows_layout = QVBoxLayout()
+        rows_layout.setSpacing(8)
+        holder = QWidget()
+        holder.setLayout(rows_layout)
+        card.add(holder)
+        card.setVisible(False)
+        return card, rows_layout
+
     # ------------------------------- doldurma -------------------------------- #
+
+    def set_break_overuse(self, rows: list[tuple[str, str]]) -> None:
+        """`rows`: (işçinin adı, xəbərdarlıq mətni) — boş siyahı kartı gizlədir.
+
+        Xəbərdarlıq mətni EKRANDA QURULMUR: «2-ci nahar fasiləsi (limit: 1)»
+        ifadəsi `BreakAllowance.warning_az()`-dan gəlir, yəni işçinin öz
+        ekranındakı mətnlə HƏRFƏN eynidir. İki yerdə ayrıca qursaydıq, biri
+        dəyişəndə HR ilə işçi fərqli ifadə görərdi və "hansı doğrudur?" sualı
+        yaranardı.
+        """
+        clear_layout(self._break_rows)
+        self._break_card.setVisible(bool(rows))
+        if not rows:
+            return
+
+        for name, warning in rows:
+            row = QWidget()
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(10)
+            layout.addWidget(body_label(name, size=13, wrap=False))
+            layout.addWidget(stretch())
+            layout.addWidget(Chip(warning, "warning"))
+            self._break_rows.addWidget(row)
 
     def set_summary(
         self,

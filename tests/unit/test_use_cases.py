@@ -20,7 +20,7 @@ from src.domain.entities.base import InvalidStateTransitionError
 from src.domain.entities.employee import Employee
 from src.domain.entities.fine import FineStatus
 from src.domain.entities.position import Position
-from src.domain.policies import FeatureModule, SystemLimitKey
+from src.domain.policies import BreakKind, FeatureModule, SystemLimitKey
 from src.domain.value_objects.authorization import (
     HardlockLevel,
     PermissionFlag,
@@ -46,6 +46,7 @@ from tests.fixtures.fakes import (
     FakeShifts,
     FakeSystemLimits,
     InMemoryAttendance,
+    InMemoryBreakUsage,
     InMemoryEmployees,
     InMemoryFines,
     InMemoryLeaveRequests,
@@ -134,7 +135,10 @@ class Ctx:
         self.leave_requests = InMemoryLeaveRequests()
         self.fines = InMemoryFines()
         self.employees = InMemoryEmployees()
-        self.leave_types = FakeLeaveTypes({LUNCH: 60})
+        # `LUNCH` sabiti burada NAHAR icazə NÖVÜNÜN id-sidir; nişan onu
+        # nahar.md-nin sistem fasiləsinə bağlayır ki, STEP1 sayğacı artırsın.
+        self.leave_types = FakeLeaveTypes({LUNCH: 60}, {LUNCH: BreakKind.LUNCH})
+        self.break_usage = InMemoryBreakUsage()
         self.shifts = FakeShifts()
         self.attendance = InMemoryAttendance()
         self.cameras = FakeCameraAssignments({OPERATOR: [STORE]})
@@ -158,6 +162,7 @@ class Ctx:
             employees=self.employees,  # type: ignore[arg-type]
             leave_types=self.leave_types,  # type: ignore[arg-type]
             camera_assignments=self.cameras,  # type: ignore[arg-type]
+            break_usage=self.break_usage,  # type: ignore[arg-type]
             clock=self.clock,  # type: ignore[arg-type]
             ntp=self.ntp,  # type: ignore[arg-type]
             limits=self.limits,  # type: ignore[arg-type]

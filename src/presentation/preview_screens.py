@@ -53,6 +53,10 @@ def _dashboard(screen: group_c.DashboardScreen) -> None:
     screen.set_leave_usage(128, 200)
     screen.set_leaders(list(data.LEADERS))
     screen.set_server_health(list(data.SERVER_HEALTH))
+    # Nahar/Çay həddini aşanlar (nahar.md) — maket mətnləri CANLI yolla eyni
+    # mənbədən (`BreakAllowance.warning_az()`) qurulur ki, iki yol fərqli
+    # ifadə göstərməsin (bax `preview_data.py` başlığı).
+    screen.set_break_overuse(list(data.BREAK_OVERUSE))
 
     # #24 Çox-Mağaza Benchmark (Faza 9A) — canlı yolla EYNİ açarlar
     # (`screen_data.py::_populate_benchmark_sections`), bax `preview_data.py`
@@ -446,6 +450,7 @@ def _root_control(screen: group_d.RootControlScreen) -> None:
     """
     from src.domain.policies import DEFAULT_LIMITS, FeatureModule, SystemLimitKey  # noqa: PLC0415
     from src.presentation.controllers.root_control import (  # noqa: PLC0415
+        BREAK_LIMIT_KEYS,
         MODULE_LABELS,
         limit_row,
     )
@@ -459,6 +464,10 @@ def _root_control(screen: group_d.RootControlScreen) -> None:
         SystemLimitKey.LEAVE_ALLOWANCE_SOURCE,
     )
     screen.set_limits([limit_row(key.value, DEFAULT_LIMITS[key]) for key in preview_keys])
+    # «Fasilə Parametrləri» maketdə də CANLI açarlarla doldurulur (nahar.md):
+    # `BREAK_LIMIT_KEYS` kontrollerdən gəlir, yəni maket öz ad məkanını
+    # qurmur — modul başlığındakı uyğunsuzluq qüsuru təkrarlanmır.
+    screen.set_break_limits([limit_row(key.value, DEFAULT_LIMITS[key]) for key in BREAK_LIMIT_KEYS])
     screen.set_modules(
         [
             (module.value, MODULE_LABELS[module], True, module.is_structural)
