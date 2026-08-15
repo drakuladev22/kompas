@@ -672,7 +672,7 @@ def test_can_manage_employees_is_not_enough_to_grant_an_exemption() -> None:
 
 
 def test_the_root_flag_holder_can_grant_an_exemption_with_audit_and_notice() -> None:
-    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.EXECUTIVE)
+    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.ROOT)
     use_case, repository, audit, notifier = _exemption_use_case()
     worker = EmployeeId(uuid.uuid4())
 
@@ -692,7 +692,7 @@ def test_the_root_flag_holder_can_grant_an_exemption_with_audit_and_notice() -> 
 
 def test_an_exemption_may_not_exceed_the_root_managed_ceiling() -> None:
     """`FACE_EXEMPTION_MAX_DAYS` — «müvəqqəti» istisna sükutla əbədi qalmamalıdır."""
-    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.EXECUTIVE)
+    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.ROOT)
     max_days = int(DEFAULT_LIMITS[SystemLimitKey.FACE_EXEMPTION_MAX_DAYS])
     use_case, _repo, _audit, _notifier = _exemption_use_case()
 
@@ -708,7 +708,7 @@ def test_an_exemption_may_not_exceed_the_root_managed_ceiling() -> None:
 
 def test_the_exemption_ceiling_follows_the_root_value() -> None:
     """Root tavanı 5 günə salsa, 10 günlük istisna RƏDD edilir."""
-    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.EXECUTIVE)
+    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.ROOT)
     use_case, _repo, _audit, _notifier = _exemption_use_case(
         limits={SystemLimitKey.FACE_EXEMPTION_MAX_DAYS.value: "5"}
     )
@@ -725,7 +725,7 @@ def test_the_exemption_ceiling_follows_the_root_value() -> None:
 
 def test_an_exemption_requires_a_documented_reason() -> None:
     """«ok» kimi cavab sənəd sayılmır (`reason` CHECK-inin güzgüsü)."""
-    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.EXECUTIVE)
+    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.ROOT)
     use_case, _repo, _audit, _notifier = _exemption_use_case()
 
     with pytest.raises(FaceControlError, match="simvol"):
@@ -740,7 +740,7 @@ def test_an_exemption_requires_a_documented_reason() -> None:
 
 def test_a_second_active_exemption_is_refused() -> None:
     """`ux_face_exemption_active` qismən unikal indeksinin kod tərəfi."""
-    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.EXECUTIVE)
+    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.ROOT)
     worker = _employee()
     use_case, _repo, _audit, _notifier = _exemption_use_case(exemptions=[_exemption(worker)])
 
@@ -789,7 +789,7 @@ def test_the_expiry_job_is_idempotent() -> None:
 
 def test_a_revocation_records_who_and_why() -> None:
     """`REVOKED` İNSAN QƏRARIDIR — sahibi və səbəbi olmadan status dəyişmir."""
-    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.EXECUTIVE)
+    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.ROOT)
     worker = _employee()
     existing = _exemption(worker)
     use_case, repository, audit, _notifier = _exemption_use_case(exemptions=[existing])
@@ -810,7 +810,7 @@ def test_a_revocation_records_who_and_why() -> None:
 
 def test_an_extension_is_measured_from_the_original_grant_not_from_today() -> None:
     """Tavan TƏYİNAT anından ölçülür — əks halda istisna sonsuz uzanardı."""
-    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.EXECUTIVE)
+    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.ROOT)
     worker = _employee()
     max_days = int(DEFAULT_LIMITS[SystemLimitKey.FACE_EXEMPTION_MAX_DAYS])
     existing = _exemption(
@@ -1224,7 +1224,7 @@ def test_deactivating_an_employee_purges_the_face_vector_and_leaves_a_purged_tra
     təmizləmək arxivdəki köhnə vektorları sağ saxlayardı — yəni qayda
     SÜKUTLA pozulardı.
     """
-    root = _employee(flags=("can_manage_employees",), code="ROOT", priority=RolePriority.EXECUTIVE)
+    root = _employee(flags=("can_manage_employees",), code="ROOT", priority=RolePriority.ROOT)
     worker = _employee(code="SATICI", priority=RolePriority.OPERATIONAL)
     faces = InMemoryFaceProfiles([_profile(worker)])
     faces.archive_rows.append((worker.id, "REPLACED", FaceEmbedding(values=(0.3,)), "köhnə"))
@@ -1252,7 +1252,7 @@ def test_deactivating_an_employee_purges_the_face_vector_and_leaves_a_purged_tra
 
 def test_deactivation_still_works_when_face_control_is_not_installed() -> None:
     """Port qoşulmayıbsa deaktivasiya DAYANMIR, lakin audit bunu GÖSTƏRİR."""
-    root = _employee(flags=("can_manage_employees",), code="ROOT", priority=RolePriority.EXECUTIVE)
+    root = _employee(flags=("can_manage_employees",), code="ROOT", priority=RolePriority.ROOT)
     worker = _employee(code="SATICI", priority=RolePriority.OPERATIONAL)
     audit = RecordingAudit()
     use_case = UserManagementUseCase(

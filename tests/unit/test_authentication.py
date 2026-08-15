@@ -562,6 +562,71 @@ def test_equal_tier_can_reset(
     assert credential.plaintext
 
 
+def test_ceo_cannot_reset_the_root_accounts_password(
+    hashing: HashingService,
+    clock: FakeClock,
+    audit: RecordingAudit,
+    notifier: RecordingNotifier,
+) -> None:
+    """`Root`/`CEO` prioritet ayrılığının BİRBAŞA nəticəsi (reqressiya qapısı).
+
+    Köhnə (səhv) modeldə `Root` və `CEO` hər ikisi prioritet 0-da idi. Bölmə
+    2 isə sıfırlamaya "daha yüksək VƏ YA BƏRABƏR" pilləyə icazə verir — yəni
+    `0 > 0` yanlış olduğu üçün CEO `Root` hesabının ŞİFRƏSİNİ sıfırlaya
+    bilirdi. Müvəqqəti şifrə ilə isə həmin hesaba GİRMƏK olur, yəni bu, bütün
+    `ROOT_ONLY` hardlock-larının dolayı yan keçilməsi idi.
+
+    İndi `CEO` (1) `Root`-dan (0) aşağıdadır və qapı bağlıdır.
+    """
+    actor = make_employee(SystemRole.CEO, flags=[RESET_PASSWORD_FLAG])
+    subject = make_employee(SystemRole.ROOT)
+    uc = reset_uc(InMemoryEmployees([actor, subject]), hashing, clock, audit, notifier)
+
+    with pytest.raises(AuthenticationError, match="aşağı səlahiyyət"):
+        uc.reset_password(actor=actor, subject=subject)
+
+    assert subject.must_change_password is False
+    assert audit.actions() == []
+
+
+def test_another_root_can_still_reset_the_root_accounts_password(
+    hashing: HashingService,
+    clock: FakeClock,
+    audit: RecordingAudit,
+    notifier: RecordingNotifier,
+) -> None:
+    """Bərabər pillə qalır — əks halda tək Root-lu tenant kilidlənərdi.
+
+    Yuxarıdakı testin "hər şeyi bloklamaq" olmadığını göstərir: qadağa
+    PİLLƏYƏ görədir, `Root` roluna görə yox.
+    """
+    actor = make_employee(SystemRole.ROOT, flags=[RESET_PASSWORD_FLAG])
+    subject = make_employee(SystemRole.ROOT)
+    uc = reset_uc(InMemoryEmployees([actor, subject]), hashing, clock, audit, notifier)
+
+    credential = uc.reset_password(actor=actor, subject=subject)
+
+    assert credential.plaintext
+    assert "PASSWORD_RESET" in audit.actions()
+
+
+def test_root_can_still_reset_a_ceo_password(
+    hashing: HashingService,
+    clock: FakeClock,
+    audit: RecordingAudit,
+    notifier: RecordingNotifier,
+) -> None:
+    """İstiqamət YALNIZ yuxarıdan aşağıya açıldı — CEO hələ də idarə olunur."""
+    actor = make_employee(SystemRole.ROOT, flags=[RESET_PASSWORD_FLAG])
+    subject = make_employee(SystemRole.CEO)
+    uc = reset_uc(InMemoryEmployees([actor, subject]), hashing, clock, audit, notifier)
+
+    credential = uc.reset_password(actor=actor, subject=subject)
+
+    assert credential.plaintext
+    assert subject.must_change_password is True
+
+
 def test_pin_reset_clears_lockout(
     hashing: HashingService,
     clock: FakeClock,

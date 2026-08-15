@@ -428,7 +428,17 @@ def test_guard_suite_covers_the_new_race_conditions() -> None:
     assert "TEST 28" in sql, "TIMEOUT_ESCALATED paritet testi yoxdur"
     assert "TEST 29" in sql, "etiraz pəncərəsinin başlanğıc anı testi yoxdur"
     assert "TEST 30" in sql, "PENDING_REVIEW export sızması testi yoxdur"
-    assert "%/30" in sql, "yekun sayğac yenilənməyib"
+
+    # YEKUN SAYĞAC SABİT ƏDƏDLƏ MÜQAYİSƏ EDİLMİR: dəst böyüdükcə (məs. TEST
+    # 31/32 — Root/CEO prioritet ayrılığı) sabit yazılış hər dəfə köhnəlir və
+    # düzəliş "testi yenilə" refleksinə çevrilir. Bunun əvəzinə İDDİA
+    # GÜCLƏNDİRİLİR: sayğac faylın ƏN BÖYÜK `TEST N` nömrəsi ilə eyni
+    # olmalıdır — yəni yeni test əlavə edib sayğacı unutmaq da tutulur.
+    numbers = {int(match) for match in re.findall(r"TEST (\d+)", sql)}
+    assert numbers, "SQL guard dəstində heç bir `TEST N` başlığı tapılmadı"
+    assert f"%/{max(numbers)}" in sql, (
+        f"yekun sayğac ən böyük test nömrəsi ({max(numbers)}) ilə uyğun gəlmir"
+    )
 
 
 # --------------------------------------------------------------------------- #

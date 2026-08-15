@@ -144,14 +144,137 @@ yazı düşür və `python -m src.main --strict` istehsalat mühitində **uğurs
 **Vəziyyət:** Qəbul edildi
 
 **Problem.** Bölmə 3: *"Eyni pillədəki … istifadəçilərin icazələrinə HEÇ VAXT
-müdaxilə edə bilməz."* Lakin `Root` və `CEO` hər ikisi priority 0-dadır. Qayda
-hərfi tətbiq edilsə, tenant-ın ilk Root-u heç kimə icazə verə bilməzdi (hər
-kəs ondan aşağı olmalıdır, amma digər Root/CEO deyil) → sistem kilidlənərdi.
+müdaxilə edə bilməz."* Qayda hərfi tətbiq edilsə, tenant-ın ilk Root-u heç kimə
+icazə verə bilməzdi (hər kəs ondan aşağı olmalıdır, amma digər `Root` deyil) →
+sistem kilidlənərdi.
 
 **Qərar.** Yalnız `ROOT` **rol kodu** bərabər-pillə qaydasından azaddır.
 `CEO` digər `CEO`-ya və `Root`-a müdaxilə edə **bilmir**.
 
 **Tətbiq:** `schema.sql` §18 `enforce_hierarchy_guard`, TEST 13.
+
+**SEC-019 SONRASI DƏQİQLƏŞDİRMƏ (vacib).** Bu qərar yazılanda `Root` və `CEO`
+hər ikisi priority 0-da idi, yəni «CEO `Root`-a toxuna bilmir» nəticəsi MƏHZ
+bərabər-pillə şərtindən çıxırdı. SEC-019 həmin modeli düzəltdi (`Root` = 0,
+`CEO` = 1), ona görə indi CEO → Root qadağası iyerarxiyanın TƏBİİ nəticəsidir.
+SEC-006 isə hələ də zəruridir və mənası DARALDI: o, artıq yalnız GERÇƏK
+bərabər-pillə hallarını (CEO ↔ CEO, Admin ↔ Admin, Root ↔ Root) tənzimləyir və
+`Root` üçün istisna verir.
+
+---
+
+## SEC-019 — `Root` və `CEO` AYRI iyerarxiya pillələrindədir
+
+**Vəziyyət:** Qəbul edildi
+
+**Problem.** `RolePriority` `Root` və `CEO`-nu `EXECUTIVE = 0` altında
+birləşdirirdi. Nəticədə iyerarxiya modelin ÖZÜNDƏ səhv idi: `CEO` tenant
+sahibi ilə bərabər sayılırdı. «CEO Root-un icazələrinə toxuna bilmir» qaydası
+iyerarxiyadan gəlmirdi — o, iki ƏLAVƏ qapının yan təsiri idi
+(`hardlock_level = 1` və bərabər-pillə şərti). Bir flag `ROOT_ONLY`-dən
+`ROOT_CEO`-ya keçsəydi, CEO onu `Root` rolundan çıxara bilərdi.
+
+Səhvin ikinci, daha az görünən nəticəsi kimlik yolunda idi: bölmə 2 sirr
+sıfırlamasına «daha yüksək VƏ YA BƏRABƏR» pilləyə icazə verir, yəni `0 > 0`
+yanlış olduğu üçün `CEO` `Root` hesabına müvəqqəti şifrə təyin edə bilirdi —
+bu, bütün `ROOT_ONLY` hardlock-larının dolayı yan keçilməsi idi.
+
+Üçüncü nəticə funksional idi: `_assert_may_assign_position` aktorun rolunun
+hədəf roldan CİDDİ ŞƏKİLDƏ yuxarıda olmasını tələb edir, yəni `Root` YENİ
+`CEO` hesabı yarada bilmirdi.
+
+**Qərar.** Nərdivan beş pilləlidir: `Root`=0 (TƏK BAŞINA), `CEO`=1, `Admin`=2,
+`HR_Admin`/`Mağaza_Meneceri`/`Kamera_Nəzarətçisi`=3, `Satıcı`=4.
+`RolePriority`-yə `ROOT` üzvü əlavə olundu; `EXECUTIVE` MƏNASINI saxladı
+(«şirkət rəhbərliyi» = CEO) və dəyəri 1-ə sürüşdü.
+
+`_PRIORITY_TO_ROLE[RolePriority.ROOT]` QƏSDƏN `SystemRole.CEO`-dur: prioritet
+0-lı CUSTOM rol `Root` semantikası ALMAMALIDIR, əks halda «özümə 0-lı rol
+yaradıb Root-a toxunum» yolu açılardı və domen DB trigger-lərindən (Root
+istisnası rol KODU ilə verilir) fərqli qərar verərdi.
+
+**Hardlock DƏYİŞMİR.** `ROOT_CEO` (=2) hələ də «Root VƏ CEO» deməkdir —
+hardlock «flag kimə VERİLƏ bilər» sualına cavabdır, «kim kimə TOXUNA bilər»
+sualına yox. İki qat qəsdən müstəqildir.
+
+**Tətbiq:** `src/domain/value_objects/authorization.py`,
+`src/domain/entities/position.py`, `database/schema.sql` §5/§18/§21,
+`database/migrations/048_root_ceo_priority_split.sql`,
+`tests/unit/test_role_priority_split.py`.
+
+### DAVRANIŞ DƏYİŞİKLİYİ — «Root indi `CEO`-nu idarə edə bilir»
+
+Bu, ayrıca bir qərar DEYİL, prioritet ayrılığının məntiqi nəticəsidir; lakin
+istifadəçinin GÖRDÜYÜ davranış dəyişdiyi üçün buraxılış qeydi kimi ayrıca
+yazılır — əks halda dəstək «əvvəl olmurdu, indi olur» sualına cavabsız qalar.
+
+**NİYƏ əvvəl bağlı idi.** Strict Hierarchy Guard-ın əsası
+`RolePriority.outranks()`-dir və o, BƏRABƏR pillə üçün `False` qaytarır
+(«yalnız CİDDİ ŞƏKİLDƏ aşağı pilləyə toxunmaq olar»). Köhnə modeldə `Root` və
+`CEO` hər ikisi `EXECUTIVE = 0` idi, yəni `Root.outranks(CEO)` → `0 > 0` →
+`False`. Nəticədə **tenant sahibi öz şirkətinin CEO hesabına toxuna bilmirdi**
+— bu, qorunma deyil, modelin səhvindən doğan sükutlu blok idi.
+
+**İndi nə açıqdır.** `Root` = 0, `CEO` = 1 olduğu üçün `Root.outranks(CEO)` →
+`True` və aşağıdakı mövcud əməliyyatlar `Root` → `CEO` istiqamətində işləyir.
+Heç bir qapı SİLİNMƏDİ; eyni `outranks()` çağırışı indi düzgün cavab verir:
+
+| Əməliyyat | Yer | Əvvəl | İndi |
+|---|---|---|---|
+| `CEO` hesabı YARATMAQ (rolu təyin etmək) | `user_management._assert_may_assign_position` | bloklu | açıq |
+| `CEO` profilini redaktə / deaktiv etmək | `user_management.update_employee` / `deactivate_employee` | bloklu | açıq |
+| `CEO`-nun şifrə / PIN sıfırlaması | `user_management.reset_password` / `reset_pin` | bloklu | açıq |
+| `CEO`-ya kamera mağazaları təyin etmək | `user_management.assign_camera_stores` | bloklu | açıq |
+| `CEO`-nun icazə flag-lərini dəyişmək | `permission_guards._assert_strict_hierarchy` | bloklu | açıq |
+| `CEO` üçün performans qiymətləndirməsi (yazı + oxu) | `performance_reviews._require_hierarchy` | bloklu | açıq |
+| `CEO` üçün POS həddi təyin etmək | `pos_threshold._require_hierarchy` | bloklu | açıq |
+| `CEO` ROLUNU (position) redaktə etmək | `position.assert_may_be_edited_by` | bloklu | açıq |
+| Toplu əməliyyatda `CEO` sətri | `bulk_operations` (eyni guard) | bloklu | açıq |
+
+**Bu, səlahiyyət ARTIRMASI DEYİL.** Üç səbəbdən:
+
+1. `Root` tenant-ın SAHİBİDİR — `can_manage_permissions`,
+   `can_manage_system_limits`, lisenziya və Permission Registry onsuz da
+   yalnız ondadır (`HardlockLevel.ROOT_ONLY`). `CEO` hesabına toxuna bilməmək
+   ona heç bir qorunma vermirdi: `Root` istənilən halda `CEO`-nun rolundakı
+   flag dəstini Registry-dən dəyişə bilirdi.
+2. Əks istiqamət EYNİ dəyişikliklə DARALDI — `CEO` artıq `Root`-un nə
+   icazələrinə, nə profilinə, nə də sirrinə toxuna bilir
+   (`authentication._assert_may_reset`: köhnə modeldə `0 > 0` yanlış olduğu
+   üçün `CEO` `Root`-a müvəqqəti şifrə təyin edə bilirdi — bu, bütün
+   `ROOT_ONLY` hardlock-larının dolayı yan keçilməsi idi). Yəni xalis nəticə
+   səlahiyyətin ARTMASI yox, DÜZGÜN İSTİQAMƏTƏ yönəlməsidir.
+3. Anti-fraud hardlock-ları toxunulmaz qalır: `Root` bu qapı ilə də
+   `can_verify_returns` / `can_issue_fines` / `can_override_return_time` /
+   `can_approve_dual_control_override` flag-lərini `Mağaza_Meneceri` və
+   `Satıcı`-ya VERƏ BİLMİR (`ANTI_FRAUD_FORBIDDEN_ROLES` + DB-dəki
+   `enforce_anti_fraud_segregation()`).
+
+**Əməliyyat qeydi.** Hər sadalanan əməliyyat mövcud audit yolundan keçir
+(`AuditTrail.record()` istisna udmur), yəni `Root` → `CEO` müdaxiləsi
+jurnalda görünür və sonradan sübut edilə bilər.
+
+### DAVRANIŞ DƏYİŞİKLİYİ — `db_switch` / `plugin_management` rol qapıları «yalnız Root»
+
+`DatabaseSwitchUseCase._require_permission` və
+`PluginManagementUseCase._require` rol şərti `Root VƏ CEO` idi, halbuki hər
+iki əməliyyatın flag-i (`can_switch_db`, `can_manage_plugins`)
+`permission_flags`-də `hardlock_level = 1` = `ROOT_ONLY` daşıyır. `CEO` həmin
+flag-i nə rol dəsti, nə fərdi override ilə ala bilmir — yəni rol şərtindəki
+`CEO` budağına HEÇ VAXT çatılmırdı (ölü kod). İki qat fərqli qərar yazırdı;
+CLAUDE.md §5 qaydanın hər iki yerdə EYNİ olmasını tələb edir, ona görə rol
+qapısı `SystemRole.ROOT`-a daraldıldı.
+
+**Heç bir imkan itmir**, çünki bağlayıcı qat flag qatıdır və o dəyişmədi.
+`kompasos.md` bölmə 1/2-dəki «Root/CEO» mətni spesifikasiyanın ÜMUMİ
+ifadəsidir; icazə kataloqu (`schema.sql` §22) onun DƏQİQLƏŞDİRİLMİŞ
+variantıdır və bağlayıcıdır. Hardlock səviyyəsi gələcəkdə Registry-dən 2-yə
+(`ROOT_CEO`) qaldırılarsa, rol qapısı da AÇIQ şəkildə genişləndirilməlidir.
+
+**Tətbiq (davranış qeydləri):** `src/application/use_cases/db_switch.py`,
+`src/application/use_cases/plugin_management.py`,
+`database/migrations/049_position_priority_range_narrowing.sql`,
+`tests/unit/test_role_priority_split.py`, `tests/unit/test_remaining_gaps.py`.
 
 ---
 

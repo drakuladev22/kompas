@@ -26,10 +26,12 @@ DECLARE
     v_pos_camera UUID;
     v_pos_seller UUID;
     v_root       UUID;
+    v_ceo        UUID;
     v_admin      UUID;
     v_manager    UUID;
     v_seller     UUID;
     v_failed     BOOLEAN;
+    v_message    TEXT;
     v_passed     INTEGER := 0;
 BEGIN
     -- ---------------------------------------------------------------- setup
@@ -55,6 +57,14 @@ BEGIN
                            username, password_hash)
     VALUES (v_tenant, v_store, v_pos_root, 'Test', 'Root', 'guard.root', 'argon2-hash')
     RETURNING id INTO v_root;
+
+    -- `CEO` istifadəçisi TEST 31/32 üçündür: Root/CEO prioritet ayrılığından
+    -- sonra CEO → Root qadağası İYERARXİYADAN gəlir və bu, DB tərəfində də
+    -- yoxlanılmalıdır (CLAUDE.md §5 — qayda İKİ yerdədir).
+    INSERT INTO employees (tenant_id, store_id, position_id, first_name, last_name,
+                           username, password_hash)
+    VALUES (v_tenant, v_store, v_pos_ceo, 'Test', 'Ceo', 'guard.ceo', 'argon2-hash')
+    RETURNING id INTO v_ceo;
 
     INSERT INTO employees (tenant_id, store_id, position_id, first_name, last_name,
                            username, password_hash)
@@ -151,7 +161,7 @@ BEGIN
     RAISE NOTICE 'TEST 5 ✓ self-escalation guard işləyir';
 
     -- =====================================================================
-    -- TEST 6: HIERARCHY GUARD — Admin (priority 1) Root-a (0) toxuna bilməz
+    -- TEST 6: HIERARCHY GUARD — Admin (priority 2) Root-a (0) toxuna bilməz
     -- =====================================================================
     v_failed := FALSE;
     BEGIN
@@ -167,7 +177,7 @@ BEGIN
     RAISE NOTICE 'TEST 6 ✓ strict hierarchy guard işləyir';
 
     -- =====================================================================
-    -- TEST 7: MÜSBƏT HAL — Admin Satıcı-ya (priority 3) icazə verə bilər
+    -- TEST 7: MÜSBƏT HAL — Admin Satıcı-ya (priority 4) icazə verə bilər
     -- =====================================================================
     INSERT INTO user_permission_overrides (user_id, flag_code, effect, granted_by)
     VALUES (v_seller, 'can_view_employee_reports', 'GRANT', v_admin);
@@ -863,9 +873,74 @@ BEGIN
     RAISE NOTICE 'TEST 29 ✓ etiraz pəncərəsi nəşrdən (published_at) başlayır';
     RAISE NOTICE 'TEST 30 ✓ PENDING_REVIEW export-a düşmür, PUBLISHED+bağlı pəncərə düşür';
 
+    -- =====================================================================
+    -- TEST 31: PRİORİTET MODELİ — `Root` TƏK BAŞINA 0-dadır (miqrasiya 048)
+    -- =====================================================================
+    -- Domen qarşılığı `RolePriority` + `SystemRole.default_priority`.
+    -- Seed ilə domen ayrılsaydı, `mappers.position_from_row` bazadakı ədədi
+    -- BAŞQA pilləyə çevirərdi: ekran bir şey göstərər, guard başqa qərar
+    -- verərdi. Ona görə ədədlər burada ADBAAD təsbit olunur.
+    IF (SELECT priority FROM positions WHERE id = v_pos_root)   <> 0
+       OR (SELECT priority FROM positions WHERE id = v_pos_ceo)    <> 1
+       OR (SELECT priority FROM positions WHERE id = v_pos_admin)  <> 2
+       OR (SELECT priority FROM positions WHERE id = v_pos_hr)     <> 3
+       OR (SELECT priority FROM positions WHERE id = v_pos_store)  <> 3
+       OR (SELECT priority FROM positions WHERE id = v_pos_camera) <> 3
+       OR (SELECT priority FROM positions WHERE id = v_pos_seller) <> 4 THEN
+        RAISE EXCEPTION
+            'TEST 31 UĞURSUZ: rol prioritetləri Root=0/CEO=1/Admin=2/'
+            'operativ=3/Satıcı=4 modelinə uyğun deyil (bölmə 3, SEC-019)';
+    END IF;
+
+    IF (SELECT COUNT(*) FROM positions
+         WHERE tenant_id = v_tenant AND priority = 0) <> 1 THEN
+        RAISE EXCEPTION
+            'TEST 31 UĞURSUZ: prioritet 0 pilləsində birdən çox rol var — '
+            '`Root` TƏK BAŞINA ən üst pillədə olmalıdır';
+    END IF;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 31 ✓ Root=0 (tək), CEO=1, Admin=2, operativ=3, Satıcı=4';
+
+    -- =====================================================================
+    -- TEST 32: CEO `Root` istifadəçisinin icazəsinə TOXUNA BİLMİR
+    -- =====================================================================
+    -- Bu, TEST 6-nın (Admin → Root) DAHA DAR variantıdır və prioritet
+    -- ayrılığının əsas nəticəsidir. Köhnə modeldə (Root=CEO=0) qadağa
+    -- BƏRABƏR-pillə şərtindən çıxırdı; indi `0 < 1`, yəni qadağa
+    -- iyerarxiyanın ÖZÜNDƏNDİR. Mesaj yoxlaması vacibdir: yazı başqa
+    -- trigger-in (hardlock/sahiblik) səbəbindən rədd edilsəydi, test
+    -- yanlış olaraq "keçmiş" sayılardı.
+    --
+    -- `DENY` seçilir ki, `enforce_grantor_owns_flag` erkən çıxsın —
+    -- TEST 6 ilə eyni naxış.
+    v_failed := FALSE;
+    v_message := '';
+    BEGIN
+        INSERT INTO user_permission_overrides (user_id, flag_code, effect, granted_by)
+        VALUES (v_root, 'can_export_reports', 'DENY', v_ceo);
+    EXCEPTION WHEN OTHERS THEN
+        v_failed := TRUE;
+        v_message := SQLERRM;
+    END;
+    IF NOT v_failed THEN
+        RAISE EXCEPTION 'TEST 32 UĞURSUZ: CEO Root-un icazəsinə toxundu!';
+    END IF;
+    IF v_message NOT LIKE '%STRICT HIERARCHY GUARD%' THEN
+        RAISE EXCEPTION
+            'TEST 32 UĞURSUZ: yazı bloklandı, lakin iyerarxiyaya GÖRƏ YOX (%)', v_message;
+    END IF;
+
+    -- MÜSBƏT HAL: eyni CEO ondan CİDDİ ŞƏKİLDƏ aşağı olan Admin-ə toxuna bilir
+    -- (guard-ın "hər şeyi bloklamadığının" sübutu).
+    INSERT INTO user_permission_overrides (user_id, flag_code, effect, granted_by)
+    VALUES (v_admin, 'can_view_employee_reports', 'DENY', v_ceo);
+
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 32 ✓ CEO → Root bloklandı, CEO → Admin işləyir';
+
     RAISE NOTICE '';
     RAISE NOTICE '===========================================';
-    RAISE NOTICE 'BÜTÜN GUARD TESTLƏRİ UĞURLU: %/30', v_passed;
+    RAISE NOTICE 'BÜTÜN GUARD TESTLƏRİ UĞURLU: %/32', v_passed;
     RAISE NOTICE '===========================================';
 
     -- Test məlumatlarının təmizlənməsi

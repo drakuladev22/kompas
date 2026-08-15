@@ -159,6 +159,92 @@ def test_root_is_exempt_from_equal_tier_rule(
 
 
 # --------------------------------------------------------------------------- #
+# `Root` / `CEO` PRİORİTET AYRILIĞI — üç məcburi təsdiq testi
+#
+# `RolePriority` uzun müddət `Root` və `CEO`-nu `EXECUTIVE = 0` altında
+# BİRLƏŞDİRİRDİ. Aşağıdakı üçlük həmin konseptual səhvin geri qayıtmasını
+# tutur: birincisi CEO-nun səlahiyyətinin SINMADIĞINI, ikincisi anti-fraud-un
+# `Root` üçün də MÜTLƏQ olduğunu, üçüncüsü isə Root-un qorunmasının artıq
+# İYERARXİYADAN gəldiyini sübut edir.
+# --------------------------------------------------------------------------- #
+
+
+def test_ceo_can_grant_an_owned_flag_to_hr_admin(
+    guard: PermissionHierarchyGuardUseCase,
+) -> None:
+    """MƏCBURİ TƏSDİQ TESTİ №1 — funksionallıq SINMAYIB.
+
+    Prioritet ayrılığı `CEO`-nu 0-dan 1-ə endirdi. Əgər hansısa yoxlama
+    "aktor 0-da olmalıdır" formasında yazılsaydı, CEO bir gecədə bütün
+    icazə idarəetməsini itirərdi. Bu test məhz onu qapayır: CEO (1)
+    `HR_Admin`-ə (3) ÖZÜNDƏ OLAN flag-i verə bilir.
+
+    `can_control_user_permissions` CEO-da AÇIQ şəkildə yoxdur — Root/CEO
+    həmin flag olmadan da keçir (`_assert_actor_may_manage_permissions`),
+    lakin Self-Escalation Guard verilən flag-in aktorda olmasını TƏLƏB EDİR.
+    """
+    ceo = make_employee(SystemRole.CEO, flags=[EXPORT_FLAG])
+    hr = make_employee(SystemRole.HR_ADMIN)
+
+    guard.assert_allowed(request_for(ceo, hr))
+    guard.apply(request_for(ceo, hr))
+
+    assert hr.has_permission(EXPORT_FLAG.code, now=NOW) is True
+
+
+def test_even_root_cannot_grant_can_verify_returns_to_a_store_manager(
+    guard: PermissionHierarchyGuardUseCase,
+) -> None:
+    """MƏCBURİ TƏSDİQ TESTİ №2 — anti-fraud MÜTLƏQDİR, `Root` daxil.
+
+    Bölmə 3: `can_verify_returns` HEÇ VAXT, HEÇ KİM tərəfindən
+    `Mağaza_Meneceri`/`Satıcı`-ya verilə bilməz. `Root` bütün digər
+    qapılardan (iyerarxiya, flag sahibliyi) azaddır — məhz ona görə bu
+    testin aktoru `Root`-dur: qadağa iyerarxiyadan DEYİL, vəzifə
+    ayrılığından gəlir və prioritet ayrılığı ona TOXUNMAMALIDIR.
+    """
+    verify_flag = PermissionFlag(
+        code="can_verify_returns",
+        category="KAMERA_CERIME",
+        is_anti_fraud=True,
+        is_camera_only=True,
+    )
+    root = make_employee(SystemRole.ROOT)
+    manager = make_employee(SystemRole.STORE_MANAGER)
+
+    with pytest.raises(AuthorizationError, match="ANTI-FRAUD") as caught:
+        guard.assert_allowed(request_for(root, manager, flag=verify_flag))
+
+    assert "can_verify_returns" in caught.value.message
+    assert manager.has_permission(verify_flag.code, now=NOW) is False
+
+
+def test_ceo_cannot_touch_a_root_users_permissions(
+    guard: PermissionHierarchyGuardUseCase,
+) -> None:
+    """MƏCBURİ TƏSDİQ TESTİ №3 — indi İYERARXİYANIN TƏBİİ NƏTİCƏSİDİR.
+
+    Flag `can_export_reports`-dur: hardlock-u YOXDUR, anti-fraud deyil.
+    Yəni yeganə səbəb pillə fərqidir — `Root` (0) `CEO`-dan (1) CİDDİ
+    ŞƏKİLDƏ yüksəkdir.
+
+    Köhnə (səhv) modeldə bu test də keçərdi, lakin BAŞQA səbəbdən: `0 <= 0`
+    bərabər-pillə şərtindən. Yəni Root-un qorunması "təsadüfən eyni ədəd"
+    faktına bağlı idi. Aşağıdakı `assert` məhz həmin fərqi sabitləyir —
+    mesaj iki AYRI pillə adı daşımalıdır.
+    """
+    ceo = make_employee(SystemRole.CEO, flags=[EXPORT_FLAG])
+    root_user = make_employee(SystemRole.ROOT)
+
+    with pytest.raises(AuthorizationError, match="HIERARCHY") as caught:
+        guard.assert_allowed(request_for(ceo, root_user))
+
+    assert "aktor=EXECUTIVE" in caught.value.message
+    assert "hədəf=ROOT" in caught.value.message
+    assert root_user.has_permission(EXPORT_FLAG.code, now=NOW) is False
+
+
+# --------------------------------------------------------------------------- #
 # Self-Escalation Guard
 # --------------------------------------------------------------------------- #
 

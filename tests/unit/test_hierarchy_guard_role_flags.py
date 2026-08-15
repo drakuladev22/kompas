@@ -186,10 +186,16 @@ def _use_case(positions: _Positions) -> tuple[PositionManagementUseCase, Recordi
 
 
 def _root_role() -> Position:
-    """`Root` rolu — sistemin ən həssas flag-ini məhz o daşıyır."""
+    """`Root` rolu — sistemin ən həssas flag-ini məhz o daşıyır.
+
+    PİLLƏ `RolePriority.ROOT`-dur (0) və `CEO`-nunkundan (1) FƏRQLİDİR. Əvvəl
+    hər ikisi `EXECUTIVE = 0` idi; həmin qurğuda aşağıdakı testlərin bir hissəsi
+    yalnız BƏRABƏR-PİLLƏ şərti sayəsində keçirdi. İndi eyni testlər
+    iyerarxiyanın TƏBİİ nəticəsi kimi də keçir — iddia zəifləmir, GÜCLƏNİR.
+    """
     return _position(
         SystemRole.ROOT.value,
-        RolePriority.EXECUTIVE,
+        RolePriority.ROOT,
         flags=(MANAGE_POSITIONS, SYSTEM_LIMITS),
     )
 
@@ -229,6 +235,59 @@ def test_ceo_cannot_strip_a_root_only_flag_from_the_root_role() -> None:
     assert audit.actions() == [], "Baş tutmayan dəyişiklik audit-ə düşməməlidir"
 
 
+def test_ceo_cannot_touch_the_root_role_even_for_an_unlocked_flag() -> None:
+    """MƏCBURİ TƏSDİQ TESTİ №3 — «CEO Root-un icazələrinə toxuna bilmir».
+
+    Yuxarıdakı testdən FƏRQİ HƏLLEDİCİDİR: orada hədəf flag `ROOT_ONLY`
+    hardlock-u daşıyır, yəni qadağa hardlock-dan DA gələ bilərdi. Burada
+    flag `can_export_reports`-dur — hardlock-u YOXDUR, anti-fraud deyil,
+    kamera ilə əlaqəsi yoxdur. Yeganə səbəb İYERARXİYADIR: `Root` (0)
+    `CEO`-dan (1) CİDDİ ŞƏKİLDƏ yüksəkdir.
+
+    Köhnə (səhv) modeldə bu test də keçərdi — lakin BAŞQA səbəbdən:
+    `0 <= 0` bərabər-pillə şərtindən. Yəni Root-un qorunması "təsadüfən
+    eyni ədəd" faktına bağlı idi. İndi qoruma iyerarxiyanın ÖZÜNDƏDİR.
+    """
+    root_role = _root_role()
+    ceo_role = _ceo_role()
+    ceo_role.grant(EXPORT)
+    positions = _Positions([root_role, ceo_role])
+    use_case, audit = _use_case(positions)
+
+    with pytest.raises(AuthorizationError, match="STRICT HIERARCHY GUARD") as caught:
+        use_case.set_role_flags(
+            tenant_id=TENANT,
+            actor=_employee(ceo_role),
+            position_id=root_role.id,
+            flag_codes=(MANAGE_POSITIONS.code, SYSTEM_LIMITS.code, EXPORT.code),
+        )
+
+    # Səbəb MƏHZ pillədir: mesaj hər iki pilləni adı ilə göstərir.
+    assert "EXECUTIVE" in caught.value.message
+    assert "ROOT" in caught.value.message
+    assert root_role.granted_flags == frozenset({MANAGE_POSITIONS.code, SYSTEM_LIMITS.code}), (
+        "Root rolunun flag dəsti TOXUNULMAZ qalmalıdır"
+    )
+    assert positions.saved == []
+    assert audit.actions() == []
+
+
+def test_the_root_role_strictly_outranks_the_ceo_role() -> None:
+    """Prioritet ayrılığının rol səviyyəsindəki birbaşa iddiası.
+
+    `outranks()` primitivi Strict Hierarchy Guard-ın YEGANƏ müqayisə
+    nöqtəsidir; o səhv olsaydı yuxarıdakı bütün qadağalar sükutla açılardı.
+    """
+    root_role = _root_role()
+    ceo_role = _ceo_role()
+
+    assert root_role.outranks(ceo_role) is True
+    assert ceo_role.outranks(root_role) is False
+    # Və `Root` semantikası ROLA görədir, pilləyə görə YOX.
+    assert root_role.effective_system_role is SystemRole.ROOT
+    assert ceo_role.effective_system_role is SystemRole.CEO
+
+
 def test_ceo_cannot_edit_a_role_at_its_own_level() -> None:
     """SEC-006: bərabər pillə DƏ bloklanır — yalnız `Root` istisnadır.
 
@@ -257,15 +316,25 @@ def test_ceo_cannot_edit_a_role_at_its_own_level() -> None:
 def test_priority_zero_custom_role_does_not_inherit_the_root_exemption() -> None:
     """SEC-006 istisnası KODA bağlıdır, prioritetə yox.
 
-    Əks halda qadağa bir addımla yan keçilərdi: "özümə prioritet 0-lı custom
-    rol yaradım, sonra `Root` roluna toxunum". `effective_system_role` məhz
-    buna görə yalnız kodu `ROOT` olanı `ROOT` sayır.
+    Əks halda qadağa bir addımla yan keçilərdi: "özümə `Root` pilləsində (0)
+    custom rol yaradım, sonra `Root` roluna toxunum". `effective_system_role`
+    məhz buna görə yalnız kodu `ROOT` olanı `ROOT` sayır — custom rol pillə
+    0-da olsa belə `CEO` semantikasına düşür (`_PRIORITY_TO_ROLE`).
+
+    Prioritet ayrılığından SONRA bu test daha da kritikləşdi: `RolePriority`
+    artıq `ROOT` adlı üzv daşıyır və "0 = Root, deməli xəritəni də ROOT-a
+    bağlayaq" yanlış addımı çox aşkardır. Bu test məhz həmin addımı tutur.
     """
-    fake_root = _position("KÖLGƏ_ROOT", RolePriority.EXECUTIVE, is_system=False)
+    fake_root = _position("KÖLGƏ_ROOT", RolePriority.ROOT, is_system=False)
     fake_root.grant(MANAGE_POSITIONS)
     root_role = _root_role()
     positions = _Positions([fake_root, root_role])
     use_case, _audit = _use_case(positions)
+
+    assert fake_root.effective_system_role is SystemRole.CEO, (
+        "Prioritet 0-lı custom rol `Root` semantikası ALMAMALIDIR — əks halda "
+        "`assert_root_only_flag_allowed` və Root bərabər-pillə istisnası açılardı"
+    )
 
     with pytest.raises(AuthorizationError, match="STRICT HIERARCHY GUARD"):
         use_case.set_role_flags(
@@ -276,6 +345,21 @@ def test_priority_zero_custom_role_does_not_inherit_the_root_exemption() -> None
         )
 
     assert root_role.has_flag(SYSTEM_LIMITS.code)
+
+
+def test_priority_zero_custom_role_cannot_touch_a_root_only_flag() -> None:
+    """Eyni hücumun İKİNCİ qapısı — mütləq `ROOT_ONLY` yoxlaması.
+
+    Strict Hierarchy Guard-dan asılı deyil: hədəf `HR_Admin` (3) aktordan (0)
+    ciddi şəkildə aşağıdadır, yəni iyerarxiya bu yazını BURAXARDI.
+    `assert_root_only_flag_allowed` aktorun `effective_system_role`-una baxır
+    və prioritet 0-lı custom rol orada `Root` sayılmır.
+    """
+    fake_root = _position("KÖLGƏ_ROOT", RolePriority.ROOT, is_system=False)
+    hr_role = _position(SystemRole.HR_ADMIN.value, RolePriority.OPERATIONAL)
+
+    with pytest.raises(AuthorizationError, match="YALNIZ Root toxuna bilər"):
+        hr_role.assert_root_only_flag_allowed(SYSTEM_LIMITS, actor_position=fake_root)
 
 
 # --------------------------------------------------------------------------- #

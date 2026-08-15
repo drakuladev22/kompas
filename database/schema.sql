@@ -254,8 +254,15 @@ CREATE TABLE IF NOT EXISTS positions (
     tenant_id      UUID REFERENCES license_tenants(tenant_id) ON DELETE CASCADE,
     code           TEXT NOT NULL,
     name_az        TEXT NOT NULL,
-    -- İYERARXİYA PRİORİTETİ: Root/CEO=0, Admin=1, HR/Store/Camera=2, Satıcı=3
-    priority       SMALLINT NOT NULL CHECK (priority BETWEEN 0 AND 9),
+    -- İYERARXİYA PRİORİTETİ: Root=0, CEO=1, Admin=2, HR/Store/Camera=3, Satıcı=4
+    -- (`Root` TƏK BAŞINA 0-dadır — `CEO` ondan DƏRHAL aşağıdır, bax §21 və
+    --  `RolePriority` docstring-i; miqrasiya 048 mövcud bazaları köçürür.)
+    -- DİAPAZON DOMENLƏ HƏRFİ UYĞUNDUR (049): `RolePriority` yalnız 0..4-ü
+    -- tanıyır. Əvvəl hədd 0..9 idi və 5..9 aralığındakı sətir BAZADA qanuni,
+    -- TƏTBİQDƏ isə oxunmaz olurdu — `mappers.position_from_row` həmin sətirdə
+    -- `RolePriority(...)` çağırıb `ValueError` atırdı. Yeni pillə əlavə
+    -- edilərsə HƏM `RolePriority`, HƏM bu CHECK dəyişməlidir (CLAUDE.md §5).
+    priority       SMALLINT NOT NULL CHECK (priority BETWEEN 0 AND 4),
     is_system      BOOLEAN NOT NULL DEFAULT FALSE,   -- 7 defolt rol silinə bilməz
     -- "kamera-tipli" custom rol işarəsi: yalnız belə rollar anti-fraud
     -- flag-lərini daşıya bilər (bölmə 3, QORUYUCU QAYDALAR)
@@ -279,7 +286,9 @@ CREATE TRIGGER trg_positions_updated BEFORE UPDATE ON positions
 COMMENT ON COLUMN positions.priority IS
     'Strict Hierarchy Guard-ın əsası: can_control_user_permissions sahibi yalnız '
     'ÖZ priority dəyərindən CİDDİ ŞƏKİLDƏ BÖYÜK (daha aşağı səlahiyyətli) '
-    'istifadəçilərə toxuna bilər (bölmə 3).';
+    'istifadəçilərə toxuna bilər (bölmə 3). Model: Root=0 (TƏK BAŞINA), CEO=1, '
+    'Admin=2, HR_Admin/Mağaza_Meneceri/Kamera_Nəzarətçisi=3, Satıcı=4. '
+    'Domen qarşılığı `RolePriority`; mövcud bazalar üçün miqrasiya 048.';
 
 
 -- ---------------------------------------------------------------------------
@@ -1651,10 +1660,14 @@ BEGIN
             '(bölmə 3, səviyyə 2)', NEW.flag_code;
     END IF;
 
-    -- Səviyyə 3: Admin-ə həvalə edilə bilər, amma operativ rollardan aşağı YOX
-    IF v_level = 3 AND COALESCE(v_priority, 9) > 1 THEN
+    -- Səviyyə 3: Admin-ə həvalə edilə bilər, amma operativ rollardan aşağı YOX.
+    -- HƏDD 2-DİR (Admin), 1 DEYİL: Root/CEO prioritet ayrılığından sonra
+    -- Root=0, CEO=1, Admin=2. Domen qarşılığı `HardlockLevel.allows()`-dadır
+    -- və orada müqayisə SİMVOLLADIR (`<= RolePriority.ADMIN`), yəni sürüşməni
+    -- avtomatik udur; burada ədəd yazılmalıdır (bax miqrasiya 048).
+    IF v_level = 3 AND COALESCE(v_priority, 9) > 2 THEN
         RAISE EXCEPTION
-            'HARDLOCK POZUNTUSU: "%" flag-i yalnız priority <= 1 olan rollara '
+            'HARDLOCK POZUNTUSU: "%" flag-i yalnız priority <= 2 olan rollara '
             '(Root/CEO/Admin) verilə bilər (bölmə 3, səviyyə 3)', NEW.flag_code;
     END IF;
 
@@ -1881,10 +1894,13 @@ BEGIN
     FROM employees e JOIN positions p ON p.id = e.position_id WHERE e.id = NEW.granted_by;
 
     -- QƏRAR SEC-006: YALNIZ `Root` bərabər-pillə qaydasından azaddır.
-    -- `CEO` də priority 0-dadır, lakin bölmə 3 "eyni pillədəki istifadəçilərin
-    -- icazələrinə HEÇ VAXT müdaxilə edə bilməz" deyir — ona görə CEO ↔ CEO
-    -- (və CEO → Root) müdaxiləsi bloklanır. Əks halda bir CEO digərinin
-    -- səlahiyyətlərini sükutla ala bilərdi.
+    -- Bölmə 3 "eyni pillədəki istifadəçilərin icazələrinə HEÇ VAXT müdaxilə
+    -- edə bilməz" deyir — ona görə CEO ↔ CEO müdaxiləsi bloklanır. Əks halda
+    -- bir CEO digərinin səlahiyyətlərini sükutla ala bilərdi.
+    -- CEO → Root istiqaməti isə artıq İYERARXİYANIN TƏBİİ NƏTİCƏSİDİR:
+    -- Root=0, CEO=1 (miqrasiya 048), yəni `v_subject_priority(0) <=
+    -- v_actor_priority(1)` şərti onsuz da işə düşür. Əvvəl ikisi də 0 idi və
+    -- qadağa YALNIZ bərabər-pillə şərtindən asılı qalırdı.
     -- Root istisnası zəruridir: əks halda tenant-ın ilk Root-u heç kimə
     -- (o cümlədən digər Root-a) icazə verə bilməzdi və sistem kilidlənərdi.
     IF v_actor_code = 'ROOT' THEN
@@ -2299,15 +2315,22 @@ $$;
 -- ---------------------------------------------------------------------------
 -- 21. SEED: 7 DEFOLT ROL (bölmə 3)
 -- ---------------------------------------------------------------------------
+-- PRİORİTET MODELİ (bölmə 3, KONSEPTUAL DÜZƏLİŞ — miqrasiya 048):
+--   Root=0 (TƏK BAŞINA), CEO=1, Admin=2, operativ rollar=3, Satıcı=4.
+-- Əvvəl `ROOT` və `CEO` hər ikisi 0 idi; o model `CEO`-nu `Root` ilə BƏRABƏR
+-- pilləyə qoyurdu və "CEO Root-un icazələrinə toxuna bilmir" qaydası yalnız
+-- hardlock-un yan təsiri kimi işləyirdi. Mövcud quraşdırmalar üçün eyni
+-- sürüşdürməni `migrations/048_root_ceo_priority_split.sql` aparır — bu
+-- fayl ilə həmin miqrasiya EYNİ son vəziyyəti verməlidir.
 INSERT INTO positions (tenant_id, code, name_az, priority, is_system, is_camera_type, description)
 VALUES
-    (NULL, 'ROOT',               'Root',                0, TRUE,  FALSE, 'Sistem sahibi — Permission Registry və sistem limitləri yalnız bu roldadır'),
-    (NULL, 'CEO',                'CEO',                 0, TRUE,  FALSE, 'Şirkət rəhbəri — rol yaratma və biznes konfiqurasiyası'),
-    (NULL, 'ADMIN',              'Admin',               1, TRUE,  FALSE, 'CEO-dan bir pillə aşağı — gündəlik icazə idarəetməsi (həvalə edilmiş)'),
-    (NULL, 'HR_ADMIN',           'HR_Admin',            2, TRUE,  FALSE, 'İşçi/növbə/cərimə/etiraz idarəetməsi'),
-    (NULL, 'MAGAZA_MENECERI',    'Mağaza Meneceri',     2, TRUE,  FALSE, 'Gündəlik Tabel + öz filialının tapşırıqları (növbə PLANLAMASI YOX)'),
-    (NULL, 'KAMERA_NEZARETCISI', 'Kamera Nəzarətçisi',  2, TRUE,  TRUE,  'iVMS-də görüntünü yoxlayıb təsdiq/vaxt düzəlişi/cərimə verir'),
-    (NULL, 'SATICI',             'Satıcı',              3, TRUE,  FALSE, 'İşçi — Kiosk PIN handshake və İşçi Ana Ekranı')
+    (NULL, 'ROOT',               'Root',                0, TRUE,  FALSE, 'Sistem sahibi — TƏK BAŞINA ən üst pillə; Permission Registry və sistem limitləri yalnız bu roldadır'),
+    (NULL, 'CEO',                'CEO',                 1, TRUE,  FALSE, 'Şirkət rəhbəri — Root-dan DƏRHAL aşağı; rol yaratma və biznes konfiqurasiyası'),
+    (NULL, 'ADMIN',              'Admin',               2, TRUE,  FALSE, 'CEO-dan bir pillə aşağı — gündəlik icazə idarəetməsi (həvalə edilmiş)'),
+    (NULL, 'HR_ADMIN',           'HR_Admin',            3, TRUE,  FALSE, 'İşçi/növbə/cərimə/etiraz idarəetməsi'),
+    (NULL, 'MAGAZA_MENECERI',    'Mağaza Meneceri',     3, TRUE,  FALSE, 'Gündəlik Tabel + öz filialının tapşırıqları (növbə PLANLAMASI YOX)'),
+    (NULL, 'KAMERA_NEZARETCISI', 'Kamera Nəzarətçisi',  3, TRUE,  TRUE,  'iVMS-də görüntünü yoxlayıb təsdiq/vaxt düzəlişi/cərimə verir'),
+    (NULL, 'SATICI',             'Satıcı',              4, TRUE,  FALSE, 'İşçi — Kiosk PIN handshake və İşçi Ana Ekranı')
 ON CONFLICT DO NOTHING;
 
 

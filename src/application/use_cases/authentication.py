@@ -515,6 +515,14 @@ class CredentialResetUseCase:
         # Bölmə 2: "daha yüksək və ya BƏRABƏR səlahiyyətli başqa bir admin".
         # Ona görə burada `outranks` DEYİL, `<=` müqayisəsi istifadə olunur —
         # Hierarchy Guard-dan (icazə dəyişikliyi) FƏRQLİ qayda.
+        #
+        # ROOT/CEO PRİORİTET AYRILIĞININ BİRBAŞA NƏTİCƏSİ: `CEO` artıq `Root`
+        # hesabının sirrini sıfırlaya BİLMİR. Köhnə modeldə ikisi də 0 idi,
+        # yəni `0 > 0` yanlış çıxır və CEO `Root`-a müvəqqəti şifrə təyin edə
+        # bilirdi — həmin şifrə ilə isə `Root` hesabına GİRMƏK mümkündür, yəni
+        # bütün `ROOT_ONLY` hardlock-ları bir addımla dolayı yan keçilirdi.
+        # Bərabər pillə istisnası qalır (Root → Root), əks halda tək Root-lu
+        # tenant unudulmuş şifrə ilə kilidlənərdi.
         if actor.priority > subject.priority:
             raise AuthenticationError(
                 f"Aktor daha aşağı səlahiyyət pilləsindədir "

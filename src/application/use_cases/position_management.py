@@ -22,8 +22,9 @@ CUSTOM ROL QADAĞANI YAN KEÇƏ BİLMİR
 kamera flag-i olan CUSTOM rol verərəm". Bu bağlıdır və üç qatda:
 
     1. `Position.effective_system_role` — custom rol prioritetinə görə ən yaxın
-       sistem rolu kimi qiymətləndirilir, yəni prioritet 2-li custom rol
-       operativ rol qaydalarına tabedir.
+       sistem rolu kimi qiymətləndirilir, yəni prioritet 3-lü (OPERATIONAL)
+       custom rol operativ rol qaydalarına tabedir. Prioritet 0-lı custom rol
+       isə `Root` YOX, `CEO` semantikasına düşür (bax `_PRIORITY_TO_ROLE`).
     2. `PermissionFlag.assert_grantable_to()` — hardlock + anti-fraud.
     3. `is_camera_type` bayrağı — kamera flag-ləri YALNIZ açıq şəkildə
        "kamera-tipli" işarələnmiş rollarda ola bilər (bölmə 3).
@@ -35,9 +36,14 @@ KAMERA-TİPLİ ROL YARATMAQ NİYƏ ƏLAVƏ ŞƏRTLƏ MƏHDUDDUR
 ──────────────────────────────────────────────────────────────────────────────
 `is_camera_type=True` custom rol praktikada `Kamera_Nəzarətçisi`-nin
 ekvivalentidir və maliyyə nəticəli səlahiyyət daşıya bilər. Ona görə onu
-yalnız prioritet ≤ OPERATIONAL (2) səviyyəsində yaratmağa icazə verilir:
-`Satıcı` pilləsində kamera-tipli rol yaratmaq, satıcıya cərimə yazma hüququ
-verməyin dolayı yolu olardı.
+yalnız prioritet ≤ OPERATIONAL (3) səviyyəsində yaratmağa icazə verilir:
+`Satıcı` pilləsində (4) kamera-tipli rol yaratmaq, satıcıya cərimə yazma
+hüququ verməyin dolayı yolu olardı.
+
+Hədd SİMVOLLA (`RolePriority.OPERATIONAL`) yazılır, ədədlə yox — Root/CEO
+prioritet ayrılığı bütün dəyərləri bir vahid sürüşdürdü və simvol yazılışı bu
+sürüşmədən heç nə hiss etmədi. DB qarşılığı isə ədəddir
+(`chk_camera_role_priority`) və miqrasiya 048 onu 2-dən 3-ə qaldırır.
 """
 
 from __future__ import annotations
@@ -165,7 +171,7 @@ class PositionManagementUseCase:
             )
         if draft.is_camera_type and draft.priority > MAX_CAMERA_ROLE_PRIORITY:
             raise PositionManagementError(
-                "Kamera-tipli rol ən aşağı operativ pillədə (2) ola bilər",
+                "Kamera-tipli rol ən aşağı operativ pillədə (3) ola bilər",
                 user_message=(
                     "Kamera-tipli rol yalnız operativ və ya daha yüksək pillədə yaradıla bilər."
                 ),

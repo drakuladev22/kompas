@@ -169,9 +169,9 @@ class DatabaseSwitchUseCase:
     ) -> MigrationReport:
         """Keçidi icra edir — heç vaxt yarımçıq vəziyyət qoymur.
 
-        `can_switch_db` YALNIZ Root/CEO-da ola bilər (bölmə 3); yoxlama
-        həm flag, həm də rol səviyyəsindədir, çünki bu əməliyyat bütün
-        tenant-ın məlumatına toxunur.
+        `can_switch_db` YALNIZ `Root`-da ola bilər (`hardlock_level = 1`);
+        yoxlama həm flag, həm də rol səviyyəsindədir, çünki bu əməliyyat
+        bütün tenant-ın məlumatına toxunur.
         """
         now = self._clock.now()
         self._require_permission(actor, now=now)
@@ -408,11 +408,39 @@ class DatabaseSwitchUseCase:
     # ------------------------------ səlahiyyət ------------------------------- #
 
     def _require_permission(self, actor: Employee, *, now: datetime) -> None:
-        """`can_switch_db` + Root/CEO rolu (bölmə 3).
+        """`can_switch_db` + `Root` rolu (bölmə 3).
 
         İKİ QAT: flag təsadüfən verilə bilər, rol isə tenant qurulanda təyin
         olunur. Bu əməliyyat bütün məlumata toxunduğu üçün hər iki şərt
         tələb olunur.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ ROL QAPISI «Root VƏ CEO»-DAN «YALNIZ Root»-A DARALDI
+        ──────────────────────────────────────────────────────────────────────
+        BAĞLAYICI QAT FLAG QATIDIR. `can_switch_db` `permission_flags`-də
+        `hardlock_level = 1` (`HardlockLevel.ROOT_ONLY`) daşıyır — həm domen
+        (`assert_grantable_to`), həm DB trigger-i (`enforce_permission_hardlock`)
+        onu `CEO`-ya nə rol dəsti, nə də fərdi override yolu ilə buraxmır.
+        Yəni birinci `if` `CEO`-nu ONSUZ DA rədd edir və rol şərtindəki `CEO`
+        budağı praktikada HEÇ VAXT icra olunmayan koddur.
+
+        Əvvəl həmin budaq "daha GENİŞ qat, gələcəkdə hardlock dəyişsə sağ
+        qalsın" arqumenti ilə saxlanılırdı. Bu arqument RƏDD EDİLDİ: nəticə
+        İKİ QATIN FƏRQLİ QƏRAR VERMƏSİ idi — flag qatı «yalnız Root», rol qatı
+        «Root+CEO» deyirdi. CLAUDE.md §5 hər struktur qaydanın İKİ yerdə,
+        LAKİN EYNİ məzmunla yaşamasını tələb edir; oxucunun hansı qatın həqiqi
+        qərarı verdiyini kodun özündən görməsi bundan vacibdir. Hardlock
+        səviyyəsi gələcəkdə Root Permission Registry-dən 2-yə (`ROOT_CEO`)
+        dəyişdirilərsə, o dəyişikliyi edən şəxs BURANI da AÇIQ şəkildə
+        genişləndirməlidir — sükutla açılan qapıdan yaxşıdır.
+
+        HEÇ BİR İMKAN İTMİR: `CEO` bu flag-i onsuz da daşıya bilmirdi, yəni
+        bura heç vaxt `CEO` ilə çatılmırdı.
+
+        `kompasos.md` bölmə 2-dəki "Root/CEO" mətni artıq GÜZGÜLƏNMİR: həmin
+        mətn spesifikasiyanın ÜMUMİ ("ən yuxarı rəhbərlik") ifadəsidir,
+        icazə kataloqu (`schema.sql` §22) isə həmin cümlənin DƏQİQLƏŞDİRİLMİŞ
+        variantıdır və kataloq bağlayıcıdır.
         """
         if not actor.has_permission(SWITCH_DB_FLAG, now=now):
             _security_log.warning("DB_SWITCH_DENIED_FLAG", extra={"actor_id": str(actor.id)})
@@ -420,14 +448,14 @@ class DatabaseSwitchUseCase:
                 f"«{SWITCH_DB_FLAG}» səlahiyyəti yoxdur",
                 user_message="Baza ayarlarını dəyişmək səlahiyyətiniz yoxdur.",
             )
-        if actor.position.effective_system_role not in (SystemRole.ROOT, SystemRole.CEO):
+        if actor.position.effective_system_role is not SystemRole.ROOT:
             _security_log.warning(
                 "DB_SWITCH_DENIED_ROLE",
                 extra={"actor_id": str(actor.id), "role": actor.position.code},
             )
             raise MigrationError(
-                "Baza keçidi YALNIZ Root/CEO tərəfindən icra edilə bilər (bölmə 3)",
-                user_message="Bu əməliyyat yalnız Root və CEO üçündür.",
+                "Baza keçidi YALNIZ Root tərəfindən icra edilə bilər (bölmə 3)",
+                user_message="Bu əməliyyat yalnız Root üçündür.",
                 context={"role": actor.position.code},
             )
 

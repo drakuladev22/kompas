@@ -147,16 +147,26 @@ class Position(AggregateRoot):
         mövcud `outranks()` çağırılır ki, "ciddi şəkildə aşağı" tərifi tək
         yerdə qalsın (`RolePriority.outranks`).
 
-        SEC-006 İSTİSNASI: yalnız `Root` bərabər pillədən azaddır. `CEO` də
-        prioritet 0-dadır, lakin bölmə 3 eyni pilləyə müdaxiləni QADAĞAN edir —
-        əks halda bir CEO digərinin (və ya `Root` rolunun) səlahiyyətlərini
-        sükutla ala bilərdi. Root istisnası isə zəruridir: `Root` öz rolunun
-        flag dəstini redaktə edə bilməsəydi, sistem ilk gündən kilidlənərdi.
+        SEC-006 İSTİSNASI: yalnız `Root` bərabər pillədən azaddır. Bölmə 3
+        eyni pilləyə müdaxiləni QADAĞAN edir — əks halda bir `CEO` digərinin
+        səlahiyyətlərini sükutla ala bilərdi. Root istisnası isə zəruridir:
+        `Root` öz rolunun flag dəstini redaktə edə bilməsəydi, sistem ilk
+        gündən kilidlənərdi.
+
+        `CEO` → `Root` istiqaməti İKİ MÜSTƏQİL SƏBƏBDƏN bağlıdır və bu, qəsdən
+        artıqlıqdır (defense-in-depth):
+            1. PRİORİTET — `Root` (0) `CEO`-dan (1) CİDDİ ŞƏKİLDƏ yüksəkdir,
+               yəni `outranks()` onsuz da `False` qaytarır. Bu, iyerarxiyanın
+               TƏBİİ nəticəsidir; əvvəllər ikisi də 0 idi və qadağa yalnız
+               bərabər-pillə şərtindən asılı qalırdı.
+            2. HARDLOCK — `ROOT_ONLY` flag-lərinə toxunmaq
+               `assert_root_only_flag_allowed`-da AYRICA bloklanır.
 
         Prioritet 0-lı CUSTOM rol bu istisnaya DÜŞMÜR: `effective_system_role`
         yalnız kodu `ROOT` olanı `ROOT` sayır (custom rol `CEO` semantikasına
-        düşür), yəni "özümə prioritet 0-lı rol yaradıb Root-a toxunum" yolu
-        bağlıdır.
+        düşür — bax `_PRIORITY_TO_ROLE` şərhi), yəni "özümə prioritet 0-lı rol
+        yaradıb Root-a toxunum" yolu bağlıdır. Belə rol həm də `Root` rolunu
+        redaktə edə bilmir, çünki 0 <= 0 bərabər-pillədir.
 
         Raises:
             AuthorizationError: aktor naməlumdursa və ya pillə kifayət etmirsə.
@@ -276,7 +286,35 @@ class Position(AggregateRoot):
         return f"Position(code={self.code}, priority={self.priority.name})"
 
 
+#: CUSTOM rolun prioritetindən ən yaxın SİSTEM rolu semantikası.
+#:
+#: ──────────────────────────────────────────────────────────────────────────
+#: `RolePriority.ROOT` QƏSDƏN `SystemRole.CEO`-YA XƏRİTƏLƏNİR
+#: ──────────────────────────────────────────────────────────────────────────
+#: Root/CEO prioritet ayrılığından sonra ən aşkar yazılış
+#: `RolePriority.ROOT: SystemRole.ROOT` olardı və RƏDD EDİLİB — o, birbaşa
+#: səlahiyyət artırması yolu açardı:
+#:
+#:   * `assert_may_be_edited_by` `Root` semantikasına BƏRABƏR-PİLLƏ
+#:     istisnası verir. Prioritet 0-lı custom rol `ROOT` sayılsaydı, onu
+#:     daşıyan istifadəçi HƏQİQİ `Root` rolunun flag dəstini redaktə edə
+#:     bilərdi.
+#:   * `assert_root_only_flag_allowed` aktorun `ROOT` olmasını tələb edir —
+#:     yəni həmin custom rol `can_manage_permissions` /
+#:     `can_manage_system_limits` flag-lərinə də toxuna bilərdi.
+#:   * `HardlockLevel.ROOT_ONLY.allows()` həmin flag-lərin custom rola
+#:     VERİLMƏSİNƏ icazə verərdi.
+#:
+#: Üstəlik DB yarısı ilə fərq yaranardı: `enforce_position_flag_hierarchy()`
+#: (miqrasiya 046) və `enforce_hierarchy_guard()` (schema.sql §18) Root
+#: istisnasını rol KODU ilə (`v_actor_code = 'ROOT'`) verir, prioritetlə yox.
+#: İki qatın fərqli qərar verməsi CLAUDE.md §5-in birbaşa pozuntusudur.
+#:
+#: Ona görə qayda belədir: prioritet 0 pilləsi `Root`-a AİDDİR, lakin həmin
+#: pillədə yaradılan custom rol ən çoxu `CEO` səlahiyyət semantikasını alır.
+#: `Root` YALNIZ kodu `ROOT` olan rolda mövcuddur (`system_role` yolu).
 _PRIORITY_TO_ROLE: dict[RolePriority, SystemRole] = {
+    RolePriority.ROOT: SystemRole.CEO,
     RolePriority.EXECUTIVE: SystemRole.CEO,
     RolePriority.ADMIN: SystemRole.ADMIN,
     RolePriority.OPERATIONAL: SystemRole.HR_ADMIN,

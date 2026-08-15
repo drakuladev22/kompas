@@ -220,21 +220,45 @@ def test_money_zero() -> None:
 
 
 def test_role_priority_ordering() -> None:
+    assert RolePriority.ROOT.outranks(RolePriority.EXECUTIVE)
     assert RolePriority.EXECUTIVE.outranks(RolePriority.ADMIN)
     assert RolePriority.ADMIN.outranks(RolePriority.STAFF)
     # Bərabər pillə üstünlük vermir — Strict Hierarchy Guard-ın əsası
     assert RolePriority.ADMIN.outranks(RolePriority.ADMIN) is False
     assert RolePriority.STAFF.outranks(RolePriority.EXECUTIVE) is False
+    # `CEO` `Root`-u ÜSTƏLƏYƏ BİLMİR — bu, iyerarxiyanın TƏBİİ nəticəsidir,
+    # hardlock-un yan təsiri deyil (əvvəl ikisi də 0 idi).
+    assert RolePriority.EXECUTIVE.outranks(RolePriority.ROOT) is False
 
 
 def test_default_priorities_match_spec() -> None:
-    assert SystemRole.ROOT.default_priority == RolePriority.EXECUTIVE
+    """Root TƏK BAŞINA 0-dadır; CEO ondan DƏRHAL aşağıdır (1)."""
+    assert SystemRole.ROOT.default_priority == RolePriority.ROOT
     assert SystemRole.CEO.default_priority == RolePriority.EXECUTIVE
     assert SystemRole.ADMIN.default_priority == RolePriority.ADMIN
     assert SystemRole.HR_ADMIN.default_priority == RolePriority.OPERATIONAL
     assert SystemRole.STORE_MANAGER.default_priority == RolePriority.OPERATIONAL
     assert SystemRole.CAMERA_OPERATOR.default_priority == RolePriority.OPERATIONAL
     assert SystemRole.SELLER.default_priority == RolePriority.STAFF
+    # Ədədlər spesifikasiya bölmə 3 və `schema.sql` §21 seed-i ilə eynidir.
+    assert [int(role.default_priority) for role in SystemRole] == [0, 1, 2, 3, 3, 3, 4]
+
+
+def test_root_and_ceo_are_not_on_the_same_rung() -> None:
+    """KONSEPTUAL DÜZƏLİŞ — reqressiya qapısı.
+
+    `Root` və `CEO` uzun müddət `EXECUTIVE = 0` altında BİRLƏŞDİRİLMİŞDİ.
+    Həmin modeldə "CEO Root-a toxuna bilmir" qaydası yalnız `ROOT_ONLY`
+    hardlock-unun və bərabər-pillə şərtinin yan təsiri idi. Bu test məhz
+    birləşdirmənin geri qayıtmasını tutur.
+    """
+    assert SystemRole.ROOT.default_priority is not SystemRole.CEO.default_priority
+    assert int(SystemRole.ROOT.default_priority) == 0
+    assert int(SystemRole.CEO.default_priority) == 1
+    # `Root` pilləsində BAŞQA HEÇ BİR sistem rolu yoxdur.
+    assert [role for role in SystemRole if role.default_priority is RolePriority.ROOT] == [
+        SystemRole.ROOT
+    ]
 
 
 @pytest.mark.parametrize(

@@ -16,6 +16,14 @@ deaktiv edə, lisenziyanı uzada, məcburi yenilənmə tətbiq edə və aqreqasi
 edilmiş telemetriya görə bilir. Müştəri bunu **müqavilə imzalayarkən**
 bilməlidir — sonradan aşkar edilməsi etibar məsələsidir.
 
+**ADLANDIRMA QEYDİ (vacib, çünki müqavilə mətninə də təsir edir):** buradakı
+"Master" sözü tenant-daxili rol iyerarxiyasının bir pilləsi DEYİL. Müştərinin
+`Root` istifadəçisi öz sistemində mütləq ən yuxarıdır və onun ÜSTÜNDƏ heç bir
+"Master Root" hesabı yoxdur. Hazırlayıcı tərəfin panelı yalnız **abunəni**
+(aktiv/deaktiv, ödəniş, versiya, aqreqat telemetriya) idarə edir; tenant-ın
+daxilində — işçi, rol, icazə, cərimə, hesabat — heç bir səlahiyyəti yoxdur.
+Bu iki sistem qəsdən ayrıdır və müqavilə mətni də onları qarışdırmamalıdır.
+
 ### Müqaviləyə salınacaq mətn (təklif)
 
 > **Uzaqdan idarəetmə və lisenziya nəzarəti.** Təchizatçı KompasOS

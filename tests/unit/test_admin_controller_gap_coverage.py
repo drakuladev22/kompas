@@ -501,7 +501,7 @@ def _matrix(
 def test_roles_are_ordered_by_tier_not_alphabetically() -> None:
     """Əlifba sırası «Root» ilə «Satıcı»-nı yan-yana salardı — matris iyerarxikdir."""
     seller = _FakePosition("SATICI", "Satıcı", RolePriority.STAFF, set())
-    root = _FakePosition("ROOT", "Root", RolePriority.EXECUTIVE, set())
+    root = _FakePosition("ROOT", "Root", RolePriority.ROOT, set())
     admin = _FakePosition("ADMIN", "Admin", RolePriority.ADMIN, set())
     positions = _Positions([_Summary(seller), _Summary(root), _Summary(admin)])
     controller, _ = _matrix(
@@ -552,7 +552,7 @@ def test_an_empty_role_list_selects_nothing() -> None:
 
 
 def test_selecting_a_role_fills_the_matrix_with_grouped_flags() -> None:
-    root = _FakePosition("ROOT", "Root", RolePriority.EXECUTIVE, {EXPORT.code})
+    root = _FakePosition("ROOT", "Root", RolePriority.ROOT, {EXPORT.code})
     positions = _Positions([_Summary(root)])
     controller, _ = _matrix(
         positions=positions,
@@ -574,7 +574,7 @@ def test_selecting_a_role_fills_the_matrix_with_grouped_flags() -> None:
 
 def test_a_flag_without_a_label_falls_back_to_its_code() -> None:
     """Tərcüməni UYDURMAQ kataloqla ekran arasında ikinci ad məkanı yaradardı."""
-    root = _FakePosition("ROOT", "Root", RolePriority.EXECUTIVE, set())
+    root = _FakePosition("ROOT", "Root", RolePriority.ROOT, set())
     uow = _MatrixUow(counts=[], labels=[], flags=[EXPORT])
     session = _MatrixSession(_Positions([_Summary(root)]), uow)
 
@@ -585,7 +585,7 @@ def test_a_flag_without_a_label_falls_back_to_its_code() -> None:
 
 def test_a_flag_without_a_category_lands_in_the_other_group() -> None:
     """Sərhəd: boş kateqoriya — flag GİZLƏNMİR, «Digər» altında görünür."""
-    root = _FakePosition("ROOT", "Root", RolePriority.EXECUTIVE, set())
+    root = _FakePosition("ROOT", "Root", RolePriority.ROOT, set())
     uow = _MatrixUow(counts=[], labels=[], flags=[UNCATEGORISED])
     session = _MatrixSession(_Positions([_Summary(root)]), uow)
 
@@ -607,7 +607,7 @@ def test_selecting_an_unknown_role_is_a_no_op() -> None:
 
 def test_only_checked_flags_are_sent_to_the_use_case() -> None:
     """Ekran BÜTÜN xanaları göndərir; yazıya yalnız işarələnənlər gedir."""
-    root = _FakePosition("ROOT", "Root", RolePriority.EXECUTIVE, set())
+    root = _FakePosition("ROOT", "Root", RolePriority.ROOT, set())
     positions = _Positions([_Summary(root)])
     controller, session = _matrix(positions=positions)
     screen = _MatrixScreen()
@@ -623,7 +623,7 @@ def test_only_checked_flags_are_sent_to_the_use_case() -> None:
 
 def test_saving_an_empty_selection_clears_every_flag() -> None:
     """Sərhəd: boş dəst «heç nə göndərilmədi» DEYİL, «hamısı silindi» deməkdir."""
-    root = _FakePosition("ROOT", "Root", RolePriority.EXECUTIVE, {EXPORT.code})
+    root = _FakePosition("ROOT", "Root", RolePriority.ROOT, {EXPORT.code})
     positions = _Positions([_Summary(root)])
     controller, session = _matrix(positions=positions)
     screen = _MatrixScreen()
@@ -647,7 +647,7 @@ def test_saving_a_role_that_vanished_asks_for_a_refresh() -> None:
 
 def test_a_guard_violation_is_shown_and_the_grid_is_restored() -> None:
     """Hardlock/anti-fraud/SEC-001 rəddi SÜKUTLA udulmamalıdır."""
-    root = _FakePosition("ROOT", "Root", RolePriority.EXECUTIVE, set())
+    root = _FakePosition("ROOT", "Root", RolePriority.ROOT, set())
     positions = _Positions([_Summary(root)], save_error=_DeniedError("hardlock"))
     controller, session = _matrix(positions=positions)
     screen = _MatrixScreen()
@@ -665,7 +665,7 @@ def test_a_guard_violation_is_shown_and_the_grid_is_restored() -> None:
 
 
 def test_an_unexpected_save_failure_also_restores_the_grid() -> None:
-    root = _FakePosition("ROOT", "Root", RolePriority.EXECUTIVE, set())
+    root = _FakePosition("ROOT", "Root", RolePriority.ROOT, set())
     positions = _Positions([_Summary(root)], save_error=RuntimeError("bağlantı"))
     controller, session = _matrix(positions=positions)
     screen = _MatrixScreen()
@@ -679,7 +679,7 @@ def test_an_unexpected_save_failure_also_restores_the_grid() -> None:
 
 def test_the_selected_role_survives_a_refresh() -> None:
     """Yazıdan sonra admin eyni rolda qalmalıdır — siyahının başına atılmamalıdır."""
-    root = _FakePosition("ROOT", "Root", RolePriority.EXECUTIVE, set())
+    root = _FakePosition("ROOT", "Root", RolePriority.ROOT, set())
     seller = _FakePosition("SATICI", "Satıcı", RolePriority.STAFF, set())
     positions = _Positions([_Summary(root), _Summary(seller)])
     controller, _ = _matrix(positions=positions)

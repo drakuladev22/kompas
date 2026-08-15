@@ -163,7 +163,7 @@ def _with_flag(role_code: str, *, priority: RolePriority) -> Employee:
 
 
 def _root() -> Employee:
-    return _with_flag(SystemRole.ROOT.value, priority=RolePriority.EXECUTIVE)
+    return _with_flag(SystemRole.ROOT.value, priority=RolePriority.ROOT)
 
 
 def _ceo() -> Employee:

@@ -31,7 +31,11 @@ from src.application.use_cases.plugin_management import (
 )
 from src.domain.entities.employee import Employee, PermissionOverride
 from src.domain.entities.position import Position
-from src.domain.value_objects.authorization import PermissionEffect, RolePriority
+from src.domain.value_objects.authorization import (
+    PermissionEffect,
+    RolePriority,
+    SystemRole,
+)
 from src.domain.value_objects.credentials import Username
 from src.domain.value_objects.identifiers import EmployeeId, TenantId
 from src.domain.value_objects.infrastructure import (
@@ -73,7 +77,9 @@ class _Audit:
 
 
 def _employee(*, code: str = "ROOT", flags: tuple[str, ...] = ()) -> Employee:
-    priority = RolePriority.EXECUTIVE if code in {"ROOT", "CEO"} else RolePriority.ADMIN
+    # `Root` və `CEO` AYRI pillələrdədir — sahtə də həqiqi modeli izləməlidir,
+    # əks halda test səhv iyerarxiyanı sabitləşdirər (bax `RolePriority`).
+    priority = SystemRole(code).default_priority if code in {"ROOT", "CEO"} else RolePriority.ADMIN
     position = Position(
         position_id=uuid.uuid4(),  # type: ignore[arg-type]
         code=code,
@@ -228,12 +234,51 @@ def test_switch_requires_both_flag_and_role() -> None:
     with pytest.raises(MigrationError, match="səlahiyyəti yoxdur"):
         use_case.execute(tenant_id=TENANT, actor=_employee(), plan=PLAN)
 
-    with pytest.raises(MigrationError, match="YALNIZ Root/CEO"):
+    with pytest.raises(MigrationError, match="YALNIZ Root"):
         use_case.execute(
             tenant_id=TENANT,
             actor=_employee(code="HR_ADMIN", flags=("can_switch_db",)),
             plan=PLAN,
         )
+
+
+def test_switch_role_gate_rejects_ceo_even_with_the_flag() -> None:
+    """`CEO` flag-i hansısa yolla əldə etsə belə rol qapısı onu rədd edir.
+
+    REQRESSİYA QAPISI. `can_switch_db` `hardlock_level = 1` (`ROOT_ONLY`)
+    daşıyır, yəni `CEO` bu flag-i normal yolla ALA BİLMİR — testdəki override
+    məhz həmin qatın YAN KEÇİLDİYİ ssenarini (birbaşa SQL, köhnə məlumat,
+    gələcəkdə səhvən dəyişdirilmiş hardlock səviyyəsi) təqlid edir.
+
+    Rol qapısı əvvəl `Root VƏ CEO` idi; iki qat FƏRQLİ qərar verirdi
+    (flag qatı «yalnız Root», rol qatı «Root+CEO»). Bu test həmin genişlənmənin
+    sükutla geri qayıtmasını tutur.
+    """
+    use_case, parts = _switch()
+
+    with pytest.raises(MigrationError, match="YALNIZ Root"):
+        use_case.execute(
+            tenant_id=TENANT,
+            actor=_employee(code="CEO", flags=("can_switch_db",)),
+            plan=PLAN,
+        )
+
+    # Rədd YAZIDAN ƏVVƏLDİR: heç bir addım başlamır, hadisə jurnalı boşdur.
+    assert parts["events"].started == 0
+    assert parts["read_only"].entered == 0
+
+
+def test_switch_root_path_still_works_after_the_narrowing() -> None:
+    """Daralma `Root` yolunu POZMAMALIDIR — bu, qərarın "itki yoxdur" sübutudur."""
+    use_case, parts = _switch()
+
+    report = use_case.execute(tenant_id=TENANT, actor=_root(), plan=PLAN)
+
+    assert report.succeeded
+    assert parts["migrator"].switched == [DatabaseTarget.PRIVATE_SERVER]
+    # Yalnız-oxu yolu da toxunulmadan işləyir.
+    assert parts["read_only"].entered == 1
+    assert parts["read_only"].left == 1
 
 
 def test_successful_switch_runs_every_phase_in_order() -> None:
@@ -674,10 +719,34 @@ def test_plugin_management_requires_flag_and_root_role() -> None:
     with pytest.raises(PluginManagementError, match="səlahiyyəti yoxdur"):
         use_case.list_plugins(tenant_id=TENANT, actor=_employee())
 
-    with pytest.raises(PluginManagementError, match="YALNIZ Root/CEO"):
+    with pytest.raises(PluginManagementError, match="YALNIZ Root"):
         use_case.list_plugins(
             tenant_id=TENANT, actor=_employee(code="HR_ADMIN", flags=("can_manage_plugins",))
         )
+
+
+def test_plugin_role_gate_rejects_ceo_even_with_the_flag() -> None:
+    """`can_manage_plugins` `ROOT_ONLY`-dir — rol qapısı da eyni şeyi deməlidir.
+
+    `db_switch`-dəki eyni reqressiya qapısı. Plugin host prosesinə KOD əlavə
+    edir, yəni iki qatın fərqli qərar verməsi burada daha bahalıdır.
+    """
+    use_case = _plugins()
+
+    with pytest.raises(PluginManagementError, match="YALNIZ Root"):
+        use_case.list_plugins(
+            tenant_id=TENANT, actor=_employee(code="CEO", flags=("can_manage_plugins",))
+        )
+
+
+def test_plugin_root_path_still_lists_after_the_narrowing() -> None:
+    """Daralmadan sonra `Root` yolu toxunulmaz qalır."""
+    use_case = _plugins()
+
+    assert (
+        use_case.list_plugins(tenant_id=TENANT, actor=_employee(flags=("can_manage_plugins",)))
+        == []
+    )
 
 
 def test_unsigned_package_is_never_installed() -> None:

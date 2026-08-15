@@ -165,10 +165,17 @@ BEGIN
     END IF;
 
     -- (a) STRICT HIERARCHY GUARD.
-    -- QƏRAR SEC-006: YALNIZ `Root` bərabər-pillə qaydasından azaddır. `CEO` də
-    -- priority 0-dadır, lakin bölmə 3 eyni pilləyə müdaxiləni qadağan edir.
+    -- QƏRAR SEC-006: YALNIZ `Root` bərabər-pillə qaydasından azaddır — bölmə 3
+    -- eyni pilləyə müdaxiləni qadağan edir (CEO ↔ CEO, Admin ↔ Admin).
     -- Root istisnası zəruridir: əks halda Root ÖZ rolunun flag dəstini redaktə
     -- edə bilməzdi (`v_target_priority <= v_actor_priority` özünə də düşür).
+    --
+    -- SEC-019 QEYDİ (miqrasiya 048): bu fayl yazılanda `CEO` də priority
+    -- 0-da idi, yəni «CEO Root roluna toxuna bilmir» nəticəsi bərabər-pillə
+    -- şərtindən çıxırdı. 048 modeli düzəltdi (`Root`=0, `CEO`=1) və AŞAĞIDAKI
+    -- SQL DƏYİŞMƏDİ: müqayisə NİSBİDİR, `ROOT` istisnası isə rol KODU ilə
+    -- verilir — hər ikisi sürüşmədən asılı deyil. `0 <= 1` şərti indi
+    -- iyerarxiyanın təbii nəticəsi kimi işə düşür.
     IF v_actor_code = 'ROOT' THEN
         RETURN v_result;
     END IF;

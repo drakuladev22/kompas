@@ -1,6 +1,25 @@
 """Developer Panelinin məlumat qatı — `service_role` tərəfi (bölmə 8).
 
 ──────────────────────────────────────────────────────────────────────────────
+BU, TENANT İYERARXİYASININ PİLLƏSİ DEYİL — AYRI SİSTEMDİR
+──────────────────────────────────────────────────────────────────────────────
+Bu panel bəzən "Master" adlanır və bu ad bir yanlış təəssürat yaratmışdı:
+guya tenant-ın `Root`-unun ÜSTÜNDƏ daha bir `Root` var. YOXDUR. İki AYRI
+sistem var:
+
+    * TENANT-DAXİLİ RBAC — `Root`(0) → `CEO`(1) → `Admin`(2) → operativ
+      rollar(3) → `Satıcı`(4). Tenant-ın `Root`-u öz sistemində MÜTLƏQ,
+      ETİRAZSIZ ən yuxarıdır; bu nərdivanın 0-dan yuxarısı YOXDUR.
+    * SAAS ABUNƏ İDARƏETMƏSİ (bu fayl) — hansı tenant-ın ödənişi gəlib,
+      lisenziyası nə vaxt bitir, hansı versiyaya keçməlidir. Burada HEÇ BİR
+      `permission_flags` sətri oxunmur/yazılmır, heç bir işçi PII-si açılmır
+      və tenant-ın DAXİLİNDƏ heç bir səlahiyyət yoxdur.
+
+Yeganə toxunuş nöqtəsi lisenziyanın ÖZÜDÜR (aktiv/deaktiv) — yəni proqramın
+işləyib-işləməməsi, kimin nəyə icazəsi olması yox. `active_admin_count()`
+aşağıda məhz bu sərhədi göstərir: SAY oxunur, sətir məzmunu yox.
+
+──────────────────────────────────────────────────────────────────────────────
 BU FAYL MÜŞTƏRİYƏ GÖNDƏRİLƏN `.exe`-DƏ İŞLƏMİR
 ──────────────────────────────────────────────────────────────────────────────
 `gateway.py` müştəri PC-sində işləyir və "mənim statusum nədir?" soruşur.
@@ -35,6 +54,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from src.application.use_cases.developer_console import CrashRecord, TicketRecord
 from src.domain.policies import SystemLimitKey
+from src.domain.value_objects.authorization import RolePriority
 from src.domain.value_objects.licensing import (
     LicenseStatus,
     extend_by_month,
@@ -525,6 +545,13 @@ class DeveloperTenantDirectory:
         e-poçt, heç bir sətir məzmunu OXUNMUR. Bölmə 8 hazırlayıcı tərəf üçün
         "heç bir halda işçi PII-sinə uzaqdan çıxış YOXDUR" deyir; bir ədəd
         həmin sərhədi keçmir, lakin qapını yoxlamağa kifayət edir.
+
+        HƏDD `RolePriority.ADMIN`-dir, ədəd isə ondan TÖRƏDİLİR. Əvvəllər
+        burada sabit `1` yazılırdı və o, `Root`/`CEO` eyni pillədə (0) olduğu
+        modelə bağlı idi. Root/CEO prioritet ayrılığından sonra `Admin` 2-yə
+        sürüşdü — sabit qalsaydı, sorğu Admin-ləri sükutla saymazdı və tenant
+        real admin-i olduğu halda "sıfır admin" görünərdi. Bu, Emergency
+        Access Recovery-ni SƏHVƏN açardı, yəni say ən həssas qapının girişidir.
         """
         rows = self._fetch_all(
             """
@@ -533,9 +560,9 @@ class DeveloperTenantDirectory:
               JOIN positions p ON p.id = e.position_id
              WHERE e.tenant_id = %s
                AND e.is_active
-               AND p.priority <= 1
+               AND p.priority <= %s
             """,
-            (tenant_id,),
+            (tenant_id, int(RolePriority.ADMIN)),
         )
         return int(rows[0]["total"]) if rows else 0
 

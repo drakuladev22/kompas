@@ -2,8 +2,8 @@
 
 Burada Discord-tərzi icazə modelinin DƏYİŞMƏZ QAYDALARI kodlaşdırılır:
 
-* **İyerarxiya prioriteti** — `Root`/`CEO`=0, `Admin`=1, operativ rollar=2,
-  `Satıcı`=3. Kiçik rəqəm = yüksək səlahiyyət.
+* **İyerarxiya prioriteti** — `Root`=0, `CEO`=1, `Admin`=2, operativ rollar=3,
+  `Satıcı`=4. Kiçik rəqəm = yüksək səlahiyyət.
 * **Dörd-səviyyəli hardlock** — hansı flag-in kimə verilə biləcəyi.
 * **Anti-fraud vəzifə ayrılığı** — kamera flag-ləri heç vaxt
   `Mağaza_Meneceri`/`Satıcı`-ya verilmir; təsdiq flag-i isə kamera roluna
@@ -37,15 +37,56 @@ class AuthorizationError(KompasOSError):
 class RolePriority(IntEnum):
     """Rol iyerarxiyası — KİÇİK rəqəm DAHA YÜKSƏK səlahiyyət deməkdir.
 
-    Spesifikasiya bölmə 3: "Root/CEO = ən üst pillə (0) → Admin = CEO-dan bir
-    pillə aşağı (1) → HR_Admin/Mağaza_Meneceri/Kamera_Nəzarətçisi = operativ
-    rollar (2) → Satıcı/digər personel = ən aşağı pillə (3)."
+    Spesifikasiya bölmə 3: "`Root` = tək başına ən üst pillə (0) → `CEO` =
+    Root-dan DƏRHAL aşağı, AYRI pillə (1) → `Admin` = CEO-dan bir pillə aşağı
+    (2) → HR_Admin/Mağaza_Meneceri/Kamera_Nəzarətçisi = operativ rollar (3) →
+    Satıcı/digər personel = ən aşağı pillə (4)."
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `Root` VƏ `CEO` AYRI PİLLƏDƏDİR (KONSEPTUAL DÜZƏLİŞ)
+    ──────────────────────────────────────────────────────────────────────────
+    Uzun müddət ikisi də `EXECUTIVE = 0` idi və nəticə iyerarxiyanın ÖZ
+    mənasını pozurdu: `CEO` `Root` ilə BƏRABƏR pillədə sayılırdı. "CEO Root-un
+    icazələrinə toxuna bilmir" qaydası yalnız `ROOT_ONLY` hardlock-u və
+    `assert_may_be_edited_by`-dakı bərabər-pillə şərti sayəsində işləyirdi —
+    yəni İYERARXİYANIN TƏBİİ NƏTİCƏSİ DEYİL, əlavə qapının yan təsiri idi.
+    Həmin qapının biri açıq qalsaydı (məs. hardlock səviyyəsi 1-dən 2-yə
+    düşsəydi), CEO Root-un flag dəstinə toxuna bilərdi.
+
+    İndi `Root` (0) `CEO`-dan (1) CİDDİ ŞƏKİLDƏ yüksəkdir və `outranks()`
+    qaydanı özü tətbiq edir; hardlock isə İKİNCİ, müstəqil qatdır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `EXECUTIVE` ADI SAXLANILIR (yeni üzvün adı `ROOT`-dur)
+    ──────────────────────────────────────────────────────────────────────────
+    `EXECUTIVE`-in MƏNASI dəyişmir — o, "şirkət rəhbərliyi" pilləsidir və
+    dəyəri 0-dan 1-ə sürüşür. Alternativ (`EXECUTIVE`-i Root üçün saxlayıb CEO
+    üçün yeni ad yaratmaq) RƏDD EDİLDİ: onda mövcud 100-dən çox istinadın hər
+    biri sükutla MƏNA dəyişərdi (`RolePriority.EXECUTIVE` yazan hər sətir
+    "CEO" əvəzinə "Root" oxunardı) və kompilyator bunu tutmazdı. İndiki
+    seçimdə isə hər istinad ya olduğu kimi doğru qalır (CEO nəzərdə tutulurdu),
+    ya da açıq şəkildə `RolePriority.ROOT`-a köçürülür.
+
+    ──────────────────────────────────────────────────────────────────────────
+    DB YARISI EYNİ DİAPAZONDADIR (miqrasiya 049)
+    ──────────────────────────────────────────────────────────────────────────
+    `positions.priority` CHECK-i əvvəl 0..9 idi, yəni DB `RolePriority`-nin
+    tanımadığı bir dəyəri (məs. 7) QANUNİ sayırdı; `mappers.position_from_row`
+    isə həmin sətirdə `RolePriority(7)` çağırıb `ValueError` atırdı. Boşluq
+    sükutlu idi: ekranı yan keçən birbaşa `INSERT` bazada qalır, tətbiqdə isə
+    "rol siyahısı açılmır" kimi görünürdü. 049 CHECK-i 0..4-ə daraltdı.
+
+    ONA GÖRƏ: `Satıcı`-dan aşağı YENİ pillə əlavə edilərsə, dəyişiklik İKİ
+    yerdədir (CLAUDE.md §5) — bu enum VƏ `positions.priority` CHECK-i
+    (`schema.sql` §5 + yeni miqrasiya). Yalnız birini genişləndirmək köhnə
+    qüsuru geri gətirər.
     """
 
-    EXECUTIVE = 0  # Root, CEO
-    ADMIN = 1  # Admin
-    OPERATIONAL = 2  # HR_Admin, Mağaza_Meneceri, Kamera_Nəzarətçisi
-    STAFF = 3  # Satıcı və digər personel
+    ROOT = 0  # Root — tenant-ın sistem sahibi, TƏK BAŞINA bu pillədə
+    EXECUTIVE = 1  # CEO — şirkət rəhbəri, Root-dan DƏRHAL aşağı
+    ADMIN = 2  # Admin
+    OPERATIONAL = 3  # HR_Admin, Mağaza_Meneceri, Kamera_Nəzarətçisi
+    STAFF = 4  # Satıcı və digər personel
 
     def outranks(self, other: RolePriority) -> bool:
         """`self` `other`-dan CİDDİ ŞƏKİLDƏ yüksəkdirmi.
@@ -77,7 +118,8 @@ class SystemRole(str, Enum):
 
 
 _DEFAULT_PRIORITIES: Final[dict[SystemRole, RolePriority]] = {
-    SystemRole.ROOT: RolePriority.EXECUTIVE,
+    # `Root` və `CEO` AYRI pillələrdir — bax `RolePriority` docstring-i.
+    SystemRole.ROOT: RolePriority.ROOT,
     SystemRole.CEO: RolePriority.EXECUTIVE,
     SystemRole.ADMIN: RolePriority.ADMIN,
     SystemRole.HR_ADMIN: RolePriority.OPERATIONAL,
@@ -105,6 +147,12 @@ class HardlockLevel(IntEnum):
     ROOT_CEO:  `Root` VƏ `CEO`.
     DELEGABLE: Root/CEO tərəfindən `Admin`-ə həvalə edilə bilər
                (Hierarchy + Self-Escalation Guard-a tabe).
+
+    HARDLOCK PRİORİTET AYRILIĞINDAN SONRA DA DƏYİŞMİR: `ROOT_CEO` "Root VƏ
+    CEO" deməkdir və `Root` (0) ilə `CEO` (1) artıq ayrı pillələrdə olsa da,
+    bu səviyyə HƏR İKİSİNƏ icazə verir — hardlock "kimə verilə bilər"
+    sualına cavabdır, "kim kimə toxuna bilər" sualına yox. İkinci sual
+    Strict Hierarchy Guard-ındır və iki qat QƏSDƏN müstəqildir.
     """
 
     NONE = 0
@@ -120,6 +168,11 @@ class HardlockLevel(IntEnum):
             return role is SystemRole.ROOT
         if self is HardlockLevel.ROOT_CEO:
             return role in (SystemRole.ROOT, SystemRole.CEO)
+        # DELEGABLE — `Admin` pilləsi VƏ ondan yuxarı (Root, CEO, Admin).
+        # Müqayisə ƏDƏDLƏ deyil, SİMVOLLA aparılır: prioritet dəyərləri
+        # sürüşdükdə (Root/CEO ayrılığı) bu sətir olduğu kimi doğru qalır.
+        # DB qarşılığı `enforce_permission_hardlock()`-dadır və orada ədəd
+        # yazılmalıdır — məhz ona görə miqrasiya 048 həmin şərti də yeniləyir.
         return role.default_priority <= RolePriority.ADMIN
 
 

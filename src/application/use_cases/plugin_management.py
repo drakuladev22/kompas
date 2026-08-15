@@ -4,6 +4,11 @@ Bölmə 1: *"Plugin-lər ayrıca prosesdə icra olunur, birbaşa DB credentials-
 çıxışı olmur, yalnız whitelisted API səthi üzərindən işləyir. Yalnız Root/CEO
 tərəfindən [quraşdırıla/aktivləşdirilə bilər]."*
 
+Yuxarıdakı sitatdakı "Root/CEO" spesifikasiyanın ÜMUMİ ifadəsidir; icazə
+kataloqu (`schema.sql` §22) onu DƏQİQLƏŞDİRİR və `can_manage_plugins`-ə
+`hardlock_level = 1` (`ROOT_ONLY`) verir. Kataloq bağlayıcıdır — `_require`
+buna uyğun olaraq YALNIZ `Root` buraxır (bax həmin metodun docstring-i).
+
 Sandbox, imza yoxlaması və capability whitelist-i ARTIQ Faza 2-dədir
 (`infrastructure/plugins/`). Bu modul onların üzərinə YALNIZ idarəetmə
 qərarlarını əlavə edir — həmin məntiq təkrar yazılmır.
@@ -269,10 +274,22 @@ class PluginManagementUseCase:
         return plugin
 
     def _require(self, actor: Employee, *, now: datetime) -> None:
-        """`can_manage_plugins` + Root/CEO rolu (bölmə 1).
+        """`can_manage_plugins` + `Root` rolu (bölmə 1).
 
         Baza keçidindəki ilə eyni iki qatlı qoruma: plugin host prosesinə kod
         əlavə edir, yəni nəticələri bütün tenant-a yayılır.
+
+        BAĞLAYICI QAT BİRİNCİSİDİR: `can_manage_plugins` `hardlock_level = 1`
+        (`ROOT_ONLY`) daşıyır, yəni `CEO` onu nə rol dəsti, nə fərdi override
+        ilə ala bilmir — nə domendə, nə DB trigger-ində.
+
+        Rol şərti əvvəl «Root VƏ CEO» idi və bölmə 1-in ümumi mətnini
+        güzgüləyirdi. O budaq DARALDILDI, çünki iki qat FƏRQLİ qərar verirdi
+        (flag qatı «yalnız Root», rol qatı «Root+CEO») — CLAUDE.md §5 isə
+        qaydanın hər iki yerdə EYNİ olmasını tələb edir. İmkan İTMİR: `CEO`
+        bu flag-i onsuz da daşıya bilmədiyi üçün rol şərtinə heç vaxt `CEO`
+        ilə çatılmırdı. Ətraflı əsaslandırma `db_switch._require_permission`
+        docstring-indədir (eyni qərar, eyni səbəb).
         """
         if not actor.has_permission(MANAGE_PLUGINS_FLAG, now=now):
             _security_log.warning(
@@ -282,14 +299,14 @@ class PluginManagementUseCase:
                 f"«{MANAGE_PLUGINS_FLAG}» səlahiyyəti yoxdur",
                 user_message="Plugin-ləri idarə etmək səlahiyyətiniz yoxdur.",
             )
-        if actor.position.effective_system_role not in (SystemRole.ROOT, SystemRole.CEO):
+        if actor.position.effective_system_role is not SystemRole.ROOT:
             _security_log.warning(
                 "PLUGIN_MANAGEMENT_DENIED_ROLE",
                 extra={"actor_id": str(actor.id), "role": actor.position.code},
             )
             raise PluginManagementError(
-                "Plugin idarəetməsi YALNIZ Root/CEO üçündür (bölmə 1)",
-                user_message="Bu əməliyyat yalnız Root və CEO üçündür.",
+                "Plugin idarəetməsi YALNIZ Root üçündür (bölmə 1)",
+                user_message="Bu əməliyyat yalnız Root üçündür.",
                 context={"role": actor.position.code},
             )
 

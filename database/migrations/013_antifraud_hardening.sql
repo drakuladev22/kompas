@@ -115,14 +115,51 @@ COMMENT ON FUNCTION enforce_anti_fraud_segregation() IS
 -- (`MAX_CAMERA_ROLE_PRIORITY = OPERATIONAL`), lakin birbaşa `INSERT` yolu
 -- açıq idi. Bu, "satıcıya cərimə yazma hüququ verməyin dolayı yolu"dur:
 -- `is_camera_type=TRUE` rol `is_camera_only` yoxlamasından keçir.
+--
+-- ---------------------------------------------------------------------------
+-- HƏDD NİYƏ SABİT `2` DEYİL, `SATICI` SƏTRİNDƏN OXUNUR (048 düzəlişi)
+-- ---------------------------------------------------------------------------
+-- Bu miqrasiya ilk yazılanda hədd `priority <= 2` sabiti idi, çünki o vaxtkı
+-- modeldə `Satıcı` = 3 idi. Miqrasiya 048 `Root` və `CEO`-nu ayırdı və bütün
+-- pillələr bir vahid sürüşdü (`Satıcı` = 4, operativ rollar = 3).
+--
+-- Sabit qalsaydı, TƏZƏ quraşdırma ÇÖKƏRDİ: `schema.sql` §21 artıq
+-- `KAMERA_NEZARETCISI`-ni prioritet 3 ilə yazır və `ALTER TABLE … ADD
+-- CONSTRAINT` mövcud sətirləri VALİDASİYA edir — yəni `<= 2` şərti həmin
+-- sətrə ilişərdi və miqrasiya zənciri 013-də dayanardı.
+--
+-- Ona görə hədd ƏDƏD kimi yox, QAYDA kimi yazılır: "kamera-tipli rol ƏN AŞAĞI
+-- pillədən (`Satıcı`) ən azı bir pillə yuxarı olmalıdır". Ədəd şablon
+-- (`tenant_id IS NULL`) `SATICI` sətrindən oxunur, yəni ifadə hər iki modeldə
+-- DOĞRU qalır: köhnədə `<= 2`, yenidə `<= 3`. Şablon sətri tapılmasa daha DAR
+-- olan köhnə dəyər seçilir (fail-safe).
+--
+-- Domen qarşılığı `MAX_CAMERA_ROLE_PRIORITY = RolePriority.OPERATIONAL`-dır və
+-- o, SİMVOLDUR — sürüşməni onsuz da udur.
 
 ALTER TABLE positions DROP CONSTRAINT IF EXISTS chk_camera_role_priority;
-ALTER TABLE positions ADD CONSTRAINT chk_camera_role_priority
-    CHECK (NOT is_camera_type OR priority <= 2);
+
+DO $$
+DECLARE
+    v_seller_priority SMALLINT;
+BEGIN
+    SELECT priority INTO v_seller_priority
+      FROM positions WHERE code = 'SATICI' AND tenant_id IS NULL;
+
+    v_seller_priority := COALESCE(v_seller_priority, 3);
+
+    EXECUTE format(
+        'ALTER TABLE positions ADD CONSTRAINT chk_camera_role_priority '
+        'CHECK (NOT is_camera_type OR priority <= %s)',
+        v_seller_priority - 1);
+END
+$$;
 
 COMMENT ON CONSTRAINT chk_camera_role_priority ON positions IS
-    'Kamera-tipli rol ən aşağı pillədə (prioritet 3) ola bilməz — əks halda '
-    'Satıcı səviyyəsində cərimə yazma hüququ yaranardı (bölmə 3).';
+    'Kamera-tipli rol ƏN AŞAĞI pillədə (`Satıcı`) ola bilməz — əks halda '
+    'Satıcı səviyyəsində cərimə yazma hüququ yaranardı (bölmə 3). Ədədi hədd '
+    'modeldən asılıdır (köhnə: 2, 048-dən sonra: 3) və şablon `SATICI` '
+    'sətrindən hesablanır.';
 
 -- ---------------------------------------------------------------------------
 -- 3. FLAG ATRİBUTLARI DƏYİŞMƏZDİR

@@ -325,7 +325,7 @@ HR_ADMIN_NO_BULK_POSITION = _position(
     "HR_ADMIN", RolePriority.OPERATIONAL, flags=(MANAGE_EMPLOYEES_FLAG,)
 )
 SELLER_POSITION = _position("SATICI", RolePriority.STAFF)
-ROOT_POSITION = _position("ROOT", RolePriority.EXECUTIVE)
+ROOT_POSITION = _position("ROOT", RolePriority.ROOT)
 
 
 def _csv_bytes(

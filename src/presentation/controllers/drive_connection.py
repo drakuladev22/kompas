@@ -121,10 +121,26 @@ class DriveConnectionController:
     # ------------------------------- razılıq --------------------------------- #
 
     def _on_connect(self, screen: DriveConnectionScreen) -> None:
+        # MESAJ ROL DEYİL, FLAG ADI DEYİR — NİYƏ:
+        #
+        # Əvvəlki mətn «yalnız Root və CEO idarə edə bilər» idi, halbuki
+        # `_permitted()` YALNIZ `can_manage_drive_connection` flag-ini yoxlayır
+        # və həmin flag `schema.sql` §22-də `hardlock_level = 0`-dır, yəni Root
+        # onu İSTƏNİLƏN rola verə bilər (bax `HardlockLevel.NONE`).
+        #
+        # Yəni mesaj faktdan DAR idi: flag-i almış HR_Admin əməliyyatı uğurla
+        # icra edə bilirdi, lakin icazəsi olmayan bir istifadəçi «bu, Root/CEO
+        # işidir» oxuyub səhv adama — CEO-ya — müraciət edirdi. Rol qapısı
+        # ƏLAVƏ ETMƏK variantı rədd edildi: o, flag-i qanuni şəkildə almış
+        # rolların REAL imkanını bağlayardı (`can_manage_drive_connection`
+        # qəsdən delegasiya edilə biləndir — bax `migrations/002` başlığı).
         if not self._permitted():
             screen.show_error(
                 title="Səlahiyyət yoxdur",
-                message="Drive bağlantısını yalnız Root və CEO idarə edə bilər.",
+                message=(
+                    "Drive bağlantısını idarə etmək üçün «Drive bağlantısını idarə et» "
+                    "icazəsi lazımdır. Administratorunuzla əlaqə saxlayın."
+                ),
             )
             return
         if self._flow is not None:

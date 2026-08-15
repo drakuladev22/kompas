@@ -142,7 +142,10 @@ def _position(code: str, priority: RolePriority) -> Position:
 def _employee(
     *,
     code: str = "ROOT",
-    priority: RolePriority = RolePriority.EXECUTIVE,
+    # Defolt aktor `Root`-dur, yəni pilləsi də `RolePriority.ROOT` (0) olmalıdır.
+    # Əvvəl burada `EXECUTIVE` yazılırdı, çünki `Root` və `CEO` eyni pilləni
+    # paylaşırdı — həmin model artıq yoxdur (bax `RolePriority` docstring-i).
+    priority: RolePriority = RolePriority.ROOT,
     flags: tuple[str, ...] = (),
     employee_id: EmployeeId | None = None,
 ) -> Employee:
@@ -883,7 +886,9 @@ def test_pin_reset_also_clears_the_lockout() -> None:
 def test_lower_rank_cannot_reset_a_higher_rank_password() -> None:
     """STRICT HIERARCHY GUARD şifrə sıfırlama yolu ilə yan keçilə bilməz."""
     ceo = _employee(code="CEO", priority=RolePriority.EXECUTIVE)
-    hr = _employee(code="HR_ADMIN", priority=RolePriority.ADMIN, flags=("can_reset_password",))
+    hr = _employee(
+        code="HR_ADMIN", priority=RolePriority.OPERATIONAL, flags=("can_reset_password",)
+    )
     repo = _EmployeeRepo([ceo, hr])
     use_case = _user_use_case(employees=repo, credentials=_Credentials(), audit=_Audit())
 
@@ -895,7 +900,9 @@ def test_lower_rank_cannot_reset_a_higher_rank_password() -> None:
 
 def test_cannot_assign_a_position_above_your_own() -> None:
     """Onsuz HR_Admin yeni Root yaradıb həmin hesabla daxil ola bilərdi."""
-    hr = _employee(code="HR_ADMIN", priority=RolePriority.ADMIN, flags=("can_manage_employees",))
+    hr = _employee(
+        code="HR_ADMIN", priority=RolePriority.OPERATIONAL, flags=("can_manage_employees",)
+    )
     use_case = _user_use_case(
         employees=_EmployeeRepo([hr]), credentials=_Credentials(), audit=_Audit()
     )
@@ -908,9 +915,78 @@ def test_cannot_assign_a_position_above_your_own() -> None:
             draft=EmployeeDraft(
                 first_name="Yeni",
                 last_name="Root",
-                position=_position("ROOT", RolePriority.EXECUTIVE),
+                position=_position("ROOT", RolePriority.ROOT),
             ),
             initial_pin="4821",
+        )
+
+
+def test_root_can_now_create_a_ceo_account() -> None:
+    """PRİORİTET AYRILIĞININ FUNKSİONAL QAZANCI (reqressiya qapısı).
+
+    `_assert_may_assign_position` aktorun rolunun hədəf roldan CİDDİ ŞƏKİLDƏ
+    yuxarıda olmasını tələb edir. Köhnə modeldə `Root` və `CEO` hər ikisi
+    prioritet 0-da idi, yəni `Root` YENİ CEO HESABI YARADA BİLMİRDİ —
+    iyerarxiyanın ən üstündəki istifadəçi öz birbaşa tabeliyindəki rolu
+    təyin edə bilmirdi. Bu, səhv modelin sükutla yaratdığı funksional qüsur
+    idi. İndi `Root` (0) `CEO`-nu (1) ciddi şəkildə üstələyir və axın işləyir.
+
+    `Root` → `Root` istiqaməti isə BLOKLU qalır (bərabər pillə) — bu, qəsdli
+    məhdudiyyətdir və yuxarıdakı test onu artıq qoruyur.
+    """
+    root = _employee(flags=("can_manage_employees",))
+    repo = _EmployeeRepo([root])
+    use_case = _user_use_case(employees=repo, credentials=_Credentials(), audit=_Audit())
+
+    created = use_case.create_employee(
+        tenant_id=TENANT,
+        actor=root,
+        employee_id=EmployeeId(uuid.uuid4()),
+        draft=EmployeeDraft(
+            first_name="Yeni",
+            last_name="CEO",
+            position=_position("CEO", RolePriority.EXECUTIVE),
+        ),
+        initial_pin="4821",
+    )
+
+    assert created.position.code == "CEO"
+    assert created.position.priority is RolePriority.EXECUTIVE
+
+
+def test_root_can_now_deactivate_a_ceo_account() -> None:
+    """`_assert_may_manage` də prioritet ayrılığından FAYDA GÖRÜR.
+
+    Köhnə modeldə `Root` (0) `CEO`-nu (0) ÜSTƏLƏMİRDİ, yəni `Root` çıxıb
+    getmiş CEO-nun hesabını deaktiv edə BİLMİRDİ — tenant sahibi öz
+    sistemində ən həssas hesabı bağlaya bilmirdi. Bu, səhv modelin sükutla
+    yaratdığı ikinci funksional qüsur idi (birincisi: CEO hesabı yaratmaq).
+
+    `CEO` → `Root` istiqaməti isə BAĞLIDIR və aşağıdakı `assert` onu ayrıca
+    təsbit edir — düzəliş yalnız BİR istiqaməti açır.
+    """
+    root = _employee(flags=("can_manage_employees",))
+    ceo = _employee(code="CEO", priority=RolePriority.EXECUTIVE)
+    repo, audit = _EmployeeRepo([root, ceo]), _Audit()
+    use_case = _user_use_case(employees=repo, credentials=_Credentials(), audit=audit)
+
+    deactivated = use_case.deactivate_employee(
+        tenant_id=TENANT, actor=root, employee_id=ceo.id, reason="Vəzifədən azad edildi"
+    )
+
+    assert deactivated.is_active is False
+    assert "EMPLOYEE_DEACTIVATED" in audit.actions()
+
+    # Əks istiqamət: CEO `Root` hesabına toxuna bilmir.
+    ceo_actor = _employee(
+        code="CEO", priority=RolePriority.EXECUTIVE, flags=("can_manage_employees",)
+    )
+    repo_2 = _EmployeeRepo([root, ceo_actor])
+    use_case_2 = _user_use_case(employees=repo_2, credentials=_Credentials(), audit=_Audit())
+
+    with pytest.raises(AuthorizationError, match="HIERARCHY"):
+        use_case_2.deactivate_employee(
+            tenant_id=TENANT, actor=ceo_actor, employee_id=root.id, reason="Test"
         )
 
 
