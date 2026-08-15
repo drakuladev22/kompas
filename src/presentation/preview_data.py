@@ -320,6 +320,10 @@ class QueuePreview(NamedTuple):
     timestamp_text: str
     waiting_text: str
     is_late: bool = False
+    #: Üz təsdiqi AŞAĞI-ETİBAR zolağında keçdi (facecontrol.md bənd 12).
+    #: Sətir bloklanmır — operator sadəcə iVMS yoxlamasında daha diqqətli
+    #: olmalıdır. Defolt `False`: mövcud maket sətirləri dəyişmir.
+    is_low_confidence: bool = False
 
 
 QUEUE: Final = [
@@ -340,6 +344,9 @@ QUEUE: Final = [
         kind="Qayıdış Təsdiqi",
         timestamp_text="11:58",
         waiting_text="3 dəq gözləyir",
+        # Bənd 12 — maketdə ƏN AZI BİR aşağı-etibarlı sətir olmalıdır, əks
+        # halda nişanın necə göründüyü heç vaxt gözlə yoxlanmazdı.
+        is_low_confidence=True,
     ),
     QueuePreview(
         request_id="q3",
@@ -898,6 +905,158 @@ STAFFING_PATTERN: Final[list[tuple[int, float]]] = [
     (6, 3.8),
     (7, 3.5),
 ]
+
+# --------------------------------------------------------------------------- #
+# Face Control (facecontrol.md Faza 4)
+#
+# AÇARLAR CANLI YOLLA EYNİDİR və bu, təsadüf deyil: hər sözlük
+# `controllers/face_control.py` (qeydiyyat/istisna), `controllers/kiosk.py::
+# face_result_row` (overlay) və `controllers/root_control.py` (mağaza əhatəsi)
+# funksiyalarının qaytardığı forma ilə eynidir. Maket öz ad məkanını qursaydı,
+# uyğunsuzluq yalnız istehsalatda — kioskda duran işçinin qarşısında — üzə
+# çıxardı (`shell/menu.py` başlığındakı tarixi qüsur).
+# --------------------------------------------------------------------------- #
+
+#: Qeydiyyat ekranının işçi siyahısı. ÜÇ VƏZİYYƏTİN HƏR BİRİ VAR — maket
+#: yalnız `NEW` göstərsəydi, «Köhnəlib» nişanı və yenidən-qeydiyyat rejimi
+#: heç vaxt gözlə yoxlanmazdı (bax `WORK_MODE_CHOICES`-dakı eyni qərar).
+FACE_ENROLLMENT_EMPLOYEES: Final[list[dict[str, str]]] = [
+    {
+        "id": "00000000-0000-0000-0000-0000000000f1",
+        "name": "Aysel Quliyeva",
+        "store": "Bellona 28 May",
+        "state": "NEW",
+        "enrolled_at": "",
+    },
+    {
+        "id": "00000000-0000-0000-0000-0000000000f2",
+        "name": "Murad Əliyev",
+        "store": "Yataş Xətai",
+        "state": "ENROLLED",
+        "enrolled_at": "14.02.2026 10:20",
+    },
+    {
+        "id": "00000000-0000-0000-0000-0000000000f3",
+        "name": "Nigar Səfərova",
+        "store": "Bellona 28 May",
+        "state": "STALE",
+        "enrolled_at": "03.03.2025 09:05",
+    },
+]
+
+#: Kadr sayı ROOT parametrindəndir — maket də onu `DEFAULT_LIMITS`-dən oxuyur
+#: ki, ekranda sabit ədəd yazılmasın (CLAUDE.md §5).
+FACE_ENROLLMENT_CAMERA: Final[dict[str, str]] = {
+    "available": "1",
+    "message": "Kamera hazırdır. İşçi kameraya baxsın və [Çək] düyməsini basın.",
+    "frame_count": str(DEFAULT_LIMITS[SystemLimitKey.FACE_ENROLLMENT_FRAME_COUNT]),
+}
+
+#: Son cəhdin nəticəsi — maketdə QİSMƏN uğurlu hal seçilib (5 kadrdan 4-ü),
+#: çünki «hamısı keçdi» halı kadr-kadr cədvəlini boş göstərərdi.
+FACE_ENROLLMENT_RESULT: Final[dict[str, str]] = {
+    "accepted": "1",
+    "message": "Üz qeydiyyatı tamamlandı — 4/5 kadrın ortası istinad kimi saxlanıldı.",
+    "frames_total": "5",
+    "frames_accepted": "4",
+    "archived": "0",
+}
+
+#: Kadr-kadr nəticə: rədd səbəbi KONKRETDİR (bənd 1) — «uğursuz» yazmaq
+#: operatoru işıq, bucaq və kamera arasında təsadüfi axtarışa məcbur edərdi.
+FACE_ENROLLMENT_FRAMES: Final[list[dict[str, str]]] = [
+    {"index": "1", "accepted": "1", "quality": "0.82", "reason": "—"},
+    {"index": "2", "accepted": "0", "quality": "0.31", "reason": "Kadr çox qaranlıqdır"},
+    {"index": "3", "accepted": "1", "quality": "0.77", "reason": "—"},
+    {"index": "4", "accepted": "1", "quality": "0.69", "reason": "—"},
+    {"index": "5", "accepted": "1", "quality": "0.74", "reason": "—"},
+]
+
+#: İstisna ekranının işçi seçimi.
+FACE_EXEMPTION_EMPLOYEES: Final[list[dict[str, str]]] = [
+    {"id": "00000000-0000-0000-0000-0000000000f1", "name": "Aysel Quliyeva"},
+    {"id": "00000000-0000-0000-0000-0000000000f2", "name": "Murad Əliyev"},
+    {"id": "00000000-0000-0000-0000-0000000000f3", "name": "Nigar Səfərova"},
+]
+
+#: Tavan ROOT parametrindən, minimum uzunluq isə SXEM `CHECK`-indən gəlir —
+#: ikisi fərqli mənbələrdir və maket də onları qarışdırmır.
+FACE_EXEMPTION_LIMITS: Final[dict[str, str]] = {
+    "max_days": str(DEFAULT_LIMITS[SystemLimitKey.FACE_EXEMPTION_MAX_DAYS]),
+    "min_reason_length": "10",
+}
+
+FACE_EXEMPTIONS: Final[list[dict[str, str]]] = [
+    {
+        "id": "00000000-0000-0000-0000-0000000000e1",
+        "employee": "Nigar Səfərova",
+        "reason": "Üz cərrahiyyəsindən sonra sağalma dövrü — həkim arayışı var",
+        "expires_at": "10.10.2026 09:00",
+        "days_remaining": "56 gün",
+        "granted_by": "Root İstifadəçi",
+    },
+]
+
+#: Kiosk overlay-inin maket nəticələri — `outcome` açarı `FaceGateOutcome`
+#: dəyəridir (ekran öz ad məkanını qurmur). Üç ƏSAS hal saxlanılır, çünki
+#: bənd 3 məhz onların FƏRQLİ mətnlə göstərilməsini tələb edir.
+FACE_VERIFICATION_RESULTS: Final[list[dict[str, str]]] = [
+    {
+        "outcome": "ALLOWED",
+        "message": "Üz təsdiqləndi.",
+        "gesture": "Gözlərinizi qırpın",
+        "confidence": "88%",
+        "retry": "0",
+    },
+    {
+        "outcome": "RETRY",
+        "message": "Üz aşkarlanmadı. İşığa tərəf dönüb yenidən cəhd edin.",
+        "gesture": "Başınızı yavaşca sağa çevirin",
+        "confidence": "",
+        "retry": "1",
+    },
+    {
+        "outcome": "BLOCKED",
+        "message": "Üz uyğun gəlmədi. Əməliyyat dayandırıldı.",
+        "gesture": "Gülümsəyin",
+        "confidence": "41%",
+        "retry": "0",
+    },
+]
+
+#: Overlay maketinin GÖSTƏRDİYİ sətir — dizayn yoxlaması üçün ən çox məlumat
+#: daşıyan hal (`RETRY`: göstəriş + mesaj + yenidən-cəhd düyməsi birlikdə).
+FACE_VERIFICATION_RESULT: Final[dict[str, str]] = FACE_VERIFICATION_RESULTS[1]
+
+#: ROOT panelindəki «Face Control mağazaları» sahəsi (bənd 15).
+#: `active` sətirlərdən HEÇ BİRİ seçilməsəydi maketdə «boş = qlobal» halı
+#: görünərdi, hamısı seçilsəydi isə pilot rejimi görünməzdi — ona görə
+#: qarışıqdır.
+FACE_STORE_SCOPE: Final[list[dict[str, str]]] = [
+    {"id": "00000000-0000-0000-0000-0000000000a1", "name": "Bellona 28 May", "active": "1"},
+    {"id": "00000000-0000-0000-0000-0000000000a2", "name": "Yataş Xətai", "active": "0"},
+    {"id": "00000000-0000-0000-0000-0000000000a3", "name": "İstikbal Gənclik", "active": "0"},
+    {"id": "00000000-0000-0000-0000-0000000000a4", "name": "Enza Home Gəncə", "active": "0"},
+]
+
+#: ROOT panelindəki hədd xülasəsi — TƏRS CÜT XƏBƏRDARLIĞI (bax
+#: `FaceToleranceBand.resolve`). Maket DÜZGÜN cütü göstərir (`inverted="0"`),
+#: çünki xəbərdarlığın YOX olduğu hal da yoxlanılmalıdır.
+FACE_TOLERANCE: Final[dict[str, str]] = {
+    "match": str(DEFAULT_LIMITS[SystemLimitKey.FACE_MATCH_TOLERANCE]),
+    "low_confidence": str(DEFAULT_LIMITS[SystemLimitKey.FACE_LOW_CONFIDENCE_TOLERANCE]),
+    "inverted": "0",
+    "band_enabled": "1",
+}
+
+#: Profil ekranındakı «Üz qeydiyyatı» kartı (bənd 13) — maketdə KÖHNƏLMİŞ
+#: qeydiyyat seçilib, çünki xəbərdarlığın ÖZÜ yoxlanılmalı olan hissədir.
+FACE_PROFILE_ENROLLMENT: Final[dict[str, str]] = {
+    "state": "STALE",
+    "enrolled_at": "03.03.2025 09:05",
+    "reminder_months": str(DEFAULT_LIMITS[SystemLimitKey.FACE_REENROLLMENT_REMINDER_MONTHS]),
+}
+
 
 __all__ = [
     "AUDIT_ENTRIES",

@@ -762,6 +762,69 @@ class SystemLimitKey(str, Enum):
     LUNCH_BREAK_DAILY_COUNT = "LUNCH_BREAK_DAILY_COUNT"
     TEA_BREAK_DURATION_MINUTES = "TEA_BREAK_DURATION_MINUTES"
     TEA_BREAK_DAILY_COUNT = "TEA_BREAK_DAILY_COUNT"
+    # --- FACE CONTROL — ÜZ TƏSDİQİ (facecontrol.md, seed: migrations/047) ---- #
+    #
+    # ONU DA `facecontrol.md`-nin "ROOT PARAMETRİ" işarəli (və ya MƏRKƏZİ
+    # TƏLƏBİN əhatə etdiyi) dəyəridir və sənəd onların hardcode edilməsini
+    # AÇIQ şəkildə qadağan edir. Heç biri CLAUDE.md §5-dəki struktur zəmanət
+    # DEYİL: anti-fraud vəzifə ayrılığına, hardlock iyerarxiyasına və
+    # dual-control axınına toxunmurlar — biometrik qatın HƏSSASLIĞINI
+    # tənzimləyirlər. Səlahiyyət tərəfi isə struktur zəmanətdir və ayrıca
+    # yaşayır (`can_manage_face_exemptions`, hardlock 2).
+    #
+    # Enrollment kadrının minimum keyfiyyət balı. HARDCODE QADAĞANDIR, çünki
+    # doğru hədd KAMERADAN və İŞIQDAN asılıdır: vitrin işığı altındakı kiosk
+    # ilə anbar dəhlizindəki kiosk eyni bala çatmır. Sabit ədəd birincidə
+    # mənasız, ikincidə isə enrollment-i tamamilə mümkünsüz edərdi.
+    FACE_ENROLLMENT_MIN_QUALITY = "FACE_ENROLLMENT_MIN_QUALITY"
+    # Enrollment-də çəkilən KADR SAYI (bənd 11 — çox-kadr orta alma).
+    # HARDCODE QADAĞANDIR VƏ BU, TAPŞIRIĞIN AÇIQ TƏLƏBİDİR: ədəd keyfiyyət
+    # ilə vaxt arasındakı MÜBADİLƏDİR və doğru nöqtəsi avadanlıqdan asılıdır.
+    # Zəif veb-kamerada beş kadrın ortası daha sabitdir; güclü kamerada isə
+    # üç kadr eyni nəticəni yarı vaxta verir və 235 işçilik şəbəkədə bu, real
+    # fərqdir. Kodda sabit ədəd hər iki quraşdırmanın birində səhv olardı.
+    #
+    # BU PARAMETR HEÇ VAXT PERFORMANSA GÖRƏ AVTOMATİK AZALDILMIR (bənd 18-in
+    # kritik qaydası): doğrulama yavaşdırsa həll yolu hardware/optimallaşdırma
+    # olmalıdır — kadr sayının sükutla endirilməsi TƏHLÜKƏSİZLİK GÜZƏŞTİDİR.
+    FACE_ENROLLMENT_FRAME_COUNT = "FACE_ENROLLMENT_FRAME_COUNT"
+    # Ardıcıl MISMATCH kilid həddi. PIN-in öz həddindən (`PIN_MAX_FAILED_
+    # ATTEMPTS` = 5) AYRI açardır və bu, qəsdlidir: unudulmuş rəqəm ilə
+    # tanınmayan üz eyni ağırlıqda siqnal deyil. Kilidin MÜDDƏTİ üçün YENİ
+    # açar yaradılmır — `PIN_LOCKOUT_MINUTES` işlədilir, çünki facecontrol.md
+    # bənd 4 lockout mexanizminin təkrar yazılmasını qadağan edir.
+    FACE_MISMATCH_LOCKOUT_THRESHOLD = "FACE_MISMATCH_LOCKOUT_THRESHOLD"
+    # Aktiv liveness hərəkətlərinin VERGÜLLÜ kataloqu (bənd 6). Kataloq
+    # formatı `EXECUTIVE_DIGEST_METRIC_CATALOG` ilə eynidir: Root bir hərəkəti
+    # söndürmək üçün onu siyahıdan çıxarır, yeni buraxılış lazım deyil.
+    FACE_LIVENESS_ACTIONS = "FACE_LIVENESS_ACTIONS"
+    # Bənzərlik həddi (bənd 7) — kitabxananın MƏSAFƏ vahidində (kiçik = daha
+    # oxşar). VAHİD SEÇİMİ QƏSDLİDİR: hədd faizə çevrilsəydi, Root-un gördüyü
+    # ədədlə kitabxananın cavabı arasında gizli bir çevirmə düsturu oturardı
+    # və həmin düstur özü hardcode edilmiş qərara çevrilərdi.
+    FACE_MATCH_TOLERANCE = "FACE_MATCH_TOLERANCE"
+    # Aşağı-etibar həddi (bənd 12) — nəticə BİNAR DEYİL. Bu qiymətlə
+    # `FACE_MATCH_TOLERANCE` arasındakı zolaq "icazə ver, amma nişanla"
+    # deməkdir. İki AYRI açar lazımdır, çünki tək hədd yalnız keç/keçmə
+    # verərdi və Kamera Operatoru sərhəd hallarını heç vaxt görməzdi.
+    FACE_LOW_CONFIDENCE_TOLERANCE = "FACE_LOW_CONFIDENCE_TOLERANCE"
+    # Yenidən-qeydiyyat tövsiyəsinin intervalı (ay, bənd 13). BLOKLAMIR —
+    # `MonthlyLeaveUsage` ilə eyni fəlsəfə: xəbərdarlıq göstərilir, iş davam
+    # edir. İnsan üzünün nə qədər sürətlə "köhnəldiyi" empirik sualdır.
+    FACE_REENROLLMENT_REMINDER_MONTHS = "FACE_REENROLLMENT_REMINDER_MONTHS"
+    # İstisnanın maksimum ömrü (gün, bənd 14). Parametr olmasaydı, "müvəqqəti"
+    # istisna sükutla əbədiyə çevrilərdi — təhlükəsizlik aşınmasının ən çox
+    # rast gəlinən formasıdır.
+    FACE_EXEMPTION_MAX_DAYS = "FACE_EXEMPTION_MAX_DAYS"
+    # Doğrulama jurnalının saxlanma müddəti (ay, bənd 17). Hüquqi tələb
+    # yurisdiksiyaya görə dəyişir; sabit ədəd bir müştəridə çox, digərində az
+    # olardı. 12 ay mövcud Davranış Anomaliyası aralığından (30 gün) qat-qat
+    # genişdir, yəni baseline hesablaması pozulmur.
+    FACE_VERIFICATION_LOG_RETENTION_MONTHS = "FACE_VERIFICATION_LOG_RETENTION_MONTHS"
+    # Gözlənilən maksimum doğrulama vaxtı (saniyə, bənd 18). YALNIZ hardware
+    # diaqnostikasıdır: aşılma System Health Monitor-a xəbərdarlıq yazır və
+    # HEÇ VAXT keyfiyyət parametrlərini avtomatik zəiflətmir.
+    FACE_VERIFICATION_MAX_SECONDS = "FACE_VERIFICATION_MAX_SECONDS"
 
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
@@ -1211,6 +1274,55 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # yəni burada da eyni cüt saxlanılır.
     SystemLimitKey.TEA_BREAK_DURATION_MINUTES: "15",
     SystemLimitKey.TEA_BREAK_DAILY_COUNT: "2",
+    # --- Face Control (seed: 047) -------------------------------------------- #
+    #
+    # ⚠️ AŞAĞIDAKI HƏDDLƏR İLKİN DƏYƏRLƏRDİR, "DÜZGÜN" DEYİL.
+    # `facecontrol.md`-nin açıq göstərişi: bənzərlik və aşağı-etibar həddinin
+    # doğru ədədini indi TƏXMİN ETMƏYƏ ÇALIŞMA — kitabxananın sənədləşdirilmiş
+    # defoltunu götür və pilot mağazada real şəraitdə tənzimlə. Bu, kod
+    # problemi deyil, empirik/əməliyyat qərarıdır.
+    #
+    # 0.50 — kadr keyfiyyətinin ORTA nöqtəsi. Sərt defolt (məs. 0.80) ilk gündən
+    # enrollment-i mümkünsüz edərdi (mağaza veb-kameraları zəifdir), yumşaq
+    # defolt (0.20) isə yoxlamanı faktiki olaraq söndürərdi.
+    SystemLimitKey.FACE_ENROLLMENT_MIN_QUALITY: "0.50",
+    # 5 kadr — İLKİN DƏYƏRDİR, "düzgün" ədəd DEYİL və PİLOT MAĞAZADA
+    # TƏNZİMLƏNMƏLİDİR (yuxarıdakı xəbərdarlıq bu açara da aiddir). Seçimin
+    # məntiqi: üç kadr bir uğursuz kadrdan sonra ortanı iki kadra endirir
+    # (yəni tək-kadr xətasına yaxınlaşır), on kadr isə operatoru və işçini
+    # kamera qarşısında lazımsız gözlədir. Beş kadr ikisi rədd edilsə belə
+    # üç keçən kadr saxlayır.
+    SystemLimitKey.FACE_ENROLLMENT_FRAME_COUNT: "5",
+    # 3 — PIN-in 5-indən AŞAĞI. Üç ardıcıl uyğunsuzluq artıq təsadüf deyil;
+    # PIN-də isə beş cəhd insanın rəqəmi unutmasına verilən qanuni ehtiyatdır.
+    SystemLimitKey.FACE_MISMATCH_LOCKOUT_THRESHOLD: "3",
+    # Üç hərəkətin hamısı defolt AKTİVDİR: randomlaşdırmanın dəyəri seçim
+    # hovuzunun ölçüsündədir — iki hərəkətlə hovuz yarıya enir və video-təkrar
+    # hücumu üçün təxmin etmək asanlaşır.
+    SystemLimitKey.FACE_LIVENESS_ACTIONS: "BLINK,HEAD_TURN,SMILE",
+    # 0.60 — `face_recognition` (Dlib) sənədləşməsindəki defolt `tolerance`.
+    # Ədəd QƏSDƏN "yaxşılaşdırılmır": kitabxananın öz tövsiyəsindən sapmaq
+    # üçün ölçmə lazımdır, ölçmə isə pilotdan sonra olacaq.
+    SystemLimitKey.FACE_MATCH_TOLERANCE: "0.60",
+    # 0.50 — bənzərlik həddindən bir addım sərt. Aradakı zolaq (0.50–0.60)
+    # "aşağı-etibarlı təsdiq"dir. Zolağın ENİ də pilotda tənzimlənəcək; sıfır
+    # enli zolaq (iki həddin bərabərliyi) bənd 12-ni söndürərdi.
+    SystemLimitKey.FACE_LOW_CONFIDENCE_TOLERANCE: "0.50",
+    # 12 ay — üzün gözlə görünən dəyişməsi (saqqal, eynək, çəki) üçün praktik
+    # dövr. Daha qısa interval xatırlatmanı fona çevirər və admin ona
+    # baxmamağa öyrəşərdi.
+    SystemLimitKey.FACE_REENROLLMENT_REMINDER_MONTHS: "12",
+    # 90 gün — `facecontrol.md` bənd 14-ün öz nümunəsi. Bir rüb tibbi/fiziki
+    # halın həll olunması üçün kifayətdir və yenidən əsaslandırma tələbini
+    # formal prosedura çevirmir.
+    SystemLimitKey.FACE_EXEMPTION_MAX_DAYS: "90",
+    # 12 ay — bənd 17-nin öz defoltu. Davranış baseline-ı yalnız son 30 günə
+    # baxdığı üçün konflikt yoxdur (bənd 17-nin təhlükəsizlik təsdiqi).
+    SystemLimitKey.FACE_VERIFICATION_LOG_RETENTION_MONTHS: "12",
+    # 5 saniyə — kioskda insanın gözləməyə hazır olduğu praktik hədd. Bu, bir
+    # PERFORMANS siqnalıdır: aşılma heç nəyi bloklamır və heç bir keyfiyyət
+    # parametrini zəiflətmir, yalnız System Health Monitor-a yazılır.
+    SystemLimitKey.FACE_VERIFICATION_MAX_SECONDS: "5",
 }
 
 

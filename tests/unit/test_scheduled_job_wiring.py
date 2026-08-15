@@ -69,6 +69,16 @@ EXPECTED_JOBS: Final = (
     # BÜTÜN İL üçün itərdi. Gündəlik icra zərərsizdir, çünki iş
     # İDEMPOTENTDİR (haqq TƏYİN edilir, artırılmır).
     ("ANNUAL_LEAVE_YEAR_ROLLOVER", JobCadence.DAILY, JobWeight.LIGHT),
+    # `facecontrol.md` bənd 14 — Face Control istisnalarının müddət-bitməsi.
+    # `DAILY`: müddət GÜN vahidlidir; `LIGHT`: bir indeksli sorğu + bitən sətir
+    # qədər UPDATE. GECİKMƏ BOŞLUQ YARATMIR — `FaceExemption.is_active_at()`
+    # həm statusa, həm `expires_at`-a baxır, yəni istisna öz tarixində faktiki
+    # olaraq bitir və gecəlik iş yalnız statusu təmizləyir.
+    ("FACE_EXEMPTION_EXPIRY", JobCadence.DAILY, JobWeight.LIGHT),
+    # `facecontrol.md` bənd 17 — doğrulama jurnalının saxlama müddəti.
+    # `DAILY` + `LIGHT`: tək indeksli `DELETE`. YENİ cron YAZILMIR — mövcud
+    # planlayıcıya bir sətir qeydiyyat (`NIGHTLY_BACKUP` naxışı).
+    ("FACE_LOG_RETENTION", JobCadence.DAILY, JobWeight.LIGHT),
     ("FINE_EXPIRE_STALE", JobCadence.HOURLY, JobWeight.LIGHT),
     # #30 (kompas1.md Faza 6) — planlaşdırılmış icra xülasəsi. `DAILY`:
     # `JobCadence`-də `WEEKLY` yoxdur, "bu gün DUE-dur?" sualını use case-in
@@ -163,6 +173,20 @@ class _ExecutiveDigest(_RecordingUseCase):
         )
 
 
+class _FaceExemptions(_RecordingUseCase):
+    """`facecontrol.md` bənd 14 — istisnaların müddət-bitməsi (gecəlik iş)."""
+
+    def expire_due(self, *, tenant_id: TenantId, now: datetime) -> Any:
+        return self._record("face_exemptions.expire_due", tenant_id=tenant_id, now=now)
+
+
+class _FaceLogRetention(_RecordingUseCase):
+    """`facecontrol.md` bənd 17 — jurnalın saxlama müddəti təmizləməsi."""
+
+    def purge(self, *, tenant_id: TenantId, now: datetime) -> Any:
+        return self._record("face_log_retention.purge", tenant_id=tenant_id, now=now)
+
+
 class _Benchmark:
     """`active_stores()` — kadr nümunəsi işinin mağaza siyahısı mənbəyi."""
 
@@ -214,6 +238,11 @@ class _FakeSession:
             ),
         )
         self.executive_digest = _ExecutiveDigest(calls, result=_Report(evaluated=3, sent=2))
+        # Face Control (facecontrol.md Faza 2) — hər ikisi SADƏ ədəd qaytarır
+        # (bitən istisna sayı / silinən jurnal sətri), ona görə `_Report`
+        # örtüyü lazım deyil.
+        self.face_exemptions = _FaceExemptions(calls, result=2)
+        self.face_log_retention = _FaceLogRetention(calls, result=140)
         self.uow = _SessionUow(_Benchmark({STORE_A: "Mağaza A", STORE_B: "Mağaza B"}))
 
     def commit(self) -> None:

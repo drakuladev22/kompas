@@ -285,6 +285,51 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         icon="users",
     ),
     MenuEntry(
+        key="face_enrollment",
+        title_az="Üz Qeydiyyatı",
+        # facecontrol.md bənd 1 — NƏZARƏTLİ proses, SELF-SERVICE DEYİL.
+        #
+        # NİYƏ MƏHZ `can_manage_employees`: bənd 1 qeydiyyatı adbaad həmin
+        # flag-in sahibinə (admin) bağlayır və YENİ flag YARATMIR. Ona görə
+        # maddə də «İstifadəçilər» (110) və «Toplu Əməliyyatlar» (112) ilə
+        # eyni qrupdadır — hər üçü işə-qəbul axınının hissəsidir: işçi
+        # yaradılır → üzü qeydiyyata alınır.
+        #
+        # İŞÇİ BU MADDƏNİ GÖRMÜR: flag-siz istifadəçidə maddə render
+        # OLUNMUR (boz deyil, YOX — `navigation.NavigationRegistry`), yəni
+        # işçi öz üzünü özü qeydiyyata sala biləcəyi bir yol GÖRMÜR.
+        # ƏMƏLİYYAT qapısı isə ayrıca use case-dədir
+        # (`assert_may_enroll` — özünə-qeydiyyat da bloklanır).
+        #
+        # FEATURE TOGGLE YOXDUR: qeydiyyat `CAMERA_VERIFICATION` modulundan
+        # ASILI DEYİL. Modul söndürülsə də mövcud vektorlar qalır və yeni
+        # işçini qabaqcadan qeydiyyata almaq qanunidir — maddəni toggle-a
+        # bağlasaydıq, pilot yayımı başlamazdan əvvəl heç kimi qeydiyyata
+        # almaq mümkün olmazdı.
+        required_flag="can_manage_employees",
+        order=114,
+        icon="user",
+    ),
+    MenuEntry(
+        key="face_exemptions",
+        title_az="Üz Təsdiqi İstisnaları",
+        # facecontrol.md bənd 14 — `can_manage_employees` KİFAYƏT ETMİR.
+        #
+        # `can_manage_face_exemptions` `hardlock_level = 2` ilə elan olunub
+        # (migrations/047), yəni mövcud hardlock mexanizmi onu YALNIZ
+        # Root/CEO rollarında buraxır və Root onu HR-səviyyəli admin-ə həvalə
+        # EDƏ BİLMİR. İstisna üz qatını söndürür, yəni özü bir aldatma yoluna
+        # çevrilə bilər — ona görə qapı bir pillə yuxarı qaldırılıb.
+        #
+        # NİYƏ «İcazə Matrisi»NDƏN (120) ƏVVƏL: hər ikisi səlahiyyət
+        # səviyyəli ekrandır və HR onları eyni ritmdə gəzir; qeydiyyat
+        # maddəsindən dərhal sonra durması isə səbəb-nəticə zəncirini
+        # saxlayır — «üzü qeydiyyata sala bilmirikmi? onda istisna».
+        required_flag="can_manage_face_exemptions",
+        order=116,
+        icon="shield",
+    ),
+    MenuEntry(
         key="permissions",
         title_az="İcazə Matrisi",
         # `can_manage_permissions` DEYİL — o, YALNIZ `Root`-a hardlock-dur

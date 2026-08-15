@@ -41,3 +41,61 @@ python-dotenv>=1.2,<2.0
 openpyxl>=3.1,<4.0
 Pillow>=12.3,<13.0
 tenacity>=9.1,<10.0
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FACE CONTROL — üz təsdiqi (`facecontrol.md` Faza 3)
+# ──────────────────────────────────────────────────────────────────────────────
+# Kitabxana seçimi (`face_recognition` + Dlib) `facecontrol.md`-nin "KİTABXANA
+# QƏRARI" bölməsində QƏTİ verilib: Boost lisenziyası kommersiya satışına icazə
+# verir, CPU-da işləyir (mağaza PC-lərində GPU yoxdur) və PyInstaller paketini
+# TensorFlow kimi ağırlaşdırmır. Aşağıdakı ÜÇ SƏTİR qeyri-adi görünür —
+# üçünün də səbəbi burada yazılıb ki, kimsə onları "təmizlik" adı ilə
+# sadələşdirməsin. Hər üçü Windows/cp311 mühitində FAKTİKİ olaraq sınanıb.
+
+# (1) `dlib` DEYİL, `dlib-bin`.
+#     PyPI-də `dlib` üçün Windows/cp311 hazır wheel YOXDUR — yalnız mənbə
+#     paketi var və onun qurulması CMake + Visual Studio Build Tools tələb
+#     edir. Mağaza/hazırlayıcı maşınlarında bunlar yoxdur, yəni `pip install
+#     dlib` orada həmişə uğursuz olur. `dlib-bin` EYNİ Dlib-dir (eyni mənbə,
+#     eyni versiya), sadəcə hazır binar formada dərc olunub və `dlib`
+#     MODULUNU verir. Kitabxana qərarı DƏYİŞMİR, yalnız çatdırılma formatı.
+dlib-bin>=20.0,<21.0
+# `numpy` AÇIQ elan olunur, tranzitiv qalmır: `face_matcher.py` və `camera.py`
+# onu BİRBAŞA idxal edir (kadr massivi, Laplas konvolyusiyası). Elan
+# edilməsəydi, `face_recognition` bir gün öz asılılığını dəyişəndə bizim
+# birbaşa idxalımız sükutla qırılardı.
+numpy>=2.4,<3.0
+
+# (2) `face_recognition` `--no-deps` İLƏ quraşdırılır:
+#         pip install --no-deps "face_recognition>=1.2,<2.0"
+#     Səbəb: onun metadata-sı `dlib>=19.7` tələb edir, quraşdırılan paketin
+#     DİSTRİBUTİV adı isə `dlib-bin`-dir (modul adı eyni olsa da). `--no-deps`
+#     olmadan pip bu tələbi ödəmək üçün `dlib`-i MƏNBƏDƏN qurmağa çalışır və
+#     (1)-dəki səbəbdən çökür. `face_recognition_models` ayrıca sətirdədir,
+#     çünki `--no-deps` onu da atlayır.
+#     PIN-siz `pip install -r` bu iki sətri normal quraşdırar və yalnız
+#     `dlib` tələbində ilişərdi — ona görə quraşdırıcı sənədi ardıcıllığı
+#     belədir: əvvəlcə `dlib-bin`, sonra `--no-deps` ilə `face_recognition`.
+face_recognition>=1.2,<2.0
+face_recognition_models>=0.1,<1.0
+
+# (3) `setuptools<81` PİNİ MƏCBURİDİR — SİLİNMƏMƏLİDİR.
+#     `face_recognition_models` model fayllarının yolunu `pkg_resources` ilə
+#     tapır. setuptools 81 `pkg_resources`-u çıxarıb; onsuz `face_recognition`
+#     idxal anında "Please install face_recognition_models" yazıb `quit()`
+#     çağırır — yəni SƏBƏBİ GİZLƏDƏN bir çökmə verir (paket QURULUB, sadəcə
+#     tapıla bilmir). Bu sətir bir asılılıq deyil, bir QORUYUCUDUR: onu
+#     "köhnəlmiş pin" zənn edib silmək üz təsdiqini tamamilə söndürər.
+#     Alt hədd layihənin öz qaydasına tabedir (qapılardan keçmiş versiya),
+#     üst hədd isə burada MAJOR sərhədi deyil, FUNKSİONAL sərhəddir: 81 həmin
+#     `pkg_resources` modulunu çıxaran buraxılışdır.
+setuptools>=80.10,<81.0
+
+# (4) Kamera: `opencv-python-headless`, ADİ `opencv-python` DEYİL.
+#     Adi paket cv2-nin `imshow` pəncərəsi üçün ÖZ Qt kitabxanalarını daşıyır
+#     və idxal anında `QT_QPA_PLATFORM_PLUGIN_PATH`-ı özünə yönəldir. Eyni
+#     prosesdə PySide6 ilə yanaşı olduqda nəticə "could not load the Qt
+#     platform plugin windows" çökməsidir — PyInstaller paketində ən çətin
+#     diaqnoz edilən nasazlıqlardan biri. `headless` variantı həmin GUI
+#     backend-lərini daşımır; bizə lazım olan `VideoCapture` isə eynidir.
+opencv-python-headless>=4.13,<5.0

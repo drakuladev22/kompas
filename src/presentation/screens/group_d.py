@@ -1209,6 +1209,15 @@ class RootControlScreen(Screen):
     applied = Signal(dict)
     module_toggled = Signal(str, bool, str)
     flag_created = Signal(str, str, bool)
+    #: Face Control mağaza əhatəsi (facecontrol.md bənd 15) — (store_id, aktiv).
+    #:
+    #: NİYƏ `applied` SÖZLÜYÜNƏ QOŞULMADI: `collected()["limits"]` yalnız
+    #: `SystemLimitKey` dəyərlərini daşıyır və `test_root_control_uses_the_
+    #: shared_key_namespace` məhz bunu yoxlayır. Mağaza əhatəsi isə
+    #: `system_limits` sətri DEYİL — o, ayrıca `face_control_store_scope`
+    #: cədvəlidir (soft delete ilə). Onu limit ad məkanına salmaq iki fərqli
+    #: yazı hədəfini bir sözlükdə qarışdırmaq olardı.
+    face_scope_changed = Signal(str, bool)
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(theme, parent=parent)
@@ -1217,6 +1226,7 @@ class RootControlScreen(Screen):
         self._break_inputs: dict[str, QSpinBox] = {}
         self._module_toggles: dict[str, ToggleSwitch] = {}
         self._structural: set[str] = set()
+        self._face_scope_toggles: dict[str, ToggleSwitch] = {}
 
         banner = Card(padding=14, spacing=6)
         banner_row = QWidget()
@@ -1242,6 +1252,7 @@ class RootControlScreen(Screen):
         self.add(self._limits)
 
         self.add(self._build_break_card())
+        self.add(self._build_face_card())
 
         self._modules = Card(padding=20, spacing=14)
         self._modules.add(title_label("Modul açarları", size=15))
@@ -1315,6 +1326,177 @@ class RootControlScreen(Screen):
 
     def _collected_breaks(self) -> dict[str, int | str]:
         return {key: spin.value() for key, spin in self._break_inputs.items()}
+
+    # ------------------------ Face Control (bənd 15, 7 + 12) ----------------- #
+
+    def _build_face_card(self) -> Card:
+        """«Face Control» bölməsi — mağaza əhatəsi + tərs-hədd xəbərdarlığı.
+
+        ──────────────────────────────────────────────────────────────────────
+        NAXIŞ «FASİLƏ PARAMETRLƏRİ»-DƏNDİR (bax `_build_break_card`)
+        ──────────────────────────────────────────────────────────────────────
+        Eyni fayl, eyni sinif, eyni quruluş: başlıq → izah → dinamik sətirlər
+        qabı → `Divider` → izah → bölmənin öz düyməsi. Səbəb də eynidir —
+        166 limitlik siyahıda «Face Control hansı mağazalarda işləyir?»
+        sualının cavabını sürüşdürüb axtarmaq lazım gələrdi.
+
+        FƏRQ BİR YERDƏDİR: fasilə parametrləri `system_limits` sətirləridir və
+        `applied` sözlüyü ilə birlikdə gedir; mağaza əhatəsi isə AYRI cədvəldir
+        (`face_control_store_scope`, soft delete ilə) və hər açar dərhal öz
+        siqnalını yayır — `[Tətbiq Et]` gözləmir. Səbəb: seçim aç/bağla
+        xarakterlidir və toplu «tətbiq» addımı Root-a hansı mağazanın FAKTİKİ
+        vəziyyətdə olduğunu göstərməzdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        «BOŞ = QLOBAL» MƏTNİ MƏCBURİDİR
+        ──────────────────────────────────────────────────────────────────────
+        Heç bir mağaza seçilməyəndə Face Control QLOBAL toggle-a tabe olur
+        (`FaceStoreScope.is_global`) — yəni İŞLƏYİR. İzah olmasaydı, boş sahə
+        «söndürülüb» kimi oxunardı və Root pilot yayımını tərsinə anlayardı.
+        """
+        card = Card(padding=20, spacing=14)
+        card.add(title_label("Face Control", size=15))
+        card.add(
+            muted_label(
+                "Üz təsdiqi PIN-i ƏVƏZ ETMİR — ona əlavə olunan qatdır. Aşağıdakı "
+                "seçim yalnız modulun HANSI mağazalarda tətbiq olunduğunu müəyyən edir."
+            )
+        )
+
+        card.add(Divider())
+        card.add(plain_label("Face Control aktiv olan mağazalar"))
+        card.add(
+            muted_label(
+                "HEÇ BİR mağaza seçilməyibsə (defolt) modul QLOBAL Feature Toggle-a "
+                "tabe olur — yəni indiki davranış dəyişmir. Seçim edilibsə, üz təsdiqi "
+                "YALNIZ seçilmiş mağazalarda tətbiq olunur (pilot-mərhələli yayım)."
+            )
+        )
+
+        self._face_scope_rows = QVBoxLayout()
+        self._face_scope_rows.setSpacing(12)
+        scope_holder = QWidget()
+        scope_holder.setLayout(self._face_scope_rows)
+        card.add(scope_holder)
+
+        self._face_scope_summary = muted_label("")
+        card.add(self._face_scope_summary)
+
+        card.add(Divider())
+        card.add(plain_label("Uyğunluq həddi"))
+        self._face_tolerance = body_label("", size=13)
+        card.add(self._face_tolerance)
+        # TƏRS-HƏDD XƏBƏRDARLIĞI (facecontrol.md bənd 7 + 12) — bax
+        # `set_face_tolerance`.
+        self._face_tolerance_warning = body_label("", size=13)
+        self._face_tolerance_warning.setVisible(False)
+        card.add(self._face_tolerance_warning)
+        return card
+
+    def set_face_scope(self, stores: list[dict[str, str]]) -> None:
+        """Face Control-un mağaza əhatəsi (bənd 15).
+
+        Args:
+            stores: `id`, `name`, `active` ("1"/"0") açarları olan sözlüklər.
+                Açarlar HƏM maket (`preview_screens._root_control`), HƏM canlı
+                yol (`controllers/root_control.py::_face_scope_rows`) üçün
+                EYNİDİR — CLAUDE.md §6.
+
+        Boş siyahı MAĞAZA OLMAMASI deməkdir (yeni quraşdırma) və «qlobal
+        rejim» ilə QARIŞDIRILMIR: qlobal rejim seçilmiş mağaza olmamasıdır,
+        bu isə ümumiyyətlə mağaza olmamasıdır.
+        """
+        clear_layout(self._face_scope_rows)
+        self._face_scope_toggles.clear()
+
+        for store in stores:
+            key = store.get("id", "")
+            row = QWidget()
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(12)
+            layout.addWidget(body_label(store.get("name", ""), size=13, wrap=False))
+            layout.addWidget(stretch())
+
+            toggle = ToggleSwitch(self.theme, checked=store.get("active") == "1")
+            toggle.toggled.connect(
+                lambda checked, k=key: self.face_scope_changed.emit(k, bool(checked))
+            )
+            self._face_scope_toggles[key] = toggle
+            layout.addWidget(toggle)
+            self._face_scope_rows.addWidget(row)
+
+        selected = sum(1 for store in stores if store.get("active") == "1")
+        if not stores:
+            self._face_scope_summary.setText("Mağaza siyahısı boşdur.")
+        elif selected == 0:
+            self._face_scope_summary.setText(
+                "Seçim yoxdur — Face Control qlobal Feature Toggle-a tabedir (indiki davranış)."
+            )
+        else:
+            self._face_scope_summary.setText(
+                f"{selected} mağaza seçilib — üz təsdiqi YALNIZ orada tətbiq olunur."
+            )
+
+    def reject_face_scope_change(self, store_id: str) -> None:
+        """Yazı rədd edildi — açar geri qaytarılır (siqnal təkrar yayılmadan).
+
+        `reject_module_change` ilə eyni qərar: ekran YALAN göstərməməlidir.
+        Fərq odur ki, burada əvvəlki vəziyyət açarın CARİ vəziyyətinin
+        əksidir — istifadəçi onu indicə dəyişib.
+        """
+        toggle = self._face_scope_toggles.get(store_id)
+        if toggle is None:
+            return
+        toggle.blockSignals(True)
+        toggle.setChecked(not toggle.isChecked())
+        toggle.blockSignals(False)
+
+    def set_face_tolerance(self, tolerance: dict[str, str]) -> None:
+        """Bənzərlik + aşağı-etibar həddi və TƏRS CÜT xəbərdarlığı.
+
+        Args:
+            tolerance: `match`, `low_confidence`, `inverted` ("1"/"0"),
+                `band_enabled` ("1"/"0") açarları.
+
+        ──────────────────────────────────────────────────────────────────────
+        DOMEN MƏNTİQİ BURADA TƏKRARLANMIR
+        ──────────────────────────────────────────────────────────────────────
+        `FACE_LOW_CONFIDENCE_TOLERANCE > FACE_MATCH_TOLERANCE` cütünün nə
+        demək olduğunu `FaceToleranceBand.resolve` həll edir və o, FAIL-CLOSED
+        davranır: zolaq söndürülür, qəbul sərhədi İKİSİNDƏN SƏRTİNƏ enir.
+        Ekran həmin hesablamanı APARMIR — `inverted` bayrağı ona HAZIR gəlir
+        (`is_inverted`) və burada yalnız GÖSTƏRİLİR.
+
+        Xəbərdarlıq niyə lazımdır: Root ekranda «yumşaltdım» zənn edə bilər,
+        sistem isə sərtləşmiş halda işləyir. Konfiqurasiya ilə davranış
+        arasındakı gizli fərq ən pis nasazlıq formasıdır (bax
+        `FaceToleranceBand` başlığı) — ona görə o, GİZLİ QALMAMALIDIR.
+        """
+        match = tolerance.get("match", "—")
+        low = tolerance.get("low_confidence", "—")
+        band_enabled = tolerance.get("band_enabled") == "1"
+        self._face_tolerance.setText(
+            f"Bənzərlik həddi: {match} · aşağı-etibar həddi: {low}. "
+            + (
+                "Aralıqdakı nəticələr «aşağı-etibarlı təsdiq» kimi nişanlanır."
+                if band_enabled
+                else "Aşağı-etibar zolağı işləmir — nəticələr yalnız keçdi/keçmədi olur."
+            )
+        )
+
+        inverted = tolerance.get("inverted") == "1"
+        self._face_tolerance_warning.setVisible(inverted)
+        if inverted:
+            self._face_tolerance_warning.setText(
+                f"DİQQƏT: aşağı-etibar həddi ({low}) bənzərlik həddindən ({match}) "
+                f"BÖYÜKDÜR. Bu cüt mənasızdır — sistem onu FAIL-CLOSED emal edir: "
+                f"aşağı-etibar zolağı söndürülür və qəbul sərhədi ikisindən SƏRTİNƏ "
+                f"endirilir. Yəni tətbiq olunan hədd ekranda yazdığınız deyil."
+            )
+            self._face_tolerance_warning.setStyleSheet(
+                f"color: {self.theme.color('--color-danger')};"
+            )
 
     def _build_registry(self) -> Card:
         card = Card(padding=20, spacing=14)

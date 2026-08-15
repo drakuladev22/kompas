@@ -98,6 +98,12 @@ class ProfileController:
                 # SƏLAHİYYƏT TƏLƏB OLUNMUR (`list_own` işçinin ÖZ tarixçəsidir,
                 # bax use case başlığı).
                 screen.set_performance_history(_performance_rows(session, employee))
+                # facecontrol.md bənd 13 — DÖVRİ YENİDƏN-QEYDİYYAT
+                # XATIRLATMASI. Ayrıca `try` bloku YOXDUR: sorğu `employees`
+                # sətrinin öz sütunudur və yuxarıdakı oxumalarla eyni uğur
+                # şansına malikdir — onu ayrıca qorumaq «profil açıldı, amma
+                # bir kart səbəbsiz boşdur» vəziyyəti yaradardı.
+                screen.set_face_enrollment(_face_enrollment_row(session, employee))
         except KompasOSError as error:
             screen.show_error(title="Profil açıla bilmədi", message=error.user_message)
         except Exception:
@@ -258,6 +264,40 @@ def _draft_from(employee: Any, *, first_name: str, last_name: str) -> Any:
         profile_photo_url=None,
         camera_store_ids=tuple(employee.assigned_store_ids),
     )
+
+
+def _face_enrollment_row(session: Session, employee: Any) -> dict[str, str]:
+    """Üz qeydiyyatının vəziyyəti — `ProfileScreen.set_face_enrollment` açarları.
+
+    ──────────────────────────────────────────────────────────────────────────
+    VEKTOR OXUNMUR — YALNIZ TARİX
+    ──────────────────────────────────────────────────────────────────────────
+    `FaceEmbeddingRepository.get_profile()` TAM profil qaytarır və vektoru
+    DEŞİFRƏ EDİR. Profil ekranı isə yalnız «qeydiyyat köhnəlibmi?» sualına
+    cavab verir — həmin sual üçün biometrik məlumatı yaddaşa çıxarmaq
+    lazımsız risk olardı (migrations/047-nin birinci qaydası). Ona görə
+    burada YALNIZ `face_enrolled_at` sütunu oxunur.
+
+    VƏZİYYƏT HESABLAMASI TƏKRARLANMIR: `controllers/face_control.py::
+    enrollment_state` çağırılır — «köhnəlib» sərhədinin iki tərifi yaranmasın.
+    """
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey  # noqa: PLC0415
+    from src.presentation.controllers.face_control import enrollment_state  # noqa: PLC0415
+
+    key = SystemLimitKey.FACE_REENROLLMENT_REMINDER_MONTHS
+    months: int = session.limits.get_int(session.tenant_id, key.value, int(DEFAULT_LIMITS[key]))
+    row = session.uow.connection.execute(
+        "SELECT face_enrolled_at FROM employees WHERE tenant_id = %s AND id = %s",
+        (session.tenant_id, employee.id),
+    ).fetchone()
+    enrolled_at = row["face_enrolled_at"] if row is not None else None
+    return {
+        "state": enrollment_state(enrolled_at, now=datetime.now(UTC), reminder_months=months),
+        "enrolled_at": enrolled_at.strftime("%d.%m.%Y %H:%M") if enrolled_at is not None else "",
+        "reminder_months": str(months),
+    }
 
 
 def _role_rows(session: Session, employee: Any) -> list[tuple[str, str]]:

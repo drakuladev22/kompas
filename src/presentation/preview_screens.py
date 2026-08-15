@@ -110,6 +110,9 @@ def _live_queue(screen: group_b.OperatorQueueScreen) -> None:
                 timestamp_text=entry.timestamp_text,
                 waiting_text=entry.waiting_text,
                 is_late=entry.is_late,
+                # facecontrol.md bənd 12 — nişan CANLI yolda da eyni sahədən
+                # gəlir (`screen_data._live_queue`).
+                is_low_confidence=entry.is_low_confidence,
             )
             for entry in data.QUEUE
         ]
@@ -482,6 +485,10 @@ def _root_control(screen: group_d.RootControlScreen) -> None:
             ("can_manage_erp_servers", False),
         ]
     )
+    # facecontrol.md bənd 15 + (7, 12) — açarlar `controllers/root_control.py::
+    # face_scope_rows` / `face_tolerance_row` ilə EYNİDİR (CLAUDE.md §6).
+    screen.set_face_scope([dict(store) for store in data.FACE_STORE_SCOPE])
+    screen.set_face_tolerance(dict(data.FACE_TOLERANCE))
 
 
 def _settings(screen: group_d.SettingsScreen) -> None:
@@ -515,6 +522,9 @@ def _profile(screen: group_g.ProfileScreen) -> None:
     # #20 (kompasos11.md Faza 8) — açarlar `controllers/profile.py::
     # _performance_rows` ilə EYNİDİR (CLAUDE.md §6).
     screen.set_performance_history(list(data.PERFORMANCE_REVIEW_HISTORY))
+    # facecontrol.md bənd 13 — açarlar `controllers/profile.py::
+    # _face_enrollment_row` ilə EYNİDİR.
+    screen.set_face_enrollment(dict(data.FACE_PROFILE_ENROLLMENT))
 
 
 def _support(widget: group_e.SupportChatWidget) -> None:
@@ -671,6 +681,29 @@ def _bulk_operations(screen: Any) -> None:
     screen.set_templates(list(data.STORE_TEMPLATES))
 
 
+def _face_enrollment(screen: Any) -> None:
+    """facecontrol.md bənd 1, 2, 11 — açarlar `controllers/face_control.py`-dakı
+    `_enrollment_rows` / `_result_row` / `_frame_row` ilə EYNİDİR (CLAUDE.md §6).
+
+    KAMERA MAKETDƏ «HAZIR»DIR: `--preview` rejimi dizayn yoxlaması üçündür və
+    orada fiziki kamera olmaya bilər. Nasazlıq halının ÖZÜ kontroller testində
+    yoxlanılır (`CAMERA_UNAVAILABLE`), maketdə isə düymələr sönülü qalsaydı
+    ekranın əsas axını heç vaxt görünməzdi.
+    """
+    screen.set_employees([dict(row) for row in data.FACE_ENROLLMENT_EMPLOYEES])
+    screen.set_camera(dict(data.FACE_ENROLLMENT_CAMERA))
+    screen.set_result(dict(data.FACE_ENROLLMENT_RESULT))
+    screen.set_frames([dict(row) for row in data.FACE_ENROLLMENT_FRAMES])
+
+
+def _face_exemptions(screen: Any) -> None:
+    """facecontrol.md bənd 14 — açarlar `controllers/face_control.py::
+    `_exemption_row` / `_exemption_limits` ilə EYNİDİR (CLAUDE.md §6)."""
+    screen.set_limits(dict(data.FACE_EXEMPTION_LIMITS))
+    screen.set_employees([dict(row) for row in data.FACE_EXEMPTION_EMPLOYEES])
+    screen.set_exemptions([dict(row) for row in data.FACE_EXEMPTIONS])
+
+
 def _dashboard_builder(screen: Any) -> None:
     screen.set_widgets(
         dict(data.DASHBOARD_WIDGETS),
@@ -724,6 +757,10 @@ _POPULATORS: dict[str, Callable[[Any], None]] = {
     "attrition_risk": _attrition_risk,
     "annual_leave": _annual_leave,
     "bulk_operations": _bulk_operations,
+    # Face Control (facecontrol.md Faza 4) — hər ikisi ÖZ kontrollerinə
+    # bağlıdır (həm oxuyur, həm yazır), maket isə eyni setter-ləri çağırır.
+    "face_enrollment": _face_enrollment,
+    "face_exemptions": _face_exemptions,
 }
 
 

@@ -7,6 +7,7 @@ testlər "metod çağırıldımı" deyil, "NƏTİCƏ DÜZGÜNDÜRMÜ" yoxlayır.
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -431,9 +432,13 @@ __all__ = [
     "LIVE_AUTO_DELAY_STATUSES",
     "DuplicateDedupeKeyError",
     "DuplicateLiveFineError",
+    "FaceArchiveConstraintError",
+    "FakeCamera",
     "FakeCameraAssignments",
     "FakeClock",
     "FakeExceptionSources",
+    "FakeFaceMatcher",
+    "FakeFaceStoreScope",
     "FakeFeatureToggles",
     "FakeLeaveTypes",
     "FakeNtp",
@@ -443,6 +448,9 @@ __all__ = [
     "InMemoryBreakUsage",
     "InMemoryEmployees",
     "InMemoryExceptions",
+    "InMemoryFaceExemptions",
+    "InMemoryFaceProfiles",
+    "InMemoryFaceVerificationLog",
     "InMemoryFines",
     "InMemoryLeaveRequests",
     "RecordingAudit",
@@ -677,6 +685,314 @@ class InMemoryPOSThresholds:
         if self.save_failure is not None:
             raise self.save_failure
         self.items[record.employee_id] = record
+
+
+# --------------------------------------------------------------------------- #
+# Face Control — üz təsdiqi (facecontrol.md Faza 2)
+#
+# ÜÇ QAYDA BU SAHTƏLƏRDƏ DƏ SAXLANILIR (əks halda vahid testlər sxem
+# məhdudiyyətlərinin OLMADIĞI bir dünyada yaşayardı — `DuplicateLiveFineError`
+# ilə eyni qərar):
+#   1. `PURGED` arxiv sətri vektor SAXLAYA BİLMƏZ (`chk_face_history_purge`);
+#   2. üz sayğacı PIN sayğacına TOXUNMUR (ayrı sahələr, ayrı metodlar);
+#   3. cross-check YALNIZ eyni mağazanın qeydiyyatlı işçilərini görür.
+# --------------------------------------------------------------------------- #
+
+
+class FaceArchiveConstraintError(Exception):
+    """Sahtə repo-da `chk_face_history_purge` məhdudiyyətinin qarşılığı.
+
+    Real bazada "silindi" deyib vektoru saxlamaq MÜMKÜN DEYİL. Sahtə repo
+    həmin qaydanı təkrarlayır ki, bənd 8-in silmə iddiası DB olmadan da
+    yoxlana bilsin.
+    """
+
+
+class FakeFaceMatcher:
+    """`FaceMatcher` sahtəsi — HƏQİQİ Evklid məsafəsi ilə.
+
+    MƏSAFƏ UYDURULMUR, HESABLANIR (`math.dist`): testlər vektorları
+    `(0.0,)`/`(0.55,)` kimi bir ölçülü seçir və məsafə birbaşa oxunur —
+    yəni "0.55 aşağı-etibar zolağındadır" iddiası sahtənin qaytardığı
+    ədədə deyil, `FaceToleranceBand`-ın FAKTİKİ hesablamasına baxır.
+
+    `samples` sırayla qaytarılır; siyahı bitəndə SONUNCU təkrarlanır — belə
+    halda "birinci kadr keçmədi, ikinci keçdi" ssenarisi qurmaq mümkündür.
+    """
+
+    def __init__(
+        self,
+        samples: list[Any] | None = None,
+        *,
+        clock: FakeClock | None = None,
+        delay_seconds: float = 0.0,
+    ) -> None:
+        self.samples = samples or []
+        self._index = 0
+        #: Doğrulamanın "uzun sürməsini" simulyasiya edir (bənd 18 həddi).
+        #: Vaxt `Clock` portundan oxunduğu üçün sahtə saatı irəli sürmək
+        #: real ölçmə gözləməkdən həm sürətli, həm determinstikdir.
+        self._clock = clock
+        self._delay_seconds = delay_seconds
+        self.extract_calls: list[Any] = []
+        self.distance_calls: list[tuple[Any, Any]] = []
+
+    def extract(self, frame: Any, *, gesture: Any = None) -> Any:
+        self.extract_calls.append(gesture)
+        if self._clock is not None and self._delay_seconds:
+            self._clock.advance(seconds=self._delay_seconds)
+        if not self.samples:
+            raise AssertionError("FakeFaceMatcher üçün nümunə təyin edilməyib")
+        index = min(self._index, len(self.samples) - 1)
+        self._index += 1
+        return self.samples[index]
+
+    def distance(self, reference: Any, candidate: Any) -> float:
+        self.distance_calls.append((reference, candidate))
+        return math.dist(reference.values, candidate.values)
+
+
+class FakeCamera:
+    """`CameraCapture` sahtəsi — nasazlıq AYRICA bayraqla ifadə olunur.
+
+    `available=False` ilə "boş kadr siyahısı" HALLARI QƏSDƏN AYRIDIR: birincisi
+    avadanlıq nasazlığıdır (bənd 5 — eskalasiya), ikincisi isə işçinin hərəkəti
+    vaxtında etməməsidir (`NO_FACE_DETECTED`, sayğacsız).
+    """
+
+    def __init__(
+        self,
+        *,
+        available: bool = True,
+        frames: list[Any] | None = None,
+        clock: FakeClock | None = None,
+        delay_seconds: float = 0.0,
+    ) -> None:
+        self.available = available
+        self.frames = frames
+        self._clock = clock
+        self._delay_seconds = delay_seconds
+        self.captures: list[tuple[int, Any]] = []
+
+    def is_available(self) -> bool:
+        return self.available
+
+    def capture(self, *, count: int = 1, gesture: Any = None) -> list[Any]:
+        from src.domain.value_objects.face_recognition import FaceFrame
+
+        self.captures.append((count, gesture))
+        if self._clock is not None and self._delay_seconds:
+            self._clock.advance(seconds=self._delay_seconds)
+        if self.frames is not None:
+            return list(self.frames[:count]) if count > 1 else list(self.frames[:1])
+        return [FaceFrame(payload=b"kadr", width=640, height=480) for _ in range(count)]
+
+
+class InMemoryFaceProfiles:
+    """`FaceEmbeddingRepository` sahtəsi — `employees` üz sahələri + arxiv.
+
+    ŞİFRƏLƏMƏ BURADA YOXDUR VƏ BU DOĞRUDUR: real repo-da şifrələmə saxlama
+    detalıdır (`face_repository.py`), use case isə açıq vektorla işləyir.
+    Sahtəyə şifrələmə əlavə etmək testləri açar provayderindən asılı edərdi.
+    """
+
+    def __init__(self, profiles: list[Any] | None = None) -> None:
+        self.items: dict[EmployeeId, Any] = {p.employee_id: p for p in profiles or []}
+        #: Arxiv sətirləri: `(employee_id, status, embedding, reason)`.
+        self.archive_rows: list[tuple[EmployeeId, str, Any, str | None]] = []
+
+    def get_profile(self, employee_id: EmployeeId) -> Any:
+        return self.items.get(employee_id)
+
+    def save_enrollment(self, employee_id: EmployeeId, *, embedding: Any, enrolled_at: Any) -> None:
+        from dataclasses import replace
+
+        profile = self.items[employee_id]
+        self.items[employee_id] = replace(profile, embedding=embedding, enrolled_at=enrolled_at)
+
+    def save_security(
+        self, employee_id: EmployeeId, *, mismatch_attempts: int, locked_until: Any
+    ) -> None:
+        from dataclasses import replace
+
+        profile = self.items[employee_id]
+        self.items[employee_id] = replace(
+            profile, mismatch_attempts=mismatch_attempts, locked_until=locked_until
+        )
+
+    def archive(
+        self,
+        employee_id: EmployeeId,
+        *,
+        archived_by: EmployeeId | None,
+        reason: str | None,
+        archived_at: Any,
+    ) -> bool:
+        profile = self.items.get(employee_id)
+        if profile is None or profile.embedding is None:
+            return False
+        self.archive_rows.append((employee_id, "REPLACED", profile.embedding, reason))
+        return True
+
+    def purge(
+        self,
+        employee_id: EmployeeId,
+        *,
+        purged_by: EmployeeId | None,
+        reason: str | None,
+        purged_at: Any,
+    ) -> bool:
+        """Vektoru HƏM cari sətirdən, HƏM arxivdən silir (bənd 8).
+
+        Arxivin təmizlənməsi real repo-da ayrıca `UPDATE`-dir; burada da
+        AYRICA addım kimi saxlanılır, çünki məhz onun unudulması bənd 8-i
+        sükutla pozan səhvdir.
+        """
+        from dataclasses import replace
+
+        profile = self.items.get(employee_id)
+        had_vector = profile is not None and profile.embedding is not None
+        cleared = [row for row in self.archive_rows if row[0] == employee_id and row[2] is not None]
+        if had_vector:
+            self.archive_rows.append((employee_id, "PURGED", None, reason))
+            self.items[employee_id] = replace(profile, embedding=None, enrolled_at=None)
+        self.archive_rows = [
+            (row[0], "PURGED", None, row[3]) if row[0] == employee_id else row
+            for row in self.archive_rows
+        ]
+        self._assert_purge_invariant()
+        return had_vector or bool(cleared)
+
+    def list_store_profiles(
+        self, tenant_id: TenantId, store_id: StoreId, *, exclude: EmployeeId | None = None
+    ) -> list[Any]:
+        return [
+            profile
+            for profile in self.items.values()
+            if profile.tenant_id == tenant_id
+            and profile.store_id == store_id
+            and profile.embedding is not None
+            and profile.employee_id != exclude
+        ]
+
+    def list_stale_enrollments(
+        self, tenant_id: TenantId, *, enrolled_before: datetime
+    ) -> list[Any]:
+        return sorted(
+            (
+                profile
+                for profile in self.items.values()
+                if profile.tenant_id == tenant_id
+                and profile.enrolled_at is not None
+                and profile.enrolled_at < enrolled_before
+            ),
+            key=lambda profile: profile.enrolled_at,
+        )
+
+    def _assert_purge_invariant(self) -> None:
+        for _employee_id, status, embedding, _reason in self.archive_rows:
+            if status == "PURGED" and embedding is not None:
+                raise FaceArchiveConstraintError(
+                    "`PURGED` arxiv sətri vektor saxlaya bilməz (chk_face_history_purge)"
+                )
+
+
+class InMemoryFaceVerificationLog:
+    """`FaceVerificationLogRepository` sahtəsi.
+
+    `update()` QƏSDƏN YOXDUR: real cədvəldə tətbiq rolundan `UPDATE` geri
+    alınıb (jurnal sətri FAKTdır) — sahtə repo real məhdudiyyətdən daha
+    sərbəst olmamalıdır.
+    """
+
+    def __init__(self) -> None:
+        self.entries: list[Any] = []
+
+    def record(self, entry: Any) -> None:
+        self.entries.append(entry)
+
+    def purge_older_than(self, tenant_id: TenantId, *, cutoff: datetime) -> int:
+        kept = [
+            entry
+            for entry in self.entries
+            if not (entry.tenant_id == tenant_id and entry.occurred_at < cutoff)
+        ]
+        removed = len(self.entries) - len(kept)
+        self.entries = kept
+        return removed
+
+    def list_mismatches_since(self, tenant_id: TenantId, *, since: datetime) -> list[Any]:
+        return [
+            entry
+            for entry in self.entries
+            if entry.tenant_id == tenant_id
+            and entry.result.value == "MISMATCH"
+            and entry.occurred_at >= since
+        ]
+
+    def results(self) -> list[str]:
+        """Yazılmış nəticələrin sırası — testlərin oxu köməkçisi."""
+        return [str(entry.result.value) for entry in self.entries]
+
+
+class InMemoryFaceExemptions:
+    """`FaceExemptionRepository` sahtəsi.
+
+    `delete()` YOXDUR (real cədvəldə `REVOKE DELETE`). `active_for` HƏM
+    statusa, HƏM `expires_at`-a baxır — gecəlik iş işləməsə belə istisna öz
+    tarixində bitir.
+    """
+
+    def __init__(self, exemptions: list[Any] | None = None) -> None:
+        self.items: dict[Any, Any] = {e.exemption_id: e for e in exemptions or []}
+
+    def get(self, exemption_id: Any) -> Any:
+        return self.items.get(exemption_id)
+
+    def active_for(self, employee_id: EmployeeId, *, now: datetime) -> Any:
+        for exemption in self.items.values():
+            if exemption.employee_id == employee_id and exemption.is_active_at(now):
+                return exemption
+        return None
+
+    def list_due_for_expiry(self, tenant_id: TenantId, *, now: datetime) -> list[Any]:
+        return [
+            exemption
+            for exemption in self.items.values()
+            if exemption.tenant_id == tenant_id and exemption.is_due_for_expiry(now)
+        ]
+
+    def list_active(self, tenant_id: TenantId, *, now: datetime) -> list[Any]:
+        return [
+            exemption
+            for exemption in self.items.values()
+            if exemption.tenant_id == tenant_id and exemption.is_active_at(now)
+        ]
+
+    def save(self, exemption: Any) -> None:
+        self.items[exemption.exemption_id] = exemption
+
+
+class FakeFaceStoreScope:
+    """`FaceStoreScopeRepository` sahtəsi — DEFOLT BOŞ = qlobal davranış (bənd 15)."""
+
+    def __init__(self, store_ids: set[StoreId] | None = None) -> None:
+        self.store_ids = store_ids or set()
+        self.changes: list[tuple[StoreId, bool]] = []
+
+    def active_scope(self, tenant_id: TenantId) -> Any:
+        from src.domain.value_objects.face_recognition import FaceStoreScope
+
+        return FaceStoreScope(store_ids=frozenset(self.store_ids))
+
+    def set_active(
+        self, tenant_id: TenantId, store_id: StoreId, *, active: bool, changed_by: EmployeeId
+    ) -> None:
+        self.changes.append((store_id, active))
+        if active:
+            self.store_ids.add(store_id)
+        else:
+            self.store_ids.discard(store_id)
 
 
 class FakeFineTypes:

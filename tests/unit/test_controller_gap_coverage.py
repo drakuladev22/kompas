@@ -26,11 +26,13 @@ from typing import Any, Final
 
 import pytest
 
+from src.application.use_cases.face_control import FaceGateDecision, FaceGateOutcome
 from src.application.use_cases.leave_verification import OperationNotPermittedError
 from src.domain.entities.attendance_record import CheckInStatus
 from src.domain.entities.leave_request import LeaveStatus
 from src.domain.policies import FeatureModule, SystemLimitKey
 from src.domain.value_objects.authorization import HardlockLevel, PermissionFlag
+from src.domain.value_objects.face_recognition import FaceStoreScope
 from src.domain.value_objects.identifiers import (
     AttendanceRecordId,
     EmployeeId,
@@ -137,6 +139,40 @@ class _KioskUseCase:
     claim_return = _run
 
 
+class _KioskFaceGate:
+    """`FaceVerificationUseCase` müqaviləsinin minimal təkrarı (facecontrol.md).
+
+    DEFOLT `NOT_APPLICABLE`: mövcud kiosk testlərinin sualı üz təsdiqi DEYİL
+    (commit, status, istisna udulması) və həmin suallar Face Control-dan ƏVVƏL
+    də eyni cavabı verməlidir. `NOT_APPLICABLE` yolu heç nə yazmır və heç nə
+    bloklamır — yəni sahtə köhnə davranışın DƏQİQ eynisini modelləşdirir.
+
+    REAL `FaceGateDecision` QAYTARILIR, öz uydurma tipimiz yox: `face_result_row`
+    onun sahələrini oxuyur və sahtə tip həmin çevirməni yalançı-yaşıl edərdi.
+    """
+
+    def __init__(
+        self,
+        *,
+        outcome: FaceGateOutcome = FaceGateOutcome.NOT_APPLICABLE,
+        error: Exception | None = None,
+    ) -> None:
+        self._outcome = outcome
+        self._error = error
+        self.calls: list[Any] = []
+
+    def verify(self, *, tenant_id: Any, employee: Any, trigger_context: Any) -> FaceGateDecision:
+        self.calls.append(trigger_context)
+        if self._error is not None:
+            raise self._error
+        return FaceGateDecision(
+            employee_id=employee.id,
+            trigger_context=trigger_context,
+            outcome=self._outcome,
+            message_az="Üz təsdiqi nəticəsi",
+        )
+
+
 class _KioskSession:
     def __init__(
         self,
@@ -145,11 +181,14 @@ class _KioskSession:
         check_in: CheckInStatus | None = None,
         morning_error: Exception | None = None,
         leave_error: Exception | None = None,
+        face_outcome: FaceGateOutcome = FaceGateOutcome.NOT_APPLICABLE,
+        face_error: Exception | None = None,
     ) -> None:
         self.tenant_id = TENANT
         self.uow = _KioskUow(leave_status=leave_status, check_in=check_in)
         self.morning_check_in = _KioskUseCase(error=morning_error)
         self.leave_verification = _KioskUseCase(error=leave_error)
+        self.face_verification = _KioskFaceGate(outcome=face_outcome, error=face_error)
         self.commits = 0
 
     def commit(self) -> None:
@@ -660,12 +699,27 @@ class _RootScreen:
         self.registry: list[Any] = []
         self.errors: list[tuple[str, str]] = []
         self.rejected: list[str] = []
+        #: Face Control bölməsi (facecontrol.md bənd 15 + 7/12) — AYRICA
+        #: saxlanılır, çünki mağaza əhatəsi `collected()["limits"]` ad
+        #: məkanına DÜŞMÜR (ayrı cədvəldir).
+        self.face_scope: list[Any] = []
+        self.face_tolerance: dict[str, str] = {}
+        self.face_rejected: list[str] = []
 
     def set_limits(self, rows: list[Any]) -> None:
         self.limits = rows
 
     def set_break_limits(self, rows: list[Any]) -> None:
         self.break_limits = rows
+
+    def set_face_scope(self, rows: list[Any]) -> None:
+        self.face_scope = rows
+
+    def set_face_tolerance(self, tolerance: dict[str, str]) -> None:
+        self.face_tolerance = tolerance
+
+    def reject_face_scope_change(self, store_id: str) -> None:
+        self.face_rejected.append(store_id)
 
     def set_modules(self, rows: list[Any]) -> None:
         self.modules = rows
@@ -776,19 +830,97 @@ class _RootUseCase:
         return flag
 
 
+class _FaceScopeRepo:
+    """`FaceStoreScopeRepository` müqaviləsinin minimal təkrarı (bənd 15)."""
+
+    def __init__(self, active: set[StoreId] | None = None) -> None:
+        self._active = active or set()
+        self.written: list[tuple[StoreId, bool]] = []
+
+    def active_scope(self, tenant_id: Any) -> FaceStoreScope:
+        return FaceStoreScope(store_ids=frozenset(self._active))
+
+    def set_active(
+        self, tenant_id: Any, store_id: StoreId, *, active: bool, changed_by: Any
+    ) -> None:
+        self.written.append((store_id, active))
+
+
+class _RootConnection:
+    """Mağaza siyahısı sorğusu — `face_scope_rows` onu birbaşa oxuyur."""
+
+    def __init__(self, stores: list[dict[str, Any]]) -> None:
+        self._stores = stores
+
+    def execute(self, sql: str, params: Any = None) -> Any:
+        return type("_Cursor", (), {"fetchall": lambda _self: list(self._stores)})()
+
+
+class _RootAudit:
+    def __init__(self) -> None:
+        self.records: list[dict[str, Any]] = []
+
+    def record(self, **kwargs: Any) -> None:
+        self.records.append(kwargs)
+
+
+class _RootUow:
+    def __init__(self, stores: list[dict[str, Any]], scope: _FaceScopeRepo) -> None:
+        self.connection = _RootConnection(stores)
+        self.audit = _RootAudit()
+        self._scope = scope
+
+    def repository(self, name: str) -> Any:
+        assert name == "face_store_scope"
+        return self._scope
+
+
+class _RootLimits:
+    """`SystemLimits` portunun oxu tərəfi — Face Control hədləri üçün."""
+
+    def __init__(self, values: dict[str, str] | None = None) -> None:
+        self._values = values or {}
+
+    def get_str(self, tenant_id: Any, key: str, default: str) -> str:
+        return self._values.get(key, default)
+
+    def get_int(self, tenant_id: Any, key: str, default: int) -> int:
+        return int(self._values.get(key, default))
+
+
 class _RootSession:
-    def __init__(self, use_case: _RootUseCase) -> None:
+    def __init__(
+        self,
+        use_case: _RootUseCase,
+        *,
+        stores: list[dict[str, Any]] | None = None,
+        scope: _FaceScopeRepo | None = None,
+        limits: dict[str, str] | None = None,
+    ) -> None:
         self.tenant_id = TENANT
         self.root_control = use_case
+        self.face_scope = scope or _FaceScopeRepo()
+        self.uow = _RootUow(stores or [], self.face_scope)
+        self.limits = _RootLimits(limits)
         self.commits = 0
 
     def commit(self) -> None:
         self.commits += 1
 
 
-def _root(use_case: _RootUseCase) -> tuple[RootControlController, _RootSession]:
-    session = _RootSession(use_case)
-    controller = RootControlController(_Context(session), _actor())  # type: ignore[arg-type]
+def _root(
+    use_case: _RootUseCase,
+    *,
+    stores: list[dict[str, Any]] | None = None,
+    scope: _FaceScopeRepo | None = None,
+    limits: dict[str, str] | None = None,
+    actor: Any = None,
+) -> tuple[RootControlController, _RootSession]:
+    session = _RootSession(use_case, stores=stores, scope=scope, limits=limits)
+    controller = RootControlController(
+        _Context(session),  # type: ignore[arg-type]
+        actor or _actor(),
+    )
     return controller, session
 
 

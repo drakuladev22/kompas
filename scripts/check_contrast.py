@@ -136,6 +136,22 @@ REQUIRED_PAIRS: list[tuple[str, str, float, str]] = [
     ("--color-text-muted", "--color-bg-sunken", AA_NORMAL_TEXT, "Solğun mətn (çökük)"),
     ("--color-text-muted", "--color-header-bg", AA_NORMAL_TEXT, "Alt başlıq (header)"),
     ("--color-text-muted", "--color-sidebar-bg", AA_NORMAL_TEXT, "Bölmə etiketi"),
+    # --- PIN səthindəki SEMANTİK mətn (facecontrol.md Faza 4) ---------------- #
+    #
+    # NİYƏ BU CÜTLƏR İNDİ ƏLAVƏ OLUNDU: `#PinScreen` səthi QSS-də yalnız
+    # `--color-pin-text` ilə cütləşir, lakin ekranlar üzərinə İNLİNE üslubla
+    # semantik rəng qoyur — `PinPadScreen.show_message` ("PIN yanlışdır")
+    # bunu Faza 4.2-dən bəri edir və Face Control overlay-i həmin naxışı
+    # təkrarlayır (uğur / xəbərdarlıq / xəta / məlumat başlıqları).
+    #
+    # Yoxlayıcı `tokens.py` cütlərini VƏ `qss.py`-dəki faktiki istifadəni
+    # ölçür; inline üslub isə hər iki mənbədən kənarda qalırdı — yəni bu dörd
+    # cüt bugünə qədər HEÇ VAXT ölçülməmişdi. Boşluq bağlanır.
+    ("--color-danger", "--color-pin-bg", AA_NORMAL_TEXT, "PIN səthi — xəta mətni"),
+    ("--color-success", "--color-pin-bg", AA_NORMAL_TEXT, "PIN səthi — uğur mətni"),
+    ("--color-warning", "--color-pin-bg", AA_NORMAL_TEXT, "PIN səthi — xəbərdarlıq"),
+    ("--color-info", "--color-pin-bg", AA_NORMAL_TEXT, "PIN səthi — məlumat"),
+    ("--color-text-muted", "--color-pin-bg", AA_NORMAL_TEXT, "PIN səthi — solğun mətn"),
 ]
 
 #: PIN Handshake ekranı fərqli işıqlandırmada istifadə olunur — bölmə 9 orada

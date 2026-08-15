@@ -95,6 +95,7 @@ class QueueEntry:
     __slots__ = (
         "employee_name",
         "is_late",
+        "is_low_confidence",
         "kind",
         "position_name",
         "request_id",
@@ -114,6 +115,7 @@ class QueueEntry:
         timestamp_text: str,
         waiting_text: str,
         is_late: bool = False,
+        is_low_confidence: bool = False,
     ) -> None:
         self.request_id = request_id
         self.employee_name = employee_name
@@ -125,6 +127,14 @@ class QueueEntry:
         self.waiting_text = waiting_text
         #: `True` → gözləmə mətni xəbərdarlıq rəngində göstərilir.
         self.is_late = is_late
+        #: Üz təsdiqi AŞAĞI-ETİBAR zolağında keçdi (facecontrol.md bənd 12).
+        #:
+        #: DEFOLT `False` VƏ BU, QƏSDƏNDİR: sahə mövcud çağırış nöqtələrinin
+        #: heç birini dəyişmir (`screen_data._live_queue`, `preview_screens`,
+        #: e2e testi). Nişan yalnız AÇIQ şəkildə `True` ötürüləndə görünür —
+        #: əks halda operator hər sətirdə bir xəbərdarlıq görüb ona məhəl
+        #: qoymamağa öyrəşərdi.
+        self.is_low_confidence = is_low_confidence
 
 
 class QueueRow(Card):
@@ -174,6 +184,18 @@ class QueueRow(Card):
         # Tip nişanı — giriş/qayıdış fərqi bir baxışda görünməlidir.
         tone: ChipTone = "info" if entry.kind.startswith("Giriş") else "neutral"
         layout.addWidget(Chip(entry.kind, tone))
+
+        # AŞAĞI-ETİBARLI ÜZ TƏSDİQİ (facecontrol.md bənd 12) — MÖVCUD `Chip`
+        # naxışı, yeni rəng cütü YOX.
+        #
+        # NİŞAN SƏTRİ BLOKLAMIR: bal aşağı-etibar zolağındadırsa əməliyyat
+        # DAVAM EDİB (`FaceGateOutcome.ALLOWED_LOW_CONFIDENCE`) və növbədə
+        # normal sətir kimi durur. Nişanın yeganə məqsədi operatorun iVMS
+        # yoxlamasını YÖNLƏNDİRMƏKDİR — «bu sətrə bir az diqqətlə bax».
+        # `danger` tonu QƏSDƏN SEÇİLMƏDİ: qırmızı «fırıldaq aşkarlandı»
+        # deməkdir, halbuki aşağı etibar çox vaxt işıqdan və ya bucaqdandır.
+        if entry.is_low_confidence:
+            layout.addWidget(Chip("aşağı-etibarlı üz təsdiqi", "warning"))
 
         time_box = QWidget()
         time_layout = QVBoxLayout(time_box)
@@ -268,6 +290,38 @@ class OperatorQueueScreen(Screen):
         )
         reminder_layout.addStretch(1)
         reminder.add(reminder_line)
+
+        # --- ÜZ TƏSDİQİ ↔ OPERATOR SƏRHƏDİ (facecontrol.md, konseptual sərhəd)
+        #
+        # BU MƏTN MƏCBURİDİR VƏ SƏBƏBİ TƏHLÜKƏSİZLİKDİR. Face Control
+        # kioskda avtomatik işləyir və operator onun mövcudluğunu bilirsə,
+        # təbii nəticə belə olur: «sistem üzü yoxlayıb, deməli mən sürətlə
+        # təsdiqləyə bilərəm». Bu, yanlış güvən hissidir — iki sistem İKİ
+        # FƏRQLİ suala cavab verir:
+        #
+        #     Face Control → «kioskda duran şəxs KİMDİR» (identity)
+        #     Operator/iVMS → «bu şəxs FİZİKİ olaraq orada idi, davranışı
+        #                      normaldırmı» (presence/context)
+        #
+        # Üz təsdiqi STEP B/C təsdiqini NƏ ƏVƏZ EDİR, NƏ DƏ AVTOMATLAŞDIRIR.
+        # Mətn olmasaydı, sərhəd yalnız sənəddə qalar və operator onu heç vaxt
+        # oxumazdı.
+        reminder.add(Divider())
+        reminder.add(
+            body_label(
+                "Üz təsdiqi «kioskda duran şəxs KİMDİR» sualına cavab verir. Siz isə "
+                "«bu şəxs FİZİKİ olaraq orada idi və davranışı normaldırmı» sualına "
+                "cavab verirsiniz — bu, AYRI sualdır.",
+                size=13,
+            )
+        )
+        reminder.add(
+            muted_label(
+                "Üz təsdiqi sizin təsdiqinizi ƏVƏZ ETMİR və avtomatlaşdırmır. Hər iki "
+                "yoxlama paralel işləyir; «aşağı-etibarlı üz təsdiqi» nişanı olan sətrə "
+                "xüsusilə diqqətlə baxın."
+            )
+        )
         self.add(reminder)
 
         # --- sətirlər --- #

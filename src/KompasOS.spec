@@ -30,15 +30,66 @@
 #   --add-data  → `datas=[(...kompasos.ico, 'assets')]`
 # Yeganə QƏSDLİ fərq `upx=False`-dur (səbəbi aşağıda, EXE blokunda).
 #
-# `hiddenimports` NİYƏ BOŞDUR
+# `hiddenimports` NƏ ÜÇÜNDÜR
 # -----------------------------------------------------------------------------
 # Layihədə gec idxallar funksiya daxilində `from ... import ...` şəklindədir
 # (`# noqa: PLC0415`). PyInstaller-in statik analizi bu formanı GÖRÜR — yalnız
 # `importlib.import_module(dəyişən)` kimi həqiqi dinamik idxal görünməz olardı,
 # belə istifadə isə `src/`-də yoxdur. `psycopg`, `PySide6`, `cryptography`,
 # `PIL`, `argon2` üçün standart hook-lar kifayət edir (yoxlanılıb).
+#
+# Siyahı Face Control (`facecontrol.md` Faza 3) ilə DOLDU və səbəb yuxarıdakı
+# qaydanın İSTİSNASIDIR — bax `_FACE_HIDDEN_IMPORTS` blokunun şərhi.
 # =============================================================================
 import os
+
+from PyInstaller.utils.hooks import collect_data_files  # noqa: F821 — spec mühitində mövcuddur
+
+# =============================================================================
+# FACE CONTROL — üz təsdiqi (`facecontrol.md` Faza 3)
+# =============================================================================
+# NİYƏ `hiddenimports` LAZIMDIR (statik analiz KİFAYƏT ETMİR)
+# -----------------------------------------------------------------------------
+# `face_recognition` və `cv2` layihədə `try/except ImportError` blokunun
+# İÇİNDƏ idxal olunur (bax `infrastructure/security/face_matcher.py` və
+# `infrastructure/kiosk/camera.py` — nasazlıq `import`-un özünü çökdürməməlidir,
+# çünki bənd 5 sükutla PIN-only rejimini qadağan edir və əvəzində eskalasiya
+# tələb edir). PyInstaller belə idxalı GÖRÜR, lakin:
+#   * `face_recognition` `dlib`-i C-genişlənməsi kimi çağırır — `dlib` heç bir
+#     `import` sətrində birbaşa görünmür;
+#   * `face_recognition_models` yalnız `pkg_resources` üzərindən (mətn açarı
+#     ilə) yüklənir — statik analiz onu heç vaxt tapa bilməz;
+#   * `pkg_resources`-un özü setuptools-un içindədir və heç bir modulumuz onu
+#     birbaşa idxal etmir.
+# Bunlar olmadan paketlənmiş `.exe` işə düşür, üz təsdiqi isə HƏMİŞƏ
+# "mühərrik əlçatmazdır" deyir — yəni hər giriş manual təsdiqə düşər.
+_FACE_HIDDEN_IMPORTS = [
+    'dlib',
+    'face_recognition',
+    'face_recognition_models',
+    'pkg_resources',
+]
+
+# MODEL FAYLLARI `datas`-A ƏLAVƏ OLUNMALIDIR — BUNSUZ `.exe` İŞLƏMİR
+# -----------------------------------------------------------------------------
+# Dlib-in dörd `.dat` modeli (68/5-nöqtə landmark, ResNet encoder, CNN
+# detektor; ~132 MB) `face_recognition_models` paketinin İÇİNDƏDİR və
+# PyInstaller onları avtomatik götürmür: onlar `.py` deyil, məlumat faylıdır və
+# heç bir `import` sətri onlara istinad etmir. `pkg_resources.resource_filename`
+# isə paketin qovluq strukturunu gözləyir, ona görə hədəf yolu (`face_
+# recognition_models/models`) DƏYİŞDİRİLMƏMƏLİDİR.
+_FACE_MODEL_DATAS = collect_data_files(
+    'face_recognition_models', includes=['models/*.dat']
+)
+if not _FACE_MODEL_DATAS:
+    # SÜKUTLA BOŞ QALMIR: boş siyahı ilə qurma UĞURLA bitər, `.exe` isə
+    # müştəri maşınında "Please install face_recognition_models" deyib
+    # çökərdi — yəni qüsur qurma maşınında deyil, mağazada üzə çıxardı.
+    raise SystemExit(
+        'Face Control model faylları tapılmadı. `pip install -r requirements.txt` '
+        'ilə `face_recognition_models` paketini quraşdırın (bax requirements.txt, '
+        'Face Control bölməsi).'
+    )
 
 a = Analysis(
     [os.path.join(SPECPATH, 'main.py')],  # noqa: F821 — SPECPATH-ı PyInstaller inject edir
@@ -48,8 +99,11 @@ a = Analysis(
     # faylının özünü bəzəyir; işləyən pəncərənin ikonu `setWindowIcon` ilə
     # runtime-da oxunur (bax `presentation/app.py::_apply_window_icon`).
     # CI əmrindəki `--add-data "assets/kompasos.ico;assets"` ilə eynidir.
-    datas=[(os.path.join(SPECPATH, '..', 'assets', 'kompasos.ico'), 'assets')],  # noqa: F821
-    hiddenimports=[],
+    datas=[
+        (os.path.join(SPECPATH, '..', 'assets', 'kompasos.ico'), 'assets'),  # noqa: F821
+        *_FACE_MODEL_DATAS,
+    ],
+    hiddenimports=_FACE_HIDDEN_IMPORTS,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

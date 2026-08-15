@@ -68,7 +68,7 @@ from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from src.application.use_cases.announcements import AnnouncementUseCase
     from src.application.use_cases.annual_leave import AnnualLeaveUseCase
@@ -94,6 +94,13 @@ if TYPE_CHECKING:
     from src.application.use_cases.exception_engine import ExceptionEngineUseCase
     from src.application.use_cases.executive_digest import ExecutiveDigestUseCase
     from src.application.use_cases.export_preflight import ExportPreflightUseCase
+    from src.application.use_cases.face_control import (
+        FaceControlExemptionUseCase,
+        FaceEnrollmentUseCase,
+        FaceReEnrollmentUseCase,
+        FaceVerificationLogRetentionUseCase,
+        FaceVerificationUseCase,
+    )
     from src.application.use_cases.field_reports import FieldReportUseCase
     from src.application.use_cases.fine_management import (
         FineAppealUseCase,
@@ -356,6 +363,53 @@ class _LazyBufferDrain:
         return remaining
 
 
+class _LazyFaceEngine:
+    """`CameraCapture` + `FaceMatcher` — mühərriki YALNIZ ilk üz əməliyyatında qurur.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ TƏNBƏL — ÖLÇÜLMÜŞ SƏBƏB
+    ──────────────────────────────────────────────────────────────────────────
+    `_LazyBufferDrain` ilə eyni naxış, lakin daha ağır qiymətlə: `import
+    face_recognition` sətri modul səviyyəsində Dlib-in ÜÇ model faylını
+    (68-nöqtə landmark, ResNet encoder, frontal detektor) yaddaşa yükləyir —
+    bu maşında ölçülmüş qiymət ~1.0 saniyə və ~150 MB-dır.
+
+    `Session` HƏR ekran əməliyyatında qurulur. Mühərriki orada birbaşa
+    qursaydıq, həmin bir saniyə İLK sessiyaya — yəni tətbiqin açılışına —
+    düşərdi, üstəlik Face Control əhatəsindən KƏNARDA qalan mağazalarda
+    (bənd 15) həmin yük HEÇ VAXT istifadə edilməzdi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ HƏR İKİ PORT BİR SİNİFDƏ
+    ──────────────────────────────────────────────────────────────────────────
+    İki ayrı proxy iki ayrı `face_engine()` çağırışı demək olardı — nəticə
+    eyni olardı (kontekst onu keşləyir), lakin "kamera hansı nüsxədəndir?"
+    sualı iki yerdən cavablanardı. Bir proxy = bir mənbə.
+    """
+
+    def __init__(self, resolve: Callable[[], tuple[Any, Any]]) -> None:
+        self._resolve = resolve
+
+    def is_available(self) -> bool:
+        camera, _ = self._resolve()
+        available: bool = camera.is_available()
+        return available
+
+    def capture(self, *, count: int = 1, gesture: Any = None) -> list[Any]:
+        camera, _ = self._resolve()
+        frames: list[Any] = camera.capture(count=count, gesture=gesture)
+        return frames
+
+    def extract(self, frame: Any, *, gesture: Any = None) -> Any:
+        _, matcher = self._resolve()
+        return matcher.extract(frame, gesture=gesture)
+
+    def distance(self, reference: Any, candidate: Any) -> float:
+        _, matcher = self._resolve()
+        result: float = matcher.distance(reference, candidate)
+        return result
+
+
 class StartupError(KompasOSError):
     """Tətbiq işə düşə bilmədi — fatal başlanğıc ekranı göstərilir.
 
@@ -571,6 +625,38 @@ class Session:
     # bir obyektdə qarışdırardı.
     export_preflight: ExportPreflightUseCase
 
+    # --- Face Control — üz təsdiqi (facecontrol.md, Faza 2 + Faza 3) --------- #
+    #
+    # BEŞ USE CASE-in HAMISI QOŞULUB. Faza 2-də yalnız ikisi (istisna + jurnal
+    # təmizləməsi) qoşulmuşdu, çünki qalan üçü `FaceMatcher`/`CameraCapture`
+    # portlarını tələb edir və onların adapterləri Faza 3-dədir. Faza 3 həmin
+    # adapterləri (`infrastructure/security/face_matcher.py`,
+    # `infrastructure/kiosk/camera.py`) əlavə etdi və siyahı tamamlandı.
+    #
+    # ADAPTERLƏR `ApplicationContext.face_engine()`-dƏN GƏLİR, burada
+    # qurulmur: kamera FİZİKİ cihazdır və `Session` hər əməliyyatda yenidən
+    # qurulduğu üçün burada açsaydıq, hər ekran hərəkəti ikinci `VideoCapture`
+    # yaradıb cihazı bloklayardı.
+    #
+    # Nəzarətli qeydiyyat (bənd 1) — `can_manage_employees` + ÖZÜNƏ-qeydiyyat
+    # qadağası (qayda use case-dədir).
+    face_enrollment: FaceEnrollmentUseCase
+    # Yenidən-qeydiyyat (bənd 2) — köhnə vektor `REPLACED` statusu ilə arxivə
+    # düşür, səbəb MƏCBURİDİR.
+    face_re_enrollment: FaceReEnrollmentUseCase
+    # Üz qapısı (bənd 3–7, 9, 12, 15, 18). MÖVCUD PIN axınının İÇİNƏ
+    # yazılmır — `morning_check_in`/`leave_verification` imzaları toxunulmaz
+    # qaldı; qapı onların ÖNÜNDƏ, kiosk kontrollerindən çağırılır.
+    face_verification: FaceVerificationUseCase
+    # İstisnaların idarəsi (bənd 14) — YALNIZ Root/CEO
+    # (`can_manage_face_exemptions`, hardlock 2). `expire_due()` isə
+    # `FACE_EXEMPTION_EXPIRY` gecəlik işinin girişidir.
+    face_exemptions: FaceControlExemptionUseCase
+    # Doğrulama jurnalının saxlama müddəti (bənd 17) — `FACE_LOG_RETENTION`
+    # gecəlik işinin girişi. EKRANI YOXDUR (`behavior_baselines` ilə eyni
+    # naxış): yeganə çağırış nöqtəsi planlayıcıdır.
+    face_log_retention: FaceVerificationLogRetentionUseCase
+
     def commit(self) -> None:
         self.uow.commit()
 
@@ -667,6 +753,17 @@ class ApplicationContext:
         # ikinci `JobRunner` ikinci `instance_id` demək olardı və eyni proses
         # öz icarəsini "başqasının" kimi görərdi.
         self._job_runner: Any = None
+        # Üz təsdiqi mühərriki də TƏNBƏLdir və səbəbi ən ağırıdır: `face_
+        # recognition` idxalı Dlib-in üç model faylını (68-nöqtə landmark,
+        # encoder, detektor) yükləyir və `cv2.VideoCapture` cihaz açılışı
+        # Windows-da bir saniyəyə qədər çəkir. Örtük açılışında hər ikisini
+        # etmək bütün mağazalara — o cümlədən Face Control əhatəsindən kənarda
+        # qalanlara (bənd 15) — bu qiyməti ödədərdi.
+        #
+        # TƏK NÜSXƏ olması MƏCBURİDİR: `Session` HƏR əməliyyatda yenidən
+        # qurulur, kamera isə fiziki cihazdır — hər sessiyada ikinci
+        # `VideoCapture` açmaq cihazı bloklayardı.
+        self._face_engine: tuple[Any, Any] | None = None
         # İnfrastruktur pəncərəsi BİR DƏFƏ qurulur və paylaşılır: obyekt
         # vəziyyət saxlamır (nə keş, nə bağlantı), yalnız `Database` + tenant
         # daşıyır — hər istehlakçı üçün yenisini qurmaq eyni nəticəni verər,
@@ -1106,6 +1203,82 @@ class ApplicationContext:
             _error_log.exception("NTP_DRIFT_READ_FAILED")
             return None
 
+    # --------------------------- üz təsdiqi qatı ----------------------------- #
+    #
+    # BƏND 5 BU METODUN BÜTÜN MƏNASIDIR
+    # ─────────────────────────────────────────────────────────────────────────
+    # Kitabxana (Dlib və ya OpenCV) yüklənə bilmirsə üç variant vardı:
+    #   (a) tətbiqi açmamaq — üz təsdiqi sistemin BİR qatıdır, onun ucbatından
+    #       mağazanı dayandırmaq həddindən artıq cəzadır;
+    #   (b) üz təsdiqini sükutla keçmək — `facecontrol.md` bənd 5-in MƏHZ
+    #       qadağan etdiyi «səssiz yalnız-PIN» rejimi;
+    #   (c) kameranı ƏLÇATMAZ elan etmək — use case mövcud eskalasiya kanalına
+    #       (`VERIFICATION_TIMEOUT`) düşür və hər təsdiq HR_Admin/CEO-nun
+    #       manual qərarına gedir.
+    # Seçilən (c)-dir: sistem işləyir, lakin üz qapısının yerinə İNSAN qapısı
+    # qoyulur və nasazlıq System Health Monitor-da görünür.
+
+    def face_engine(self) -> tuple[Any, Any]:
+        """`(CameraCapture, FaceMatcher)` cütü — ilk üz əməliyyatında qurulur.
+
+        İKİSİ BİRLİKDƏ QAYTARILIR, çünki uğursuzluq halında hər ikisi EYNİ
+        `UnavailableFaceEngine` nüsxəsi olmalıdır: ayrı-ayrı qursaydıq, «işləyən
+        kamera + işləməyən mühərrik» kimi yarım vəziyyət mümkün olardı və o
+        halda doğrulama `is_available()` qapısını keçib mühərrikdə çökərdi.
+        """
+        if self._face_engine is not None:
+            return self._face_engine
+
+        from src.infrastructure.kiosk.camera import (  # noqa: PLC0415
+            OpenCvCameraCapture,
+            UnavailableFaceEngine,
+            camera_available,
+        )
+        from src.infrastructure.security.face_matcher import (  # noqa: PLC0415
+            DlibFaceMatcher,
+            engine_available,
+        )
+
+        if not camera_available() or not engine_available():
+            reason = "cv2" if not camera_available() else "face_recognition"
+            # SÜKUTLA KEÇMİR: `error.log`-a KRİTİK sətir düşür, çünki bu
+            # vəziyyət quraşdırma qüsurudur və dərhal düzəldilməlidir.
+            _error_log.critical("FACE_ENGINE_UNAVAILABLE", extra={"missing": reason})
+            fallback = UnavailableFaceEngine(reason=reason)
+            self._face_engine = (fallback, fallback)
+            return self._face_engine
+
+        try:
+            self._face_engine = (
+                OpenCvCameraCapture(device_index=_camera_index()),
+                DlibFaceMatcher(),
+            )
+        except Exception as exc:
+            # Model faylı yoxdursa (paketləmə səhvi) `DlibFaceMatcher`
+            # konstruktoru çökür. Nəticə eynidir: eskalasiya, keçid YOX.
+            _error_log.exception("FACE_ENGINE_INIT_FAILED", extra={"error": str(exc)})
+            fallback = UnavailableFaceEngine(reason="init_failed")
+            self._face_engine = (fallback, fallback)
+        return self._face_engine
+
+    def close_face_engine(self) -> None:
+        """Kamera tutacağını buraxır — tətbiq bağlananda çağırılır.
+
+        İSTİSNA ATMIR: bağlanma yolu heç vaxt bir cihaz sürücüsünün ucbatından
+        dayanmamalıdır (`run_evidence_uploads` ilə eyni prinsip).
+        """
+        if self._face_engine is None:
+            return
+        camera = self._face_engine[0]
+        self._face_engine = None
+        closer = getattr(camera, "close", None)
+        if closer is None:
+            return
+        try:
+            closer()
+        except Exception:
+            _error_log.exception("FACE_CAMERA_CLOSE_FAILED")
+
     # --------------------------- baza keçidi qatı ---------------------------- #
 
     def offline_drain(self) -> Any:
@@ -1312,6 +1485,36 @@ class ApplicationContext:
                 JobCadence.DAILY,
                 JobWeight.LIGHT,
             ),
+            # `facecontrol.md` bənd 14 — istisnaların müddət-bitməsi. SIRA
+            # TƏSADÜFİ DEYİL: `EXCEPTION_ENGINE_RUN`-dan SONRA, çünki bitmiş
+            # istisna motorun tapıntılarına təsir etmir, lakin `BEHAVIOR_
+            # BASELINE_RECALC` kimi ağır işlərdən sonra icra olunması gecə
+            # dövrəsinin yükünü bərabər paylayır.
+            #
+            # `DAILY`: müddət GÜN vahidlidir. `HOURLY` seçsəydik, eyni istisna
+            # üçün gün ərzində 24 icra cəhdi olardı — hər biri boş sorğu.
+            # `LIGHT`: bir indeksli sorğu + bitən sətir qədər UPDATE.
+            #
+            # GECİKMƏ TƏHLÜKƏSİZLİK BOŞLUĞU YARATMIR: `FaceExemption.
+            # is_active_at()` HƏM statusa, HƏM `expires_at`-a baxır — yəni
+            # terminal bir həftə söndürülü qalsa belə, istisna faktiki olaraq
+            # ÖZ TARİXİNDƏ bitir; gecəlik iş yalnız sətrin statusunu təmizləyir.
+            (
+                "FACE_EXEMPTION_EXPIRY",
+                self._job_face_exemption_expiry,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
+            # `facecontrol.md` bənd 17 — doğrulama jurnalının saxlama müddəti.
+            # `DAILY` + `LIGHT`: tək `DELETE` (indeksli, `idx_face_verification_
+            # log_retention`). YENİ cron/taymer YAZILMIR — mövcud planlayıcıya
+            # bir sətir qeydiyyat (`NIGHTLY_BACKUP` naxışı).
+            (
+                "FACE_LOG_RETENTION",
+                self._job_face_log_retention,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
             (
                 "FINE_EXPIRE_STALE",
                 self._job_expire_stale_appeals,
@@ -1453,6 +1656,36 @@ class ApplicationContext:
             f"{report.forfeited_days} gün itdi"
         )
 
+    def _job_face_exemption_expiry(self, context: Any) -> str:
+        """Bənd 14 — müddəti bitmiş Face Control istisnalarını bağlayır.
+
+        `context.now` PLANLAYICIDAN gəlir (`Clock` portu ilə eyni mənbə):
+        gecikmiş icrada (kompüter gecə söndürülüb) müqayisə FAKTİKİ ana görə
+        aparılır və `datetime.now()` heç yerdə çağırılmır.
+
+        İDEMPOTENTDİR — `list_due_for_expiry` yalnız `ACTIVE` sətirləri
+        qaytarır, yəni ikinci icra heç nə tapmır (planlayıcının at-least-once
+        zəmanəti üçün məcburi şərt).
+        """
+        with self.session() as session:
+            expired = session.face_exemptions.expire_due(
+                tenant_id=context.tenant_id, now=context.now
+            )
+            session.commit()
+        return f"{expired} istisnanın müddəti bitdi"
+
+    def _job_face_log_retention(self, context: Any) -> str:
+        """Bənd 17 — saxlama müddətindən köhnə doğrulama qeydlərini silir.
+
+        SİLMƏ, ANONİMLƏŞDİRMƏ YOX: jurnalda foto və vektor yoxdur, yalnız
+        nəticə və bal var. 12 aylıq defolt mövcud Davranış Anomaliyası
+        pəncərəsindən (30 gün) qat-qat genişdir — həmin hesablama POZULMUR.
+        """
+        with self.session() as session:
+            removed = session.face_log_retention.purge(tenant_id=context.tenant_id, now=context.now)
+            session.commit()
+        return f"{removed} üz-doğrulama qeydi silindi"
+
     def _job_expire_stale_appeals(self, context: Any) -> str:
         """Cavabsız qalmış cərimə etirazlarını bağlayır (72 saatlıq pəncərə)."""
         with self.session() as session:
@@ -1576,6 +1809,14 @@ class ApplicationContext:
         from src.application.use_cases.export_preflight import (  # noqa: PLC0415
             ExportPreflightUseCase,
         )
+        from src.application.use_cases.face_control import (  # noqa: PLC0415
+            FaceControlExemptionUseCase,
+            FaceEnrollmentUseCase,
+            FaceMismatchExceptionRule,
+            FaceReEnrollmentUseCase,
+            FaceVerificationLogRetentionUseCase,
+            FaceVerificationUseCase,
+        )
         from src.application.use_cases.field_reports import (  # noqa: PLC0415
             FieldReportUseCase,
         )
@@ -1676,6 +1917,29 @@ class ApplicationContext:
         # bu, hər ekran əməliyyatında təkrarlanardı (bax modul başlığı).
         session_limits = InfrastructureLimits(limits=repo("limits"), tenant_id=self._tenant_id)
         notifier = PostgresNotifier(self._database, limits=session_limits)
+        # Üz təsdiqi adapterləri TƏNBƏL proxy ilə ötürülür: `face_engine()`
+        # BURADA çağırılsaydı, `import face_recognition` (ölçülmüş ~1.0 s +
+        # ~150 MB model yükü) İLK sessiyada — yəni tətbiqin açılışında — baş
+        # verərdi. Proxy sayəsində qiymət yalnız FAKTİKİ üz əməliyyatında
+        # ödənilir və Face Control əhatəsindən kənar mağazalar (bənd 15) onu
+        # heç vaxt ödəmir. Kitabxana yüklənə bilmirsə proxy-nin arxasında
+        # `UnavailableFaceEngine` durur və axın eskalasiyaya düşür — bənd 5.
+        face_engine = _LazyFaceEngine(self.face_engine)
+        # İKİ YERDƏ LAZIMDIR (`users` ilə eyni naxış): həm `Session.face_
+        # enrollment` sahəsi, həm də `FaceReEnrollmentUseCase` onu ALIR —
+        # yenidən-qeydiyyat kadr çəkilişi/keyfiyyət süzgəci/orta vektor
+        # məntiqini TƏKRARLAMIR, qeydiyyat use case-inin metodunu çağırır.
+        face_enrollment = FaceEnrollmentUseCase(
+            profiles=repo("face_embeddings"),
+            camera=face_engine,
+            matcher=face_engine,
+            # `limits`: kadr sayı (`FACE_ENROLLMENT_FRAME_COUNT`), keyfiyyət
+            # həddi (`FACE_ENROLLMENT_MIN_QUALITY`) və köhnəlmə intervalı
+            # (`FACE_REENROLLMENT_REMINDER_MONTHS`) — üçü də ROOT-dandır.
+            limits=repo("limits"),
+            audit=audit,
+            clock=clock,
+        )
 
         # 1C REPO-LARI `uow.repository`-DƏ DEYİL — bu, qəsdəndir: onlar
         # `Database` alır və öz iş vahidini açır (bax `ErpServerRepository`),
@@ -1747,6 +2011,19 @@ class ApplicationContext:
                 checkins=repo("checkin_history"),
             )
         )
+        # `facecontrol.md` bənd 16 — MISMATCH hadisələri HR-in VAHİD siyahısına
+        # da düşür. Motorun ÖZÜ yenə DƏYİŞMİR: bu, ikinci bir `register_rule`
+        # çağırışıdır və `FACE_MISMATCH` mənbəyi kataloqa migrations/047 ilə
+        # seed edilib.
+        #
+        # ⚠️ BU, DƏRHAL-BİLDİRİŞİ ƏVƏZ ETMİR: uyğunsuzluq anında
+        # `FaceVerificationUseCase` HR_Admin/Store Manager-ə təcili bildiriş
+        # göndərir (bənd 3). Qayda isə gecəlik motorla işləyir — ikisini
+        # birləşdirsəydik, sistemdəki ən güclü fırıldaqçılıq siqnalı bir
+        # gecəlik gecikmə qazanardı.
+        exception_engine.register_rule(
+            FaceMismatchExceptionRule(verification_log=repo("face_verification_log"))
+        )
 
         # #15 AŞIM İZLƏYİCİSİ YEREL DƏYİŞƏNDİR, çünki İKİ yerdə lazımdır: həm
         # `Session.overtime` (HR-ın oxu yolu), həm də tabel təsdiqinin yan
@@ -1795,6 +2072,11 @@ class ApplicationContext:
             notifier=notifier,
             # Son Dual-Control təsdiqçisi itiriləndə xəbərdarlıq (bölmə 3).
             deadlock_guard=DualControlDeadlockGuardUseCase(uow.employees, notifier),
+            # `facecontrol.md` bənd 8 — işçi deaktiv ediləndə üz vektoru HƏMİN
+            # ANDA silinir. EYNİ `uow` bağlantısı MƏCBURİDİR: `is_active =
+            # FALSE` yazısı ilə vektorun silinməsi bir tranzaksiyada olmalıdır,
+            # əks halda biri commit olunub digəri geri qayıda bilərdi.
+            face_embeddings=repo("face_embeddings"),
         )
 
         def _bulk_create_employee_row(
@@ -1958,6 +2240,61 @@ class ApplicationContext:
                 audit=audit,
                 clock=clock,
                 limits=repo("limits"),
+            ),
+            # --- Face Control (facecontrol.md Faza 2 + Faza 3) ---------------
+            #
+            # `face_engine` TƏNBƏL proxy-dir və hər üç use case-ə EYNİ nüsxə
+            # ötürülür (bax `_LazyFaceEngine` + `ApplicationContext.
+            # face_engine`): kamera fiziki cihazdır, ikinci tutacaq onu
+            # bloklayardı.
+            face_enrollment=face_enrollment,
+            # Yenidən-qeydiyyat qeydiyyat use case-inin ÖZÜNÜ alır, onun
+            # məntiqini TƏKRARLAMIR (bax `FaceReEnrollmentUseCase` başlığı):
+            # kadr çəkilişi/keyfiyyət süzgəci/orta vektor TƏK yerdə qalmalıdır.
+            face_re_enrollment=FaceReEnrollmentUseCase(
+                enrollment=face_enrollment,
+                profiles=repo("face_embeddings"),
+                audit=audit,
+                clock=clock,
+            ),
+            # `toggles`: üz qapısı MÖVCUD `CAMERA_VERIFICATION` moduluna
+            # tabedir (yeni qlobal açar YARADILMADI — səbəbi use case-in
+            # "MODUL QAPISI" şərhindədir). `store_scope`: bənd 15-in pilot
+            # süzgəci; BOŞ cədvəl = qlobal davranış, yəni indiki vəziyyət.
+            face_verification=FaceVerificationUseCase(
+                profiles=repo("face_embeddings"),
+                verification_log=repo("face_verification_log"),
+                exemptions=repo("face_exemptions"),
+                store_scope=repo("face_store_scope"),
+                camera=face_engine,
+                matcher=face_engine,
+                # `limits`: bənzərlik həddi, aşağı-etibar həddi, MISMATCH
+                # kilid həddi, liveness kataloqu və bənd 18-in vaxt həddi —
+                # beşi də ROOT parametridir (seed: migrations/047).
+                limits=repo("limits"),
+                toggles=repo("toggles"),
+                audit=audit,
+                clock=clock,
+                notifier=notifier,
+            ),
+            # `limits=repo("limits")` — AÇIQ BAĞLANTININ repo-su: istisnanın
+            # maksimum müddəti (`FACE_EXEMPTION_MAX_DAYS`) sətrin yazıldığı
+            # tranzaksiyada oxunmalıdır. İkinci bağlantı Root-un həmin an
+            # dəyişdirdiyi dəyəri fərqli görə bilərdi.
+            face_exemptions=FaceControlExemptionUseCase(
+                exemptions=repo("face_exemptions"),
+                limits=repo("limits"),
+                audit=audit,
+                clock=clock,
+                notifier=notifier,
+            ),
+            face_log_retention=FaceVerificationLogRetentionUseCase(
+                verification_log=repo("face_verification_log"),
+                # `FACE_VERIFICATION_LOG_RETENTION_MONTHS` — hüquqi tələb
+                # yurisdiksiyaya görə dəyişir, ona görə Root-dan idarə olunur.
+                limits=repo("limits"),
+                audit=audit,
+                clock=clock,
             ),
             audit_query=AuditQueryUseCase(
                 reader=repo("audit_reader"),
@@ -2247,6 +2584,28 @@ class ApplicationContext:
                 notifier=notifier,
             ),
         )
+
+
+def _camera_index() -> int:
+    """`KOMPASOS_CAMERA_INDEX` — boşdursa sistemdəki BİRİNCİ kamera (0).
+
+    YARARSIZ DƏYƏR TƏTBİQİ ÇÖKDÜRMÜR, defolta qayıdır: bu dəyər heç bir
+    təhlükəsizlik qərarı vermir (kimin keçdiyini müəyyən etmir), yalnız hansı
+    cihazın oxunacağını göstərir. Yanlış indeks onsuz da cihazın açılmaması —
+    yəni bənd 5-in eskalasiyası — ilə nəticələnir və System Health Monitor-da
+    görünür; `.env` yazı səhvinə görə bütün örtüyü bağlamaq isə həddindən
+    artıq cəza olardı.
+    """
+    import os  # noqa: PLC0415
+
+    raw = os.environ.get("KOMPASOS_CAMERA_INDEX", "").strip()
+    if not raw:
+        return 0
+    try:
+        return int(raw)
+    except ValueError:
+        _log.warning("FACE_CAMERA_INDEX_INVALID", extra={"raw_value": raw})
+        return 0
 
 
 def build_context(*, tenant_id_env: str = "KOMPASOS_TENANT_ID") -> ApplicationContext:

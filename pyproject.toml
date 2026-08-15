@@ -27,6 +27,17 @@ dependencies = [
     "openpyxl>=3.1,<4.0",
     "Pillow>=12.3,<13.0",
     "tenacity>=9.1,<10.0",
+    # --- Face Control (`facecontrol.md` Faza 3) ---------------------------- #
+    # Beş sətrin də QEYRİ-ADİ tərəfi var (`dlib-bin` adı, `--no-deps` tələbi,
+    # `setuptools` üst həddi, `headless` variantı) və hər birinin səbəbi
+    # `requirements.txt`-in "FACE CONTROL" bölməsində yazılıb. Burada
+    # təkrarlanmır: iki nüsxə şərh bir gün ayrılardı.
+    "dlib-bin>=20.0,<21.0",
+    "numpy>=2.4,<3.0",
+    "face_recognition>=1.2,<2.0",
+    "face_recognition_models>=0.1,<1.0",
+    "setuptools>=80.10,<81.0",
+    "opencv-python-headless>=4.13,<5.0",
 ]
 
 [project.optional-dependencies]
@@ -198,6 +209,15 @@ filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
     "ignore::ResourceWarning",
+    # `face_recognition_models` model fayllarının yolunu `pkg_resources` ilə
+    # tapır və setuptools bunun üçün UserWarning yayır (DeprecationWarning
+    # DEYİL, ona görə yuxarıdakı sətirlərə düşmür). "error" siyasəti altında
+    # bu xəbərdarlıq `face_recognition`-un öz `except`-inə düşür və kitabxana
+    # `quit()` çağırır — nəticədə üz təsdiqi adapterinin BÜTÜN testləri
+    # "kitabxana yoxdur" deyib SÜKUTLA atlanardı. Filtr DAR seçilib (mətnə
+    # görə), ümumi `UserWarning` sinfi açıq qalır. Kök səbəb isə onsuz da
+    # bağlanıb: `requirements.txt`-dəki `setuptools<81` pini.
+    "ignore:pkg_resources is deprecated as an API:UserWarning",
 ]
 
 # --------------------------------------------------------------------------- #

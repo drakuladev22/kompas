@@ -62,6 +62,7 @@ if TYPE_CHECKING:
         CameraAssignmentRepository,
         Clock,
         EmployeeRepository,
+        FaceEmbeddingRepository,
         Notifier,
         PermissionFlagRepository,
     )
@@ -136,6 +137,7 @@ class UserManagementUseCase:
         flags: PermissionFlagRepository | None = None,
         notifier: Notifier | None = None,
         deadlock_guard: DualControlDeadlockGuardUseCase | None = None,
+        face_embeddings: FaceEmbeddingRepository | None = None,
     ) -> None:
         self._employees = employees
         self._credentials = credentials
@@ -154,6 +156,20 @@ class UserManagementUseCase:
         # çağırış YOX İDİ — sistemin son təsdiqçisini deaktiv etmək mümkün idi
         # və gözləyən override-lar sonsuza qədər təsdiqsiz qalardı.
         self._deadlock_guard = deadlock_guard
+        # ────────────────────────────────────────────────────────────────────
+        # `facecontrol.md` BƏND 8 — DEAKTİVASİYADA ÜZ VEKTORU SİLİNİR
+        # ────────────────────────────────────────────────────────────────────
+        # Sənəd bunu AÇIQ şəkildə "MÖVCUD deaktiv-etmə use case-inin İÇİNƏ
+        # əlavə et" kimi tələb edir — ayrı bir təmizləmə işi (gecəlik cron)
+        # variantı rədd edildi: onda biometrik məlumat işdən çıxarılmadan
+        # SONRA saatlarla, terminal söndürülübsə günlərlə yaşayardı.
+        #
+        # PORT İSTƏYƏ BAĞLIDIR (`None` = təmizləmə yoxdur): mövcud testlər və
+        # Face Control modulu qurulmamış quraşdırmalar bu use case-i portsuz
+        # yaradır. `None` halı SÜKUTLA UDULMUR — `deactivate_employee` audit
+        # sətrinə `face_embedding_purged` açarını `None` kimi yazır, yəni
+        # "təmizləmə cəhdi edilməyib" faktı jurnalda görünür.
+        self._face_embeddings = face_embeddings
 
     # ------------------------------- yaratma --------------------------------- #
 
@@ -316,6 +332,7 @@ class UserManagementUseCase:
         deadlock = self._check_deadlock(tenant_id, subject=employee)
         employee.deactivate()
         self._employees.save(employee)
+        purged = self._purge_face_embedding(actor=actor, employee_id=employee_id, reason=reason)
 
         self._audit.record(
             tenant_id=tenant_id,
@@ -331,6 +348,11 @@ class UserManagementUseCase:
                 "dual_control_approvers_left": deadlock.approver_count
                 if deadlock is not None
                 else None,
+                # `facecontrol.md` bənd 8 — biometrik məlumatın silinməsi
+                # auditdə GÖRÜNMƏLİDİR: "işçi çıxarıldı, üzü nə vaxt silindi?"
+                # sualının yeganə cavabı budur. `None` = Face Control portu
+                # qoşulmayıb (modul quraşdırılmayıb).
+                "face_embedding_purged": purged,
             },
             reason=reason,
         )
@@ -339,6 +361,38 @@ class UserManagementUseCase:
             extra={"actor_id": str(actor.id), "employee_id": str(employee_id)},
         )
         return employee
+
+    def _purge_face_embedding(
+        self, *, actor: Employee, employee_id: EmployeeId, reason: str
+    ) -> bool | None:
+        """Üz vektorunu HƏMİN ANDA silir (`facecontrol.md` bənd 8).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ İSTİSNA UDULMUR
+        ──────────────────────────────────────────────────────────────────────
+        Burada `try/except` YOXDUR və bu, qəsdlidir: silmə uğursuz olarsa
+        bütün deaktivasiya geri qayıtmalıdır (audit yazısının qaydası ilə eyni
+        fəlsəfə, CLAUDE.md §5). Əks halda işçi "çıxarılmış" görünər, biometrik
+        vektoru isə bazada qalardı — yəni məcburi olan bir şey sükutla
+        buraxılmış olardı.
+
+        SİLMƏ `save()`-DƏN SONRADIR: `is_active = FALSE` yazılmadan vektoru
+        silmək, tranzaksiya sonra çöksə, "aktiv işçi, üzü silinmiş" vəziyyəti
+        yaradardı. İkisi eyni tranzaksiyadadır (sessiya commit edir), yəni
+        rollback halında heç biri baş vermir.
+
+        Returns:
+            `True/False` — silinəcək vektor var idimi; `None` = port
+            qoşulmayıb (Face Control quraşdırılmayıb).
+        """
+        if self._face_embeddings is None:
+            return None
+        return self._face_embeddings.purge(
+            employee_id,
+            purged_by=actor.id,
+            reason=f"İşçi deaktiv edildi: {reason}",
+            purged_at=self._clock.now(),
+        )
 
     # -------------------------- şifrə & PIN sıfırlama ------------------------ #
 

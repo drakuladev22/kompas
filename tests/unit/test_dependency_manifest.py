@@ -40,6 +40,12 @@ IMPORT_TO_DISTRIBUTION: Final[dict[str, str]] = {
     "PIL": "pillow",
     "argon2": "argon2-cffi",
     "psycopg_pool": "psycopg",  # `psycopg[pool]` ekstrası ilə gəlir
+    # `cv2` modulunu ÜÇ fərqli paylanma verir (`opencv-python`,
+    # `opencv-contrib-python`, `opencv-python-headless`) və onlar bir-birini
+    # ƏVƏZ ETMİR. Bizə `headless` lazımdır: adi variant öz Qt kitabxanalarını
+    # daşıyır və PySide6 ilə eyni prosesdə plugin toqquşması yaradır (bax
+    # `infrastructure/kiosk/camera.py` başlığı).
+    "cv2": "opencv-python-headless",
 }
 
 #: Manifestdə olan, lakin `src/`-də İDXAL EDİLMƏYƏN paketlər.
@@ -50,6 +56,16 @@ DECLARED_BUT_NOT_IMPORTED: Final[dict[str, str]] = {
     "python-dotenv": "quraşdırma skriptləri və `--strict` yoxlaması üçün "
     "saxlanılır (bax `main.py::_check_dotenv`)",
     "tenacity": "1C konnektorunun təkrar-cəhd siyasəti üçün nəzərdə tutulub",
+    # --- Face Control (`facecontrol.md` Faza 3) ---------------------------- #
+    "dlib-bin": "`face_recognition`-un C++ özəyi. `dlib` MODULUNU verir, lakin "
+    "modul adı ilə paylanma adı fərqlidir — `src/` heç vaxt `dlib`-i birbaşa "
+    "idxal etmir, ona görə burada görünür (bax requirements.txt, səbəb 1)",
+    "face-recognition-models": "Dlib model faylları (~132 MB). Yalnız "
+    "`pkg_resources` üzərindən, MƏTN AÇARI ilə yüklənir — heç bir `import` "
+    "sətri onu göstərmir (bax requirements.txt, səbəb 2 və KompasOS.spec)",
+    "setuptools": "ASILILIQ DEYİL, QORUYUCU PİN: 81+ `pkg_resources`-u çıxarır "
+    "və `face_recognition` idxal anında `quit()` çağırır (bax requirements.txt, "
+    "səbəb 3)",
 }
 
 

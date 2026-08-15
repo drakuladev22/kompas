@@ -648,6 +648,10 @@ class KompasApplication:
         from src.presentation.screens.bulk_operations import (  # noqa: PLC0415
             BulkOperationsScreen,
         )
+        from src.presentation.screens.face_control import (  # noqa: PLC0415
+            FaceEnrollmentScreen,
+            FaceExemptionScreen,
+        )
         from src.presentation.screens.field_reports import (  # noqa: PLC0415
             FieldReportScreen,
         )
@@ -705,6 +709,12 @@ class KompasApplication:
             # ekranıdır, lakin baxış audit-ləndiyi üçün ÖZ kontrolleri var
             # (bax `controllers/attrition_risk.py` başlığı).
             (AttritionRiskScreen, self._attach_attrition_risk),
+            # Face Control (facecontrol.md Faza 4) — hər ikisi HƏM oxuyur,
+            # HƏM yazır: qeydiyyatdan sonra işçinin vəziyyəti dəyişir, istisna
+            # verildikdən sonra siyahıya düşür (bax `controllers/
+            # face_control.py` başlığı).
+            (FaceEnrollmentScreen, self._attach_face_enrollment),
+            (FaceExemptionScreen, self._attach_face_exemptions),
             # #29 Toplu Əməliyyatlar (kompas1.md Faza 5) — CSV idxalı + mağaza
             # şablonu HƏR İKİSİ HƏM oxuyur, HƏM yazır (bax `controllers/
             # bulk_operations.py` başlığı).
@@ -863,6 +873,46 @@ class KompasApplication:
         if not isinstance(screen, AnnualLeaveInboxScreen):  # pragma: no cover - tip qoruyucusu
             return
         AnnualLeaveInboxController(self._context, self._current_employee).attach(screen)
+
+    def _attach_face_enrollment(self, screen: QWidget) -> None:
+        """«Üz Qeydiyyatı» ekranını `FaceEnrollmentUseCase`-ə bağlayır (bənd 1, 2).
+
+        Ekran menyuda `can_manage_employees` ilə qapılıdır, lakin FAKTİKİ qapı
+        use case-dədir (`assert_may_enroll` — özünə-qeydiyyat da bloklanır):
+        menyunun görünməsi əməliyyat icazəsi DEYİL (bax `menu.py` başlığı).
+        """
+        from src.presentation.controllers.face_control import (  # noqa: PLC0415
+            FaceEnrollmentController,
+        )
+        from src.presentation.screens.face_control import (  # noqa: PLC0415
+            FaceEnrollmentScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, FaceEnrollmentScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        FaceEnrollmentController(self._context, self._current_employee).attach(screen)
+
+    def _attach_face_exemptions(self, screen: QWidget) -> None:
+        """«Üz Təsdiqi İstisnaları» ekranını use case-ə bağlayır (bənd 14).
+
+        Qapı `can_manage_face_exemptions`-dir (hardlock 2, YALNIZ Root/CEO) və
+        o, `FaceControlExemptionUseCase._require_permission`-dadır — OXU da,
+        QƏRAR da eyni flag-in arxasındadır.
+        """
+        from src.presentation.controllers.face_control import (  # noqa: PLC0415
+            FaceExemptionController,
+        )
+        from src.presentation.screens.face_control import (  # noqa: PLC0415
+            FaceExemptionScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, FaceExemptionScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        FaceExemptionController(self._context, self._current_employee).attach(screen)
 
     def _attach_attrition_risk(self, screen: QWidget) -> None:
         """ "İşdən Çıxma Riski" ekranını use case-ə bağlayır (#21, Faza 9)."""
@@ -1222,6 +1272,10 @@ class KompasApplication:
         from src.presentation.screens.bulk_operations import (  # noqa: PLC0415
             BulkOperationsScreen,
         )
+        from src.presentation.screens.face_control import (  # noqa: PLC0415
+            FaceEnrollmentScreen,
+            FaceExemptionScreen,
+        )
         from src.presentation.screens.field_reports import (  # noqa: PLC0415
             FieldReportScreen,
         )
@@ -1321,6 +1375,10 @@ class KompasApplication:
             "performance_reviews": lambda: PerformanceReviewScreen(theme),
             "attrition_risk": lambda: AttritionRiskScreen(theme),
             "annual_leave": lambda: AnnualLeaveInboxScreen(theme),
+            # Face Control (facecontrol.md Faza 4) — hər ikisi ÖZ kontrollerinə
+            # bağlıdır (bax `_attach_write_controller` cədvəli).
+            "face_enrollment": lambda: FaceEnrollmentScreen(theme),
+            "face_exemptions": lambda: FaceExemptionScreen(theme),
             "settings": lambda: group_d.SettingsScreen(theme),
             "profile": lambda: group_g.ProfileScreen(
                 theme,
@@ -1352,6 +1410,8 @@ class KompasApplication:
             "performance_reviews": "Dövri qiymətləndirmə · KPI + qeyd",
             "attrition_risk": "Gecəlik hesablanır · yalnız məsləhət xarakterlidir",
             "annual_leave": "İllik haqq · gündaxili icazədən AYRI mexanizm",
+            "face_enrollment": "Nəzarətli proses · foto saxlanmır, yalnız riyazi təmsil",
+            "face_exemptions": "PIN-only istisnası · məcburi ikinci təsdiqlə əvəzlənir",
         }
 
         for key, factory in factories.items():
@@ -1571,23 +1631,63 @@ class KompasApplication:
             # göstərərdi və işçi "2-ci fasilə" xəbərdarlığını görməzdi.
             home.set_break_options(controller.break_options(employee))
 
+        def show_face_overlay(outcome: KioskOutcome, status: WorkerStatus) -> None:
+            """Üz təsdiqi nəticəsini kioskda göstərir (facecontrol.md bənd 3, 5, 6).
+
+            OVERLAY YALNIZ BLOKLAYAN NƏTİCƏDƏ AÇILIR (bax `controllers/
+            kiosk.py::BLOCKING_FACE_OUTCOMES`): uğurlu təsdiq gündə onlarla
+            dəfə baş verir və hər dəfə bağlanmalı modal kiosk axınına artıq
+            bir toxunuş əlavə edərdi.
+
+            HƏRƏKƏT MƏTNİNİ BURADA SEÇMİRİK (bənd 6) — `outcome.face["gesture"]`
+            serverdə seçilmiş hərəkətin Azərbaycanca qarşılığıdır.
+            """
+            from src.presentation.screens.face_control import (  # noqa: PLC0415
+                FaceVerificationOverlay,
+            )
+
+            overlay = FaceVerificationOverlay(self._theme, parent=home)
+            overlay.set_result(outcome.face)
+
+            def retry() -> None:
+                # `RETRY` TEXNİKİ haldır (üz görünmədi) və heç bir sayğaca
+                # düşmür — yenidən cəhd EYNİ əməliyyatı təkrarlayır.
+                overlay.accept()
+                on_action(status)
+
+            overlay.retry_requested.connect(retry)
+            overlay.open()
+
         def on_action(status: WorkerStatus) -> None:
             """Statusa uyğun TƏK əməliyyat (bölmə 3).
 
             Hansı düymənin basıldığını EKRAN deyil, STATUS həll edir — ekranda
             eyni düymə mətni dəyişir və status hər dəfə serverdən oxunur.
+
+            ÜZ QAPISI BURADA ÇAĞIRILMIR: `KioskController`-in üç metodu onu
+            ÖZ içində, əməliyyatdan ƏVVƏL icra edir (bax `controllers/
+            kiosk.py::_guarded`). Qapını buraya qoysaydıq, o, GUI-nin bir
+            budağına bağlanardı və kontrolleri birbaşa çağıran hər yol onu
+            atlayardı — yəni Faza 2-nin açıq sənədləşdirdiyi boşluq bağlanmış
+            olmazdı.
             """
+            outcome: KioskOutcome
             if status is WorkerStatus.NOT_STARTED:
-                refresh(controller.start_day(employee))
+                outcome = controller.start_day(employee)
             elif status is WorkerStatus.VERIFIED:
                 # Fasilə növü EKRANDAN gəlir, statusdan yox: `[İcazə İstəyirəm]`
                 # eyni düymədir, seçim isə işçinindir. Boş sətir = «Ümumi
                 # icazə», yəni bugünkü davranışın eynisi (`leave_type_id=None`).
-                refresh(
-                    controller.request_leave(employee, leave_type_id=_leave_type_id_or_none(home))
+                outcome = controller.request_leave(
+                    employee, leave_type_id=_leave_type_id_or_none(home)
                 )
             elif status is WorkerStatus.OUTSIDE:
-                refresh(controller.claim_return(employee))
+                outcome = controller.claim_return(employee)
+            else:
+                return
+            refresh(outcome)
+            if outcome.requires_face_overlay:
+                show_face_overlay(outcome, status)
 
         home.action_requested.connect(on_action)
         # İLK DOLDURMA: işçi haqqını fasiləni istifadə etməmişdən ƏVVƏL
@@ -1784,6 +1884,15 @@ def run(
         if context is not None:
             application.set_auth_controller(_build_auth_controller(context))
         application.start()
+
+    if context is not None:
+        # KAMERA TUTACAĞI BAĞLANIŞDA BURAXILIR (`facecontrol.md` Faza 3).
+        # `OpenCvCameraCapture` cihazı AÇIQ saxlayır (hər doğrulamada bir
+        # saniyəlik açılış qiymətini ödəməmək üçün — bax orada). Proses
+        # bağlananda onu buraxmasaq, Windows-da sürücü kameranı bir müddət
+        # "məşğul" saxlayır və dərhal yenidən başladılan kiosk (watchdog!)
+        # öz kamerasını aça bilməzdi.
+        app.aboutToQuit.connect(context.close_face_engine)
 
     _log.info("GUI_STARTED", extra={"preview": preview, "kiosk": kiosk})
     return app.exec()

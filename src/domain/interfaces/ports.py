@@ -55,6 +55,16 @@ from src.domain.value_objects.exception_signals import (
 )
 from src.domain.value_objects.executive_digest import ExecutiveDigestConfig
 from src.domain.value_objects.export_corrections import ExportCorrection
+from src.domain.value_objects.face_recognition import (
+    FaceEmbedding,
+    FaceExemption,
+    FaceFrame,
+    FaceProfile,
+    FaceSample,
+    FaceStoreScope,
+    FaceVerificationLogEntry,
+    LivenessGesture,
+)
 from src.domain.value_objects.field_reports import (
     FieldReportCategory,
     FieldReportTemplate,
@@ -72,6 +82,7 @@ from src.domain.value_objects.identifiers import (
     ErpServerId,
     ExceptionId,
     ExecutiveDigestConfigId,
+    FaceExemptionId,
     FieldReportId,
     FieldReportItemId,
     FineId,
@@ -1939,6 +1950,315 @@ class CameraAssignmentRepository(Protocol):
 
 
 # --------------------------------------------------------------------------- #
+# Face Control — üz təsdiqi (facecontrol.md, Faza 2)
+# --------------------------------------------------------------------------- #
+#
+# ALTI PORT, BİR QAYDA: domen `face_recognition` (Dlib) kitabxanasını GÖRMÜR.
+# Alignment (bənd 10), landmark aşkarlaması, məsafə hesablaması və kamera
+# sürücüsü infrastruktur adapterlərindədir; burada yalnız onların MÜQAVİLƏSİ
+# var. Beləliklə anti-fraud məntiqi (hədd zolağı, kilid sayğacı, cross-check)
+# ağır bir kitabxana quraşdırılmadan test oluna bilir.
+#
+# BİOMETRİK MÜQAVİLƏ (migrations/047-nin dörd qaydası) BU PORTLARA DA AİDDİR:
+#   * heç bir port KADR saxlamır və ya qaytarmır (yalnız emal edir);
+#   * `FaceEmbeddingRepository` şifrələməni ÖZÜ edir — use case açıq mətn
+#     vektoru ilə işləyir, DB isə yalnız token görür (bax `face_repository.py`);
+#   * `purge()` VEKTORU SİLİR VƏ ARXİVDƏ İZ QOYUR — ikisi bir metodda, çünki
+#     ayrı olsaydı, biri unudulanda biometrik məlumat sükutla sağ qalardı.
+
+
+@runtime_checkable
+class FaceMatcher(Protocol):
+    """Üz-tanıma mühərriki (`facecontrol.md` bənd 3, 7, 10, 11, 12).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `extract` VƏ `distance` AYRI METODLARDIR
+    ──────────────────────────────────────────────────────────────────────────
+    "Bu kadr bu işçiyə uyğundurmu?" şəklində TƏK metod daha sadə görünürdü və
+    rədd edildi: MISMATCH halında EYNİ kadr mağazanın BÜTÜN qeydiyyatlı
+    işçiləri ilə müqayisə olunur (cross-check, bənd 3). Tək metodla hər
+    müqayisə üçün kadr yenidən emal edilər — yəni alignment və embedding
+    hesablaması işçi sayı qədər təkrarlanardı (kioskda saniyələr).
+
+    ALIGNMENT PORTUN İÇİNDƏDİR, AYRICA METOD DEYİL: bənd 10 onu HƏM
+    enrollment, HƏM hər doğrulama üçün MƏCBURİ edir. Ayrıca metod olsaydı,
+    onu çağırmağı unudan bir axın sükutla daha aşağı dəqiqliklə işləyərdi —
+    və heç bir test bunu tutmazdı, çünki nəticə yenə "işləyir".
+    """
+
+    def extract(self, frame: FaceFrame, *, gesture: LivenessGesture | None = None) -> FaceSample:
+        """Kadrdan üzü düzləndirib (alignment) vektoru və keyfiyyət balını çıxarır.
+
+        Args:
+            gesture: Tələb olunan canlılıq hərəkəti (bənd 6). `None` =
+                yoxlama İSTƏNİLMİR (enrollment: admin fiziki olaraq oradadır
+                və prosesi özü idarə edir) — belə halda nəticədə
+                `liveness_confirmed=True` gəlir.
+
+        Üz tapılmasa `embedding=None` qaytarılır — İSTİSNA ATILMIR: bu, gündəlik
+        və gözlənilən haldır (işıq, bucaq) və `NO_FACE_DETECTED` axınına
+        çevrilir (bənd 3). İstisna atsaydıq, adi işıq problemi kioskda xəta
+        ekranı kimi görünərdi.
+        """
+        ...
+
+    def distance(self, reference: FaceEmbedding, candidate: FaceEmbedding) -> float:
+        """İki vektor arasındakı MƏSAFƏ (kiçik = daha oxşar).
+
+        VAHİD QƏSDƏN KİTABXANANINKIDIR: `FACE_MATCH_TOLERANCE` və
+        `FACE_LOW_CONFIDENCE_TOLERANCE` Root ekranında məhz bu vahiddə
+        göstərilir. Faiz qaytarsaydıq, Root-un gördüyü ədəd ilə kitabxananın
+        cavabı arasında gizli bir çevirmə sabiti oturardı və həmin sabit özü
+        hardcode edilmiş qərara çevrilərdi (migrations/047, `confidence_score`
+        şərhi).
+        """
+        ...
+
+
+@runtime_checkable
+class CameraCapture(Protocol):
+    """Kiosk veb-kamerası (bənd 1, 5).
+
+    NASAZLIQ SÜKUTLA "PIN-ONLY"A ÇEVRİLMİR (bənd 5) — məhz ona görə
+    `is_available()` AYRICA metoddur: use case nasazlığı BİR şərtdə görür və
+    mövcud timeout-eskalasiya kanalına yönləndirir. Nasazlığı yalnız "boş
+    kadr siyahısı" ilə ifadə etsəydik, "kamera işləyir, amma üz görünmür"
+    (`NO_FACE_DETECTED`, texniki, sayğacsız) ilə "kamera ümumiyyətlə yoxdur"
+    (eskalasiya tələb edən) halları eyni cavaba yığılardı.
+    """
+
+    def is_available(self) -> bool:
+        """Kamera fiziki olaraq bağlıdır və açıla bilirmi."""
+        ...
+
+    def capture(self, *, count: int = 1, gesture: LivenessGesture | None = None) -> list[FaceFrame]:
+        """Kadr(lar) çəkir — DİSKƏ YAZMIR, yalnız yaddaşda qaytarır.
+
+        Args:
+            count: Neçə kadr (`FACE_ENROLLMENT_FRAME_COUNT` — bənd 11).
+                Doğrulamada 1-dir.
+            gesture: Ekranda göstəriləcək canlılıq göstərişi (bənd 6). Hərəkət
+                SERVERDƏ seçilir və bura ötürülür — adapterin ÖZÜ seçsəydi,
+                seçim kiosk maşınında olardı və təsadüfilik yerli koddan asılı
+                qalardı.
+
+        Boş siyahı qaytarmaq QANUNİDİR (işçi vaxtında hərəkəti etmədi) və
+        `NO_FACE_DETECTED` kimi emal olunur.
+        """
+        ...
+
+
+@runtime_checkable
+class FaceEmbeddingRepository(Protocol):
+    """`employees` sətrinin üz sahələri + `face_embedding_history` arxivi.
+
+    ŞİFRƏLƏMƏ BU PORTUN ARXASINDADIR: implementasiya (`face_repository.py`)
+    mövcud `EncryptionService`-i işlədir və use case AÇIQ vektorla işləyir.
+    Alternativ — use case-də şifrələmək — RƏDD EDİLDİ: tətbiq qatı onda
+    infrastruktur sinfini birbaşa idxal edərdi və "hansı sütun şifrəlidir?"
+    qərarı iki qatda yaşayardı (`ErpServerRegistry` ilə eyni naxış).
+    """
+
+    def get_profile(self, employee_id: EmployeeId) -> FaceProfile | None:
+        """İşçinin üz profili (vektor AÇIQ mətndə — deşifrə edilmiş).
+
+        İşçi yoxdursa `None`; qeydiyyatsız işçidə `embedding is None` olan
+        profil qaytarılır — ikisi FƏRQLİDİR: birincisi "belə işçi yoxdur",
+        ikincisi "işçi var, üzü qeydiyyatda deyil" (istisnalı işçi və ya yeni
+        işə götürülən) və axınları da fərqlidir.
+        """
+        ...
+
+    def save_enrollment(
+        self,
+        employee_id: EmployeeId,
+        *,
+        embedding: FaceEmbedding,
+        enrolled_at: datetime,
+    ) -> None:
+        """İstinad vektorunu yazır (şifrələyərək) və qeydiyyat anını möhürləyir.
+
+        İKİSİ BİRLİKDƏ YAZILIR, çünki sxem onları `chk_employee_face_
+        enrollment_pair` ilə bağlayıb: vektorsuz tarix «qeydiyyatlı görünən,
+        doğrulana bilməyən» işçi, tarixsiz vektor isə heç vaxt köhnəlməyən
+        qeydiyyat yaradardı (bənd 13).
+        """
+        ...
+
+    def archive(
+        self,
+        employee_id: EmployeeId,
+        *,
+        archived_by: EmployeeId | None,
+        reason: str | None,
+        archived_at: datetime,
+    ) -> bool:
+        """Cari vektoru `REPLACED` statusu ilə arxivə köçürür (bənd 2).
+
+        Returns:
+            Arxivlənəcək qeydiyyat VAR İDİmi. `False` = ilk qeydiyyatdır.
+        """
+        ...
+
+    def purge(
+        self,
+        employee_id: EmployeeId,
+        *,
+        purged_by: EmployeeId | None,
+        reason: str | None,
+        purged_at: datetime,
+    ) -> bool:
+        """Vektoru SİLİR və arxivdə `PURGED` izi qoyur (bənd 8).
+
+        İKİ İŞ BİR METODDADIR VƏ BU, TƏHLÜKƏSİZLİK QƏRARIDIR: yalnız
+        `employees.face_embedding`-i təmizləmək biometrik məlumatı ARXİVDƏ
+        sağ saxlayardı (migrations/047 bunu açıq izah edir). Ayrı metodlar
+        olsaydı, çağıran birini unuda bilərdi və qayda sükutla pozulardı.
+
+        Returns:
+            Silinəcək vektor VAR İDİmi (idempotentlik üçün — ikinci
+            deaktivasiya çağırışı xəta vermir).
+        """
+        ...
+
+    def save_security(
+        self,
+        employee_id: EmployeeId,
+        *,
+        mismatch_attempts: int,
+        locked_until: datetime | None,
+    ) -> None:
+        """MISMATCH sayğacını və üz kilidini yazır (bənd 3, 4).
+
+        SAYĞAC PIN SAYĞACINA TOXUNMUR: `pin_failed_attempts` və
+        `pin_locked_until` sütunları bu metoddan HEÇ VAXT yazılmır — iki
+        sayğacın ayrılığı sxem səviyyəsində ifadə olunub və kod tərəfi onu
+        pozmamalıdır.
+        """
+        ...
+
+    def list_store_profiles(
+        self, tenant_id: TenantId, store_id: StoreId, *, exclude: EmployeeId | None = None
+    ) -> list[FaceProfile]:
+        """EYNİ MAĞAZANIN qeydiyyatlı işçiləri — MISMATCH cross-check-i (bənd 3).
+
+        ƏHATƏ QƏSDƏN MAĞAZA İLƏ MƏHDUDDUR: bütün şəbəkə (235 işçi) üzrə
+        axtarış həm yavaşdır, həm də yalançı-müsbətə meyllidir — kioskda
+        duran adamın 100 km uzaqdakı filialın işçisi olması ehtimalı, iki
+        nəfərin təsadüfən oxşar çıxması ehtimalından aşağıdır.
+        """
+        ...
+
+    def list_stale_enrollments(
+        self, tenant_id: TenantId, *, enrolled_before: datetime
+    ) -> list[FaceProfile]:
+        """«Köhnəlmiş» qeydiyyatlar (bənd 13) — admin panelinin tövsiyə siyahısı.
+
+        BLOKLAMIR: siyahı yalnız göstərilir. Kəsim tarixi use case-də
+        `FACE_REENROLLMENT_REMINDER_MONTHS`-dan hesablanır, SQL-də yox — Root
+        həddi dəyişəndə siyahı DƏRHAL yenilənməlidir (`break_overuse_for_day`
+        ilə eyni əsaslandırma).
+        """
+        ...
+
+
+@runtime_checkable
+class FaceVerificationLogRepository(Protocol):
+    """`face_verification_log` — hər cəhdin jurnalı (bənd 9, 12, 17, 18).
+
+    `UPDATE` YOXDUR VƏ OLMAYACAQ: miqrasiya tətbiq rolundan `UPDATE`
+    hüququnu AÇIQ geri alır — jurnal sətri FAKTdır və biri MISMATCH-i
+    sonradan SUCCESS-ə çevirə bilməməlidir. `DELETE` isə VAR, lakin yalnız
+    saxlama müddəti təmizləməsi üçün (`purge_older_than`).
+    """
+
+    def record(self, entry: FaceVerificationLogEntry) -> None:
+        """Cəhdi jurnala yazır — vektor/kadr YAZILMIR, yalnız nəticə və bal."""
+        ...
+
+    def purge_older_than(self, tenant_id: TenantId, *, cutoff: datetime) -> int:
+        """Saxlama müddətindən köhnə sətirləri TAM SİLİR (bənd 17).
+
+        Anonimləşdirmə DEYİL, silmə: jurnalda foto və vektor onsuz da yoxdur,
+        yalnız nəticə və bal var — anonimləşdirmə həmin sətirləri hesabat
+        üçün yararsız edər, lakin heç bir əlavə məxfilik qazandırmazdı.
+
+        Returns: Silinən sətir sayı (planlaşdırılmış işin hesabat sətri).
+        """
+        ...
+
+    def list_mismatches_since(
+        self, tenant_id: TenantId, *, since: datetime
+    ) -> list[FaceVerificationLogEntry]:
+        """Verilmiş andan sonrakı MISMATCH sətirləri (bənd 16).
+
+        İstisna Motoruna qoşulan qayda bunu oxuyur. Motorun ÖZÜ dəyişmir —
+        `FACE_MISMATCH` mənbəyi kataloqa seed edilib, qayda isə reyestrə bir
+        `register_rule()` çağırışı ilə qoşulur.
+        """
+        ...
+
+
+@runtime_checkable
+class FaceExemptionRepository(Protocol):
+    """`face_control_exemptions` — PIN-only istisnası (bənd 14).
+
+    `delete()` YOXDUR: miqrasiya tətbiq rolundan `DELETE`-i geri alır — ləğv
+    edilmiş və müddəti bitmiş istisna «həmin gün bu işçi niyə üz təsdiqindən
+    keçmirdi?» sualının yeganə struktur cavabıdır.
+    """
+
+    def active_for(self, employee_id: EmployeeId, *, now: datetime) -> FaceExemption | None:
+        """İşçinin BU ANDA qüvvədə olan istisnası.
+
+        Sorğu HƏM statusa, HƏM `expires_at`-a baxır: gecəlik iş işləməmiş ola
+        bilər (terminal söndürülüb) və `ACTIVE` sətrin müddəti faktiki olaraq
+        bitmiş olardı. Yalnız statusa baxsaydıq, söndürülmüş terminal istisnanı
+        — yəni üz təsdiqindən azadlığı — sükutla uzadardı.
+        """
+        ...
+
+    def get(self, exemption_id: FaceExemptionId) -> FaceExemption | None: ...
+
+    def save(self, exemption: FaceExemption) -> None:
+        """UPSERT — `ON CONFLICT (id)`."""
+        ...
+
+    def list_due_for_expiry(self, tenant_id: TenantId, *, now: datetime) -> list[FaceExemption]:
+        """Müddəti bitmiş, lakin hələ `ACTIVE` sətirlər — gecəlik işin girişi."""
+        ...
+
+    def list_active(self, tenant_id: TenantId, *, now: datetime) -> list[FaceExemption]:
+        """Qüvvədə olan istisnalar — Root/CEO idarəetmə ekranının siyahısı."""
+        ...
+
+
+@runtime_checkable
+class FaceStoreScopeRepository(Protocol):
+    """`face_control_store_scope` — mağaza-səviyyəli aktivlik (bənd 15).
+
+    QLOBAL TOGGLE MEXANİZMİNƏ TOXUNMUR: bu, onun ÜSTÜNDƏ DARALDICI süzgəcdir.
+    AKTİV sətir yoxdursa davranış BUGÜNKÜ ilə eynidir — qlobal toggle nə
+    deyirsə, o olur (`FaceStoreScope.is_global`).
+    """
+
+    def active_scope(self, tenant_id: TenantId) -> FaceStoreScope:
+        """Aktiv mağazalar dəsti. Boş dəst = QLOBAL davranış."""
+        ...
+
+    def set_active(
+        self, tenant_id: TenantId, store_id: StoreId, *, active: bool, changed_by: EmployeeId
+    ) -> None:
+        """Mağazanı əhatəyə salır/çıxarır — SOFT DELETE ilə.
+
+        Çıxarma sətri SİLMİR (`is_active = FALSE`): «bu mağazada Face Control
+        üç ay işlədi, sonra söndürüldü» faktı keçmiş kilidlərin qanuniliyini
+        izah edən yeganə mənbədir.
+        """
+        ...
+
+
+# --------------------------------------------------------------------------- #
 # Baza keçidi (bölmə 2 — Hybrid DB Switcher)
 # --------------------------------------------------------------------------- #
 
@@ -2135,6 +2455,7 @@ __all__ = [
     "BehaviorBaselineRepository",
     "BulkImportLogRepository",
     "CameraAssignmentRepository",
+    "CameraCapture",
     "CheckInHistoryProvider",
     "Clock",
     "DailyAttendanceSheetRepository",
@@ -2150,6 +2471,11 @@ __all__ = [
     "ExceptionSourceCatalog",
     "ExecutiveDigestConfigRepository",
     "ExportCorrectionRepository",
+    "FaceEmbeddingRepository",
+    "FaceExemptionRepository",
+    "FaceMatcher",
+    "FaceStoreScopeRepository",
+    "FaceVerificationLogRepository",
     "FeatureToggles",
     "FieldReportCatalog",
     "FieldReportRepository",

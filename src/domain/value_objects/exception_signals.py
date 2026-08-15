@@ -53,6 +53,14 @@ from src.domain.value_objects.scheduling import require_aware
 #: ikili-ad-məkanı qüsuru məhz belə yaranmışdı.
 BEHAVIOR_ANOMALY_SOURCE: Final = "BEHAVIOR_ANOMALY"
 
+#: Face Control-un mənbə kodu (`facecontrol.md` bənd 16, migrations/047 seed-i).
+#: Sabit MƏHZ BURADA, `BEHAVIOR_ANOMALY_SOURCE` ilə YAN-YANA elan olunur ki,
+#: qaydanın (`FaceMismatchExceptionRule.source_code`) yazdığı sətir ilə
+#: kataloqdakı sətir arasında ikinci bir ad məkanı yaranmasın — `menu.py`
+#: başlığındakı qüsur məhz belə doğulmuşdu. Motorun kodu bu sabiti TANIMIR:
+#: mənbə seçimi reyestr vasitəsilə edilir, `if source == ...` zənciri yoxdur.
+FACE_MISMATCH_SOURCE: Final = "FACE_MISMATCH"
+
 #: `exception_sources.code` üçün minimum uzunluq — DB `CHECK`-inin güzgüsü
 #: (`char_length(trim(code)) >= 3`). Bu, biznes həddi DEYİL, sxem
 #: məhdudiyyətidir; ona görə `system_limits`-ə aid deyil.
@@ -197,6 +205,7 @@ class RuleEvaluationContext:
 
 __all__ = [
     "BEHAVIOR_ANOMALY_SOURCE",
+    "FACE_MISMATCH_SOURCE",
     "MIN_SOURCE_CODE_LENGTH",
     "ExceptionFinding",
     "ExceptionSeverity",

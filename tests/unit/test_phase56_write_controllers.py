@@ -405,6 +405,16 @@ class _ProfileScreen:
         """#20 (kompasos11.md Faza 8) — bax `_PerformanceReviews` şərhi."""
         self.performance_history = rows
 
+    def set_face_enrollment(self, enrollment: dict[str, str]) -> None:
+        """facecontrol.md bənd 13 — bax `_ProfileConnection` şərhi.
+
+        Bu fayl profil YAZI axınını sınayır; üz qeydiyyatının ÖZ testləri
+        `test_face_control_screen.py`-dədir. Metod burada olmasaydı,
+        `refresh()` `AttributeError` alıb xəta yoluna düşərdi və «yazıdan
+        sonra ekran yenilənir» iddiası yenidən yoxlanılmamış qalardı.
+        """
+        self.face_enrollment = enrollment
+
     def show_error(self, *, title: str, message: str) -> None:
         self.errors.append((title, message))
 
@@ -495,6 +505,21 @@ class _PerformanceReviews:
         return []
 
 
+class _ProfileLimits:
+    """`SystemLimits` portunun oxu tərəfi — üz qeydiyyatı xatırlatması (bənd 13).
+
+    HƏMİŞƏ DEFOLTU QAYTARIR: bu faylın sualı limit oxunuşu deyil, yazı
+    yoludur; `DEFAULT_LIMITS` isə `system_limits` sətri olmayan yeni
+    quraşdırmanın real davranışıdır.
+    """
+
+    def get_int(self, tenant_id: Any, key: str, default: int) -> int:
+        return default
+
+    def get_str(self, tenant_id: Any, key: str, default: str) -> str:
+        return default
+
+
 class _ProfileSession:
     def __init__(self, employee: Any, users: _Users) -> None:
         self.tenant_id = TENANT
@@ -502,6 +527,7 @@ class _ProfileSession:
         self.uow = _ProfileUow(employee)
         self.employee_profile = _EmployeeProfileAccess()
         self.performance_reviews = _PerformanceReviews()
+        self.limits = _ProfileLimits()
         self.commits = 0
 
     def commit(self) -> None:

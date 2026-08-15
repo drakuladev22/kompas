@@ -365,6 +365,11 @@ class ProfileScreen(Screen):
         right_layout.addWidget(self._build_role_card())
         right_layout.addWidget(self._build_sessions_card())
         right_layout.addWidget(self._build_security_card())
+        # facecontrol.md bənd 13 — «Üz qeydiyyatı» kartı TƏHLÜKƏSİZLİK
+        # bölməsindən dərhal sonra durur: hər ikisi hesabın kimliyini qoruyan
+        # mexanizmdir (biri «bilirsən», digəri «kimsən») və eyni ritmdə
+        # baxılır.
+        right_layout.addWidget(self._build_face_card())
         right_layout.addStretch(1)
         columns_layout.addWidget(right, 1)
 
@@ -496,6 +501,90 @@ class ProfileScreen(Screen):
         self._password_note = muted_label("")
         card.add(self._password_note)
         return card
+
+    # ------------------------- üz qeydiyyatı (bənd 13) ------------------------ #
+
+    def _build_face_card(self) -> Card:
+        """«Üz qeydiyyatı» — DÖVRİ YENİLƏMƏ TÖVSİYƏSİ, bloklama YOX.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ BURADA MƏCBURİYYƏT YOXDUR
+        ──────────────────────────────────────────────────────────────────────
+        `facecontrol.md` bənd 13 açıq deyir: «Bu, MƏCBURİ BLOKLAMA YARATMIR,
+        yalnız admin üçün görünən tövsiyədir». İnsan üzü zamanla dəyişir
+        (saqqal, eynək, çəki) və köhnə vektor tanınma dəqiqliyini AZALDIR —
+        lakin işçini işə buraxmamaq üçün əsas deyil (`MonthlyLeaveUsage` ilə
+        eyni fəlsəfə: xəbərdarlıq göstərilir, iş davam edir).
+
+        Ona görə burada nə düymə, nə qadağa var — yalnız vəziyyət və tarix.
+        Yeniləmə isə NƏZARƏTLİ prosesdir və AYRI ekrandadır («Üz Qeydiyyatı»,
+        `can_manage_employees`): işçi öz üzünü özü yeniləyə bilməz (bənd 1).
+        """
+        card = Card(padding=20, spacing=12)
+        card.add(section_label("Üz qeydiyyatı"))
+        card.add(Divider())
+
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        self._face_chip = Chip("Qeydiyyatsız", "neutral")
+        layout.addWidget(self._face_chip)
+        self._face_enrolled_at = mono_label("")
+        layout.addWidget(self._face_enrolled_at)
+        layout.addWidget(stretch())
+        card.add(row)
+
+        self._face_note = body_label("", size=12)
+        card.add(self._face_note)
+        return card
+
+    def set_face_enrollment(self, enrollment: dict[str, str]) -> None:
+        """Üz qeydiyyatının vəziyyəti (bənd 13).
+
+        Args:
+            enrollment: `state` (`NEW` / `ENROLLED` / `STALE`), `enrolled_at`,
+                `reminder_months` açarları. Açarlar HƏM maket
+                (`preview_data.FACE_PROFILE_ENROLLMENT`), HƏM canlı yol
+                (`controllers/profile.py::_face_enrollment_row`) üçün EYNİDİR
+                (CLAUDE.md §6). `state` dəyərləri `controllers/face_control.py::
+                enrollment_state` ilə eynidir — ekran öz ad məkanını qurmur.
+
+        BOŞ SÖZLÜK NORMAL HALDIR: Face Control modulu söndürülübsə və ya
+        məlumat oxuna bilmirsə kart neytral vəziyyətdə qalır və heç bir
+        xəbərdarlıq göstərmir — yalançı xəbərdarlıq həqiqi olanı dəyərsizləşdirir.
+        """
+        state = enrollment.get("state", "")
+        enrolled_at = enrollment.get("enrolled_at", "")
+        months = enrollment.get("reminder_months", "")
+
+        if state == "STALE":
+            self._face_chip.setText("Köhnəlib")
+            self._face_chip.set_tone("warning")
+            self._face_note.setText(
+                f"Üz qeydiyyatı köhnəlib, yenilənməsi tövsiyə olunur ({months} aydan "
+                f"köhnədir). Bu, girişinizi BLOKLAMIR — yeniləmə «Üz Qeydiyyatı» "
+                f"ekranından administrator tərəfindən aparılır."
+            )
+        elif state == "ENROLLED":
+            self._face_chip.setText("Qeydiyyatlı")
+            self._face_chip.set_tone("success")
+            self._face_note.setText(
+                f"Qeydiyyat qüvvədədir. Tövsiyə olunan yeniləmə intervalı: {months} ay."
+            )
+        elif state == "NEW":
+            self._face_chip.setText("Qeydiyyatsız")
+            self._face_chip.set_tone("neutral")
+            self._face_note.setText(
+                "Üz qeydiyyatı aparılmayıb. Qeydiyyatı administrator aparır — "
+                "işçi bunu özü edə bilmir."
+            )
+        else:
+            self._face_chip.setText("Məlumat yoxdur")
+            self._face_chip.set_tone("neutral")
+            self._face_note.setText("")
+
+        self._face_enrolled_at.setText(enrolled_at or "—")
 
     # ------------------------ performans tarixçəsi (#20) ---------------------- #
 

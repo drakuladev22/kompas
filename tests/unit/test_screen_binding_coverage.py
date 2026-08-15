@@ -84,6 +84,13 @@ CONTROLLER_BOUND: Final[dict[str, str]] = {
     # HƏR İKİSİ HƏM oxuyur, HƏM yazır (bax `controllers/bulk_operations.py`
     # başlığı) — `announcements`/`annual_leave` ilə eyni qərar.
     "bulk_operations": "_attach_bulk_operations",
+    # Face Control (facecontrol.md Faza 4) — İKİ ekran, İKİ AYRI SƏLAHİYYƏT.
+    # Hər ikisi HƏM oxuyur, HƏM yazır: qeydiyyatdan sonra işçinin vəziyyəti
+    # `NEW`-dən `ENROLLED`-a keçir, istisna verildikdən sonra aktiv siyahıya
+    # düşür — yəni siyahı hər yazıdan sonra yenidən oxunmalıdır (bax
+    # `controllers/face_control.py` başlığı).
+    "face_enrollment": "_attach_face_enrollment",
+    "face_exemptions": "_attach_face_exemptions",
 }
 
 #: Həm `_binders()`-də, HƏM DƏ `_attach_*` ilə bağlanan açarlar.

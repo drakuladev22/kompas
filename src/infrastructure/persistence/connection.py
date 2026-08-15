@@ -453,6 +453,12 @@ class PostgresUnitOfWork:
         from src.infrastructure.persistence.export_correction_repository import (  # noqa: PLC0415
             PostgresExportCorrectionRepository,
         )
+        from src.infrastructure.persistence.face_repository import (  # noqa: PLC0415
+            PostgresFaceEmbeddingRepository,
+            PostgresFaceExemptionRepository,
+            PostgresFaceStoreScopeRepository,
+            PostgresFaceVerificationLogRepository,
+        )
         from src.infrastructure.persistence.field_report_repositories import (  # noqa: PLC0415
             PostgresFieldReportCatalog,
             PostgresFieldReportRepository,
@@ -510,6 +516,7 @@ class PostgresUnitOfWork:
             PostgresFineAppealRepository,
             PostgresShiftSwapRepository,
         )
+        from src.infrastructure.security.encryption import EncryptionService  # noqa: PLC0415
 
         if self._conn is None:  # pragma: no cover - invariant
             raise TenantContextError("Bağlantı yoxdur")
@@ -671,6 +678,27 @@ class PostgresUnitOfWork:
             # yeni sətri dərhal görməlidir.
             "export_corrections": export_corrections,
             "export_roster": export_corrections,
+            # --- Face Control — üz təsdiqi (facecontrol.md, migrations/047) ----
+            # DÖRDÜ DƏ EYNİ BAĞLANTIDADIR VƏ BU, MƏCBURİDİR:
+            #   * MISMATCH halında sayğac (`employees` üz sütunları) ilə jurnal
+            #     sətri BİR tranzaksiyada yazılır — ayrı bağlantıda "kilid
+            #     qoyuldu, lakin səbəbi jurnalda yoxdur" vəziyyəti mümkün
+            #     olardı və kilidin qanuniliyi sübut edilə bilməzdi;
+            #   * yenidən-qeydiyyatda arxiv sətri ilə yeni vektor atomikdir
+            #     (arxivsiz üstündən yazma bənd 2-nin qadağasıdır);
+            #   * deaktivasiyada `is_active = FALSE` ilə vektorun silinməsi
+            #     atomikdir (bənd 8) — biri yazılıb digəri yazılmayan hal
+            #     biometrik məlumatı sahibsiz qoyardı.
+            #
+            # ŞİFRƏLƏMƏ REPO-NUN İÇİNDƏDİR: `EncryptionService` MƏHZ BURADA
+            # qurulur və `ErpServerRepository` naxışını təkrarlayır — tətbiq
+            # qatı açıq vektorla işləyir, bazaya isə yalnız token yazılır.
+            "face_embeddings": PostgresFaceEmbeddingRepository(
+                conn, self._context, EncryptionService()
+            ),
+            "face_verification_log": PostgresFaceVerificationLogRepository(conn, self._context),
+            "face_exemptions": PostgresFaceExemptionRepository(conn, self._context),
+            "face_store_scope": PostgresFaceStoreScopeRepository(conn, self._context),
             # Bildirişin YAZISI `PostgresNotifier`-dədir (öz tranzaksiyası ilə);
             # burada qeydiyyatdan keçən yalnız OXU və "oxundu" işarəsidir.
             "notifications": PostgresNotificationRepository(conn, self._context),

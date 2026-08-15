@@ -64,6 +64,15 @@ FALLBACK_MATRIX_WINDOW_DAYS = int(DEFAULT_LIMITS[SystemLimitKey.SHIFT_MATRIX_WIN
 #: "Gündəlik Tabel" ekranının `AdminShell`-dəki açarı (bax `shell/menu.py`).
 DAILY_ROSTER_SCREEN_KEY: Final = "daily_roster"
 
+#: «Aşağı-etibarlı üz təsdiqi» nişanının geriyə baxış pəncərəsi (gün).
+#:
+#: ROOT PARAMETRİ DEYİL VƏ BU, QƏSDLİDİR: pəncərə yalnız SORĞU həddidir —
+#: nişan onsuz da yalnız növbədə DAYANAN sətirlərə düşür və növbənin öz ömrü
+#: 45 dəqiqəlik timeout ilə məhduddur (`face_control.MISMATCH_LOOKBACK_DAYS`
+#: ilə eyni əsaslandırma). Gecə növbəsinin gün sərhədini keçməsi üçün bir gün
+#: kifayətdir.
+LOW_CONFIDENCE_LOOKBACK_DAYS: Final = 1
+
 #: Növbə dəyişmə statusu → ekran mətni.
 _SWAP_STATUS_TEXT: Final[dict[str, str]] = {
     "PENDING_APPROVAL": "Gözləyir",
@@ -639,6 +648,11 @@ class ScreenDataBinder:
         # `late_threshold_minutes` və `LATE_QUEUE_MINUTES` şərhi).
         late_after = late_threshold_minutes(session)
 
+        # AŞAĞI-ETİBARLI ÜZ TƏSDİQİ (facecontrol.md bənd 12) — nişan üçün
+        # lazım olan dəst BİR sorğu ilə oxunur; sətir-sətir sorğu 40 sətirlik
+        # növbədə 40 gediş-gəliş demək olardı.
+        low_confidence = _low_confidence_faces(session, stores)
+
         # `(gözləmə dəqiqəsi, sətir)` cütü ilə yığılır: `QueueEntry` gözləməni
         # MƏTN kimi saxlayır ("18 dəq") və mətnə görə sıralamaq "9 dəq"-i
         # "18 dəq"-dən sonra qoyardı.
@@ -658,6 +672,7 @@ class ScreenDataBinder:
                         timestamp_text=_hhmm(record.requested_at),
                         waiting_text=f"{waited} dəq",
                         is_late=waited >= late_after,
+                        is_low_confidence=(str(record.employee_id), "STEP_A") in low_confidence,
                     ),
                 )
             )
@@ -676,6 +691,7 @@ class ScreenDataBinder:
                         timestamp_text=_hhmm(request.requested_time),
                         waiting_text=f"{waited} dəq",
                         is_late=waited >= late_after,
+                        is_low_confidence=(str(request.employee_id), "STEP_2") in low_confidence,
                     ),
                 )
             )
@@ -1709,6 +1725,67 @@ def _minutes_since(moment: datetime | None) -> int:
     if moment is None:
         return 0
     return max(0, int((datetime.now(UTC) - moment).total_seconds() // 60))
+
+
+def _low_confidence_faces(session: Session, stores: list[Any]) -> set[tuple[str, str]]:
+    """AŞAĞI-ETİBARLI üz təsdiqi olan (işçi, addım) cütləri (facecontrol.md bənd 12).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ USE CASE DEYİL, BİRBAŞA SQL
+    ──────────────────────────────────────────────────────────────────────────
+    `_users`/`_fines` ilə eyni əsaslandırma: burada heç bir iş qərarı
+    verilmir — nə status keçidi, nə hesablama, nə səlahiyyət yoxlaması var.
+    Yalnız bir NİŞAN göstərilir. `FaceVerificationUseCase`-ə «operator növbəsi
+    üçün siyahı» metodu əlavə etmək onu hesabat vasitəsinə çevirərdi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ SON SƏTİR (`DISTINCT ON`) VƏ NİYƏ 24 SAAT
+    ──────────────────────────────────────────────────────────────────────────
+    Bir işçi eyni gün bir neçə dəfə doğrulana bilər (məsələn əvvəlcə üz
+    görünmədi, sonra keçdi). Operatorun sualı isə «BU sətri yaradan təsdiq
+    zəif idimi?» — yəni SONUNCU nəticə. Bütün gün üzrə `bool_or` işlətsəydik,
+    səhər bir dəfə zəif tanınan işçi axşama qədər nişanlı qalardı və nişan
+    öz mənasını itirərdi.
+
+    24 saatlıq pəncərə növbənin ÖZ ömründən (45 dəqiqəlik timeout) qat-qat
+    genişdir və gecə növbəsinin gün sərhədini keçməsini də əhatə edir. Bu,
+    siyasət deyil — SORĞU həddidir, ona görə ROOT parametri deyil.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NASAZLIQ NÖVBƏNİ DAYANDIRMIR
+    ──────────────────────────────────────────────────────────────────────────
+    Boş dəst qayıdırsa nişan görünmür, növbə isə OLDUĞU KİMİ işləyir. Face
+    Control quraşdırılmamış (miqrasiya tətbiq edilməmiş) bir bazada bu sorğu
+    uğursuz olar və operatorun BÜTÜN növbəsini boş qoymaq — bir nişanın
+    ucbatından — yolverilməz olardı.
+    """
+    if not stores:
+        return set()
+    try:
+        rows = session.uow.connection.execute(
+            """
+            SELECT DISTINCT ON (employee_id, trigger_context)
+                   employee_id, trigger_context, is_low_confidence
+              FROM face_verification_log
+             WHERE tenant_id = %s
+               AND store_id = ANY(%s)
+               AND occurred_at >= %s
+             ORDER BY employee_id, trigger_context, occurred_at DESC
+            """,
+            (
+                session.tenant_id,
+                list(stores),
+                datetime.now(UTC) - timedelta(days=LOW_CONFIDENCE_LOOKBACK_DAYS),
+            ),
+        ).fetchall()
+    except Exception:
+        _error_log.exception("FACE_LOW_CONFIDENCE_LOOKUP_FAILED")
+        return set()
+    return {
+        (str(row["employee_id"]), str(row["trigger_context"]))
+        for row in rows
+        if row["is_low_confidence"]
+    }
 
 
 def _store_name(session: Session, store_id: Any) -> str:

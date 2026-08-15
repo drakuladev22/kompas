@@ -113,6 +113,14 @@ ExecutiveDigestConfigId = NewType("ExecutiveDigestConfigId", uuid.UUID)
 #: sualı cavabsız qalardı — bir işçinin eyni günü üçün bir neçə ardıcıl düzəliş
 #: sətri ola bilər (düzəliş DƏYİŞMİR, yenisi YAZILIR — migrations/037 başlığı).
 ExportCorrectionId = NewType("ExportCorrectionId", uuid.UUID)
+#: Face Control istisnası (`facecontrol.md` bənd 14, `face_control_exemptions`).
+#: Ayrıca tip: sətir EYNİ ANDA üç işçi identifikatoru daşıyır — istisnadan
+#: yararlanan (`employee_id`), onu verən Root/CEO (`granted_by`) və ləğv edən
+#: (`revoked_by`). Dördüncü, SƏTİR-səviyyəli ID olmasaydı, audit `entity_id`-si
+#: bunlardan biri ilə qarışar və "hansı istisna ləğv edildi?" sualı cavabsız
+#: qalardı (bir işçinin ardıcıl bir neçə istisnası ola bilər — sətirlər heç vaxt
+#: silinmir, yalnız `EXPIRED`/`REVOKED` olur).
+FaceExemptionId = NewType("FaceExemptionId", uuid.UUID)
 
 # --- Dəstək (bölmə 8) ------------------------------------------------------- #
 SupportTicketId = NewType("SupportTicketId", uuid.UUID)
@@ -258,6 +266,10 @@ def new_export_correction_id() -> ExportCorrectionId:
     return ExportCorrectionId(uuid.uuid4())
 
 
+def new_face_exemption_id() -> FaceExemptionId:
+    return FaceExemptionId(uuid.uuid4())
+
+
 __all__ = [
     "AnnouncementId",
     "AnnualLeaveBalanceId",
@@ -272,6 +284,7 @@ __all__ = [
     "ExceptionId",
     "ExecutiveDigestConfigId",
     "ExportCorrectionId",
+    "FaceExemptionId",
     "FieldReportId",
     "FieldReportItemId",
     "FineId",
@@ -310,6 +323,7 @@ __all__ = [
     "new_exception_id",
     "new_executive_digest_config_id",
     "new_export_correction_id",
+    "new_face_exemption_id",
     "new_field_report_id",
     "new_field_report_item_id",
     "new_fine_id",

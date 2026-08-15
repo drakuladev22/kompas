@@ -25,11 +25,15 @@ və audit jurnalı real dəyişiklikləri gizlədərdi (bölmə 3, bənd 4).
 
 from __future__ import annotations
 
+import uuid
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from src.application.use_cases.root_control import RootControlError
-from src.domain.policies import FeatureModule, SystemLimitKey
+from src.domain.policies import DEFAULT_LIMITS, FeatureModule, SystemLimitKey
 from src.domain.value_objects.authorization import HardlockLevel, PermissionFlag
+from src.domain.value_objects.face_recognition import FaceToleranceBand, parse_tolerance
+from src.domain.value_objects.identifiers import StoreId
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
@@ -39,6 +43,16 @@ if TYPE_CHECKING:
     from src.presentation.screens.group_d import RootControlScreen
 
 _error_log = get_logger(__name__, channel=LogChannel.ERROR)
+_security_log = get_logger(__name__, channel=LogChannel.SECURITY)
+
+#: ROOT panelinin öz flag-i — Face Control mağaza əhatəsi də ona bağlıdır.
+#:
+#: NİYƏ YENİ FLAG YARADILMADI: mağaza əhatəsi Face Control-un KONFİQURASİYASIDIR
+#: (hansı mağazada işləyir), istisna DEYİL (kim üz təsdiqindən azaddır). İkincisi
+#: `can_manage_face_exemptions` (hardlock 2) tələb edir və o, ayrı ekrandadır.
+#: Konfiqurasiya üçün ROOT panelinin mövcud qapısı düzgün səviyyədir — əks halda
+#: hər yeni parametr öz flag-ini gətirər və icazə reyestri şişərdi.
+FACE_SCOPE_FLAG = "can_manage_system_limits"
 
 
 # --------------------------------------------------------------------------- #
@@ -156,6 +170,11 @@ class RootControlController:
                 screen, code, category, hardlock=hardlock
             )
         )
+        # facecontrol.md bənd 15 — mağaza əhatəsi `applied` sözlüyündən AYRI
+        # gedir (bax `RootControlScreen.face_scope_changed` şərhi).
+        screen.face_scope_changed.connect(
+            lambda store_id, active: self._on_face_scope_changed(screen, store_id, active=active)
+        )
         self.refresh(screen)
 
     def refresh(self, screen: RootControlScreen) -> None:
@@ -227,6 +246,12 @@ class RootControlController:
         screen.set_registry(
             [(flag.code, flag.hardlock is not HardlockLevel.NONE) for flag in flags]
         )
+
+        # facecontrol.md bənd 15 + (7, 12). Hər ikisi `set_limits`-dən SONRA
+        # gəlir, çünki `set_limits` `show_content()` çağırır — əks sırada
+        # kartlar doldurulub, sonra ekran vəziyyəti dəyişərdi.
+        screen.set_face_scope(face_scope_rows(session))
+        screen.set_face_tolerance(face_tolerance_row(session))
 
     # ------------------------------ yazı yolu -------------------------------- #
 
@@ -302,6 +327,86 @@ class RootControlController:
                 title="Modul dəyişdirilmədi",
                 message="Dəyişiklik saxlanmadı. Yenidən cəhd edin.",
             )
+
+    def _on_face_scope_changed(
+        self, screen: RootControlScreen, store_id: str, *, active: bool
+    ) -> None:
+        """Face Control mağaza əhatəsi (bənd 15) — SOFT DELETE ilə yazılır.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ USE CASE YOX, REPOSITORY + AUDİT
+        ──────────────────────────────────────────────────────────────────────
+        `face_control_store_scope` `system_limits` sətri DEYİL, ona görə
+        `RootControlUseCase.set_limit` yolu ona uyğun gəlmir; `FaceControl
+        ExemptionUseCase` isə tamamilə başqa flag-in (hardlock 2) arxasındadır.
+        Layihədə bu vəziyyət üçün hazır naxış var və o, `controllers/
+        drive_connection.py`-dədir: kontroller səlahiyyəti AÇIQ yoxlayır,
+        repository-yə yazır və audit sətrini ÖZÜ yazır.
+
+        AUDİT SƏTRİ MƏCBURİDİR: mağazanın əhatəyə salınması/çıxarılması
+        həmin mağazadakı BÜTÜN girişlərin üz təsdiqindən keçib-keçmədiyini
+        müəyyən edir. Onsuz «bu ay niyə heç bir uyğunsuzluq qeydə alınmayıb?»
+        sualının cavabı yoxa çıxardı.
+
+        SƏTİR SİLİNMİR (`set_active(active=False)`): sxem `chk_face_scope_
+        deactivation` ilə çıxarılmış sətrin `deactivated_at`-ını MƏCBUR edir.
+        """
+        if not self._permitted():
+            _security_log.warning(
+                "FACE_SCOPE_DENIED",
+                extra={"actor_id": str(self._actor.id), "flag": FACE_SCOPE_FLAG},
+            )
+            screen.reject_face_scope_change(store_id)
+            screen.show_error(
+                title="Əhatə dəyişdirilmədi",
+                message="Face Control mağaza əhatəsini yalnız ROOT dəyişə bilər.",
+            )
+            return
+
+        target = _store_id_or_none(store_id)
+        if target is None:
+            screen.reject_face_scope_change(store_id)
+            screen.show_error(
+                title="Əhatə dəyişdirilmədi", message="Mağaza identifikatoru düzgün deyil."
+            )
+            return
+
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                session.uow.repository("face_store_scope").set_active(
+                    session.tenant_id,
+                    target,
+                    active=active,
+                    changed_by=self._actor.id,
+                )
+                session.uow.audit.record(
+                    tenant_id=session.tenant_id,
+                    actor_id=self._actor.id,
+                    action="FACE_SCOPE_CHANGED",
+                    entity_type="face_control_store_scope",
+                    entity_id=target,
+                    after_state={"store_id": str(target), "is_active": active},
+                    reason=("Face Control mağaza əhatəsi dəyişdirildi (facecontrol.md bənd 15)"),
+                )
+                session.commit()
+        except KompasOSError as error:
+            screen.reject_face_scope_change(store_id)
+            screen.show_error(title="Əhatə dəyişdirilmədi", message=error.user_message)
+            return
+        except Exception:
+            _error_log.exception("FACE_SCOPE_WRITE_FAILED", extra={"store_id": store_id})
+            screen.reject_face_scope_change(store_id)
+            screen.show_error(
+                title="Əhatə dəyişdirilmədi",
+                message="Dəyişiklik saxlanmadı. Yenidən cəhd edin.",
+            )
+            return
+
+        self.refresh(screen)
+
+    def _permitted(self) -> bool:
+        """`can_manage_system_limits` — `drive_connection._permitted` naxışı."""
+        return bool(self._actor.has_permission(FACE_SCOPE_FLAG, now=datetime.now(UTC)))
 
     def _on_flag_created(
         self,
@@ -461,10 +566,89 @@ def limit_row(
     return (key.value, label, number, low, high, suffix)
 
 
+def _store_id_or_none(value: str) -> StoreId | None:
+    """Naməlum/yararsız identifikator yazı yoluna GETMİR."""
+    try:
+        return StoreId(uuid.UUID(value))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def face_scope_rows(session: Session) -> list[dict[str, str]]:
+    """Face Control mağaza əhatəsi — ekranın gözlədiyi açarlar (bənd 15).
+
+    AKTİV MAĞAZALAR CƏDVƏLDƏN, SEÇİM İSƏ ƏHATƏ SƏTİRLƏRİNDƏN gəlir. İkisi
+    ayrı mənbədir və qəsdən belədir: əhatədən çıxarılmış sətir SİLİNMİR
+    (soft delete), yəni əhatə cədvəlini tək başına oxumaq «bir vaxt seçilmiş,
+    sonra çıxarılmış» mağazanı da seçilmiş göstərərdi.
+    """
+    scope = session.uow.repository("face_store_scope").active_scope(session.tenant_id)
+    rows = session.uow.connection.execute(
+        """
+        SELECT id, name FROM stores
+         WHERE tenant_id = %s AND is_active
+         ORDER BY name
+        """,
+        (session.tenant_id,),
+    ).fetchall()
+    return [
+        {
+            "id": str(row["id"]),
+            "name": str(row["name"]),
+            "active": "1" if scope.covers(StoreId(row["id"])) and not scope.is_global else "0",
+        }
+        for row in rows
+    ]
+
+
+def face_tolerance_row(session: Session) -> dict[str, str]:
+    """İki ROOT həddi + TƏRS CÜT bayrağı (bənd 7 + 12).
+
+    ──────────────────────────────────────────────────────────────────────────
+    QƏRAR BURADA VERİLMİR — `FaceToleranceBand.resolve` VERİR
+    ──────────────────────────────────────────────────────────────────────────
+    Şərti («aşağı-etibar həddi bənzərlik həddindən böyükdürsə...») burada
+    yenidən yazmaq domen qaydasının İKİNCİ NÜSXƏSİ olardı və iki nüsxə bir
+    müddət üst-üstə düşüb sonra sükutla ayrılardı — `menu.py` başlığındakı
+    qüsurun eynisi. Ona görə eyni funksiya çağırılır və nəticənin YALNIZ
+    bayraqları ekrana ötürülür.
+
+    XAM DƏYƏRLƏR GÖSTƏRİLİR, HESABLANMIŞ DEYİL: Root ekranda ÖZ yazdığı
+    ədədləri görməlidir. Sistemin FAKTİKİ tətbiq etdiyi hədd tərs cütdə
+    fərqlidir və məhz bu fərq xəbərdarlığın mövzusudur (bax `set_face_
+    tolerance`).
+    """
+    match_raw = _limit_str(session, SystemLimitKey.FACE_MATCH_TOLERANCE)
+    low_raw = _limit_str(session, SystemLimitKey.FACE_LOW_CONFIDENCE_TOLERANCE)
+    band = FaceToleranceBand.resolve(
+        match_tolerance=parse_tolerance(
+            match_raw, fallback=float(DEFAULT_LIMITS[SystemLimitKey.FACE_MATCH_TOLERANCE])
+        ),
+        low_confidence_tolerance=parse_tolerance(
+            low_raw,
+            fallback=float(DEFAULT_LIMITS[SystemLimitKey.FACE_LOW_CONFIDENCE_TOLERANCE]),
+        ),
+    )
+    return {
+        "match": match_raw,
+        "low_confidence": low_raw,
+        "inverted": "1" if band.is_inverted else "0",
+        "band_enabled": "1" if band.band_enabled else "0",
+    }
+
+
+def _limit_str(session: Session, key: SystemLimitKey) -> str:
+    value: str = session.limits.get_str(session.tenant_id, key.value, DEFAULT_LIMITS[key])
+    return value
+
+
 __all__ = [
     "BREAK_LIMIT_KEYS",
+    "FACE_SCOPE_FLAG",
     "LIMIT_LABELS",
     "MODULE_LABELS",
     "RootControlController",
+    "face_scope_rows",
+    "face_tolerance_row",
     "limit_row",
 ]
