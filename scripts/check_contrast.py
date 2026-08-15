@@ -67,7 +67,10 @@ REQUIRED_PAIRS: list[tuple[str, str, float, str]] = [
     ("--color-nav-active-text", "--color-nav-active-bg", AA_NORMAL_TEXT, "Aktiv naviqasiya"),
     ("--color-nav-item-icon", "--color-sidebar-bg", AA_LARGE_TEXT, "Naviqasiya ikonu"),
     ("--color-titlebar-text", "--color-titlebar-bg", AA_NORMAL_TEXT, "Başlıq zolağı mətni"),
-    ("--color-titlebar-control", "--color-titlebar-bg", AA_LARGE_TEXT, "Pəncərə düymələri"),
+    # Pəncərə düymələri artıq MƏTN deyil, xətt-əsaslı İKONDUR (kiçilt / böyüt ·
+    # bərpa / bağla) — WCAG 1.4.11 qrafik element üçün 3:1 tələb edir, yəni
+    # hədd DƏYİŞMİR, lakin qiymətləndirilən şey dəyişib.
+    ("--color-titlebar-control", "--color-titlebar-bg", AA_LARGE_TEXT, "Pəncərə ikonları"),
     ("--color-success", "--color-success-bg", AA_NORMAL_TEXT, "Uğur nişanı"),
     ("--color-warning", "--color-warning-bg", AA_NORMAL_TEXT, "Xəbərdarlıq nişanı"),
     ("--color-danger", "--color-danger-bg", AA_NORMAL_TEXT, "Xəta nişanı"),
@@ -93,6 +96,9 @@ REQUIRED_PAIRS: list[tuple[str, str, float, str]] = [
     ("--color-text-placeholder", "--color-card-bg", AA_NORMAL_TEXT, "Placeholder (form sahəsi)"),
     # --- dolu semantik səthlərdə mətn: nişan (badge), danger/success düymə,
     #     pəncərənin "bağla" düyməsinin hover halı ---
+    # `--color-bg-primary` qırmızı fonun üzərində ÜÇ rolu daşıyır: nişan mətni,
+    # bağla düyməsinin İKONU və (hover + fokus eyni anda olduqda) fokus halqası.
+    # Üçü də eyni cütdür, ona görə tək sətir kifayətdir.
     ("--color-bg-primary", "--color-danger", AA_NORMAL_TEXT, "Nişan/bağla — xəta"),
     ("--color-bg-primary", "--color-success", AA_NORMAL_TEXT, "Nişan mətni — uğur"),
     ("--color-bg-primary", "--color-warning", AA_NORMAL_TEXT, "Nişan mətni — xəbərdarlıq"),
@@ -123,7 +129,19 @@ REQUIRED_PAIRS: list[tuple[str, str, float, str]] = [
     ("--color-action-text", "--color-action-hover", AA_NORMAL_TEXT, "Hərəkət düyməsi (hover)"),
     ("--color-action-text", "--color-action-pressed", AA_NORMAL_TEXT, "Hərəkət (basılı)"),
     ("--color-text-primary", "--color-bg-sunken", AA_NORMAL_TEXT, "Düymə (hover fonu)"),
-    ("--color-titlebar-text", "--color-nav-active-bg", AA_NORMAL_TEXT, "Pəncərə düyməsi (hover)"),
+    ("--color-titlebar-text", "--color-nav-active-bg", AA_NORMAL_TEXT, "Naviqasiya dolu səthi"),
+    # ── PƏNCƏRƏ DÜYMƏSİNİN HOVER SƏTHİ (yeni token) ─────────────────────────
+    # Bu cüt İNDİ əlavə olunur, çünki hover fonu artıq öz tokenindədir. Əvvəl
+    # `--color-nav-active-bg` işlənirdi və İŞIQLI temada o, başlıq zolağının
+    # fonu ilə eyni Navy idi (1.00:1) — yəni hover halı ümumiyyətlə görünmürdü.
+    # Cüt üç şeyi birdən qapıya salır: hover mətni, hover İKONU və həmin
+    # səthdə dayanan fokus halqası (üçü də `--color-titlebar-text`-dir).
+    (
+        "--color-titlebar-text",
+        "--color-titlebar-control-hover",
+        AA_NORMAL_TEXT,
+        "Pəncərə düyməsi (hover)",
+    ),
     ("--color-nav-item-text", "--color-neutral-bg", AA_NORMAL_TEXT, "Nav maddəsi (hover)"),
     ("--color-nav-item-text", "--color-card-bg", AA_NORMAL_TEXT, "İkinci dərəcəli düymə"),
     # --- eyni mətn rolunun DİGƏR səthləri (auditdə tapılan boşluq) ---

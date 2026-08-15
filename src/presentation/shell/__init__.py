@@ -1,9 +1,12 @@
 """Role-driven Shell, NavigationRegistry render qatı — Faza 4.
 
-window       — çərçivəsiz pəncərə bazası (öz başlıq zolağı, ölçü dəyişdirmə)
-admin_shell  — sol panel + başlıq + kontent yığını
-menu         — bütün menyu maddələrinin qeydiyyatı
-kiosk        — tam ekran, çərçivəsiz kiosk pəncərəsi
+window        — çərçivəsiz pəncərə bazası (öz başlıq zolağı, ölçü dəyişdirmə)
+native_chrome — Windows Aero Snap + Snap Layouts (yalnız `windows` platforması)
+admin_shell   — sol panel + başlıq + kontent yığını
+menu          — bütün menyu maddələrinin qeydiyyatı
+kiosk         — tam ekran, çərçivəsiz kiosk pəncərəsi
+
+Tərtibat rejimi (breakpoint) `widgets/responsive.py`-dədir — səbəb orada.
 """
 
 from src.presentation.shell.admin_shell import AdminShell

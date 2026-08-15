@@ -119,6 +119,10 @@ class DashboardScreen(Screen):
         tiles_layout = QHBoxLayout(tiles)
         tiles_layout.setContentsMargins(0, 0, 0, 0)
         tiles_layout.setSpacing(metrics.CARD_SPACING)
+        # Dar pəncərədə (700–1280px, yarım-ekran snap) dörd rəqəm kartı
+        # yan-yana 150px-ə düşür və başlıqları kəsilir — o həddən sonra
+        # bir sütuna yığılır (bax `screens/base.py::responsive_row`).
+        self.responsive_row(tiles_layout)
 
         self._in_store = StatTile("Hazırda mağazada")
         self._pending = StatTile("Təsdiq gözləyir")
@@ -134,6 +138,7 @@ class DashboardScreen(Screen):
         middle_layout = QHBoxLayout(middle)
         middle_layout.setContentsMargins(0, 0, 0, 0)
         middle_layout.setSpacing(metrics.CARD_SPACING)
+        self.responsive_row(middle_layout)
 
         chart_card = Card(padding=20, spacing=16)
         chart_head = QWidget()
@@ -163,6 +168,7 @@ class DashboardScreen(Screen):
         bottom_layout = QHBoxLayout(bottom)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(metrics.CARD_SPACING)
+        self.responsive_row(bottom_layout)
 
         self._leaders = RankList("Xal liderləri")
         bottom_layout.addWidget(self._leaders, 1)
@@ -760,11 +766,26 @@ class RoleCreateDialog(QDialog):
     submitted = Signal(str, int, bool)
 
     #: Açılan siyahıdakı pillələr — `RolePriority` dəyərləri ilə eyni sıra.
+    #:
+    #: ──────────────────────────────────────────────────────────────────────
+    #: `Root` PİLLƏSİ (0) SİYAHIDA YOXDUR — SİLİNMƏ DEYİL, DÜZƏLİŞDİR
+    #: ──────────────────────────────────────────────────────────────────────
+    #: Əvvəllər siyahının ilk sətri «Rəhbərlik (0)» idi, çünki `Root` və `CEO`
+    #: EYNİ pillədə (0) sayılırdı. Root/CEO ayrılığından sonra pillə 0 TƏK
+    #: BAŞINA `Root`-a aiddir və orada yaradılan custom rol yanıltıcı olardı:
+    #: `Position.effective_system_role` onu `Root` YOX, `CEO` semantikası ilə
+    #: qiymətləndirir (bax `_PRIORITY_TO_ROLE`), yəni etiket səlahiyyətdən
+    #: GÜCLÜ görünərdi. Həmin «Rəhbərlik» pilləsi itmir — dəyəri 1-dir və
+    #: siyahının ilk sətri olaraq qalır.
+    #:
+    #: Praktikada bu, heç bir imkanı da bağlamır: pillə 0-lı rol yaratmaq
+    #: onsuz da yalnız `Root` aktoruna mümkün idi (Strict Hierarchy Guard —
+    #: yaradan CİDDİ ŞƏKİLDƏ yuxarıda olmalıdır və 0-dan yuxarı pillə yoxdur).
     PRIORITIES: Final[tuple[tuple[str, int], ...]] = (
-        ("Rəhbərlik (0)", 0),
-        ("Admin (1)", 1),
-        ("Operativ (2)", 2),
-        ("Personal (3)", 3),
+        ("Rəhbərlik (1)", 1),
+        ("Admin (2)", 2),
+        ("Operativ (3)", 3),
+        ("Personal (4)", 4),
     )
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
@@ -793,7 +814,7 @@ class RoleCreateDialog(QDialog):
         self._priority = QComboBox()
         for label, value in self.PRIORITIES:
             self._priority.addItem(label, value)
-        # Defolt «Personal (3)»: ən aşağı pillə ən az risklidir və pilləni
+        # Defolt «Personal (4)»: ən aşağı pillə ən az risklidir və pilləni
         # sonradan qaldırmaq, səhvən yüksək verilmiş pilləni endirməkdən
         # asandır.
         self._priority.setCurrentIndex(len(self.PRIORITIES) - 1)
@@ -804,7 +825,7 @@ class RoleCreateDialog(QDialog):
         card.add(
             muted_label(
                 "Kamera-tipli rol cərimə yaza bilən rollar sinfindəndir və "
-                "yalnız operativ (2) və ya daha yüksək pillədə yaradıla bilər.",
+                "yalnız operativ (3) və ya daha yüksək pillədə yaradıla bilər.",
                 size=12,
             )
         )

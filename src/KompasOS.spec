@@ -70,6 +70,39 @@ _FACE_HIDDEN_IMPORTS = [
     'pkg_resources',
 ]
 
+# =============================================================================
+# NATIVE PƏNCƏRƏ ÖRTÜYÜ (Aero Snap + Windows 11 Snap Layouts)
+# =============================================================================
+# `presentation/shell/native_chrome.py` bu modulların HAMISINI `try/except
+# ImportError` blokunun İÇİNDƏ, funksiya daxilində idxal edir (Linux/macOS-da
+# modul idxalı çökməsin deyə). Yuxarıdakı ümumi qayda belə formanı "PyInstaller
+# görür" deyir və bu, DOĞRUDUR — lakin nəticə burada təhlükəlidir:
+#
+#   * `qframelesswindow` idxal anında PLATFORMAYA GÖRƏ alt-modul seçir
+#     (`windows/`, `linux/`, `mac/`). Statik analiz üç budağı da görür, lakin
+#     `win32print`/`winreg` kimi yalnız bir budaqda işlənən modullar asanlıqla
+#     kənarda qalır.
+#   * `pywin32` paketi `win32api`/`win32gui`-ni C-genişlənməsi kimi verir və
+#     onların yükləyicisi (`pywintypes`) heç bir `import` sətrində görünmür.
+#
+# Çatışmayan modul `.exe`-ni ÇÖKDÜRMÜR — `except ImportError` işə düşür və
+# pəncərə sükutla saf-Qt yoluna keçir. Yəni qüsurun simptomu yalnız "snap
+# işləmir"dir: qurma yaşıl, test yaşıl, müştəri isə pəncərəni ekran kənarına
+# sürüşdürəndə heç nə baş vermir. Məhz buna görə siyahı AÇIQ yazılır.
+_WINDOW_CHROME_HIDDEN_IMPORTS = [
+    'qframelesswindow',
+    'qframelesswindow.windows',
+    'qframelesswindow.windows.c_structures',
+    'qframelesswindow.windows.window_effect',
+    'qframelesswindow.utils',
+    'qframelesswindow.utils.win32_utils',
+    'win32api',
+    'win32con',
+    'win32gui',
+    'win32print',   # `getDpiForWindow` ehtiyat yolu (köhnə Windows)
+    'pywintypes',   # `win32*` genişlənmələrinin yükləyicisi
+]
+
 # MODEL FAYLLARI `datas`-A ƏLAVƏ OLUNMALIDIR — BUNSUZ `.exe` İŞLƏMİR
 # -----------------------------------------------------------------------------
 # Dlib-in dörd `.dat` modeli (68/5-nöqtə landmark, ResNet encoder, CNN
@@ -103,7 +136,7 @@ a = Analysis(
         (os.path.join(SPECPATH, '..', 'assets', 'kompasos.ico'), 'assets'),  # noqa: F821
         *_FACE_MODEL_DATAS,
     ],
-    hiddenimports=_FACE_HIDDEN_IMPORTS,
+    hiddenimports=[*_FACE_HIDDEN_IMPORTS, *_WINDOW_CHROME_HIDDEN_IMPORTS],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

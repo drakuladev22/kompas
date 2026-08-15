@@ -34,10 +34,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.screens.base import Screen
 from src.presentation.theme.manager import enable_styled_background
 from src.presentation.theme.tokens import ThemeMode
 from src.presentation.widgets import metrics
 from src.presentation.widgets.page_header import PageHeader
+from src.presentation.widgets.responsive import LayoutMode
 from src.presentation.widgets.sidebar import Sidebar
 from src.shared.logger import get_logger
 
@@ -85,6 +87,8 @@ class AdminShell(QWidget):
         self._factories: dict[str, Callable[[], QWidget]] = {}
         self._screens: dict[str, QWidget] = {}
         self._titles: dict[str, tuple[str, str]] = {}
+        #: Cari tərtibat rejimi — pəncərədən gəlir (bax `apply_layout_mode`).
+        self._layout_mode = LayoutMode.WIDE
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -188,6 +192,11 @@ class AdminShell(QWidget):
             widget = factory()
             self._screens[key] = widget
             self._stack.addWidget(widget)
+            # Ekran GEC qurulur (bax modul başlığı), yəni rejim siqnalını
+            # qaçırıb. Onsuz daraldılmış pəncərədə ilk dəfə açılan ekran
+            # geniş tərtibatla görünərdi və yalnız növbəti ölçü dəyişikliyində
+            # düzələrdi.
+            self._apply_mode_to(widget)
 
         self._stack.setCurrentWidget(widget)
         title, subtitle = self._titles.get(key, (key, ""))
@@ -253,6 +262,50 @@ class AdminShell(QWidget):
         """Feature Toggle dəyişdikdə (ROOT İdarə Mərkəzi) menyunu yeniləyir."""
         self._enabled_modules = modules
         self.refresh_navigation()
+
+    # --------------------------- tərtibat rejimi ------------------------------ #
+
+    def apply_layout_mode(self, mode: LayoutMode | str) -> None:
+        """Pəncərə eninin rejimini örtüyə və bütün ekranlara ötürür.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ BURADA TOPLANIR
+        ──────────────────────────────────────────────────────────────────────
+        Pəncərə yalnız BİR siqnal yayır (`shell/window.py`), örtük isə onu
+        iki ünvana paylayır: sol panel (yalnız-ikon rejimi) və artıq qurulmuş
+        ekranlar. Alternativ — hər ekranın pəncərəyə birbaşa abunə olması —
+        27 ayrı abunəlik və 27 ləğvetmə demək olardı; ekran bağlananda
+        ləğvetmə unudulsaydı, silinmiş widget-ə siqnal gedərdi.
+
+        `str` də qəbul edilir, çünki Qt siqnalı `LayoutMode` dəyərini mətn
+        kimi daşıyır (`Signal(str)`) — çevirmə bir yerdə, burada olur.
+        """
+        mode = LayoutMode(mode)
+        if mode is self._layout_mode:
+            return
+        self._layout_mode = mode
+        # Sol panelin daralması ARTIQ mövcud idi (`Sidebar.set_collapsed` →
+        # `NavButton.set_compact`) — burada yalnız ÇAĞIRILIR, yenidən
+        # yazılmır (`uxui.md` Addım 3: "mövcud daralma funksiyasını ÇAĞIRARAQ").
+        self._sidebar.set_collapsed(mode is LayoutMode.COMPACT)
+        for widget in self._screens.values():
+            self._apply_mode_to(widget)
+        _log.debug("SHELL_LAYOUT_MODE", extra={"mode": mode.value})
+
+    @property
+    def layout_mode(self) -> LayoutMode:
+        return self._layout_mode
+
+    def _apply_mode_to(self, widget: QWidget) -> None:
+        """Rejimi bir ekrana ötürür.
+
+        Yalnız `Screen` bazasından törəyən widget-lər rejimi başa düşür;
+        qalanları (məs. örtüyə taxılan xüsusi panellər) toxunulmadan qalır —
+        `hasattr` yoxlaması əvəzinə tip yoxlaması seçilib ki, mypy imzanı
+        həqiqətən yoxlaya bilsin.
+        """
+        if isinstance(widget, Screen):
+            widget.apply_layout_mode(self._layout_mode)
 
     # -------------------------------- tema ----------------------------------- #
 

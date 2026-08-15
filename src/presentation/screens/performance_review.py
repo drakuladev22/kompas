@@ -80,6 +80,9 @@ class PerformanceReviewScreen(Screen):
         columns_layout = QHBoxLayout(columns)
         columns_layout.setContentsMargins(0, 0, 0, 0)
         columns_layout.setSpacing(20)
+        # Dar pəncərədə forma və tarixçə alt-alta düşür (bax
+        # `screens/base.py::responsive_row`).
+        self.responsive_row(columns_layout)
         columns_layout.addWidget(self._build_form_card(), 1)
         columns_layout.addWidget(self._build_history_card(), 1)
         self.add(columns)

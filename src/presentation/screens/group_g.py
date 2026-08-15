@@ -356,6 +356,9 @@ class ProfileScreen(Screen):
         columns_layout = QHBoxLayout(columns)
         columns_layout.setContentsMargins(0, 0, 0, 0)
         columns_layout.setSpacing(metrics.CARD_SPACING)
+        # Dar pəncərədə iki sütun bir-birinin altına düşür — bax
+        # `screens/base.py::responsive_row`.
+        self.responsive_row(columns_layout)
         columns_layout.addWidget(self._build_personal(full_name), 1)
 
         right = QWidget()

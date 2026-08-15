@@ -200,6 +200,21 @@ LIGHT_THEME: Final[dict[str, str]] = {
     "--color-titlebar-bg": BRAND_NAVY,
     "--color-titlebar-text": "#DCE4F0",
     "--color-titlebar-control": "#A9B6CB",
+    # ──────────────────────────────────────────────────────────────────────
+    # NİYƏ AYRICA HOVER TOKENİ — `--color-nav-active-bg` İŞLƏMİRDİ
+    # ──────────────────────────────────────────────────────────────────────
+    # Pəncərə düymələrinin hover fonu əvvəl `--color-nav-active-bg` idi.
+    # İŞIQLI temada həmin token da `BRAND_NAVY`-dir, yəni başlıq zolağının
+    # fonu ilə HƏRFƏN eyni rəng: nisbət 1.00:1 və hover halı gözlə heç cür
+    # seçilmirdi. Yəni istifadəçi kursoru "kiçilt" düyməsinin üstünə
+    # gətirəndə heç bir cavab görmürdü — Windows/Chrome konvensiyasında bu,
+    # düymənin işlək olub-olmadığını bildirən yeganə işarədir.
+    #
+    # Tənzimləmə naviqasiya tokenini dəyişməklə də edilə bilərdi, lakin o,
+    # sol paneldəki AKTİV maddənin dolu fonudur — orada Navy qəsdən seçilib
+    # (maket) və başlıq zolağına görə dəyişdirilməsi iki ayrı rolu bir-birinə
+    # bağlayardı. Ona görə başlıq zolağının öz hover səthi var.
+    "--color-titlebar-control-hover": "#1E3862",
     "--color-sidebar-bg": "#FFFFFF",
     "--color-sidebar-border": "#DCE2EC",
     "--color-nav-item-text": "#33405C",
@@ -286,6 +301,9 @@ DARK_THEME: Final[dict[str, str]] = {
     "--color-titlebar-bg": "#0B1424",
     "--color-titlebar-text": "#C4D0E2",
     "--color-titlebar-control": "#8394AE",
+    #: Tünddə hover səthi başlıq zolağından AÇILIR (işıqlıdakı ilə eyni
+    #: istiqamət) — bax işıqlı temadakı izah.
+    "--color-titlebar-control-hover": "#23314F",
     "--color-sidebar-bg": "#0F1B30",
     "--color-sidebar-border": "#22314D",
     "--color-nav-item-text": "#C4D0E2",

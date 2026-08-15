@@ -394,8 +394,20 @@ QPushButton[variant="window"] {
     padding: 0;
 }
 
-QPushButton[variant="window"]:hover {
-    background-color: {{--color-nav-active-bg}};
+/* Hover fonu ÖZ tokenindədir. Əvvəl `--color-nav-active-bg` idi və işıqlı
+   temada o da `BRAND_NAVY`-dir — yəni başlıq zolağının fonu ilə eyni rəng
+   (1.00:1) və hover halı GÖRÜNMÜRDÜ. Bax `tokens.py`, həmin tokenin izahı.
+
+   `color:` qaydası mətn üçündür; ikon `QIcon`-dur və QSS onu boyamır — həmin
+   rəngi `WindowButton` özü təkrarlayır (bax `buttons.py`). İki yerdə olması
+   qəsdəndir: burada mətn ehtiyatı, orada ikon. */
+/* `[hover="true"]` — QSS-in `:hover` psevdo-sinfinə ƏLAVƏ, onu əvəz etmir.
+   Snap Layouts rejimində "böyüt" düyməsi qeyri-müştəri sahədir və Qt ora
+   siçan hadisəsi göndərmir; `:hover` heç vaxt işə düşmür (bax
+   `shell/native_chrome.py`). Dinamik xüsusiyyət həmin boşluğu bağlayır. */
+QPushButton[variant="window"]:hover,
+QPushButton[variant="window"][hover="true"] {
+    background-color: {{--color-titlebar-control-hover}};
     color: {{--color-titlebar-text}};
 }
 
@@ -404,7 +416,8 @@ QPushButton[variant="window"]:hover {
    13px simvol üçün AA 4.5:1 tələb edir. `--color-bg-primary` işıqlıda onsuz da
    ağdır (6.54:1 dəyişməz qalır), tünddə isə Navy-yə çevrilir (5.02:1).
    Bu, adi `variant="danger"` düyməsinin ARTIQ işlətdiyi naxışdır. */
-QPushButton[variant="window"][action="close"]:hover {
+QPushButton[variant="window"][action="close"]:hover,
+QPushButton[variant="window"][action="close"][hover="true"] {
     background-color: {{--color-danger}};
     color: {{--color-bg-primary}};
 }
@@ -872,6 +885,18 @@ QStatusBar {
 
 QPushButton[variant="window"]:focus {
     border: {{--focus-ring-width}} solid {{--color-titlebar-text}};
+}
+
+/* BAĞLA düyməsi eyni anda HƏM fokusda, HƏM hover-də ola bilər: klaviatura ilə
+   gəzən istifadəçi `Tab`-la ora çatır, sonra siçanı hərəkət etdirir. O halda
+   fon `--color-danger`-ə çevrilir və zolağın öz mətn rəngi ilə halqa TÜND
+   temada cəmi 2.14:1 verirdi (#C4D0E2 / #EF5A5A) — 3:1 həddindən aşağı, yəni
+   fokusun harada olduğu görünmürdü. Halqa da mətn/ikon kimi
+   `--color-bg-primary`-yə keçir: həmin cüt onsuz da qapıdadır (6.54:1 işıqlı,
+   5.02:1 tünd). */
+QPushButton[variant="window"][action="close"]:hover:focus,
+QPushButton[variant="window"][action="close"][hover="true"]:focus {
+    border: {{--focus-ring-width}} solid {{--color-bg-primary}};
 }
 
 QPushButton[variant="nav"]:focus,

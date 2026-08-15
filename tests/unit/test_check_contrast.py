@@ -104,6 +104,8 @@ _SURFACE_TOKENS = frozenset(
         "--color-header-bg",
         "--color-sidebar-bg",
         "--color-titlebar-bg",
+        # Pəncərə düymələrinin hover FONU — səthdir, ön plan deyil.
+        "--color-titlebar-control-hover",
         "--color-nav-active-bg",
         "--color-neutral-bg",
         "--color-success-bg",

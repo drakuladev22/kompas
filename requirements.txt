@@ -43,6 +43,31 @@ Pillow>=12.3,<13.0
 tenacity>=9.1,<10.0
 
 # ──────────────────────────────────────────────────────────────────────────────
+# NATIVE PƏNCƏRƏ DAVRANIŞI (Aero Snap + Windows 11 Snap Layouts)
+# ──────────────────────────────────────────────────────────────────────────────
+# Qt `FramelessWindowHint` ilə pəncərədən `WS_CAPTION`/`WS_THICKFRAME`
+# üslublarını çıxarır; DWM isə məhz həmin üslublara baxaraq snap, animasiya və
+# kölgə verir. Bu paket problemi həll etmək üçün yazılıb: üslubları geri qoyur
+# (`WindowEffect.addWindowAnimation`), DPI-yə həssas kənar qalınlığını hesablayır
+# və avtomatik gizlənən tapşırıq panelini nəzərə alır.
+#
+# Snap Layouts (böyüt düyməsinin üstündə çıxan tərtibat menyusu) paketdə YOXDUR
+# — `HTMAXBUTTON` mənbənin heç bir yerində keçmir. O hissə bizim tərəfdədir
+# (`src/presentation/shell/native_chrome.py`), paket isə bazadır.
+#
+# `sys_platform` MARKERİ MƏCBURİDİR: CI həm ubuntu, həm windows üzərində
+# `pip install -r requirements.txt` çağırır və `pywin32` Linux-da ÜMUMİYYƏTLƏ
+# quraşdırılmır. Markersiz sətir bütün Linux işlərini (test, pip-audit, SBOM)
+# qırardı. Tətbiq kodu onsuz da idxalı `try/except ImportError` ilə mühafizə
+# edir — başqa platformada saf-Qt yoluna düşür.
+PySideSix-Frameless-Window>=0.8.2,<0.9; sys_platform == "win32"
+# Yuxarıdakı paketin öz asılılığıdır (`Requires-Dist: pywin32 ; Windows`), lakin
+# AÇIQ elan olunur, çünki `native_chrome.py` `win32gui`/`win32api`-ni BİRBAŞA
+# idxal edir. Tranzitiv qalsaydı, o paket bir gün asılılığını dəyişəndə bizim
+# birbaşa idxalımız sükutla qırılardı (`numpy` ilə eyni səbəb).
+pywin32>=312,<400; sys_platform == "win32"
+
+# ──────────────────────────────────────────────────────────────────────────────
 # FACE CONTROL — üz təsdiqi (`facecontrol.md` Faza 3)
 # ──────────────────────────────────────────────────────────────────────────────
 # Kitabxana seçimi (`face_recognition` + Dlib) `facecontrol.md`-nin "KİTABXANA

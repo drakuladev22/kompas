@@ -144,7 +144,7 @@ class KompasApplication:
         self._theme.apply(app)
 
         self._registry = build_default_registry()
-        self._window = FramelessWindow(title="KompasOS")
+        self._window = FramelessWindow(title="KompasOS", theme=self._theme)
         self._shell: AdminShell | None = None
         self._support: QWidget | None = None
         self._notifications: QWidget | None = None
@@ -368,6 +368,12 @@ class KompasApplication:
             enabled_modules=self._enabled_modules(),
         )
         shell.theme_toggle_requested.connect(self.toggle_theme)
+        # TƏRTİBAT REJİMİ: pəncərə ölçür, örtük paylayır (bax
+        # `widgets/responsive.py`). Bağlantı BURADADIR, çünki örtük hər
+        # girişdə yenidən qurulur — köhnə örtükdəki bağlantı onunla birlikdə
+        # ölür, yenisi isə cari rejimi dərhal alır.
+        self._window.layout_mode_changed.connect(shell.apply_layout_mode)
+        shell.apply_layout_mode(self._window.layout_mode)
         self._shell = shell
         self._register_screens(shell)
 
@@ -1586,6 +1592,10 @@ class KompasApplication:
 
         def apply() -> None:
             self._theme.set_preference(preference, self._app)
+            # Pəncərə düymələrinin İKONLARI QSS ilə boyanmır (piksel şəklidir)
+            # — onlar temadan sonra ayrıca yenidən çəkilməlidir, əks halda
+            # tünd temada işıqlı ikonlar qalırdı.
+            self._window.apply_theme(self._theme)
             if self._shell is not None:
                 self._shell.apply_theme()
 

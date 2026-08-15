@@ -134,6 +134,28 @@ _BODIES: Final[dict[str, str]] = {
     "folder": '<path d="M1.8 5.6h2.6l1-1.6h5.2l1 1.6h2.6v7.2H1.8z"/>',
     "image": '<path d="M2 3.4h12v9.2H2z"/><path d="M2 10.6l3.4-3 2.6 2.3 2.6-2.6L14 10.4"/>',
     "moon": '<path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8a5.6 5.6 0 1 0 6.8 6.8z"/>',
+    # ----------------------------- pəncərə idarəsi -------------------------- #
+    # NİYƏ AYRI DÖRD İKON, NİYƏ MÖVCUD `close` TƏKRAR İŞLƏDİLMİR
+    # ──────────────────────────────────────────────────────────────────────────
+    # Pəncərə başlığındakı üç düymə YAN-YANA dayanır və gözlə bir dəst kimi
+    # oxunur: xaçın qolları kvadratın kənarları ilə, tire isə hər ikisinin
+    # mərkəz oxu ilə eyni optik ölçüdə olmalıdır. Məzmun ikonu olan `close`
+    # 8px uzunluğunda qollarla çəkilib (kart/nişan içində tək dayanır) və
+    # kvadratın yanında BÖYÜK görünürdü. Ona görə bu dörd forma eyni optik
+    # şəbəkəyə (7.6px gövdə) köklənib və ayrıca saxlanılır — məzmun ikonunu
+    # dəyişmək pəncərə düymələrini pozmasın deyə.
+    "window_minimize": '<path d="M4.2 8h7.6"/>',
+    "window_maximize": '<rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.1"/>',
+    # Windows-un "bərpa" nişanı: arxada yarımçıq görünən ikinci kvadrat.
+    # Arxa forma TAM kvadrat kimi çəkilmir — ön kvadratın altında qalan iki
+    # kənar buraxılır, əks halda 16px-də iki xətt bir-birinə yapışıb ləkə
+    # yaradırdı.
+    "window_restore": (
+        '<path d="M6.1 6.1V4.6a1.1 1.1 0 0 1 1.1-1.1h4.2a1.1 1.1 0 0 1 1.1 1.1v4.2'
+        'a1.1 1.1 0 0 1-1.1 1.1H9.9"/>'
+        '<rect x="3.5" y="6.1" width="6.4" height="6.4" rx="1.1"/>'
+    ),
+    "window_close": '<path d="M4.4 4.4 11.6 11.6M11.6 4.4 4.4 11.6"/>',
     "sun": (
         '<circle cx="8" cy="8" r="3.2"/>'
         '<path d="M8 1.2v1.4M8 13.4v1.4M14.8 8h-1.4M2.6 8H1.2'

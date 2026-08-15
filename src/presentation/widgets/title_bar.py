@@ -14,6 +14,18 @@ Windows-un ÖZ davranışları itir: ekranın kənarına çəkib yarım-ekrana y
 `QWindow.startSystemMove()` idarəni OS-ə verir, yəni bu davranışlar pulsuz
 gəlir. Uğursuz olarsa (bəzi platformalarda dəstəklənmir) əl ilə sürükləməyə
 qayıdılır — ona görə `_drag_origin` hələ də saxlanılır.
+
+──────────────────────────────────────────────────────────────────────────────
+WINDOWS-DA BU KOD ARTIQ İŞLƏMİR (VƏ BU, DÜZGÜNDÜR)
+──────────────────────────────────────────────────────────────────────────────
+Native pəncərə örtüyü qurulduqda (`shell/native_chrome.py`) başlıq zolağının
+sürüklənən sahəsi `WM_NCHITTEST`-də `HTCAPTION` qaytarır — yəni Windows həmin
+sahəni QEYRİ-MÜŞTƏRİ sahə sayır və siçan hadisələri Qt-yə HEÇ GƏLMİR. Aşağıdakı
+`mousePressEvent` o platformada sadəcə çağırılmır; sürükləmə, snap, sağ-klik
+sistem menyusu və ikiqat klik tamamilə OS-dədir.
+
+Kod yenə də saxlanılır: Linux/macOS-da, `offscreen` platformasında (testlər) və
+native örtüyün qurula bilmədiyi hallarda YEGANƏ sürükləmə yoludur.
 """
 
 from __future__ import annotations
@@ -21,7 +33,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QWidget
+from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QSizePolicy, QWidget
 
 from src.presentation.theme.manager import enable_styled_background
 from src.presentation.widgets import metrics
@@ -93,6 +105,71 @@ class TitleBar(QWidget):
     def set_title(self, title: str) -> None:
         """Başlıq mətnini dəyişir — Developer Panelində "KompasOS — Master"."""
         self._title.setText(title)
+
+    # ------------------------------ vəziyyət --------------------------------- #
+
+    def set_maximized(self, maximized: bool) -> None:
+        """Pəncərə maksimallaşdı/bərpa oldu — düymənin nişanı dəyişir.
+
+        Çağıran tərəf pəncərənin ÖZÜDÜR (`FramelessWindow.changeEvent`), çünki
+        vəziyyəti OS də dəyişə bilir (Aero Snap, `Win`+`↑`, tapşırıq panelindən
+        böyütmə) — düymə yalnız öz klikinə baxsaydı, o hallarda nişan yanlış
+        qalardı.
+        """
+        self._maximize.set_maximized(maximized)
+
+    def apply_theme(
+        self,
+        *,
+        control_color: str,
+        hover_color: str,
+        close_hover_color: str,
+    ) -> None:
+        """İkon rənglərini temaya uyğunlaşdırır.
+
+        QSS fonu və MƏTN rəngini özü tətbiq edir, lakin ikon piksel şəklidir —
+        onu yenidən çəkmək lazımdır (eyni səbəb `Sidebar.apply_theme`-də).
+        """
+        for button in (self._minimize, self._maximize):
+            button.set_colors(idle_color=control_color, hover_color=hover_color)
+        self._close.set_colors(idle_color=control_color, hover_color=close_hover_color)
+
+    def buttons(self) -> tuple[WindowButton, WindowButton, WindowButton]:
+        """Kiçilt / böyüt / bağla — testlər və native örtük üçün."""
+        return (self._minimize, self._maximize, self._close)
+
+    def maximize_button(self) -> WindowButton:
+        """Böyüt/bərpa düyməsi.
+
+        Native örtük onun DÜZBUCAQLISINI bilməlidir: Windows 11 Snap Layouts
+        menyusunu yalnız `WM_NCHITTEST` həmin sahə üçün `HTMAXBUTTON`
+        qaytardıqda açır (bax `shell/native_chrome.py`).
+        """
+        return self._maximize
+
+    # ------------------------------ sürüklənən sahə --------------------------- #
+
+    def is_drag_region(self, position: QPoint) -> bool:
+        """Verilmiş nöqtə pəncərəni sürükləyirmi?
+
+        Native örtük bu cavabı `WM_NCHITTEST`-də işlədir: `True` → `HTCAPTION`
+        (OS sürükləməni, snap-i və sistem menyusunu öz üzərinə götürür),
+        `False` → adi müştəri sahəsi (düymələr Qt kliklərini alır).
+
+        Yalnız DÜYMƏLƏR çıxarılır — loqo və başlıq mətni sürüklənən qalır,
+        çünki maketdə onlar zolağın bir hissəsidir, ayrı idarəetmə deyil.
+        Yoxlama `childAt()` ilədir, sabit koordinatla deyil: düymələr gizlədilə
+        bilir (`show_maximize=False`) və sabit hesablama o halda zolağın sağ
+        kənarını yanlış "düymə" sayardı.
+        """
+        if not self.rect().contains(position):
+            return False
+        child = self.childAt(position)
+        while child is not None and child is not self:
+            if isinstance(child, QAbstractButton):
+                return False
+            child = child.parentWidget()
+        return True
 
     # ------------------------------ sürükləmə -------------------------------- #
 

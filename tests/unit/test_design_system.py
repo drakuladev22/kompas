@@ -54,6 +54,10 @@ def test_system_mode_is_rejected() -> None:
     "token",
     [
         "--color-titlebar-bg",
+        # Pəncərə düymələrinin hover səthi — əvvəl `--color-nav-active-bg`
+        # işlənirdi və işıqlı temada zolağın fonu ilə eyni Navy idi (hover
+        # görünmürdü). Bax `tests/unit/test_window_chrome.py`.
+        "--color-titlebar-control-hover",
         "--color-sidebar-bg",
         "--color-nav-active-bg",
         "--color-content-bg",

@@ -25,10 +25,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QBoxLayout, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
 
 from src.presentation.theme.manager import enable_styled_background
 from src.presentation.widgets import metrics
+from src.presentation.widgets.responsive import LayoutMode
 from src.presentation.widgets.states import EmptyState, ErrorState, LoadingState
 
 if TYPE_CHECKING:
@@ -84,6 +85,56 @@ class Screen(QWidget):
         self._content_layout.setContentsMargins(0, 0, 0, 0)
         self._content_layout.setSpacing(metrics.CARD_SPACING)
         self._switcher.set_content(self._content)
+
+        #: Dar pəncərədə şaquli yığılacaq üfüqi sətirlər (bax `responsive_row`).
+        self._responsive_rows: list[QBoxLayout] = []
+        self._layout_mode = LayoutMode.WIDE
+
+    # ---------------------------- tərtibat rejimi ---------------------------- #
+    # NİYƏ BURADA, HƏR EKRANDA DEYİL
+    # ─────────────────────────────────────────────────────────────────────────
+    # `uxui.md` Addım 3 açıq deyir: "hər widget öz-özünə yoxlamasın, mərkəzi bir
+    # «layout mode» siqnalına abunə olsun — təkrarlanan kod yaranmasın". Ekran
+    # eni ÖLÇMÜR və hədd ədədini görmür; o, yalnız hansı sətirlərinin dar
+    # pəncərədə bir sütuna yığılmalı olduğunu BİLDİRİR. Qərarı pəncərə verir
+    # (`shell/window.py` → `AdminShell.apply_layout_mode`).
+
+    def responsive_row(self, layout: QBoxLayout) -> QBoxLayout:
+        """Üfüqi sətri "dar pəncərədə bir sütuna yığıl" kimi qeyd edir.
+
+        NİYƏ `setDirection`, NİYƏ YENİDƏN QURMA: `QHBoxLayout` da,
+        `QVBoxLayout` da `QBoxLayout`-dur və istiqamət bir çağırışla dəyişir.
+        Kartları söküb yenidən yığmaq isə onların vəziyyətini (sürüşdürmə
+        mövqeyi, seçilmiş sətir, fokus) itirərdi — halbuki istifadəçi sadəcə
+        pəncərəni daraltmışdır.
+
+        Returns:
+            Eyni layout — çağırış yerində zəncirlə yazıla bilsin deyə.
+        """
+        self._responsive_rows.append(layout)
+        layout.setDirection(self._direction_for(self._layout_mode))
+        return layout
+
+    def apply_layout_mode(self, mode: LayoutMode) -> None:
+        """Örtük rejimi dəyişdi — qeyd olunmuş sətirlər istiqamətini dəyişir.
+
+        Alt siniflər bunu ÜSTƏLƏYƏ bilər (məs. əlavə bir kartı gizlətmək
+        üçün), lakin adi halda `responsive_row()` ilə qeydiyyat kifayətdir.
+        """
+        self._layout_mode = mode
+        direction = self._direction_for(mode)
+        for row in self._responsive_rows:
+            row.setDirection(direction)
+
+    @property
+    def layout_mode(self) -> LayoutMode:
+        return self._layout_mode
+
+    @staticmethod
+    def _direction_for(mode: LayoutMode) -> QBoxLayout.Direction:
+        if mode is LayoutMode.COMPACT:
+            return QBoxLayout.Direction.TopToBottom
+        return QBoxLayout.Direction.LeftToRight
 
     # ------------------------------- məzmun --------------------------------- #
 

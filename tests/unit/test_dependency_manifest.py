@@ -46,6 +46,15 @@ IMPORT_TO_DISTRIBUTION: Final[dict[str, str]] = {
     # daşıyır və PySide6 ilə eyni prosesdə plugin toqquşması yaradır (bax
     # `infrastructure/kiosk/camera.py` başlığı).
     "cv2": "opencv-python-headless",
+    # Native pəncərə örtüyü (Aero Snap + Snap Layouts). Hər üç ad fərqlidir:
+    # modul `qframelesswindow`, paylanma isə PyPI-də `PySideSix-Frameless-
+    # Window` (PyQt variantından ayırmaq üçün). `win32*` modulları isə tək bir
+    # `pywin32` paylanmasından gəlir — hər biri ayrıca paket kimi axtarılsaydı
+    # manifest testi mövcud olmayan `win32gui` paketini tələb edərdi.
+    "qframelesswindow": "pysidesix-frameless-window",
+    "win32api": "pywin32",
+    "win32con": "pywin32",
+    "win32gui": "pywin32",
 }
 
 #: Manifestdə olan, lakin `src/`-də İDXAL EDİLMƏYƏN paketlər.

@@ -20,15 +20,20 @@ konstruktorda verilən cütdən götürərək.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QPushButton, QSizePolicy, QWidget
 
 from src.presentation.theme.manager import refresh_widget_style
+from src.presentation.theme.tokens import ThemeMode, theme_tokens
 from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.safe_text import plain_tooltip
+
+if TYPE_CHECKING:
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QEnterEvent
 
 
 def _apply_font(button: QPushButton, *, size: int, weight: QFont.Weight) -> None:
@@ -237,37 +242,111 @@ class NavButton(QPushButton):
 
 
 class WindowButton(QPushButton):
-    """Pəncərə başlığındakı —/□/× düymələri.
+    """Pəncərə başlığındakı kiçilt / böyüt–bərpa / bağla düymələri.
 
-    Simvollar maketdəki kimi mətnlə verilir (— □ ×) — onlar ikon dəstinin
-    bir hissəsi deyil, çünki Windows konvensiyasının özüdür və hər üçü eyni
-    tipoqrafik ölçüdə görünməlidir.
+    ──────────────────────────────────────────────────────────────────────────
+    SİMVOLDAN İKONA KEÇİD
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl düymələr MƏTN idi (`—`, `□`, `×`). Üç problemi vardı:
+
+    1. Ölçü şriftdən asılı idi — `□` bəzi şriftlərdə kvadrat, bəzilərində
+       düzbucaqlı, bəzilərində isə ümumiyyətlə "tofu" (□ əvəzedicisi) kimi
+       çıxırdı. Nəticə maşından maşına dəyişirdi.
+    2. Windows konvensiyasındakı BƏRPA nişanı (iki üst-üstə düşən kvadrat)
+       üçün ümumi işlənən Unicode simvolu yoxdur — yəni maksimallaşdırılmış
+       pəncərədə düymə HƏMİŞƏ "böyüt" göstərirdi, halbuki basanda bərpa edirdi.
+    3. `—` və `×` interfeys şriftinin metrikasına görə fərqli optik çəkidə
+       görünürdü.
+
+    İndi hər üçü `icons.py`-dan gələn SVG-dir: eyni şəbəkə, eyni qalınlıq,
+    şriftdən asılı deyil və `set_maximized()` nişanı əsl bərpa formasına
+    çevirir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    RƏNG NİYƏ QSS-DƏN DEYİL, PYTHON-DAN GƏLİR
+    ──────────────────────────────────────────────────────────────────────────
+    `QIcon` hazır piksel şəklidir — QSS-in `color:` qaydası ona TƏSİR ETMİR
+    (bax modul başlığı, `NavButton` ilə eyni səbəb). Ona görə hover vəziyyəti
+    burada izlənir və ikon yenidən çəkilir. QSS-dəki `color:` qaydası isə
+    silinmir: o, mətn ehtiyatı üçün lazımdır (aşağıda `GLYPHS`).
     """
 
-    #: Maketdəki simvollar.
+    #: Maketdəki simvollar — İNDİ EHTİYAT YOLDUR.
+    #:
+    #: NİYƏ SAXLANILIR: pəncərə çərçivəsizdir, yəni Windows-un öz sistem
+    #: menyusu yoxdur və bu üç düymə tətbiqi bağlamağın/kiçiltməyin yeganə
+    #: SİÇAN yoludur. İkon dəsti gələcəkdə yenidən adlandırılsa
+    #: (`icons.IconNotFoundError`), düymə tamamilə BOŞ qalardı — istifadəçi
+    #: 46×38px görünməz kvadrata basmalı olardı. Simvol həmin halda ən azı
+    #: nəyin harada olduğunu göstərir.
     GLYPHS: ClassVar[dict[str, str]] = {
         "minimize": "—",
         "maximize": "□",
         "close": "×",
     }
 
+    #: Əməliyyat → ikon adı (`icons.py`). `maximize` iki nişan daşıyır, ona
+    #: görə cütdür: (normal hal, maksimallaşdırılmış hal).
+    ICON_NAMES: ClassVar[dict[str, tuple[str, str]]] = {
+        "minimize": ("window_minimize", "window_minimize"),
+        "maximize": ("window_maximize", "window_restore"),
+        "close": ("window_close", "window_close"),
+    }
+
     #: Ekran oxuyucusunun elan edəcəyi adlar. Simvolun ÖZÜ ad ola bilməz:
     #: `—`, `□`, `×` oxunanda "tire", "kvadrat", "vur" kimi səslənir və
-    #: istifadəçi düymənin nə etdiyini bilmir.
+    #: istifadəçi düymənin nə etdiyini bilmir. İkona keçiddən sonra bu daha da
+    #: vacibdir: ikonun heç bir mətni yoxdur.
     ACCESSIBLE_NAMES: ClassVar[dict[str, str]] = {
         "minimize": "Pəncərəni kiçilt",
         "maximize": "Pəncərəni böyüt və ya bərpa et",
         "close": "Pəncərəni bağla",
     }
 
-    def __init__(self, action: str, *, parent: QWidget | None = None) -> None:
-        if action not in self.GLYPHS:
+    #: Maksimallaşdırılmış halda "böyüt" düyməsinin adı DƏYİŞİR — ekran
+    #: oxuyucusu istifadəçiyə basdıqda NƏ olacağını deməlidir.
+    MAXIMIZED_NAME: ClassVar[str] = "Pəncərəni əvvəlki ölçüsünə qaytar"
+
+    #: İkon ölçüsü — 46×38px düymənin içində Windows-un öz nisbətinə yaxın.
+    ICON_SIZE: ClassVar[int] = 16
+    #: Xətt qalınlığı: dəstin standartı (1.5) bu ölçüdə bir az ağır görünür.
+    ICON_STROKE: ClassVar[float] = 1.3
+
+    def __init__(
+        self,
+        action: str,
+        *,
+        idle_color: str | None = None,
+        hover_color: str | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        """Args:
+        action: `minimize` / `maximize` / `close`.
+        idle_color: İkonun adi rəngi. `None` → işıqlı temanın tokeni.
+            Rəng KONSTRUKTORDA icbari deyil, çünki `TitleBar()` tema
+            obyekti olmadan da qurula bilir (testlər, dizayn önizləməsi);
+            canlı tətbiqdə `apply_theme()` onu dərhal üstələyir.
+        hover_color: Kursor üstündə olduqda. `close` üçün bu, qırmızı
+            fonun üzərindəki rəngdir (bax `qss.py`).
+        """
+        if action not in self.ICON_NAMES:
             raise ValueError(f"Naməlum pəncərə əməliyyatı: {action!r}")
-        super().__init__(self.GLYPHS[action], parent)
+        super().__init__(parent)
+        self._action = action
+        self._maximized = False
+        self._hovered = False
+        light = theme_tokens(ThemeMode.LIGHT)
+        self._idle_color = idle_color or light["--color-titlebar-control"]
+        self._hover_color = hover_color or (
+            light["--color-bg-primary"] if action == "close" else light["--color-titlebar-text"]
+        )
+
         self.setProperty("variant", "window")
         self.setProperty("action", action)
+        self.setProperty("hover", "false")
         self.setCursor(Qt.CursorShape.ArrowCursor)
         self.setFixedSize(metrics.WINDOW_BUTTON_WIDTH, metrics.TITLEBAR_HEIGHT)
+        self.setIconSize(QSize(self.ICON_SIZE, self.ICON_SIZE))
         # ──────────────────────────────────────────────────────────────────
         # NİYƏ `TabFocus`, NƏ `NoFocus`, NƏ DƏ `StrongFocus`
         # ──────────────────────────────────────────────────────────────────
@@ -283,6 +362,96 @@ class WindowButton(QPushButton):
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.setAccessibleName(self.ACCESSIBLE_NAMES[action])
         _apply_font(self, size=13, weight=QFont.Weight.Normal)
+        self._refresh_icon()
+
+    # ------------------------------- vəziyyət ------------------------------- #
+
+    @property
+    def action(self) -> str:
+        return self._action
+
+    @property
+    def is_maximized(self) -> bool:
+        return self._maximized
+
+    def icon_name(self) -> str:
+        """Hazırda göstərilən ikonun adı — testlər və audit üçün."""
+        normal, maximized = self.ICON_NAMES[self._action]
+        return maximized if self._maximized else normal
+
+    def set_maximized(self, maximized: bool) -> None:
+        """Pəncərə vəziyyəti dəyişdi — nişan böyüt ↔ bərpa arasında keçir.
+
+        Yalnız `maximize` düyməsində görünən təsiri var; digər ikisində
+        çağırış zərərsizdir, ona görə çağıran tərəf tip yoxlaması etmir.
+        """
+        if maximized == self._maximized:
+            return
+        self._maximized = maximized
+        if self._action == "maximize":
+            self.setAccessibleName(
+                self.MAXIMIZED_NAME if maximized else self.ACCESSIBLE_NAMES["maximize"]
+            )
+        self._refresh_icon()
+
+    def set_colors(self, *, idle_color: str, hover_color: str) -> None:
+        """Tema dəyişdikdə çağırılır — ikon yenidən çəkilir (bax `NavButton`)."""
+        self._idle_color = idle_color
+        self._hover_color = hover_color
+        self._refresh_icon()
+
+    # -------------------------------- hover ---------------------------------- #
+
+    def set_hovered(self, hovered: bool) -> None:
+        """Hover görünüşünü təyin edir — İKİ mənbədən çağırılır.
+
+        Adi halda `enterEvent`/`leaveEvent`. Lakin Windows-un Snap Layouts
+        rejimində "böyüt" düyməsi QEYRİ-MÜŞTƏRİ sahəyə çevrilir
+        (`WM_NCHITTEST` → `HTMAXBUTTON`) və Qt həmin sahəyə heç bir siçan
+        hadisəsi göndərmir — hover ORADAN, `WM_NCMOUSEMOVE`-dan gəlir
+        (bax `shell/native_chrome.py`).
+
+        `hover` DİNAMİK XÜSUSİYYƏTİ ona görə lazımdır: QSS-in `:hover`
+        psevdo-sinfi Qt-nin öz siçan izləməsinə bağlıdır və native halda heç
+        vaxt işə düşməzdi — yəni fon dəyişməz, yalnız ikon dəyişərdi.
+        """
+        if hovered == self._hovered:
+            return
+        self._hovered = hovered
+        self.setProperty("hover", "true" if hovered else "false")
+        refresh_widget_style(self)
+        self._refresh_icon()
+
+    def enterEvent(self, event: QEnterEvent) -> None:  # noqa: N802 - Qt adlandırması
+        self.set_hovered(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:  # noqa: N802 - Qt adlandırması
+        self.set_hovered(False)
+        super().leaveEvent(event)
+
+    # -------------------------------- çəkmə ---------------------------------- #
+
+    def _refresh_icon(self) -> None:
+        color = self._hover_color if self._hovered else self._idle_color
+        try:
+            self.setIcon(
+                icons.icon(
+                    self.icon_name(),
+                    color,
+                    size=self.ICON_SIZE,
+                    stroke_width=self.ICON_STROKE,
+                    device_pixel_ratio=self._dpr(),
+                )
+            )
+        except icons.IconNotFoundError:
+            # Bax `GLYPHS` şərhi: boş düymə pəncərəni idarəolunmaz edərdi.
+            self.setText(self.GLYPHS[self._action])
+
+    def _dpr(self) -> float:
+        window = self.window()
+        handle = window.windowHandle() if window is not None else None
+        return handle.devicePixelRatio() if handle is not None else 1.0
 
 
 __all__ = [

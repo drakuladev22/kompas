@@ -25,8 +25,40 @@ from typing import Final
 # --------------------------------------------------------------------------- #
 
 #: Spesifikasiyanın minimum pəncərə ölçüsü (bölmə "PLATFORMA QAYDALARI").
+#: Bu, pəncərənin İLK AÇILIŞ ölçüsüdür — aşağıdakı `WINDOW_HARD_MIN_*` isə
+#: istifadəçinin keçə bilmədiyi mütləq həddir (səbəb orada yazılıb).
 WINDOW_MIN_WIDTH: Final = 1280
 WINDOW_MIN_HEIGHT: Final = 800
+
+# --------------------------------------------------------------------------- #
+# Tərtibat həddləri (breakpoint)
+# --------------------------------------------------------------------------- #
+# NİYƏ BURADA, NİYƏ ROOT PARAMETRİ DEYİL
+# ─────────────────────────────────────────────────────────────────────────────
+# `system_limits` iş qaydalarının (taymaut, limit, dərəcə) yeridir — onları
+# müəssisə dəyişir. Bu iki ədəd isə UI-nin öz kompozisiya qərarıdır: 226px sol
+# panel + 26px kontent boşluğu + kart şəbəkəsi məhz bu enlərdə qırılır. Root
+# istifadəçisinə "sidebar neçə piksellə yığılsın" sualını vermək ona interfeys
+# tərtibatının məsuliyyətini ötürərdi; səhv dəyər isə ekranı sındırardı.
+#
+#: Bu enddən BÖYÜK pəncərə: sol panel tam (ikon + mətn), kartlar yan-yana.
+LAYOUT_BREAKPOINT_WIDE: Final = 1280
+#: Bu enddən kiçik olmağa icazə verilmir (aşağıda `WINDOW_HARD_MIN_WIDTH`).
+#: 1280 ilə bu hədd arasında sol panel yalnız-ikon rejiminə keçir və kartlar
+#: bir sütuna yığılır — Windows-da YARIM-EKRAN snap məhz bu diapazona düşür
+#: (1920px monitorda yarısı 960px, 1366px-də 683px).
+LAYOUT_BREAKPOINT_COMPACT: Final = 700
+
+#: Pəncərənin MÜTLƏQ minimumu.
+#:
+#: NİYƏ 1280 DEYİL: minimum en 1280 qaldıqca Windows-un yarım-ekran snap-i
+#: fiziki olaraq mümkün deyildi — OS pəncərəni 960px-ə sığışdırmağa çalışır,
+#: Qt isə 1280-dən aşağı buraxmır və snap "işləmir" görünür. Yəni bu bir ədəd
+#: bütün Aero Snap ssenarisini bloklayırdı. Spesifikasiyanın 1280×800 tələbi
+#: İLK AÇILIŞ ölçüsü kimi qorunur (`WINDOW_MIN_WIDTH` yuxarıda).
+WINDOW_HARD_MIN_WIDTH: Final = LAYOUT_BREAKPOINT_COMPACT
+#: Hündürlük üçün eyni səbəb: şaquli (dörddə-bir) snap və 1366×768 noutbuk.
+WINDOW_HARD_MIN_HEIGHT: Final = 560
 
 #: Custom title bar hündürlüyü — maketdə `height: 38px`.
 TITLEBAR_HEIGHT: Final = 38
