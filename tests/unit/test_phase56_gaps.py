@@ -678,6 +678,7 @@ def test_confirming_a_suggestion_marks_it_manual() -> None:
 class _SetupEmployees:
     def __init__(self, admin_count: int = 0) -> None:
         self.saved: list[Employee] = []
+        self.created_passwords: list[str | None] = []
         self._admin_count = admin_count
 
     def count_active_with_flag(self, tenant_id: TenantId, flag_code: str) -> int:
@@ -687,19 +688,23 @@ class _SetupEmployees:
         self.saved.append(employee)
         self._admin_count += 1
 
+    def create(
+        self,
+        employee: Employee,
+        *,
+        raw_password: str | None = None,
+        raw_pin: str | None = None,
+    ) -> None:
+        """YENİ sətir — sirri ilə birlikdə.
 
-class _SetupCredentials:
-    def __init__(self) -> None:
-        self.passwords: list[tuple[Any, bool]] = []
-
-    def set_password(self, employee_id: Any, *, raw_password: str, must_change: bool) -> None:
-        self.passwords.append((employee_id, must_change))
-
-    def set_pin(self, employee_id: Any, *, raw_pin: str) -> None:
-        return None
-
-    def clear_pin_lockout(self, employee_id: Any) -> None:
-        return None
+        Sihirbaz artıq `save()` ÇAĞIRMIR: o, canlı bazada `UPDATE`-dir və
+        olmayan sətri yaratmır (bax `repositories.create()`). Sahtə həmin
+        ayrımı təkrarlayır ki, test yenidən "yaddaşda işləyir, bazada yox"
+        vəziyyətini gizlətməsin.
+        """
+        self.saved.append(employee)
+        self.created_passwords.append(raw_password)
+        self._admin_count += 1
 
 
 class _SetupStores:
@@ -721,7 +726,7 @@ class _SetupStores:
 
 def _setup_use_case(
     admin_count: int = 0,
-) -> tuple[FirstRunSetupUseCase, _SetupStores, _SetupCredentials]:
+) -> tuple[FirstRunSetupUseCase, _SetupStores, _SetupEmployees]:
     positions = _Positions()
     root_position = Position(
         position_id=PositionId(uuid.uuid4()),
@@ -732,16 +737,15 @@ def _setup_use_case(
     )
     positions.save(root_position)
     stores = _SetupStores()
-    credentials = _SetupCredentials()
+    employees = _SetupEmployees(admin_count)
     use_case = FirstRunSetupUseCase(
-        employees=_SetupEmployees(admin_count),  # type: ignore[arg-type]
+        employees=employees,  # type: ignore[arg-type]
         positions=positions,  # type: ignore[arg-type]
         stores=stores,  # type: ignore[arg-type]
-        credentials=credentials,  # type: ignore[arg-type]
         audit=RecordingAudit(),  # type: ignore[arg-type]
         clock=FakeClock(NOW),  # type: ignore[arg-type]
     )
-    return use_case, stores, credentials
+    return use_case, stores, employees
 
 
 def _root_draft() -> RootAccountDraft:
@@ -763,7 +767,7 @@ def _root_draft() -> RootAccountDraft:
 
 
 def test_setup_creates_root_and_stores() -> None:
-    use_case, stores, credentials = _setup_use_case()
+    use_case, stores, employees = _setup_use_case()
 
     outcome = use_case.complete(
         tenant_id=TENANT,
@@ -773,7 +777,12 @@ def test_setup_creates_root_and_stores() -> None:
 
     assert stores.created == ["ST-1"]
     # İLK Root şifrəni ÖZÜ seçir — məcburi dəyişmə YOXDUR.
-    assert credentials.passwords[0][1] is False
+    #
+    # BAYRAQ ARTIQ ENTITY-DƏDİR: sətir sirri ilə BİR ifadədə yaranır
+    # (`create()`), yəni `set_password(must_change=…)` axını burada yoxdur.
+    # Zəmanət dəyişmir, ölçmə nöqtəsi dəyişir.
+    assert employees.saved[0].must_change_password is False
+    assert employees.created_passwords == ["-".join(("Uzun", "Ve", "Guclu", "Sifre", "123"))]
     assert outcome.store_ids
 
 

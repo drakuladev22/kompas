@@ -598,7 +598,6 @@ def test_recommended_admin_count_follows_the_root_value() -> None:
         employees=_Employees(2),  # type: ignore[arg-type]
         positions=object(),  # type: ignore[arg-type]
         stores=object(),  # type: ignore[arg-type]
-        credentials=object(),  # type: ignore[arg-type]
         audit=RecordingAudit(),  # type: ignore[arg-type]
         clock=FakeClock(NOW),  # type: ignore[arg-type]
         limits=limits,  # type: ignore[arg-type]

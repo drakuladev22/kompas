@@ -487,7 +487,14 @@ def _run_scheduled_jobs() -> int:
     from src.presentation.composition import build_context  # noqa: PLC0415
 
     log = get_logger(__name__)
-    context = build_context()
+    # KİMLİK BURADA YARADILMIR (`allow_generate=False`): bu yol Task Scheduler
+    # altında, çox vaxt BAŞQA istifadəçi hesabı ilə işləyir və onun
+    # `%LOCALAPPDATA%`-sı fərqlidir. Orada avtomatik yaradılan kimlik "ikinci,
+    # boş tenant" demək olardı — gecəlik işlər səssizcə heç nə etməzdi və
+    # nasazlıq yalnız aylar sonra, ehtiyat nüsxə axtarılanda üzə çıxardı.
+    # GUI yolu isə tam əksinədir: orada kimliyin yaradılması ilk quraşdırmanın
+    # ÖZÜDÜR (`build_context()` defoltu, SEC-021).
+    context = build_context(allow_generate=False)
     report = context.run_scheduled_jobs(include_heavy=True)
 
     lines = [

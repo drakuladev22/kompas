@@ -18,6 +18,7 @@ orada admin ekranlarının açılması təhlükəsizlik problemi olardı.
 from __future__ import annotations
 
 import sys
+from enum import Enum
 from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import Qt, QTimer
@@ -56,6 +57,23 @@ if TYPE_CHECKING:
     from src.presentation.widgets.worker_status import WorkerStatus
 
 _log = get_logger(__name__)
+
+#: `SQLSTATE 42P01` — «relation does not exist». Sxem heç tətbiq olunmayıb.
+_UNDEFINED_TABLE: Final = "42P01"
+
+
+class StartupRoute(str, Enum):
+    """Splash-dan sonrakı yol — üç halın hər biri fərqli ekrana aparır.
+
+    Sadə `bool` kifayət etmirdi: «sihirbaz lazımdır?» sualının cavabı ÜÇ
+    haldır və üçüncüsü (sxem ümumiyyətlə yoxdur) əvvəl `False` kimi
+    yuvarlaqlaşdırılırdı — nəticədə istifadəçi giriş ekranında qalırdı.
+    """
+
+    LOGIN = "LOGIN"
+    SETUP_WIZARD = "SETUP_WIZARD"
+    SCHEMA_MISSING = "SCHEMA_MISSING"
+
 
 #: Splash ekranının minimum görünmə müddəti.
 SPLASH_DURATION_MS: Final = 1200
@@ -202,26 +220,58 @@ class KompasApplication:
         if self._context is not None and self._context.license_blocked():
             self.show_license_blocked()
             return
-        if self._setup_required():
+        route = self._startup_route()
+        if route is StartupRoute.SCHEMA_MISSING:
+            self.show_fatal_error(
+                "Baza sxemi tətbiq olunmayıb: cədvəllər tapılmadı. "
+                "Quraşdırma sənədindəki `database/schema.sql` addımını icra "
+                "edin və ya dəstəklə əlaqə saxlayın."
+            )
+            return
+        if route is StartupRoute.SETUP_WIZARD:
             self.show_setup_wizard()
             return
         self.show_login()
 
-    def _setup_required(self) -> bool:
-        """Tenant-da admin hesabı yoxdursa İlk Quraşdırma Sihirbazı açılır.
+    def _startup_route(self) -> StartupRoute:
+        """Splash-dan sonra HANSI ekranın açılacağını BİR sorğu ilə həll edir.
 
-        Xəta halında `False`: sihirbazı SƏHVƏN açmaq mövcud quraşdırmanı
-        "boş" göstərərdi; giriş ekranını açmaq isə ən pis halda "giriş
-        alınmadı" mesajı verir və geri qaytarıla bilən vəziyyətdir.
+        ──────────────────────────────────────────────────────────────────────
+        ÜÇ HAL — ÜÇÜ DƏ FƏRQLİ ADDIM TƏLƏB EDİR
+        ──────────────────────────────────────────────────────────────────────
+        * **Sxem yoxdur** (`SQLSTATE 42P01`) — sihirbaz da işləyə bilməz, onun
+          ilk yazısı elə həmin cədvələ gedir. Əvvəl bu hal ümumi `except`-ə
+          düşürdü və istifadəçi GİRİŞ ekranını görürdü: «istifadəçi adı və ya
+          şifrə yanlışdır» yazırdı, halbuki səbəb şifrə deyil, quraşdırılmamış
+          baza idi.
+        * **Admin yoxdur** — BOŞ BAZA. Bu, XƏTA DEYİL, gözlənilən ilk açılışdır
+          və sihirbaza aparır.
+        * **Admin var** — giriş.
+
+        Sorğu BİR DƏFƏ edilir: iki ayrı yoxlama (əvvəlcə "sxem varmı", sonra
+        "admin varmı") eyni sualı iki dəfə verər və aralarındakı anda vəziyyət
+        dəyişsə, ekran öz yoxlamasına zidd qərar verərdi.
+
+        SQLSTATE ilə yoxlanılır, mətnlə deyil: psycopg xəta mətnini server
+        dilində qaytarır, yəni mətn müqayisəsi lokalizasiyaya bağlı olardı.
+
+        Naməlum xətada GİRİŞ seçilir: sihirbazı SƏHVƏN açmaq mövcud
+        quraşdırmanı "boş" göstərər və ilk Root hesabı üzərinə yazmağa
+        çalışardı; giriş ekranı isə ən pis halda "giriş alınmadı" deyir və
+        geri qaytarıla bilən vəziyyətdir.
         """
         if self._context is None:
-            return False
+            return StartupRoute.LOGIN
         try:
             with self._context.session() as session:
-                return bool(session.setup.is_required(self._context.tenant_id))
-        except Exception:
+                required = bool(session.setup.is_required(self._context.tenant_id))
+        except Exception as exc:
+            if getattr(exc, "sqlstate", None) == _UNDEFINED_TABLE:
+                _log.error("DATABASE_SCHEMA_MISSING", extra={"sqlstate": _UNDEFINED_TABLE})
+                return StartupRoute.SCHEMA_MISSING
             _log.exception("SETUP_CHECK_FAILED")
-            return False
+            return StartupRoute.LOGIN
+        return StartupRoute.SETUP_WIZARD if required else StartupRoute.LOGIN
 
     def show_license_blocked(self) -> None:
         """Bölmə 8: səbəb + borc tarixi + əlaqə vasitəsi AÇIQ göstərilir."""

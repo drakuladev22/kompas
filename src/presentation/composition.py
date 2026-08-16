@@ -760,10 +760,21 @@ class ApplicationContext:
         tenant_id: TenantId,
         license_client: LicenseClient | None = None,
         ntp: NtpVerifier | None = None,
+        self_hosted: bool = False,
     ) -> None:
         self._database = database
         self._tenant_id = tenant_id
         self._license = license_client
+        # ──────────────────────────────────────────────────────────────────
+        # `self_hosted` NİYƏ AYRI BAYRAQDIR
+        # ──────────────────────────────────────────────────────────────────
+        # Sihirbaz `license_tenants` sətrini YALNIZ bu bayraq açıq olduqda
+        # yaradır. Lisenziyalı quraşdırmada (identifikator təchizatçıdan
+        # gəlir) sətir onsuz da mövcuddur; mövcud deyilsə isə onu BURADAN
+        # yaratmaq lisenziya qapısını yan keçmək olardı — pulsuz "AKTIV"
+        # tenant yaratmağın yolu məhz belə açılır. Ona görə həmin halda
+        # sihirbaz açıq xəta verir, sükutla sətir YARATMIR.
+        self._self_hosted = self_hosted
         self._clock = SystemClock()
         # NTP yoxlayıcısı verilməyibsə `_NullNtp` işlədilir: o, HƏMİŞƏ
         # "təsdiqlənməyib" qaytarır, lakin sürüşmə ÖLÇÜLMƏYİB deyir. Nəticədə
@@ -810,6 +821,11 @@ class ApplicationContext:
     @property
     def database(self) -> Database:
         return self._database
+
+    @property
+    def self_hosted(self) -> bool:
+        """Tenant identifikatoru bu maşında yaranıb (lisenziya qeydi yoxdur)."""
+        return self._self_hosted
 
     def infrastructure_limits(self) -> InfrastructureLimits:
         """`src/infrastructure/` siniflərinin ROOT pəncərəsi (bax modul başlığı).
@@ -918,11 +934,19 @@ class ApplicationContext:
                 root=root,
                 stores=stores,
                 invites=invites,
+                # Tenant sətri YALNIZ identifikator bu maşında yaranıbsa
+                # burada qurulur — səbəbi `__init__`-dəki `_self_hosted`
+                # şərhindədir (lisenziya qapısının yan keçilməməsi).
+                provision_tenant=self._self_hosted,
             )
             session.commit()
         _log.info(
             "FIRST_RUN_SETUP_COMPLETED",
-            extra={"store_count": len(stores), "invite_count": len(invites)},
+            extra={
+                "store_count": len(stores),
+                "invite_count": len(invites),
+                "self_hosted": self._self_hosted,
+            },
         )
 
         # 1C server addımı QƏSDƏN quraşdırma tranzaksiyasından KƏNARDADIR:
@@ -2532,7 +2556,6 @@ class ApplicationContext:
                 employees=uow.employees,
                 positions=uow.positions,
                 stores=repo("stores"),
-                credentials=uow.employees,
                 audit=audit,
                 clock=clock,
                 # `SETUP_RECOMMENDED_ADMIN_COUNT` — sihirbazın "neçə admin
@@ -2541,6 +2564,11 @@ class ApplicationContext:
                 # port ötürülür; bağlantısız yol (`limits=None`) use case-in
                 # öz defoltu kimi qalır — bax `first_run_setup.py` başlığı.
                 limits=repo("limits"),
+                # Özünə-host edilən quraşdırmada `license_tenants` sətrini
+                # sihirbaz yaradır (bax `first_run_setup.TenantProvisioning`).
+                # Lisenziyalı quraşdırmada port ötürülür, lakin ÇAĞIRILMIR —
+                # qərar `complete(provision_tenant=…)` bayrağındadır.
+                provisioning=repo("tenant_provisioning"),
             ),
             root_control=RootControlUseCase(
                 limits=repo("limits"),
@@ -2828,39 +2856,50 @@ def _camera_index() -> int:
         return 0
 
 
-def build_context(*, tenant_id_env: str = "KOMPASOS_TENANT_ID") -> ApplicationContext:
+def build_context(
+    *,
+    tenant_id_env: str = "KOMPASOS_TENANT_ID",
+    allow_generate: bool = True,
+) -> ApplicationContext:
     """Mühit dəyişənlərindən canlı kontekst qurur.
 
-    Raises:
-        StartupError: Baza və ya tenant konfiqurasiyası yoxdursa. Xəta MESAJI
-            istifadəçiyə göstərilir və orada əlaqə e-poçtu olur (bölmə 8) —
-            "işə düşmədi" mesajı ilə kimsəsiz qalan müştəri ən pis haldır.
-    """
-    import os  # noqa: PLC0415
-    import uuid  # noqa: PLC0415
+    ──────────────────────────────────────────────────────────────────────────
+    TENANT İDENTİFİKATORUNUN OLMAMASI XƏTA DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl `KOMPASOS_TENANT_ID` boş olduqda burada fatal xəta atılırdı və
+    istifadəçi «Quraşdırma tamamlanmayıb» dalanına düşürdü. Halbuki sıfırdan
+    quraşdırmada həmin dəyişən TƏRİFƏ GÖRƏ boşdur — onu dolduracaq İlk
+    Quraşdırma Sihirbazı isə məhz həmin xəta ucbatından heç vaxt açılmırdı.
 
+    İndi kimlik `shared/installation.py`-da həll olunur (mühit → yerli fayl →
+    yeni UUID) və "Root hesabı varmı?" sualı BAZAYA verilir — yəni ilk açılış
+    sihirbaza, ikinci açılış girişə gedir.
+
+    Raises:
+        StartupError: Baza əlçatan deyilsə, və ya kimlik oxuna/yazıla
+            bilmirsə. Xəta MESAJI istifadəçiyə göstərilir və orada əlaqə
+            e-poçtu olur (bölmə 8) — "işə düşmədi" mesajı ilə kimsəsiz qalan
+            müştəri ən pis haldır.
+    """
     from src.domain.value_objects.identifiers import TenantId  # noqa: PLC0415
     from src.infrastructure.persistence.connection import Database  # noqa: PLC0415
-
-    raw_tenant = os.environ.get(tenant_id_env, "").strip()
-    if not raw_tenant:
-        raise StartupError(
-            f"`{tenant_id_env}` təyin edilməyib",
-            user_message=(
-                "Quraşdırma tamamlanmayıb: tenant identifikatoru təyin edilməyib. "
-                "Quraşdırma sənədinə baxın və ya dəstəklə əlaqə saxlayın."
-            ),
-            context={"missing_env": tenant_id_env},
-        )
+    from src.shared.installation import (  # noqa: PLC0415
+        InstallationIdentityError,
+        resolve_installation_identity,
+    )
 
     try:
-        tenant_id = TenantId(uuid.UUID(raw_tenant))
-    except ValueError as exc:
+        identity = resolve_installation_identity(
+            env_key=tenant_id_env, allow_generate=allow_generate
+        )
+    except InstallationIdentityError as exc:
         raise StartupError(
-            "Tenant identifikatoru düzgün UUID deyil",
-            user_message="Quraşdırma faylındakı tenant identifikatoru yararsızdır.",
-            context={"value": raw_tenant},
+            exc.message,
+            user_message=exc.user_message,
+            context=exc.context,
         ) from exc
+
+    tenant_id = TenantId(identity.tenant_id)
 
     try:
         database = Database()
@@ -2875,9 +2914,22 @@ def build_context(*, tenant_id_env: str = "KOMPASOS_TENANT_ID") -> ApplicationCo
             ),
         ) from exc
 
-    context = ApplicationContext(database=database, tenant_id=tenant_id)
+    context = ApplicationContext(
+        database=database,
+        tenant_id=tenant_id,
+        self_hosted=not identity.is_licensed,
+    )
     _apply_root_pool_limits(context)
-    _log.info("APPLICATION_CONTEXT_BUILT", extra={"tenant_id": str(tenant_id)})
+    _log.info(
+        "APPLICATION_CONTEXT_BUILT",
+        extra={
+            "tenant_id": str(tenant_id),
+            "identity_source": identity.source.value,
+            "superseded_local_id": (
+                str(identity.superseded_local_id) if identity.superseded_local_id else None
+            ),
+        },
+    )
     return context
 
 

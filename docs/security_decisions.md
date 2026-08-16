@@ -703,6 +703,52 @@ gördüyü mesaj səbəbi VƏ növbəti addımı deyir; «Sistem xətası» yaz�
 
 ---
 
+## SEC-021 — Tenant kimliyi: boş mühit dəyişəni ilk quraşdırmadır, xəta deyil
+
+**Vəziyyət:** Qəbul edildi (2026-08-16) — ilk açılış axınının qüsuru
+
+**Kontekst — nə baş verirdi.** `build_context()` `KOMPASOS_TENANT_ID` boş
+olduqda `StartupError` atırdı və istifadəçi «Quraşdırma tamamlanmayıb» fatal
+ekranını görürdü. Halbuki sıfırdan quraşdırmada həmin dəyişən TƏRİFƏ GÖRƏ
+boşdur (`.env.example`-də boş göndərilir) və onu dolduracaq yeganə ekran —
+İlk Quraşdırma Sihirbazı — məhz həmin xəta ucbatından heç vaxt açılmırdı.
+Sihirbazın kodu (`screens/group_a_entry.FirstRunWizard`,
+`use_cases/first_run_setup`) tam yazılmışdı; ora aparan yol yox idi.
+
+**Qərar.** Kimlik `shared/installation.py`-da ÜÇ mənbədən həll olunur:
+mühit dəyişəni → yerli fayl (`%LOCALAPPDATA%\KompasOS\datainstallation.json`) → yeni UUID. «Root hesabı varmı?» sualı isə BAZAYA
+verilir (`FirstRunSetupUseCase.is_required`). Bloklayıcı xəta yalnız üç halda
+qalır: baza əlçatan deyil, sxem ümumiyyətlə tətbiq olunmayıb
+(`SQLSTATE 42P01`), lisenziya deaktivdir (`LICENSE_INACTIVE`).
+
+**Lisenziya qapısı NİYƏ YAN KEÇİLMİR.** Bütün cədvəllərin `tenant_id`-si
+`license_tenants(tenant_id)`-ə xarici açarla bağlıdır, yəni sihirbazın işləməsi
+üçün həmin sətir lazımdır. Sətri sihirbaz YALNIZ identifikator BU MAŞINDA
+yaranıbsa qurur (`ApplicationContext.self_hosted`). Mühitdən gələn — yəni
+təchizatçının verdiyi — identifikator üçün sətir qurulmur: qursaydıq,
+istənilən UUID-ni mühitə yazıb «AKTIV» tenant yaratmaq mümkün olardı.
+
+Özünə-host edilən sətir `license_key_hash = SELF_HOSTED_NO_LICENSE_KEY` nişanı
+ilə yaradılır (uydurma hash YOX) və statusu `AKTIV`-dir: ödəniş münasibəti
+olmayan quraşdırmada `ODENIS_GOZLENILIR` olmayan borcu göstərərdi. Mövcud sətrə
+TOXUNULMUR (`ON CONFLICT DO NOTHING`) — `DO UPDATE` deaktiv tenant-ı sihirbazı
+açmaqla dirildərdi.
+
+**Kimliyin sabitliyi məlumat bütövlüyü məsələsidir.** Yeni identifikator diskə
+yazıla bilmirsə başlanğıc DAYANIR: davam etsəydik hər açılışda yeni tenant
+yaranar və dünənki məlumat görünməz qalardı. Mühitdən gələn dəyər üçün isə yazı
+yalnız qeyddir — uğursuzluğu xəbərdarlıqdır.
+
+**Tətbiq:** `shared/installation.py`, `presentation/composition.py`
+(`build_context`, `ApplicationContext.self_hosted`, `complete_setup`),
+`presentation/app.py` (`StartupRoute`, `_startup_route`),
+`application/use_cases/first_run_setup.py` (`TenantProvisioning`, `_provision`),
+`infrastructure/persistence/config_repositories.py`
+(`PostgresTenantProvisioning`), `tests/unit/test_installation_identity.py`,
+`tests/unit/test_first_run_provisioning.py`, `tests/unit/test_startup_route.py`.
+
+---
+
 ## Açıq qalan (Faza 3-də bağlanır)
 
 | # | Məsələ | Faza |

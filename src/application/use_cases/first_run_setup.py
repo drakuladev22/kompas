@@ -52,12 +52,11 @@ from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
-    from src.application.use_cases.user_management import CredentialWriter
+    from src.application.use_cases.user_management import EmployeeWriter
     from src.domain.entities.position import Position
     from src.domain.interfaces.ports import (
         AuditTrail,
         Clock,
-        EmployeeRepository,
         PositionRepository,
         SystemLimits,
     )
@@ -173,19 +172,47 @@ class StoreWriter(Protocol):
     def get_id_by_code(self, tenant_id: TenantId, code: str) -> StoreId | None: ...
 
 
+@runtime_checkable
+class TenantProvisioning(Protocol):
+    """`license_tenants` sətrini və tenant defoltlarını YARADIR.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ BU PORT LAZIM OLDU
+    ──────────────────────────────────────────────────────────────────────────
+    Bütün əsas cədvəllərdə `tenant_id` sütunu `license_tenants(tenant_id)`-ə
+    XARİCİ AÇARLA bağlıdır. Yəni sətir yoxdursa sihirbaz ilk mağazanı belə
+    yarada bilmir — FK pozuntusu ilə dayanır. Sxemin ÖZÜ bunu gözləyirdi:
+    `seed_tenant_defaults()` funksiyasının şərhində «İlk Quraşdırma Sihirbazı
+    yeni tenant yaradarkən bu funksiyanı çağırır» yazılıb — sadəcə çağıran
+    tərəf heç vaxt yazılmamışdı.
+
+    Defoltlar (rollar, icazə matrisi, limitlər, toggle-lar, icazə növləri) də
+    həmin funksiyadan gəlir: onlarsız `_require_position(ROOT)` "rol tapılmadı"
+    deyərdi.
+    """
+
+    def ensure_self_hosted_tenant(
+        self,
+        *,
+        tenant_id: TenantId,
+        name: str,
+        contact_email: str,
+    ) -> bool: ...
+
+
 class FirstRunSetupUseCase:
     """İlk quraşdırma — tenant-ı işlək vəziyyətə gətirir."""
 
     def __init__(
         self,
         *,
-        employees: EmployeeRepository,
+        employees: EmployeeWriter,
         positions: PositionRepository,
         stores: StoreWriter,
-        credentials: CredentialWriter,
         audit: AuditTrail,
         clock: Clock,
         limits: SystemLimits | None = None,
+        provisioning: TenantProvisioning | None = None,
     ) -> None:
         # `limits` İSTƏYƏ BAĞLIDIR: sihirbaz ƏN ERKƏN axındır və `system_limits`
         # sətirləri o anda hələ oxunmaya bilər (yeni tenant, seed trigger-i
@@ -195,10 +222,14 @@ class FirstRunSetupUseCase:
         self._employees = employees
         self._positions = positions
         self._stores = stores
-        self._credentials = credentials
         self._audit = audit
         self._clock = clock
         self._limits = limits
+        # `provisioning` YALNIZ özünə-host edilən quraşdırmada işlənir (bax
+        # `complete(provision_tenant=...)`). `None` qalması normal haldır:
+        # lisenziyalı quraşdırmada `license_tenants` sətrini TƏCHİZATÇI
+        # yaradır və tətbiqin onu yaratmaq səlahiyyəti YOXDUR.
+        self._provisioning = provisioning
 
     # ------------------------------ yoxlama ---------------------------------- #
 
@@ -219,12 +250,21 @@ class FirstRunSetupUseCase:
         root: RootAccountDraft,
         stores: list[StoreDraft],
         invites: list[InviteDraft] | None = None,
+        provision_tenant: bool = False,
     ) -> SetupOutcome:
         """Sihirbazın bütün addımlarını BİR əməliyyatda tətbiq edir.
 
         Addımlar bir-birindən asılıdır (dəvət olunan HR-a mağaza təyin
         edilir), ona görə ayrı-ayrı çağırışlara bölünmür: yarımçıq
         quraşdırma "işçi var, mağaza yox" kimi izahsız vəziyyət yaradardı.
+
+        Args:
+            provision_tenant: `True` → `license_tenants` sətri və tenant
+                defoltları BURADA yaradılır (özünə-host edilən quraşdırma:
+                identifikator bu maşında yaranıb, təchizatçıdan gəlməyib).
+                `False` → sətir onsuz da olmalıdır; yoxdursa aşağıdakı rol
+                yoxlaması açıq xəta verir. Bayraq `ApplicationContext`-dən
+                gəlir, çünki identifikatorun MƏNBƏYİNİ yalnız o bilir.
         """
         if self._admin_count(tenant_id) > 0:
             _security_log.warning(
@@ -239,6 +279,13 @@ class FirstRunSetupUseCase:
                 "Ən azı bir mağaza əlavə edilməlidir",
                 user_message="Ən azı bir mağaza əlavə edin.",
             )
+
+        # TENANT SƏTRİ ROLLARDAN ƏVVƏL: `positions` sətirləri
+        # `seed_tenant_defaults()`-dan gəlir və o, `license_tenants` sətri
+        # olmadan işləyə bilməz (FK). Sıranı dəyişsək, ilk quraşdırma "rol
+        # tapılmadı" deyərdi — səbəbi isə rol deyil, tenant olardı.
+        if provision_tenant:
+            self._provision(tenant_id=tenant_id, root=root, stores=stores)
 
         root_position = self._require_position(tenant_id, SystemRole.ROOT.value)
 
@@ -273,8 +320,9 @@ class FirstRunSetupUseCase:
             # etdiyi üçün `must_change_password=True` qalır.
             must_change_password=False,
         )
-        self._employees.save(root_employee)
-        self._credentials.set_password(root_id, raw_password=root.password, must_change=False)
+        # `save()` DEYİL: o, `UPDATE`-dir və olmayan sətri yaratmır — sihirbaz
+        # canlı bazada məhz buna görə işləmirdi (bax `repositories.create()`).
+        self._employees.create(root_employee, raw_password=root.password)
 
         # 3. Dəvətlər.
         invited: list[EmployeeId] = []
@@ -324,10 +372,9 @@ class FirstRunSetupUseCase:
             # Müvəqqəti şifrə — ilk girişdə MƏCBURİ dəyişdirilir (bölmə 2).
             must_change_password=True,
         )
-        self._employees.save(employee)
-        self._credentials.set_password(
-            employee_id, raw_password=invite.temporary_password, must_change=True
-        )
+        # Root hesabı ilə eyni səbəb: dəvət olunan işçi də YENİ sətirdir.
+        # `must_change_password=True` entity-dədir və `create()` onu yazır.
+        self._employees.create(employee, raw_password=invite.temporary_password)
         self._audit.record(
             tenant_id=tenant_id,
             actor_id=created_by,
@@ -361,6 +408,58 @@ class FirstRunSetupUseCase:
         """
         return self._employees.count_active_with_flag(tenant_id, "can_manage_license")
 
+    def _provision(
+        self,
+        *,
+        tenant_id: TenantId,
+        root: RootAccountDraft,
+        stores: list[StoreDraft],
+    ) -> None:
+        """Özünə-host edilən quraşdırma üçün tenant sətrini yaradır.
+
+        ──────────────────────────────────────────────────────────────────────
+        E-POÇT NİYƏ MƏCBURİDİR — HALBUKİ SİHİRBAZDA «İSTƏYƏ BAĞLI» YAZILIR
+        ──────────────────────────────────────────────────────────────────────
+        `license_tenants.company_contact_email` ŞİRKƏT əlaqəsidir və
+        Emergency Access Recovery-də kimliyin YEGANƏ təsdiq mənbəyidir
+        (bölmə 2, 8). Yəni Root şifrəsini itirsə, sistemə qayıtmağın başqa
+        yolu qalmır. Uydurma dəyər (`noreply@local` və s.) yazsaydıq, sətir
+        formal olaraq dolar, faktiki bərpa isə MÜMKÜNSÜZ olardı — və bunu
+        istifadəçi yalnız ən pis anda öyrənərdi.
+
+        Sahə sihirbazda hesabın BƏRPA e-poçtu kimi soruşulur; özünə-host
+        edilən quraşdırmada həmin dəyər eyni zamanda şirkət əlaqəsi olur.
+        Boşdursa açıq xəta qaytarılır — sükutla davam etmək yox.
+        """
+        if self._provisioning is None:
+            raise SetupValidationError(
+                "Tenant provizyon portu qoşulmayıb",
+                user_message=(
+                    "Quraşdırma tamamlana bilmədi: sistem tenant qeydini yarada "
+                    "bilmir. Dəstəklə əlaqə saxlayın."
+                ),
+            )
+        if root.recovery_email is None:
+            raise SetupValidationError(
+                "Özünə-host edilən quraşdırmada şirkət e-poçtu məcburidir",
+                user_message=(
+                    "Bərpa e-poçtunu doldurun: bu quraşdırma lisenziya qeydi "
+                    "olmadan başlayır və e-poçt şifrə bərpasının yeganə "
+                    "kanalıdır."
+                ),
+            )
+
+        name = _tenant_name(stores)
+        created = self._provisioning.ensure_self_hosted_tenant(
+            tenant_id=tenant_id,
+            name=name,
+            contact_email=str(root.recovery_email),
+        )
+        _security_log.info(
+            "SELF_HOSTED_TENANT_PROVISIONED",
+            extra={"tenant_id": str(tenant_id), "created": created, "tenant_name": name},
+        )
+
     def _require_position(self, tenant_id: TenantId, code: str) -> Position:
         position = self._positions.get_by_code(tenant_id, code)
         if position is None:
@@ -370,6 +469,22 @@ class FirstRunSetupUseCase:
                 context={"role_code": code},
             )
         return position
+
+
+def _tenant_name(stores: list[StoreDraft]) -> str:
+    """Tenant adı — İLK mağazanın brendi, o boşdursa adı.
+
+    Ayrıca «şirkət adı» sahəsi ƏLAVƏ EDİLMİR: sihirbazda onsuz da brend
+    soruşulur və iki ad sahəsi istifadəçini "hansı fərqlidir?" sualı ilə
+    qarşılaşdırardı. Brend boş qala bilmir (`_require_text` onu tələb edir),
+    ona görə ehtiyat yol yalnız nəzəri haldır.
+    """
+    for draft in stores:
+        for candidate in (draft.brand, draft.name):
+            cleaned = " ".join(candidate.split())
+            if cleaned:
+                return cleaned
+    return "KompasOS quraşdırması"
 
 
 def _require_text(raw: str, *, label: str) -> str:
@@ -392,4 +507,5 @@ __all__ = [
     "SetupValidationError",
     "StoreDraft",
     "StoreWriter",
+    "TenantProvisioning",
 ]

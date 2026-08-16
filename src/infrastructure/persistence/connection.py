@@ -439,6 +439,7 @@ class PostgresUnitOfWork:
             PostgresShiftRepository,
             PostgresStoreWriter,
             PostgresSystemLimits,
+            PostgresTenantProvisioning,
         )
         from src.infrastructure.persistence.employee_document_repository import (  # noqa: PLC0415
             PostgresEmployeeDocumentRepository,
@@ -581,6 +582,12 @@ class PostgresUnitOfWork:
             "permission_flags": PostgresPermissionFlagRepository(conn, self._context),
             "camera_assignments": PostgresCameraAssignmentRepository(conn, self._context),
             "stores": PostgresStoreWriter(conn, self._context),
+            # İlk Quraşdırma Sihirbazının tenant sətri — `stores` İLƏ EYNİ
+            # BAĞLANTIDA olması MƏCBURİDİR: mağaza sətrinin `tenant_id`-si
+            # həmin tenant sətrinə xarici açarla bağlıdır və ikisi bir
+            # tranzaksiyada görünməlidir. Ayrı bağlantıda mağaza yazısı hələ
+            # commit olunmamış tenant-ı görməz və FK pozuntusu ilə dayanardı.
+            "tenant_provisioning": PostgresTenantProvisioning(conn, self._context),
             "preferences": PostgresUserPreferences(conn, self._context),
             "report_facts": PostgresReportFactProvider(conn, self._context),
             "support": PostgresSupportTicketRepository(conn, self._context),

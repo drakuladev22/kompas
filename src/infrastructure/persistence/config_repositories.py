@@ -710,7 +710,67 @@ class PostgresStoreWriter(_BaseRepository):
         return row["id"] if row else None
 
 
+#: Lisenziya AÇARI OLMAYAN quraşdırmanın nişanı.
+#:
+#: `license_key_hash` sütunu `NOT NULL`-dur və Argon2 hash gözləyir. Özünə-host
+#: edilən quraşdırmada isə açar YOXDUR. Uydurma hash yazsaydıq, sətrə baxan
+#: adam onu real lisenziya sanardı və "hansı açarın hash-idir?" sualına heç vaxt
+#: cavab tapılmazdı. Açıq nişan isə vəziyyəti olduğu kimi deyir.
+SELF_HOSTED_LICENSE_MARKER: Final[str] = "SELF_HOSTED_NO_LICENSE_KEY"
+
+
+class PostgresTenantProvisioning(_BaseRepository):
+    """`license_tenants` sətri + `seed_tenant_defaults()` — İlk Quraşdırma.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `ON CONFLICT DO NOTHING`, NİYƏ `DO UPDATE` DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Sətir ARTIQ varsa ona TOXUNULMUR. `DO UPDATE` yazsaydıq, deaktiv edilmiş
+    tenant-da sihirbazı işə salmaq statusu `AKTIV`-ə qaytarardı — yəni
+    lisenziya blokunu keçmək üçün ekranı yenidən açmaq kifayət edərdi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    STATUS NİYƏ `AKTIV`, NİYƏ `ODENIS_GOZLENILIR` (SÜTUN DEFOLTU) DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Defolt status ÖDƏNİŞ münasibətinin mövcud olduğunu fərz edir. Özünə-host
+    edilən quraşdırmada belə münasibət YOXDUR: heç kim heç kimə borclu deyil.
+    `ODENIS_GOZLENILIR` qoysaydıq, ilk gündən "ödəniş gözlənilir" xəbərdarlığı
+    çıxardı və istifadəçi olmayan bir borcu axtarardı.
+    """
+
+    def ensure_self_hosted_tenant(
+        self,
+        *,
+        tenant_id: TenantId,
+        name: str,
+        contact_email: str,
+    ) -> bool:
+        """Sətir yoxdursa yaradır və defoltları seed edir; yaratdısa `True`.
+
+        `seed_tenant_defaults()` HƏR HALDA çağırılır (sətir yeni olsun və ya
+        olmasın): funksiyanın bütün `INSERT`-ləri `ON CONFLICT DO NOTHING`-dir,
+        yəni idempotentdir. Yarımçıq seed (proses ilk cəhddə öldürülüb) məhz
+        belə tamamlanır — əks halda istifadəçi "rol tapılmadı" xətasından
+        çıxa bilməzdi.
+        """
+        created = (
+            self._execute(
+                """
+                INSERT INTO license_tenants
+                    (tenant_id, tenant_name, license_key_hash, status, company_contact_email)
+                VALUES (%s, %s, %s, 'AKTIV', %s)
+                ON CONFLICT (tenant_id) DO NOTHING
+                """,
+                (tenant_id, name, SELF_HOSTED_LICENSE_MARKER, contact_email),
+            )
+            > 0
+        )
+        self._execute("SELECT seed_tenant_defaults(%s)", (tenant_id,))
+        return created
+
+
 __all__ = [
+    "SELF_HOSTED_LICENSE_MARKER",
     "STRUCTURAL_CONFIRMATION_REQUIRED",
     "PostgresCameraAssignmentRepository",
     "PostgresFeatureToggles",
@@ -719,4 +779,5 @@ __all__ = [
     "PostgresShiftRepository",
     "PostgresStoreWriter",
     "PostgresSystemLimits",
+    "PostgresTenantProvisioning",
 ]
