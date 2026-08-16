@@ -84,6 +84,42 @@ class PostgresUserPreferences(_BaseRepository):
             (employee_id, normalized),
         )
 
+    def notification_prefs(self, employee_id: EmployeeId) -> dict[str, bool]:
+        """Bildiriş kanallarının vəziyyəti (miqrasiya 058).
+
+        AÇAR YOXDURSA KANAL AÇIQ SAYILIR və bu, qərarın özüdür: sətri olmayan
+        istifadəçi bugünkü davranışı görməlidir. Əks qayda (yoxdursa bağlıdır)
+        miqrasiya anında hamının bildirişini sükutla kəsərdi.
+        """
+        row = self._fetch_one(
+            "SELECT notification_prefs FROM user_preferences WHERE user_id = %s",
+            (employee_id,),
+        )
+        if row is None or row["notification_prefs"] is None:
+            return {}
+        raw = row["notification_prefs"]
+        if not isinstance(raw, dict):
+            _log.warning(
+                "UNREADABLE_NOTIFICATION_PREFERENCE",
+                extra={"employee_id": str(employee_id)},
+            )
+            return {}
+        return {str(key): bool(value) for key, value in raw.items()}
+
+    def set_notification_prefs(self, employee_id: EmployeeId, prefs: dict[str, bool]) -> None:
+        """Bildiriş açarlarını yazır — tema ilə EYNİ `ON CONFLICT` naxışı."""
+        import json  # noqa: PLC0415
+
+        self._execute(
+            """
+            INSERT INTO user_preferences (user_id, notification_prefs)
+            VALUES (%s, %s::jsonb)
+            ON CONFLICT (user_id)
+            DO UPDATE SET notification_prefs = EXCLUDED.notification_prefs
+            """,
+            (employee_id, json.dumps({key: bool(value) for key, value in prefs.items()})),
+        )
+
     def language_for(self, employee_id: EmployeeId) -> str:
         row = self._fetch_one(
             "SELECT language FROM user_preferences WHERE user_id = %s",

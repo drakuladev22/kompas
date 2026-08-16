@@ -77,6 +77,10 @@ class _Panel:
     def __init__(self, *, visible: bool = False) -> None:
         self.notification_clicked = _Signal()
         self.mark_all_read_requested = _Signal()
+        #: «Hamısına bax» — kontroller `attach()`-də ona da qoşulur (tam
+        #: tarixçə rejimi). Sahtə paneldə elan olunmasaydı `attach()`
+        #: `AttributeError` atardı.
+        self.see_all_requested = _Signal()
         self.renders: list[list[dict[str, str]]] = []
         self._visible = visible
 

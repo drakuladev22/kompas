@@ -54,6 +54,11 @@ if TYPE_CHECKING:
 
 _error_log = get_logger(__name__, channel=LogChannel.ERROR)
 
+
+#: «Hamısına bax» rejimindəki hədd — saxlama müddəti (30 gün) onsuz da
+#: sətirləri məhdudlaşdırır, bu isə pəncərəni cavabsız qoymamaq üçün tavandır.
+FULL_HISTORY_LIMIT = 500
+
 #: Kateqoriya → sətir ikonu (`group_g._NOTIFICATION_KINDS` açarları).
 #: Bu, iş qaydası deyil, YALNIZ görünüş seçimidir: eyni paneldə "1C bağlantısı
 #: kəsildi" ilə "növbə dəyişikliyi təsdiqləndi" eyni tonda görünsəydi,
@@ -109,6 +114,9 @@ class NotificationsController:
     def __init__(self, context: ApplicationContext, actor: Employee) -> None:
         self._context = context
         self._actor = actor
+        #: «Bütün bildirişlərə bax» basılıbmı — sonrakı yeniləmələr də
+        #: genişlənmiş siyahını saxlayır (bax `_on_see_all`).
+        self._show_all = False
 
     # ------------------------------- qoşulma --------------------------------- #
 
@@ -126,6 +134,7 @@ class NotificationsController:
             lambda raw: self._on_clicked(raw, panel=panel, header=header)
         )
         panel.mark_all_read_requested.connect(lambda: self._on_mark_all(panel, header))
+        panel.see_all_requested.connect(lambda: self._on_see_all(panel, header))
         # İlk oxunuş girişdən DƏRHAL sonra: zəng nişanı istifadəçi ona
         # toxunmadan ƏVVƏL doğru rəqəmi göstərməlidir — bildirişin bütün
         # məqsədi diqqət çəkməkdir, tapılmaq deyil.
@@ -143,6 +152,24 @@ class NotificationsController:
         header.set_unread(sum(1 for row in rows if row.is_unread))
 
     # ------------------------------- siqnallar ------------------------------- #
+
+    def _on_see_all(self, panel: NotificationPanel, header: PageHeader) -> None:
+        """«Bütün bildirişlərə bax» — panel limitini AÇIR.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ AYRI EKRAN DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Panel ONSUZ DA bildiriş mərkəzidir (ekran 29) — ayrıca «tam siyahı»
+        ekranı eyni məzmunu ikinci dəfə qurardı və iki yerdə iki fərqli süzgəc
+        məntiqi yaranardı. Fərq yalnız SAYDADIR: panel son `PANEL_LIMIT`
+        sətri göstərir, bu düymə isə saxlama müddəti ərzindəki hamısını.
+
+        Bayraq saxlanılır: sonrakı `refresh()` çağırışları da (yeni bildiriş
+        gələndə) genişlənmiş siyahını göstərməlidir — əks halda istifadəçi
+        «hamısını» açır, bir bildiriş gəlir və siyahı sükutla yenidən qısalır.
+        """
+        self._show_all = True
+        self.refresh(panel, header)
 
     def _on_bell(self, panel: NotificationPanel, header: PageHeader) -> None:
         if not panel.isVisible():
@@ -184,6 +211,7 @@ class NotificationsController:
                 rows: list[NotificationRow] = session.notifications.list_for_recipient(
                     self._actor.id,
                     hidden_categories=hidden_categories_for(self._actor),
+                    **({"limit": FULL_HISTORY_LIMIT} if self._show_all else {}),
                 )
                 return rows
         except Exception:

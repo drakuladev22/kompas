@@ -893,7 +893,18 @@ class KompasApplication:
             (SyncConflictScreen, self._attach_sync_conflicts),
             (group_g.ProfileScreen, self._attach_profile),
             # Faza 3 yekunu: ERP, ehtiyat nüsxə, baza keçidi və diaqnostika.
+            # Tapşırıq lövhəsi: «Nəzərdən Keçirilir» sütunundakı təsdiq/rədd
+            # düymələri use case-ə bağlanır və hər qərardan sonra lövhə
+            # yenidən oxunur (CLAUDE.md bölmə 6).
+            (group_f.TasksScreen, self._attach_task_review),
+            # Satış Xalları: «Al» və sətir-səviyyəli «Etiraz» use case-ə
+            # bağlanır; hər yazıdan sonra balans+tarixçə+kataloq yenidən
+            # oxunur (`screen_data._sales_points` başlığındakı vəd).
+            (group_f.SalesPointsScreen, self._attach_sales_points),
             (group_d.ErpServersScreen, self._attach_erp_servers),
+            # Audit jurnalı YALNIZ OXUYUR, lakin hər süzgəc/səhifə dəyişikliyində
+            # YENİDƏN oxuyur — `screen_data`-nın tək çağırışı bunu ödəmir.
+            (group_d.AuditScreen, self._attach_audit_log),
             (group_d.BackupScreen, self._attach_backups),
             (group_i.InfrastructureScreen, self._attach_infrastructure),
             (group_d.HealthScreen, self._attach_health),
@@ -903,6 +914,62 @@ class KompasApplication:
                 handler(screen)
                 return
 
+    def _attach_sales_points(self, screen: QWidget) -> None:
+        """Mükafat sorğusu və xal etirazı — `SalesPointsUseCase`-ə bağlayır.
+
+        İki düymə ekranda VARDI, lakin siqnal yükləri use case-in tələb
+        etdiyi identifikatorları daşımırdı (`reward_requested` mükafatın
+        ADINI yayırdı, `appeal_requested` isə heç nə) — yəni bağlantı texniki
+        olaraq mümkün deyildi. İndi hər ikisi identifikator daşıyır.
+        """
+        from src.presentation.controllers.sales_points import (  # noqa: PLC0415
+            SalesPointsController,
+        )
+        from src.presentation.screens.group_f import SalesPointsScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, SalesPointsScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        SalesPointsController(self._context, self._current_employee).attach(screen)
+
+    def _attach_task_review(self, screen: QWidget) -> None:
+        """Tapşırıq təsdiqi/rəddi — `TaskWorkflowUseCase`-ə bağlayır.
+
+        Düymələr ekranda VARDI və siqnal yayırdı, lakin onları dinləyən tərəf
+        yox idi: menecer «Təsdiqlə» basırdı, tapşırıq sütunda qalırdı, xəta da
+        çıxmırdı. İşçi isə sübutunu göndərib gözləyirdi — və gecikmə
+        eskalasiyası onu gecikmiş sayırdı.
+        """
+        from src.presentation.controllers.tasks import TaskReviewController  # noqa: PLC0415
+        from src.presentation.screens.group_f import TasksScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, TasksScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        TaskReviewController(self._context, self._current_employee).attach(screen)
+
+    def _attach_audit_log(self, screen: QWidget) -> None:
+        """Audit süzgəclərini və səhifələməsini `AuditQueryUseCase`-ə bağlayır.
+
+        Süzgəc sahələri ekranda ARTIQ vardı və `filters_changed`/`page_changed`
+        siqnallarını yayırdı, lakin heç bir kontroller onları dinləmirdi —
+        istifadəçi tarix aralığı seçir, «2» səhifəsini basır, cədvəl isə
+        dəyişmirdi. Ən pisi: ekran heç bir xəta göstərmirdi, yəni nəticə
+        "süzgəcə uyğun yazı budur" kimi oxunurdu.
+        """
+        from src.presentation.controllers.audit_log import (  # noqa: PLC0415
+            AuditLogController,
+        )
+        from src.presentation.screens.group_d import AuditScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, AuditScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        AuditLogController(self._context, self._current_employee).attach(screen)
+
     def _attach_settings(self, screen: QWidget) -> None:
         """Ayarlar ekranındakı tema seçimi — hər iki rejimdə qoşulur (bölmə 9)."""
         from src.presentation.screens.group_d import SettingsScreen  # noqa: PLC0415
@@ -911,6 +978,17 @@ class KompasApplication:
             return
         screen.select_theme(self._theme.preference.value)
         screen.theme_selected.connect(self._on_theme_selected)
+
+        # Qalan dörd idarəedici (Yadda Saxla, bildiriş açarları, şifrə,
+        # sessiyalar) ÖZ kontrollerinə bağlanır: onlar `user_preferences`-ə
+        # yazır və ekran açılanda saxlanmış vəziyyət geri oxunur.
+        # Tema BURADA qalır, çünki o, yazıdan ƏVVƏL dərhal tətbiq olunur və
+        # hər iki rejimdə (önizləmə daxil) işləməlidir.
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        from src.presentation.controllers.settings import SettingsController  # noqa: PLC0415
+
+        SettingsController(self._context, self._current_employee).attach(screen)
 
     def _attach_profile(self, screen: QWidget) -> None:
         """Profil ekranını canlı hesab məlumatına bağlayır (bölmə 2, 3).
@@ -1284,8 +1362,8 @@ class KompasApplication:
     def _attach_open_shift_market(self, screen: QWidget) -> None:
         """Növbə Planlama ekranının yazı/kataloq kontrollerlərini bağlayır.
 
-        Matrisin ÖZÜ toxunulmur: onun canlı məlumatı `ScreenDataBinder.
-        _shift_planning`-dən gəlməyə davam edir. Burada İKİ kontroller
+        Matrisin İLK doldurulması toxunulmur: o, `ScreenDataBinder.
+        _shift_planning`-dən gəlməyə davam edir. Burada ÜÇ kontroller
         qoşulur — hibrid bağlama, `users` ekranı ilə eyni naxış:
 
           * `ShiftMatrixOpenShiftController` — "Açıq Növbə Bazarı" kartı (#16,
@@ -1293,6 +1371,9 @@ class KompasApplication:
           * `ShiftMatrixWorkModeController` — toolbar-dakı İş Rejimi seçicisi
             (Faza 7, YALNIZ oxu). Ayrı sinif olmasının səbəbi öz modulunun
             başlığındadır.
+          * `ShiftWindowController` — «‹ / ›» ay oxları; matrisi sürüşdürülmüş
+            pəncərə ilə YENİDƏN doldurur. Seçicidən ayrı saxlanılır, çünki
+            seçicinin "matrisə toxunmur" zəmanəti mənbə mətnindən yoxlanılır.
 
         METOD ADI DƏYİŞMİR: o, ekran açarı ↔ bağlayıcı xəritəsində qeydə
         alınıb (`tests/unit/test_screen_binding_coverage.py`) və adı
@@ -1304,6 +1385,9 @@ class KompasApplication:
         from src.presentation.controllers.shift_matrix import (  # noqa: PLC0415
             ShiftMatrixWorkModeController,
         )
+        from src.presentation.controllers.shift_window import (  # noqa: PLC0415
+            ShiftWindowController,
+        )
         from src.presentation.screens.group_c import ShiftPlanningScreen  # noqa: PLC0415
 
         if self._preview or self._context is None or self._current_employee is None:
@@ -1312,6 +1396,7 @@ class KompasApplication:
             return
         ShiftMatrixOpenShiftController(self._context, self._current_employee).attach(screen)
         ShiftMatrixWorkModeController(self._context, self._current_employee).attach(screen)
+        ShiftWindowController(self._context, self._current_employee).attach(screen)
 
     def _attach_erp_servers(self, screen: QWidget) -> None:
         """1C server panelini `ErpConnectionWizardUseCase`-ə bağlayır (bölmə 7).
@@ -1951,6 +2036,22 @@ class KompasApplication:
 
             EmployeeOpenShiftController(self._context, employee).attach(home)
 
+            # İşçi Ana Ekranının üç öz-xidmət keçidi (bölmə 3): tapşırıqlar,
+            # xallar, «Cərimələrim» → etiraz. Üç düymə də mövcud idi və
+            # siqnal yayırdı, lakin onları DİNLƏYƏN tərəf yox idi — işçi
+            # basırdı, heç nə olmurdu. Ən ağırı cərimə etirazı idi: hüquq
+            # vardı, ona çatan yol yox idi.
+            from src.presentation.controllers.kiosk_self_service import (  # noqa: PLC0415
+                KioskSelfServiceController,
+            )
+
+            KioskSelfServiceController(
+                self._context,
+                employee,
+                kiosk=kiosk,
+                theme=self._theme,
+            ).attach(home)
+
             # #19 Elan (Broadcast, kompasos11.md Faza 8) — "Elanlar" kartının
             # ÖZ kontrolleri var, LAKİN bağlayacaq siqnalı YOXDUR (bir-tərəfli,
             # cavab yoxdur — bax `controllers/announcements.py` başlığı).
@@ -2072,7 +2173,41 @@ class KompasApplication:
             home = self._build_employee_home(outcome, kiosk=kiosk, pin_pad=pin_pad)
             kiosk.set_content(home)
 
+        def on_face_login() -> None:
+            """«Üzlə daxil ol» — PIN-siz giriş (üz qapısı ilə).
+
+            Önizləmədə eyni nümunə ekranı açılır: maket rejimində kamera və
+            baza yoxdur, lakin düymənin AXINI göstərilməlidir — əks halda
+            dizayn baxışında o, ölü bir düymə kimi görünərdi.
+            """
+            if self._preview:
+                show_preview_home()
+                return
+            if self._kiosk_controller is None:
+                pin_pad.show_message(
+                    "Sistem konfiqurasiya edilməyib — administratorla əlaqə saxlayın."
+                )
+                return
+
+            outcome = self._kiosk_controller.authenticate_by_face()
+            if outcome.failed or outcome.employee is None:
+                pin_pad.show_message(outcome.message)
+                return
+
+            home = self._build_employee_home(outcome, kiosk=kiosk, pin_pad=pin_pad)
+            kiosk.set_content(home)
+
         pin_pad.submitted.connect(on_pin)
+        pin_pad.face_login_requested.connect(on_face_login)
+        # DÜYMƏ YALNIZ İŞLƏYƏCƏYİ HALDA GÖRÜNÜR: modul, mağaza əhatəsi və
+        # kamera — üçü də hazır olmalıdır. Önizləmədə həmişə göstərilir ki,
+        # dizayn baxışı ekranın tam formasını görsün.
+        pin_pad.set_face_login_available(
+            True
+            if self._preview
+            else self._kiosk_controller is not None
+            and self._kiosk_controller.face_login_available()
+        )
         kiosk.set_content(pin_pad)
 
         def on_exit() -> None:

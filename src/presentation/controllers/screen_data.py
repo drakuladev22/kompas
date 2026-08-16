@@ -59,6 +59,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from src.domain.policies import DEFAULT_LIMITS, FeatureModule, SystemLimitKey
 from src.domain.value_objects.identifiers import StoreId
+from src.presentation.controllers.audit_log import entry_row
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
@@ -201,6 +202,8 @@ class ScreenDataBinder:
     def __init__(self, context: ApplicationContext, actor: Employee) -> None:
         self._context = context
         self._actor = actor
+        #: Növbə matrisinin başlanğıc sürüşməsi (gün) — `set_shift_offset`.
+        self._shift_offset_days = 0
 
     def populate(self, key: str, screen: QWidget) -> None:
         """Ekranı canlı məlumatla doldurur — bağlaması olmayan açar İZ QOYUR."""
@@ -887,7 +890,29 @@ class ScreenDataBinder:
     # ------------------------------ Qrup C ----------------------------------- #
 
     def _shift_planning(self, session: Session, screen: Any) -> None:
-        today = date.today()  # noqa: DTZ011
+        self._render_shift_matrix(session, screen, day_offset=self._shift_offset_days)
+
+    def shift_window_days(self, session: Session) -> int:
+        """Matris pəncərəsinin uzunluğu — kontroller sürüşmə addımını bilməlidir."""
+        return matrix_window_days(session)
+
+    def set_shift_offset(self, day_offset: int) -> None:
+        """Növbə matrisinin başlanğıcını sürüşdürür (irəli/geri naviqasiya).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ GÜN SÜRÜŞMƏSİ, NİYƏ TƏQVİM AYI
+        ──────────────────────────────────────────────────────────────────────
+        Ekranda «ay» oxları var, məlumat modeli isə BUGÜNDƏN başlayan
+        SÜRÜŞƏN pəncərədir (`matrix_window_days`). Oxları təqvim ayına
+        bağlasaydıq, iki fərqli anlayış bir idarəediciyə yığılardı: istifadəçi
+        «Avqust» gözləyər, ekran isə 14 günlük pəncərə göstərərdi. Ona görə
+        oxlar pəncərəni ÖZ uzunluğu qədər sürüşdürür — göstərilən aralıq
+        başlıqda yazılır və vəd ilə nəticə üst-üstə düşür.
+        """
+        self._shift_offset_days = day_offset
+
+    def _render_shift_matrix(self, session: Session, screen: Any, *, day_offset: int) -> None:
+        today = date.today() + timedelta(days=day_offset)  # noqa: DTZ011
         window_days = matrix_window_days(session)
         end = today + timedelta(days=window_days)
         assignments = session.shift_planning.view_matrix(
@@ -1190,7 +1215,7 @@ class ScreenDataBinder:
         # sualına cavab verir), ekran isə səbəb sütunu göstərir.
         rows = session.uow.connection.execute(
             """
-            SELECT l.created_at, l.delta_points, l.reason, l.status,
+            SELECT l.id, l.created_at, l.delta_points, l.reason, l.status,
                    a.status AS appeal_status
               FROM points_ledger l
               LEFT JOIN points_appeals a ON a.ledger_id = l.id
@@ -1203,10 +1228,16 @@ class ScreenDataBinder:
         screen.set_history(
             [
                 {
+                    "entry_id": str(row["id"]),
                     "date": f"{row['created_at']:%d.%m}" if row["created_at"] else "—",
                     "reason": str(row["reason"] or "—"),
                     "status": _points_status_text(row),
                     "points": _points_text(row["delta_points"], reversed_=_is_reversed(row)),
+                    # ETİRAZ PƏNCƏRƏSİNİ DOMEN HESABLAYIR: ekran 72 saatı
+                    # TƏKRAR hesablamır (iki mənbə sükutla ayrılardı) —
+                    # burada yalnız mövcud etirazın OLMAMASI yoxlanılır,
+                    # qalan şərti `open_dispute` özü tətbiq edir.
+                    "can_appeal": "0" if row["appeal_status"] else "1",
                 }
                 for row in rows
             ],
@@ -1216,8 +1247,16 @@ class ScreenDataBinder:
             # rejimdə həmişə boş qalardı.
             period=_month_text(),
         )
+        # AÇARLAR MAKET YOLU İLƏ EYNİDİR (`preview_screens._sales_points`):
+        # `id` mükafat sorğusunun YEGANƏ etibarlı açarıdır — ad təkrarlana
+        # bilər, `request_reward` isə `reward_id` tələb edir.
         screen.set_catalog(
-            [{"name": item.name, "cost": str(item.cost_points)} for item in catalog],
+            [
+                {"id": str(reward_id), "name": item.name, "cost": str(item.cost_points)}
+                for reward_id, item in session.sales_points.list_rewards_for_employee(
+                    session.tenant_id
+                )
+            ],
             balance=available,
         )
 
@@ -1307,17 +1346,15 @@ class ScreenDataBinder:
         session.commit()  # baxış faktı da audit-lənir (bax `audit_query`)
         # `result_text` MƏCBURİ açar-arqumentdir — onsuz `TypeError` atılırdı
         # və audit ekranı canlı rejimdə boş qalırdı (istisna udulurdu).
+        #
+        # AÇARLAR `controllers/audit_log.entry_row`-DAN GƏLİR: burada əvvəllər
+        # `actor`/`entity`/`reason` yazılırdı, halbuki `AuditScreen.set_entries`
+        # `user`/`module`/`detail` oxuyur — nəticədə canlı rejimdə cədvəlin üç
+        # sütunu BOŞ qalırdı, maketdə isə dolu görünürdü. Bu, CLAUDE.md bölmə
+        # 6-dakı "maket və canlı yol EYNİ AÇARLARI işlətməlidir" qaydasının
+        # pozulmasının dəqiq nümunəsidir; ona görə forma indi tək funksiyadadır.
         screen.set_entries(
-            [
-                {
-                    "time": _hhmm(entry.occurred_at),
-                    "actor": entry.actor_name,
-                    "action": entry.action,
-                    "entity": entry.entity_type,
-                    "reason": entry.reason or "",
-                }
-                for entry in page.entries
-            ],
+            [entry_row(entry) for entry in page.entries],
             result_text=f"{len(page.entries)} nəticə",
         )
 

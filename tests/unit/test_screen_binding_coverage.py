@@ -135,6 +135,15 @@ CONTROLLER_BOUND: Final[dict[str, str]] = {
 #: həm yazır (manual düzəliş) və hər yazıdan sonra siyahını yenidən oxuyur —
 #: ona görə ÖZ kontrolleri var (bax `controllers/report_export.py` başlığı).
 HYBRID_BOUND: Final[dict[str, str]] = {
+    # Tapşırıqlar: ilkin doldurma `screen_data`-dan, təsdiq/rədd isə öz
+    # kontrollerindən — hər qərardan sonra lövhə yenidən oxunur.
+    "tasks": "_attach_task_review",
+    # Satış Xalları: balans/tarixçə `screen_data`-dan, mükafat sorğusu və
+    # etiraz isə öz kontrollerindən — hər yazıdan sonra üçü də yenilənir.
+    "sales_points": "_attach_sales_points",
+    # Audit: ilkin doldurma `screen_data`-dan, süzgəc/səhifələmə isə öz
+    # kontrollerindən gəlir — ekran yalnız oxuyur, lakin TƏKRAR oxuyur.
+    "audit": "_attach_audit_log",
     "help": "_attach_help_center",
     "health": "_attach_health",
     "users": "_attach_users_pos_threshold",
