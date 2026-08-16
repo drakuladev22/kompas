@@ -175,6 +175,13 @@ class FramelessWindow(QWidget):
             # konvensiyası) — ikon həmin fonun üzərində oxunmalıdır, ona görə
             # rəng `qss.py`-dakı `color:` qaydası ilə EYNİ tokendəndir.
             close_hover_color=theme.color("--color-bg-primary"),
+            # LOQO DÜYMƏ RƏNGİNDƏ DEYİL, MARKA RƏNGİNDƏDİR (logo.md).
+            # Düymələr ikinci dərəcəli idarəetmədir və solğun tonda olur;
+            # loqo isə markanın özüdür — eyni solğunluqda çəkilsəydi zolaqda
+            # «sönük» görünərdi. Dəyər loqo faylının ÖZ rəngidir (açıq teal),
+            # yəni eyni marka iki yerdə iki cür görünmür (bax `tokens.py`,
+            # `BRAND_TEAL_LIGHT` şərhi və `windows_app.png` referansı).
+            brand_mark_color=theme.color("--color-brand-mark"),
         )
 
     # --------------------------- maksimallaşdırma ---------------------------- #

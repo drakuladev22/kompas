@@ -154,6 +154,14 @@ a = Analysis(
     # CI əmrindəki `--add-data "assets/kompasos.ico;assets"` ilə eynidir.
     datas=[
         (os.path.join(SPECPATH, '..', 'assets', 'kompasos.ico'), 'assets'),  # noqa: F821
+        # LOQO PNG-LƏRİ PAKETƏ DAXİLDİR (logo.md)
+        # ---------------------------------------------------------------------
+        # `.ico` yalnız `.exe` faylının və Taskbar-ın ikonudur. Başlıq zolağı və
+        # splash isə PNG oxuyur (`widgets/brand_assets.py`) — onlar paketə
+        # düşməsəydi, mənbədən işləyən tətbiq düzgün, PAKETLƏNMİŞ tətbiq isə
+        # loqosuz (fallback çəkilən kvadratla) çıxardı və fərq yalnız müştəri
+        # maşınında görünərdi.
+        (os.path.join(SPECPATH, '..', 'assets', 'logo', '*.png'), 'assets/logo'),  # noqa: F821
         *_FACE_MODEL_DATAS,
     ],
     hiddenimports=[*_FACE_HIDDEN_IMPORTS, *_WINDOW_CHROME_HIDDEN_IMPORTS],

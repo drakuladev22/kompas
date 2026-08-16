@@ -32,6 +32,8 @@ from PySide6.QtWidgets import (
 )
 
 from src.presentation.theme.manager import set_surface_color
+from src.presentation.theme.tokens import ThemeMode
+from src.presentation.widgets import brand_assets
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.forms import FormField
 from src.presentation.widgets.layout_utils import clear_layout
@@ -40,6 +42,7 @@ from src.presentation.widgets.primitives import (
     Card,
     Divider,
     body_label,
+    image_label,
     mono_label,
     muted_label,
     plain_label,
@@ -128,21 +131,41 @@ class SplashScreen(QWidget):
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.setSpacing(32)
 
-        logo = CompassLogo(
-            size=96,
-            background=theme.color("--color-brand-navy"),
-            mark=theme.color("--color-brand-amber"),
-        )
-        layout.addWidget(logo, alignment=Qt.AlignmentFlag.AlignHCenter)
+        # ------------------------------------------------------------------
+        # LOCKUP — TEMAYA GÖRƏ HAZIR ŞƏKİL, ÇƏKİLƏN LOQO DEYİL (logo.md)
+        # ------------------------------------------------------------------
+        # `loading_screen_light/dark.png` pərgar İLƏ "KompasOS" mətnini BİR
+        # kompozisiyada daşıyır — hərflərin işarəyə nisbəti, boşluq və optik
+        # mərkəz dizaynda həll olunub. Onu Qt-də iki ayrı elementlə (çəkilən
+        # loqo + etiket) təkrar qurmaq həmin nisbətləri təxmin etmək olardı.
+        #
+        # Tema seçimi `ThemeManager`-in HƏLL OLUNMUŞ rejimindən gəlir
+        # (`SYSTEM` → işıqlı/tünd) — fayl adı heç bir yerdə hardcode edilmir
+        # (logo.md ADDIM 3).
+        self._lockup = image_label()
+        self._fallback_logo: CompassLogo | None = None
 
-        wordmark = plain_label("KompasOS")
-        wordmark_font = wordmark.font()
-        wordmark_font.setPixelSize(34)
-        wordmark_font.setWeight(QFont.Weight.DemiBold)
-        wordmark.setFont(wordmark_font)
-        wordmark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        wordmark.setStyleSheet("background: transparent;")
-        layout.addWidget(wordmark)
+        if not self._apply_lockup():
+            # Şəkil tapılmadı — köhnə çəkilən loqo QALIR (paket qüsuru splash-i
+            # boş qoymamalıdır). İki elementin İKİSİ də əlavə olunmur: yalnız
+            # işləyən yol görünür.
+            self._fallback_logo = CompassLogo(
+                size=96,
+                background=theme.color("--color-brand-navy"),
+                mark=theme.color("--color-brand-amber"),
+            )
+            layout.addWidget(self._fallback_logo, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+            wordmark = plain_label("KompasOS")
+            wordmark_font = wordmark.font()
+            wordmark_font.setPixelSize(34)
+            wordmark_font.setWeight(QFont.Weight.DemiBold)
+            wordmark.setFont(wordmark_font)
+            wordmark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            wordmark.setStyleSheet("background: transparent;")
+            layout.addWidget(wordmark)
+        else:
+            layout.addWidget(self._lockup, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         tagline = muted_label("Mağaza İdarəetmə Platforması", size=15)
         tagline.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -164,6 +187,42 @@ class SplashScreen(QWidget):
         version_label = mono_label(f"v{version}", muted=True)
         version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(version_label)
+
+    #: Lockup-un ekrandakı hündürlüyü. Mənbə 1066×388-dir, yəni nisbət ~2.75:1
+    #: — 132px hündürlük ≈ 363px en verir və köhnə 96px loqo + 34px başlıqdan
+    #: ibarət blokun tutduğu şaquli yerlə eyni sıradadır (splash-in tarazlığı
+    #: dəyişmir).
+    LOCKUP_HEIGHT: Final = 132
+
+    def _apply_lockup(self) -> bool:
+        """Cari temaya uyğun lockup şəklini qoyur; fayl yoxdursa `False`."""
+        pixmap = brand_assets.logo_pixmap(
+            brand_assets.splash_asset(dark=self._theme.mode is ThemeMode.DARK),
+            height=self.LOCKUP_HEIGHT,
+        )
+        if pixmap is None:
+            return False
+        self._lockup.setPixmap(pixmap)
+        return True
+
+    def apply_theme(self, theme: ThemeManager) -> None:
+        """Tema keçidində FON və lockup birlikdə dəyişir (logo.md ADDIM 3).
+
+        Splash qısa ömürlüdür, lakin `--theme` bayrağı ilə açılan önizləmə və
+        dizayn yoxlaması onu hər iki rejimdə göstərir — şəkil fonla birlikdə
+        dəyişməsəydi, tünd lockup işıqlı fonun üzərində qalardı.
+        """
+        self._theme = theme
+        self.setStyleSheet(
+            f"#SplashScreen {{ background-color: {theme.color('--color-content-bg')}; }}"
+        )
+        if self._fallback_logo is not None:
+            self._fallback_logo.set_colors(
+                background=theme.color("--color-brand-navy"),
+                mark=theme.color("--color-brand-amber"),
+            )
+            return
+        self._apply_lockup()
 
     def set_status(self, text: str) -> None:
         """Yüklənən mərhələni göstərir ("Baza bağlantısı yoxlanılır…")."""
@@ -211,14 +270,23 @@ class AdminLoginScreen(QWidget):
         heading_layout.setSpacing(16)
         heading_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        heading_layout.addWidget(
-            CompassLogo(
-                size=52,
-                background=theme.color("--color-brand-navy"),
-                mark=theme.color("--color-brand-amber"),
-            ),
-            alignment=Qt.AlignmentFlag.AlignHCenter,
-        )
+        # Rozet (konteynerli işarə) — `64.png`. Başlıq zolağındakı işarədən
+        # FƏRQLİ fayldır və qəsdən: kart açıq səthdədir, yəni işarənin öz
+        # konteyneri onu fondan ayırır. Boyanmır — rozetin daxili kontrastı
+        # (tünd konteyner + açıq teal işarə) hər iki temada işləyir.
+        rosette = brand_assets.logo_pixmap(brand_assets.APP_MARK, height=52)
+        if rosette is not None:
+            heading_layout.addWidget(image_label(rosette), alignment=Qt.AlignmentFlag.AlignHCenter)
+        else:
+            # Fayl yoxdursa çəkilən loqo QALIR — giriş ekranı loqosuz açılmır.
+            heading_layout.addWidget(
+                CompassLogo(
+                    size=52,
+                    background=theme.color("--color-brand-navy"),
+                    mark=theme.color("--color-brand-amber"),
+                ),
+                alignment=Qt.AlignmentFlag.AlignHCenter,
+            )
 
         heading = plain_label("Hesabınıza Daxil Olun")
         heading_font = heading.font()

@@ -48,6 +48,7 @@ from PySide6.QtGui import (
     QPainterPath,
     QPaintEvent,
     QPen,
+    QPixmap,
     QPolygonF,
 )
 from PySide6.QtWidgets import (
@@ -137,6 +138,33 @@ def plain_label(text: str = "", parent: QWidget | None = None) -> QLabel:
     """
     label = QLabel(text, parent)
     label.setTextFormat(Qt.TextFormat.PlainText)
+    return label
+
+
+def image_label(pixmap: QPixmap | None = None, parent: QWidget | None = None) -> QLabel:
+    """YALNIZ şəkil daşıyan etiket — loqo, lockup, ikon (logo.md).
+
+    ──────────────────────────────────────────────────────────────────────
+    NİYƏ AYRICA FABRİKA — `plain_label()` KİFAYƏT ETMİRDİMİ
+    ──────────────────────────────────────────────────────────────────────
+    Kifayət edərdi, lakin çağırış yeri MƏNASINI itirərdi: `plain_label()`
+    adı "burada mətn var" deyir, halbuki bu etiketlərdə mətn HEÇ VAXT olmur.
+    Ayrı ad niyyəti göstərir və `test_no_screen_creates_a_bare_qlabel`
+    qapısını da yan keçmədən saxlayır — birbaşa `QLabel(...)` yazmağın
+    yeganə alternativi mərkəzi fabrika olmalıdır.
+
+    Mətn rejimi burada da sabitlənir: etiket bu gün mətnsizdir, lakin sabah
+    kimsə ona `setText(...)` yazsa, Qt-nin `AutoText` təxmini QAYIDARDI.
+    Qorunma obyektin ÖZÜNDƏ olmalıdır, istifadə vərdişində yox.
+    """
+    label = QLabel(parent)
+    label.setTextFormat(Qt.TextFormat.PlainText)
+    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    # Fon şəffafdır: loqo kartın/zolağın öz səthində oturur və etiketin
+    # miras aldığı fon rəngi onun altında kvadrat kimi görünərdi.
+    label.setStyleSheet("background: transparent;")
+    if pixmap is not None:
+        label.setPixmap(pixmap)
     return label
 
 
@@ -770,6 +798,7 @@ __all__ = [
     "StatusDot",
     "body_label",
     "column",
+    "image_label",
     "is_activation_key",
     "mono_label",
     "muted_label",

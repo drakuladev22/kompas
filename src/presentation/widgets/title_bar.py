@@ -36,9 +36,9 @@ from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QSizePolicy, QWidget
 
 from src.presentation.theme.manager import enable_styled_background
-from src.presentation.widgets import metrics
+from src.presentation.widgets import brand_assets, metrics
 from src.presentation.widgets.buttons import WindowButton
-from src.presentation.widgets.primitives import plain_label
+from src.presentation.widgets.primitives import image_label, plain_label
 
 if TYPE_CHECKING:
     from PySide6.QtGui import QMouseEvent
@@ -76,11 +76,22 @@ class TitleBar(QWidget):
         layout.setContentsMargins(14, 0, 0, 0)
         layout.setSpacing(12)
 
-        # Loqo — maketdə 16×16 amber kvadrat, 5px künc.
-        logo = QWidget()
-        logo.setObjectName("TitleBarLogo")
-        logo.setFixedSize(metrics.TITLEBAR_LOGO_SIZE, metrics.TITLEBAR_LOGO_SIZE)
-        layout.addWidget(logo)
+        # ------------------------------------------------------------------
+        # LOQO — RƏNGLİ KVADRAT DEYİL, ƏSL PƏRGAR İŞARƏSİ (logo.md)
+        # ------------------------------------------------------------------
+        # Əvvəl burada `#TitleBarLogo` QSS ilə boyanan BOŞ `QWidget` vardı,
+        # yəni zolaqda markanın özü deyil, rəngli kvadrat görünürdü.
+        # `16_withoutcontainer.png` konteynersizdir və məhz bunun üçündür:
+        # zolağın öz tünd fonu var, rozet artıq olardı.
+        #
+        # Fayl SABİT tünd-teal rəngdədir və tünd zolaqda görünməzdi — ona görə
+        # o, ALFA MASKASI kimi işlədilir və rəng `apply_theme`-dən gəlir
+        # (bax `widgets/brand_assets.py`). Şəkil tapılmasa köhnə kvadrat
+        # QALIR: loqonun olmaması pəncərəni açılmaz etməməlidir.
+        self._logo = image_label()
+        self._logo.setObjectName("TitleBarLogo")
+        self._logo.setFixedSize(metrics.TITLEBAR_LOGO_SIZE, metrics.TITLEBAR_LOGO_SIZE)
+        layout.addWidget(self._logo)
 
         self._title = plain_label(title)
         layout.addWidget(self._title)
@@ -124,15 +135,35 @@ class TitleBar(QWidget):
         control_color: str,
         hover_color: str,
         close_hover_color: str,
+        brand_mark_color: str = "",
     ) -> None:
         """İkon rənglərini temaya uyğunlaşdırır.
 
         QSS fonu və MƏTN rəngini özü tətbiq edir, lakin ikon piksel şəklidir —
         onu yenidən çəkmək lazımdır (eyni səbəb `Sidebar.apply_theme`-də).
+
+        Loqo da eyni qayda ilə boyanır: `brand_mark_color` verilməzsə düymə
+        rəngi işlədilir — belə halda işarə mətn/düymələrlə eyni tonda olur və
+        zolaq bütöv görünür.
         """
         for button in (self._minimize, self._maximize):
             button.set_colors(idle_color=control_color, hover_color=hover_color)
         self._close.set_colors(idle_color=control_color, hover_color=close_hover_color)
+        self.set_logo_color(brand_mark_color or control_color)
+
+    def set_logo_color(self, color: str) -> None:
+        """Başlıq loqosunu verilmiş rənglə yenidən çəkir.
+
+        Fayl tapılmasa etiket BOŞ qalır və QSS-dəki `#TitleBarLogo` qaydası
+        (rəngli kvadrat) görünür — yəni köhnə davranış fallback kimi işləyir.
+        """
+        pixmap = brand_assets.tinted_pixmap(
+            brand_assets.TITLE_MARK,
+            height=metrics.TITLEBAR_LOGO_SIZE,
+            color=color,
+        )
+        if pixmap is not None:
+            self._logo.setPixmap(pixmap)
 
     def buttons(self) -> tuple[WindowButton, WindowButton, WindowButton]:
         """Kiçilt / böyüt / bağla — testlər və native örtük üçün."""

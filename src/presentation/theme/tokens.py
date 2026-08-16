@@ -140,6 +140,24 @@ BRAND_NAVY: Final = "#0B1D3A"
 #: işlədilir; interaktiv vurğu üçün `--color-accent`-ə bax (yuxarıdakı izah).
 BRAND_AMBER: Final = "#F5A623"
 
+# --------------------------------------------------------------------------- #
+# LOQO RƏNGLƏRİ — PALİTRADAN DEYİL, FAYLLARDAN GƏLİR (logo.md)
+# --------------------------------------------------------------------------- #
+# Bunlar `assets/logo/*.png` fayllarındakı FAKTİKİ piksel dəyərləridir, dizayn
+# sistemindən törədilməyib. Ayrıca yazılmalarının səbəbi budur ki, başlıq
+# zolağındakı işarə şəkildən ALFA MASKASI kimi götürülüb yenidən boyanır (bax
+# `widgets/brand_assets.py`) — boyama rəngi loqonun öz rəngi ilə EYNİ olmalıdır,
+# əks halda eyni marka iki yerdə iki cür görünərdi.
+#
+# Bunlar `--color-accent` DEYİL və ola da bilməz: vurğu rəngi kontrast
+# tələblərinə görə seçilir və dəyişə bilər, loqo rəngi isə markanın özüdür.
+
+#: Açıq teal — TÜND fon üzərindəki işarə (`windows_app.png` referansı).
+BRAND_TEAL_LIGHT: Final = "#2DD4BF"
+
+#: Tünd teal — AÇIQ fon üzərindəki işarə və rozetin konteyneri.
+BRAND_TEAL_DARK: Final = "#134E4A"
+
 
 class ThemeMode(str, Enum):
     """İstifadəçinin Ayarlar ekranındakı seçimi (`user_preferences.theme`).
@@ -180,6 +198,9 @@ LIGHT_THEME: Final[dict[str, str]] = {
     # --- brend (dekorativ, kontrast məcburiyyəti yoxdur) ---
     "--color-brand-navy": BRAND_NAVY,
     "--color-brand-amber": BRAND_AMBER,
+    # Loqo işarəsinin rəngi — başlıq zolağı HƏR İKİ temada tünddür, ona görə
+    # dəyər də hər iki palitrada eynidir (bax `BRAND_TEAL_LIGHT` şərhi).
+    "--color-brand-mark": BRAND_TEAL_LIGHT,
     # --- semantik ---
     "--color-success": "#1E7A46",
     "--color-warning": "#A15C00",
@@ -281,6 +302,9 @@ DARK_THEME: Final[dict[str, str]] = {
     # --- brend ---
     "--color-brand-navy": BRAND_NAVY,
     "--color-brand-amber": BRAND_AMBER,
+    # Loqo işarəsinin rəngi — başlıq zolağı HƏR İKİ temada tünddür, ona görə
+    # dəyər də hər iki palitrada eynidir (bax `BRAND_TEAL_LIGHT` şərhi).
+    "--color-brand-mark": BRAND_TEAL_LIGHT,
     # --- semantik ---
     "--color-success": "#3FBF6E",
     "--color-warning": "#F0B429",

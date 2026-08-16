@@ -91,10 +91,13 @@ def test_the_datas_block_only_carries_known_assets() -> None:
     block = _datas_block()
     assert "kompasos.ico" in block
     assert "_FACE_MODEL_DATAS" in block
-    # Hər `datas` elementi ya ikon, ya da model dəstidir.
+    # Loqo PNG-ləri (logo.md): başlıq zolağı və splash onları RUNTIME-da oxuyur,
+    # yəni `.ico` tək başına kifayət etmir.
+    assert "'assets/logo'" in block
+    # Hər `datas` elementi ya ikon, ya loqo dəsti, ya da üz modelləridir.
     entries = [line.strip() for line in block.splitlines() if line.strip().startswith(("(", "*"))]
-    assert len(entries) == 2, f"gözlənilməyən `datas` elementləri: {entries}"
-    assert entries[1].startswith("*_FACE_MODEL_DATAS")
+    assert len(entries) == 3, f"gözlənilməyən `datas` elementləri: {entries}"
+    assert entries[2].startswith("*_FACE_MODEL_DATAS")
 
 
 def test_the_test_tree_is_excluded() -> None:
