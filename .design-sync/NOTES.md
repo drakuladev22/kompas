@@ -60,9 +60,21 @@ git-ə salınmır (bax `.gitignore`).
   `tokens/colors-dark.css` isə `[data-theme="dark"]`-a yazır — hər ikisi
   `styles.css`-dən `@import` olunur (skillin invariantı: dizaynlara YALNIZ
   `styles.css`-in tranzitiv `@import` bağlaması çatır).
-- **Rənglər WCAG AA qapısından keçib** — `scripts/check_contrast.py` 50 cütü
-  yoxlayır. Tokenləri dəyişdirən hər kəs həmin skripti işlətməlidir.
-  DİQQƏT: 50 rəqəmi `--include-high-contrast` İLƏ alınır; bayraqsız 48 çıxır.
+- **Rənglər WCAG AA qapısından keçib** — `scripts/check_contrast.py`
+  `--include-high-contrast` ilə **156**, bayraqsız **154** cütü yoxlayır.
+  Tokenləri dəyişdirən hər kəs həmin skripti işlətməlidir.
+  **(ÇATIŞMAZLIQ DÜZƏLİŞİ:** əvvəllər burada «50 cütü… bayraqsız 48» yazılırdı.
+  Rəqəm yoxlayıcı yalnız `tokens.py` cütlərini ölçdüyü dövrdən qalmışdı; sonra
+  skript `qss.py`-dəki FAKTİKİ istifadəni də (`::placeholder`, `:disabled`,
+  `:focus`, `:hover`, sərhədlər) ölçməyə başladı və say üç dəfədən çox artdı.
+  Bu, sadəcə köhnə rəqəm deyildi — faylın öz xəbərdarlığına görə **dizayn
+  agenti bu siyahını həqiqət kimi oxuyur**, yəni səhv rəqəm ona "əhatə tamdır"
+  deyib real boşluğu gizlədə bilərdi.**)**
+  **BU RƏQƏM DƏYİŞKƏNDİR — sənədə güvənməyin, skripti işə salıb yoxlayın:**
+  `.venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast`
+  — son sətir «UĞURLU: NN rəng cütü…» formasında cari sayı yazır. Yeni rəng
+  cütü və ya yeni QSS selektoru əlavə edən hər kəs bu bəndi də yeniləməlidir
+  (aşağıdakı `conventions.md` ikon-sayı ilə eyni köhnəlmə riski).
 
 ## Növbəti sinxron üçün risklər
 

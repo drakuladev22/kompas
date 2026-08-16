@@ -644,7 +644,9 @@ def test_session_sync_conflicts_read_the_root_page_size() -> None:
     limits = FakeSystemLimits()
     limits.set(SystemLimitKey.SYNC_CONFLICT_PAGE_SIZE, "6")
     session = _session(limits, sync_conflicts=conflicts)
-    actor = _employee(SystemRole.ROOT, "can_view_employee_reports")
+    # SEC-018-dən sonra oxu yolu da AYRICA `can_resolve_sync_conflicts`
+    # tələb edir — hesabat flag-i artıq kifayət etmir.
+    actor = _employee(SystemRole.ROOT, "can_resolve_sync_conflicts")
 
     session.sync_conflicts.inbox(tenant_id=TENANT, actor=actor)
     assert conflicts.seen == [6]

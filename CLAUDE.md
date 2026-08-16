@@ -32,17 +32,27 @@ Hər dəyişiklikdən sonra HAMISI keçməlidir:
 ```bash
 .venv/Scripts/python.exe -m ruff check src/ tests/ scripts/
 .venv/Scripts/python.exe -m ruff format src/ tests/ scripts/
-.venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (200 fayl)
-.venv/Scripts/python.exe -m pytest tests/ -q    # 1984 test, 45 skip
+.venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (320 fayl)
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 4656 test, 47 skip
 .venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast
 ```
 
-Kontrast yoxlayıcısı **130 rəng cütünü** ölçür — həm `tokens.py` cütlərini,
+**`QT_QPA_PLATFORM=offscreen` OPSİYONAL DEYİL.** Bu maşında real Windows
+platform plagini ilə e2e Qt testləri dəqiqədə ~4 test sürətinə düşür — tam
+dəst saatlarla çəkir və "asmış" kimi görünür. Offscreen-də eyni dəst dəqiqələr
+içində bitir. Yeganə fərq: `test_mono_role_resolves_to_a_fixed_pitch_font`
+atlanır (aşağıya bax).
+
+Kontrast yoxlayıcısı **156 rəng cütünü** (`--include-high-contrast` olmadan
+154) ölçür — həm `tokens.py` cütlərini,
 həm də `qss.py`-dəki FAKTİKİ istifadəni (`::placeholder`, `:disabled`,
 `:focus`, `:hover`, sərhədlər). Yalnız tokenləri yoxlamaq kifayət etmirdi:
-dörd kontrast qüsuru məhz bu boşluqda gizlənmişdi.
+dörd kontrast qüsuru məhz bu boşluqda gizlənmişdi. **Bu rəqəm dəyişkəndir** —
+yeni rəng cütü və ya yeni QSS selektoru əlavə edən skriptin son sətrindən
+cari sayı oxuyub bu bəndi yeniləməlidir (eyni köhnəlmə riski
+`.design-sync/NOTES.md`-dədir).
 
-Domen coverage qapısı **85%** (hazırda ~93%):
+Domen coverage qapısı **85%** (hazırda 94.35%):
 
 ```bash
 .venv/Scripts/python.exe -m pytest tests/unit \

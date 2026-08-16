@@ -22,7 +22,7 @@ Windows masaüstü tətbiqi (`.exe`).
 | 3 | Supabase repo-ları, çoxsaylı 1C konnektorları, offline buffer, lisenziya klienti, auto-update | ✅ Tamamlandı |
 | 4 | PySide6 Shell (role-driven), Kiosk Mode, Camera Dashboard, dizayn sistemi, kompozisiya kökü | ✅ Tamamlandı |
 | 5 | Root/CEO panelləri, növbə/tabel/cərimə modulları, özünə-xidmət alətləri | ✅ Tamamlandı |
-| 6 | Satış xalları, şübhəli satış növbəsi, hesabatlar, Master Lisenziya / Developer Paneli | ✅ Tamamlandı |
+| 6 | Satış xalları, şübhəli satış növbəsi, hesabatlar, SaaS-hazırlayıcı Lisenziya / Developer Paneli | ✅ Tamamlandı |
 
 ### Faza 5/6 — sonuncu mərhələdə bağlanan qatlar
 
@@ -172,13 +172,14 @@ KompasOS/
 │   │   ├── backup/          # ✅ pg_dump nüsxəsi, yoxlama, saxlama müddəti
 │   │   └── notifications/   # ✅ SMTP fallback + PII-siz crash reporting
 │   ├── developer_panel/     # ✅ YERLİ alət — müştəri .exe-sinə DAXİL EDİLMİR
-│   ├── presentation/        # Faza 4 — PySide6
+│   ├── presentation/        # ✅ PySide6 örtük, tema/tokenlər, ekranlar,
+│   │                        #    kontrollerlər (Faza 4 — bax cədvəl yuxarı)
 │   ├── shared/              # ✅ event_bus, di_container, saga_orchestrator,
 │   │                        #    saga_policies, logger
 │   └── main.py              # ✅ kompozisiya kökü + təhlükəsizlik self-check
 ├── database/
 │   ├── schema.sql           # ✅ 46 cədvəl, RLS, append-only audit, cron
-│   ├── tests/               # ✅ 17 DB-səviyyəli guard testi
+│   ├── tests/               # ✅ 34 DB-səviyyəli guard testi
 │   └── migrations/          # ✅ 001 username-auth · 002 Drive · 003 cərimə
 │                            #    icmalı · 004 1C konnektoru · 005 lisenziya
 │                            #    telemetriyası · 006 lisenziya RLS + expires_at
@@ -258,7 +259,10 @@ normal yaranır, şəkillər lokal növbədə gözləyir.
 
 Sxem canlı Supabase layihəsinə tətbiq olunub (ap-southeast-1, PostgreSQL 17.6):
 **46 cədvəl, 42 RLS siyasəti, 18 enum, 21 funksiya, 4 view, 23 trigger,
-110 indeks**, seed tam. **Guard testləri 17/17 ✅**, idempotentlik doğrulanıb.
+110 indeks**, seed tam. **Guard testləri tətbiq anında 17/17 ✅**, idempotentlik
+doğrulanıb. **Diqqət: 17/17 həmin tətbiq anının nəticəsidir** — fayl o vaxtdan
+bəri **34 teste** qədər genişlənib və yuxarıdakı sxem rəqəmləri də (cədvəl,
+RLS, trigger sayı) eyni ana aiddir. Cari sayı canlı bazada özünüz yoxlayın.
 
 Ətraflı: [`docs/database_deployment.md`](docs/database_deployment.md).
 
@@ -332,14 +336,26 @@ Tam əsaslandırma: [`docs/security_decisions.md`](docs/security_decisions.md).
 
 ---
 
-## Faza 4-dən əvvəl əvəzlənməli
+## İlk müştəri təhvilindən əvvəl əvəzlənməli
+
+**(ÇATIŞMAZLIQ DÜZƏLİŞİ:** bu bölmə əvvəllər «Faza 4-dən əvvəl əvəzlənməli»
+adlanırdı və iki maddə saxlayırdı. Faza 4 çoxdan ✅ Tamamlandı sayılır, yəni
+başlıq keçmiş bir tarixə istinad edirdi. İkinci maddə isə tamamilə köhnəlmişdi
+— aşağıya baxın.**)**
 
 - **`assets/kompasos.ico`** — hazırda avtomatik yaradılmış placeholder
-  (Deep Navy + Amber "K", 4 ölçü). Müştərinin real loqosu ilə əvəzlənməlidir
-  (bax [`assets/README.md`](assets/README.md)).
-- **`src/presentation/theme/tokens.py`** — dizayn tokenləri Faza 4-də yaranır;
-  yarandığı an `scripts/check_contrast.py` avtomatik "atlandı" rejimindən
-  "yoxlanılır" rejiminə keçir, CI-a toxunmaq lazım deyil.
+  (Deep Navy + Amber "K", 4 ölçü). Heç bir texniki qapını bloklamır, lakin
+  imzalanmış `production` buraxılışı müştəriyə verilməzdən əvvəl onun real
+  loqosu ilə əvəzlənməlidir (bax [`assets/README.md`](assets/README.md)).
+
+**Bu siyahıdan ÇIXARILAN maddə — `src/presentation/theme/tokens.py`:** əvvəlki
+mətn «dizayn tokenləri Faza 4-də YARANIR; yarandığı an `check_contrast.py`
+avtomatik "atlandı" rejimindən "yoxlanılır" rejiminə keçir» deyirdi. Fayl artıq
+MÖVCUDDUR, yoxlayıcı isə "atlandı" rejimində deyil — real olaraq işləyir və
+`tokens.py` ilə yanaşı `qss.py`-dəki FAKTİKİ istifadəni (`::placeholder`,
+`:disabled`, `:focus`, `:hover`, sərhədlər) də ölçür. Yəni bu maddə "gözlənilən
+iş" deyil, keçilmiş qapıdır — əmr üçün bax yuxarıdakı keyfiyyət qapıları
+bölməsinə.
 
 ---
 
@@ -348,8 +364,20 @@ Tam əsaslandırma: [`docs/security_decisions.md`](docs/security_decisions.md).
 - [`kompasos.md`](kompasos.md) — tam texniki spesifikasiya (mənbə həqiqət)
 - [`docs/security_decisions.md`](docs/security_decisions.md) — SEC-001…SEC-017 qərarları
 - [`docs/open_questions.md`](docs/open_questions.md) — açıq/bağlanmış biznes sualları (BR-NNN)
-- [`docs/risk_register.md`](docs/risk_register.md) — risk reyestri (cari)
+- [`docs/risk_register.md`](docs/risk_register.md) — risk reyestri: bağlanmış
+  risklər + hələ AÇIQ olan istismar riskləri, üstəgəl «Faza 3-ə keçən açıq
+  öhdəliklər» cədvəli (risk deyil, iş maddəsi). **(ÇATIŞMAZLIQ DÜZƏLİŞİ:**
+  burada sadəcə «(cari)» yazılırdı, halbuki faylın son bölməsi hələ də faza-
+  bağlı öhdəlik siyahısıdır — «cari» sözü oxucuya sənədin tam yenilənmiş
+  olduğunu vəd edirdi. Faylın ÖZ «Son yenilənmə» sətri həqiqi tarixi göstərir;
+  vəziyyəti oradan oxuyun.**)**
 - [`docs/dependency_policy.md`](docs/dependency_policy.md) — versiya hədləri və yeniləmə proseduru
 - [`docs/key_rotation.md`](docs/key_rotation.md) — şifrələmə açarının rotasiyası
 - [`docs/scheduler_setup.md`](docs/scheduler_setup.md) — pg_cron / xarici scheduler
 - [`docs/phase1_risks.md`](docs/phase1_risks.md) — risk vəziyyəti və 96 test ssenarisi
+- [`docs/root_parameters.md`](docs/root_parameters.md) — ROOT panelindən idarə olunan
+  bütün limit və modul açarlarının kataloqu
+- [`docs/drive_integration.md`](docs/drive_integration.md) — Google Drive razılığı,
+  sübut şəkillərinin növbəsi və kvota nəzarəti
+- [`docs/cli_reference.md`](docs/cli_reference.md) — `main.py`-ın bütün əmr sətri
+  açarları (quraşdırma, diaqnostika, planlaşdırılmış işlər)

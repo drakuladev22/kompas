@@ -525,9 +525,11 @@ def test_sync_conflict_page_size_follows_the_root_value() -> None:
         clock=FakeClock(NOW),  # type: ignore[arg-type]
         limits=limits,  # type: ignore[arg-type]
     )
+    # SEC-018-dən sonra oxu yolu da AYRICA `can_resolve_sync_conflicts`
+    # tələb edir — hesabat flag-i artıq kifayət etmir.
     hr = _employee(
         SystemRole.HR_ADMIN,
-        flags=[PermissionFlag(code="can_view_employee_reports", category="HR")],
+        flags=[PermissionFlag(code="can_resolve_sync_conflicts", category="ERP_INFRA")],
     )
     use_case.inbox(tenant_id=TENANT, actor=hr)
     assert repository.seen == [6]
