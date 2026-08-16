@@ -321,6 +321,24 @@ bağlamasında yaşayır və ekranla birlikdə ölür.
 * Hər miqrasiya idempotentdir və sonunda şərhlə DOWN blokunu saxlayır.
 * Yeni sütun əlavə edərkən: miqrasiya faylı + `COMMENT ON COLUMN` + niyə-izahı.
 
+### Miqrasiyalar YALNIZ icraçı ilə tətbiq olunur
+
+```bash
+.venv/Scripts/python.exe scripts/apply_migrations.py --dry-run   # nə gözləyir
+.venv/Scripts/python.exe scripts/apply_migrations.py             # tətbiq et
+.venv/Scripts/python.exe scripts/apply_migrations.py --vendor    # vendor dəsti
+```
+
+İcraçı `kompasos.schema_migrations` reyestrinə yazır (miqrasiya 061): fayl adı,
+SHA-256, vaxt, rol, müddət. **Faylı əl ilə SQL redaktorunda işlətmək qadağandır**
+— reyestrdə iz qalmaz.
+
+Səbəb DB-5-in canlı bazada tapdığı faktdır: 60 miqrasiyadan **11-i heç vaxt
+tətbiq olunmamışdı**, 32 cədvəl yox idi və tətbiq onlara yazmağa çalışırdı.
+Qüsur aylarla görünmədi, çünki tətbiq olunanın qeydi HEÇ YERDƏ yox idi — cavab
+yalnız sxemi mənbə ilə əl ilə müqayisə etməklə tapılırdı, o müqayisə isə
+YALNIZ cədvəl yaradan miqrasiyanı görür (60-dan 40-ı cədvəl yaratmır).
+
 ### SÜTUN yox, QAYDA dəyişirsə — hər iki yer yenilənir
 
 Sütun qatlanır, **qayda qatlanmır**. Miqrasiya `schema.sql`-də ARTIQ mövcud olan
@@ -346,7 +364,8 @@ qalmır, qərara çevrilir.
 
 | Nə | Harada |
 |---|---|
-| İcazə flag kataloqu (36 flag: 34 spesifikasiyadan + `can_publish_fines`, `can_manage_drive_connection`) | `database/schema.sql` §22 |
+| İcazə flag kataloqu — **50 flag** (36 `schema.sql`-də: 34 spesifikasiyadan + `can_publish_fines`, `can_manage_drive_connection`; qalan 14 miqrasiyalarda: 021 +6, 038 +6, 047 +1, 056 +1) | `database/schema.sql` §22 + miqrasiyalar |
+| Miqrasiya icraçısı və reyestri | `scripts/apply_migrations.py`, `migrations/061` |
 | Hardlock/anti-fraud qaydaları | `src/domain/value_objects/authorization.py` |
 | Menyu maddələri + flag bağlantısı | `src/presentation/shell/menu.py` |
 | Sistem limitləri & Feature Toggle açarları | `src/domain/policies.py` |
