@@ -85,7 +85,7 @@ class BarChart(QWidget):
         self._theme = theme
         self._data: list[BarDatum] = []
         self._highlight_max = highlight_max
-        self.setMinimumHeight(150)
+        self.setMinimumHeight(152)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMouseTracking(True)
 
@@ -228,7 +228,7 @@ class StatTile(Card):
         super().__init__(padding=20, spacing=8, parent=parent)
         self.add(muted_label(title, size=13))
 
-        self._value = title_label(value, size=30)
+        self._value = title_label(value, size=26)
         self.add(self._value)
 
         self._caption = muted_label(caption)
@@ -258,7 +258,7 @@ class MeterCard(Card):
         head = QWidget()
         head_layout = QVBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(6)
+        head_layout.setSpacing(8)
         head_layout.addWidget(title_label(title, size=15))
         head_layout.addWidget(muted_label(subtitle))
         self.add(head)
@@ -290,10 +290,10 @@ class RankList(Card):
     """Sıralanmış siyahı — "Xal liderləri" (nömrə, ad, dəyər)."""
 
     def __init__(self, title: str, *, parent: QWidget | None = None) -> None:
-        super().__init__(padding=18, spacing=12, parent=parent)
-        self.add(title_label(title, size=14))
+        super().__init__(padding=20, spacing=12, parent=parent)
+        self.add(title_label(title, size=15))
         self._rows_layout = QVBoxLayout()
-        self._rows_layout.setSpacing(10)
+        self._rows_layout.setSpacing(12)
         holder = QWidget()
         holder.setLayout(self._rows_layout)
         self.add(holder)

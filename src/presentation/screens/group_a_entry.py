@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.theme.manager import set_surface_color
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.forms import FormField
 from src.presentation.widgets.layout_utils import clear_layout
@@ -124,7 +125,7 @@ class SplashScreen(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.setSpacing(30)
+        layout.setSpacing(32)
 
         logo = CompassLogo(
             size=96,
@@ -193,12 +194,12 @@ class AdminLoginScreen(QWidget):
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._theme = theme
-        self.setStyleSheet(f"background-color: {theme.color('--color-content-bg')};")
+        set_surface_color(self, theme.color("--color-content-bg"))
 
         outer = QVBoxLayout(self)
         outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        card = Card(padding=40, spacing=22, shadow=True)
+        card = Card(padding=40, spacing=20, shadow=True)
         card.setFixedWidth(LOGIN_CARD_WIDTH)
         card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Maximum)
 
@@ -206,7 +207,7 @@ class AdminLoginScreen(QWidget):
         heading_box = QWidget()
         heading_layout = QVBoxLayout(heading_box)
         heading_layout.setContentsMargins(0, 0, 0, 0)
-        heading_layout.setSpacing(14)
+        heading_layout.setSpacing(16)
         heading_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
         heading_layout.addWidget(
@@ -339,7 +340,7 @@ class _WizardStep(QWidget):
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
+        layout.setSpacing(16)
 
         self._badge = plain_label(str(number))
         self._badge.setFixedSize(28, 28)
@@ -353,7 +354,7 @@ class _WizardStep(QWidget):
         text_box = QWidget()
         text_layout = QVBoxLayout(text_box)
         text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(2)
+        text_layout.setSpacing(4)
 
         self._title = plain_label(title)
         title_font = self._title.font()
@@ -428,7 +429,7 @@ class FirstRunWizard(QWidget):
         super().__init__(parent)
         self._theme = theme
         self._index = 0
-        self.setStyleSheet(f"background-color: {theme.color('--color-content-bg')};")
+        set_surface_color(self, theme.color("--color-content-bg"))
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -465,7 +466,7 @@ class FirstRunWizard(QWidget):
 
         layout.addStretch(1)
 
-        note = Card(padding=14, spacing=6)
+        note = Card(padding=16, spacing=8)
         note.add(
             body_label(
                 "Bu hesab sistemin ilk Admin-i olacaq. Sonradan yalnız Admin "
@@ -483,7 +484,7 @@ class FirstRunWizard(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(48, 40, 48, 32)
-        layout.setSpacing(22)
+        layout.setSpacing(24)
 
         self._heading = plain_label()
         heading_font = self._heading.font()
@@ -492,14 +493,14 @@ class FirstRunWizard(QWidget):
         self._heading.setFont(heading_font)
         layout.addWidget(self._heading)
 
-        self._description = body_label("", size=14)
+        self._description = body_label("", size=13)
         self._description.setStyleSheet(f"color: {self._theme.color('--color-text-secondary')};")
         layout.addWidget(self._description)
 
         self._fields_host = QWidget()
         self._fields_layout = QVBoxLayout(self._fields_host)
         self._fields_layout.setContentsMargins(0, 0, 0, 0)
-        self._fields_layout.setSpacing(18)
+        self._fields_layout.setSpacing(16)
         layout.addWidget(self._fields_host)
 
         layout.addStretch(1)
@@ -778,12 +779,12 @@ class FatalStartupScreen(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setStyleSheet(f"background-color: {theme.color('--color-content-bg')};")
+        set_surface_color(self, theme.color("--color-content-bg"))
 
         outer = QVBoxLayout(self)
         outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        card = Card(padding=44, spacing=20, surface="modal", shadow=True)
+        card = Card(padding=40, spacing=20, surface="modal", shadow=True)
         card.setFixedWidth(560)
         card.body().setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
@@ -795,7 +796,7 @@ class FatalStartupScreen(QWidget):
         heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card.add(heading)
 
-        detail = body_label(message, size=14)
+        detail = body_label(message, size=13)
         detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
         detail.setMaximumWidth(440)
         detail.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
@@ -807,7 +808,7 @@ class FatalStartupScreen(QWidget):
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card.body().addWidget(hint, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        contact_label = mono_label(contact, size=14)
+        contact_label = mono_label(contact, size=13)
         contact_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card.body().addWidget(contact_label, alignment=Qt.AlignmentFlag.AlignHCenter)
 

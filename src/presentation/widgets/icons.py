@@ -67,6 +67,18 @@ _BODIES: Final[dict[str, str]] = {
     "user": (
         '<circle cx="8" cy="6" r="2.6"/><path d="M3 13.4c.8-2.4 2.6-3.6 5-3.6s4.2 1.2 5 3.6"/>'
     ),
+    # Üz təsdiqi — dörd künc çərçivəsi + sadə sifət.
+    #
+    # NİYƏ KÜNCLƏR, NİYƏ TAM ÇƏRÇİVƏ: tam kvadrat «şəkil/foto» kimi oxunur,
+    # dörd künc isə SKAN etməni bildirir — istifadəçilər bu formanı telefon
+    # üz-tanımasından tanıyır. Sifət cizgiləri minimaldır: 16px-də göz və ağız
+    # detalları bir-birinə qarışır.
+    "face_scan": (
+        '<path d="M2.4 5.6V3.6a1.2 1.2 0 011.2-1.2h2M13.6 5.6V3.6a1.2 1.2 0 00-1.2-1.2h-2'
+        'M2.4 10.4v2a1.2 1.2 0 001.2 1.2h2M13.6 10.4v2a1.2 1.2 0 01-1.2 1.2h-2"/>'
+        '<path d="M6.2 6.6h.01M9.8 6.6h.01"/>'
+        '<path d="M6 9.6c.5.7 1.2 1 2 1s1.5-.3 2-1"/>'
+    ),
     "calendar": (
         '<path d="M2.2 3.4h11.6v10.4H2.2z"/><path d="M2.2 6.6h11.6M5.6 1.8v3M10.4 1.8v3"/>'
     ),

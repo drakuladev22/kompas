@@ -641,8 +641,11 @@ QPushButton[variant="secondary"][active="true"] {
 QLabel[chip="success"], QLabel[chip="warning"], QLabel[chip="danger"],
 QLabel[chip="info"], QLabel[chip="neutral"] {
     border: {{--focus-ring-width}} solid transparent;
-    border-radius: {{--radius-md}};
-    padding: 2px 6px;
+    /* DESIGN.MD REDİZAYNI: `--radius-md` (8px) → tam həb. Referansların
+       hamısında status nişanı HƏBDİR; 8px radius onu kiçik kartla
+       qarışdırırdı və cədvəl sətrində "basıla bilən" görünürdü. */
+    border-radius: {{--radius-pill}};
+    padding: 3px 10px;
     font-size: {{--font-size-sm}};
     font-weight: {{--font-weight-normal}};
 }

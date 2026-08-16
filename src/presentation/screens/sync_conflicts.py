@@ -175,7 +175,7 @@ class SyncConflictScreen(Screen):
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_layout.setSpacing(10)
+        toolbar_layout.setSpacing(12)
         self._summary = muted_label("")
         toolbar_layout.addWidget(self._summary)
         toolbar_layout.addWidget(stretch())
@@ -225,7 +225,7 @@ class SyncConflictScreen(Screen):
 
     def _build_list_card(self) -> Card:
         card = Card(padding=20, spacing=12)
-        card.add(title_label("Həll gözləyən konfliktlər", size=16))
+        card.add(title_label("Həll gözləyən konfliktlər", size=15))
         card.add(
             muted_label(
                 "Audit-kritik qeydlər siyahının başındadır — sıranı use case verir.",
@@ -235,7 +235,7 @@ class SyncConflictScreen(Screen):
         card.add(Divider())
 
         self._list_rows = QVBoxLayout()
-        self._list_rows.setSpacing(10)
+        self._list_rows.setSpacing(12)
         holder = QWidget()
         holder.setLayout(self._list_rows)
         card.add(holder)
@@ -245,7 +245,7 @@ class SyncConflictScreen(Screen):
 
     def _build_list_row(self, row: dict[str, str]) -> QWidget:
         key = row.get("id", "")
-        card = ClickableCard(key, padding=16, spacing=6)
+        card = ClickableCard(key, padding=16, spacing=8)
         card.clicked.connect(self.conflict_selected)
 
         head = QWidget()
@@ -312,8 +312,8 @@ class SyncConflictScreen(Screen):
     # ------------------------------ müqayisə ---------------------------------- #
 
     def _build_comparison_card(self) -> Card:
-        card = Card(padding=20, spacing=10)
-        self._detail_title = title_label("Konflikt seçilməyib", size=16)
+        card = Card(padding=20, spacing=12)
+        self._detail_title = title_label("Konflikt seçilməyib", size=15)
         card.add(self._detail_title)
         self._detail_meta = mono_label("", muted=True)
         card.add(self._detail_meta)
@@ -468,7 +468,7 @@ class SyncConflictScreen(Screen):
         card.add(self._notice)
 
         self._decisions = QVBoxLayout()
-        self._decisions.setSpacing(10)
+        self._decisions.setSpacing(12)
         holder = QWidget()
         holder.setLayout(self._decisions)
         card.add(holder)

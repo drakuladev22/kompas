@@ -310,24 +310,32 @@ def _sales_points(screen: group_f.SalesPointsScreen) -> None:
     screen.set_history(
         [
             {
+                "entry_id": "preview-1208",
+                "can_appeal": "1",
                 "date": "12.08",
                 "reason": "Divan satışı — Enza kolleksiyası",
                 "status": "Təsdiqli",
                 "points": "+45",
             },
             {
+                "entry_id": "preview-1108",
+                "can_appeal": "1",
                 "date": "11.08",
                 "reason": "Tapşırıq: səhər açılış yoxlaması",
                 "status": "Təsdiqli",
                 "points": "+20",
             },
             {
+                "entry_id": "preview-1008",
+                "can_appeal": "1",
                 "date": "10.08",
                 "reason": "Yataq dəsti satışı — çek 4471",
                 "status": "Gözləyir",
                 "points": "+60",
             },
             {
+                "entry_id": "preview-0808",
+                "can_appeal": "1",
                 "date": "08.08",
                 "reason": "Satış geri qaytarıldı — çek 4392",
                 "status": "Geri alınıb",
@@ -339,9 +347,11 @@ def _sales_points(screen: group_f.SalesPointsScreen) -> None:
     )
     screen.set_catalog(
         [
-            {"name": "Əlavə istirahət günü", "cost": "2000"},
-            {"name": "100 ₼ hədiyyə kartı", "cost": "1200"},
-            {"name": "Mağaza endirim kuponu", "cost": "600"},
+            # `id` MAKETDƏ DƏ VAR: canlı yol onu `request_reward` üçün
+            # işlədir və iki yol EYNİ AÇARLARI daşımalıdır (CLAUDE.md §6).
+            {"id": "preview-reward-1", "name": "Əlavə istirahət günü", "cost": "2000"},
+            {"id": "preview-reward-2", "name": "100 ₼ hədiyyə kartı", "cost": "1200"},
+            {"id": "preview-reward-3", "name": "Mağaza endirim kuponu", "cost": "600"},
         ],
         balance=1240,
     )

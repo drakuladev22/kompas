@@ -114,8 +114,25 @@ CONTENT_PADDING_H: Final = 26
 CONTENT_BOTTOM_SAFE_AREA: Final = 96
 #: Kartlar arası `gap: 18px`.
 CARD_SPACING: Final = 18
-#: Kart daxili `padding: 16px 20px` (siyahı sətri) / `18px` (adi kart).
-CARD_PADDING: Final = 18
+#: Kart daxili boşluq.
+#:
+#: DESIGN.MD REDİZAYNI: 18 → 20. Referansların hamısında (`dashboard.jpg`,
+#: `tasks.jpg`, `status card UI design.jpg`) kart daxili boşluq 4px şəbəkəsinə
+#: OTURUR; 18 isə şəbəkədən kənar idi və kartın içindəki hər sətir yarım
+#: piksel sürüşürdü. 20 həm şəbəkəyə düşür, həm də başlıq ilə kənar arasında
+#: referanslardakı nəfəs payını verir.
+CARD_PADDING: Final = 20
+
+#: Sıx cədvəl sətri (`tasks.jpg`, `status card UI design.jpg`).
+#:
+#: NİYƏ İKİ SƏTİR HÜNDÜRLÜYÜ VAR: referanslar iki fərqli sıxlıq işlədir —
+#: skan edilən cədvəl (44px) və oxunan siyahı kartı (56px). Tək dəyər
+#: seçsəydik, ya cədvəl lazımsız yer tutar, ya siyahı sıxılıb oxunmaz olardı.
+#: 44 həm də `--touch-target-min` ilə üst-üstə düşür: kassa PC-sinin toxunma
+#: ekranında cədvəl sətri hələ də hədəf ola bilir.
+ROW_HEIGHT_DENSE: Final = 44
+#: Geniş siyahı sətri — iki sətirlik mətn (ad + alt-sətir) sığmalıdır.
+ROW_HEIGHT_COMFORTABLE: Final = 56
 #: İdarə Paneli widget sətri `grid-auto-rows: 132px`.
 DASHBOARD_ROW_HEIGHT: Final = 132
 
@@ -168,8 +185,16 @@ KEYPAD_SPACING: Final = 16
 
 #: Naviqasiya maddəsi — maketdə 13.5px.
 FONT_NAV_ITEM: Final = 13
-#: Səhifə başlığı — 17px.
-FONT_PAGE_TITLE: Final = 17
+#: Səhifə başlığı.
+#:
+#: DESIGN.MD REDİZAYNI: 17 → 22. Referansların dördü də (`dashboard.jpg`,
+#: `tasks.jpg`, `notification.jpg`, `Login screen.jpg`) səhifə başlığı ilə
+#: kart başlığı arasında AYDIN sıçrayış qoyur — 17px kart başlığından (15px)
+#: cəmi 2px böyük idi, yəni iyerarxiya faktiki olaraq yox idi və istifadəçi
+#: hansı mətnin ekranın adı olduğunu formadan oxuya bilmirdi.
+FONT_PAGE_TITLE: Final = 22
+#: Kart/bölmə başlığı — səhifə başlığından bir pillə aşağı (referanslarda 15px).
+FONT_CARD_TITLE: Final = 15
 #: Köməkçi/solğun mətn — 12.5px.
 FONT_CAPTION: Final = 12
 #: Bölmə etiketi (böyük hərflər) — 11px.
@@ -179,8 +204,13 @@ FONT_STATE_TITLE: Final = 20
 #: Kiosk başlığı — 28px.
 FONT_KIOSK_TITLE: Final = 28
 
-#: Bölmə etiketindəki hərf aralığı — maketdə `letter-spacing: 0.12em`.
+#: Bölmə etiketindəki hərf aralığı.
 #: QSS bunu dəstəkləmir, `QFont.setLetterSpacing` ilə verilir (piksel olaraq).
-SECTION_LABEL_LETTER_SPACING: Final = 1.3
+#:
+#: DESIGN.MD REDİZAYNI: 1.3px (0.12em) → 0.66px (0.06em). Referanslarda
+#: (`navbar.jpg` «Menu»/«Group», `status card UI design.jpg` «TEAM»/«PIPELINES»)
+#: böyük-hərfli etiket AZ aralıqlıdır: 0.12em Azərbaycan hərflərində (Ə, Ğ, Ş)
+#: sözü dağıdır, çünki onların diakritikası onsuz da əlavə optik boşluq yaradır.
+SECTION_LABEL_LETTER_SPACING: Final = 0.66
 
 __all__ = [name for name in dir() if name.isupper()]

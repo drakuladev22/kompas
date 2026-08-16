@@ -199,7 +199,7 @@ class FaceEnrollmentScreen(Screen):
         toolbar = QWidget()
         layout = QHBoxLayout(toolbar)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
 
         self._summary = muted_label("")
         layout.addWidget(self._summary)
@@ -211,7 +211,7 @@ class FaceEnrollmentScreen(Screen):
         return toolbar
 
     def _build_subject_card(self) -> Card:
-        card = Card(padding=20, spacing=14)
+        card = Card(padding=20, spacing=12)
         card.add(title_label("Üz Qeydiyyatı", size=15))
         card.add(
             muted_label(
@@ -224,7 +224,7 @@ class FaceEnrollmentScreen(Screen):
         selector = QWidget()
         selector_layout = QVBoxLayout(selector)
         selector_layout.setContentsMargins(0, 0, 0, 0)
-        selector_layout.setSpacing(7)
+        selector_layout.setSpacing(8)
         selector_layout.addWidget(field_label("İşçi"))
 
         self._subject = QComboBox()
@@ -236,7 +236,7 @@ class FaceEnrollmentScreen(Screen):
         state_row = QWidget()
         state_layout = QHBoxLayout(state_row)
         state_layout.setContentsMargins(0, 0, 0, 0)
-        state_layout.setSpacing(10)
+        state_layout.setSpacing(12)
         self._state_chip = Chip("Qeydiyyatsız", "danger")
         state_layout.addWidget(self._state_chip)
         self._enrolled_at = mono_label("")
@@ -248,7 +248,7 @@ class FaceEnrollmentScreen(Screen):
         self._re_enroll_box = QWidget()
         re_layout = QVBoxLayout(self._re_enroll_box)
         re_layout.setContentsMargins(0, 0, 0, 0)
-        re_layout.setSpacing(7)
+        re_layout.setSpacing(8)
         self._archive_warning = body_label("", size=13)
         re_layout.addWidget(self._archive_warning)
         re_layout.addWidget(field_label("Yenidən qeydiyyatın səbəbi"))
@@ -262,7 +262,7 @@ class FaceEnrollmentScreen(Screen):
 
     def _build_preview_card(self) -> Card:
         """«Canlı önizləmə» — ŞƏKİL YOX, VƏZİYYƏT (bax modul başlığı)."""
-        card = Card(padding=20, spacing=14)
+        card = Card(padding=20, spacing=12)
         card.add(title_label("Kamera", size=15))
 
         self._camera_state = body_label("Kamera vəziyyəti oxunmayıb.", size=13)
@@ -582,7 +582,7 @@ class FaceExemptionScreen(Screen):
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
         layout.addWidget(Chip("Kompensasiya edici nəzarət", "warning"))
         layout.addWidget(stretch())
         card.add(row)
@@ -603,14 +603,14 @@ class FaceExemptionScreen(Screen):
         return card
 
     def _build_form(self) -> Card:
-        card = Card(padding=20, spacing=14)
+        card = Card(padding=20, spacing=12)
         card.add(title_label("Yeni istisna", size=15))
         card.add(Divider())
 
         employee_box = QWidget()
         employee_layout = QVBoxLayout(employee_box)
         employee_layout.setContentsMargins(0, 0, 0, 0)
-        employee_layout.setSpacing(7)
+        employee_layout.setSpacing(8)
         employee_layout.addWidget(field_label("İşçi"))
         self._employee = QComboBox()
         self._employee.setProperty("variant", "form")
@@ -620,7 +620,7 @@ class FaceExemptionScreen(Screen):
         reason_box = QWidget()
         reason_layout = QVBoxLayout(reason_box)
         reason_layout.setContentsMargins(0, 0, 0, 0)
-        reason_layout.setSpacing(7)
+        reason_layout.setSpacing(8)
         reason_layout.addWidget(field_label("Səbəb"))
         self._reason = QLineEdit()
         self._reason.setProperty("variant", "form")
@@ -631,7 +631,7 @@ class FaceExemptionScreen(Screen):
         days_box = QWidget()
         days_layout = QVBoxLayout(days_box)
         days_layout.setContentsMargins(0, 0, 0, 0)
-        days_layout.setSpacing(7)
+        days_layout.setSpacing(8)
         days_layout.addWidget(field_label("Müddət"))
         self._days = QSpinBox()
         self._days.setProperty("variant", "form")
@@ -662,12 +662,12 @@ class FaceExemptionScreen(Screen):
         host = QWidget()
         layout = QVBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
 
         header = QWidget()
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(10)
+        header_layout.setSpacing(12)
         header_layout.addWidget(title_label("Aktiv istisnalar", size=15))
         self._summary = muted_label("")
         header_layout.addWidget(self._summary)

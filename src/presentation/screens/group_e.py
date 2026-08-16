@@ -18,21 +18,15 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
-from src.presentation.screens.base import Screen
+from src.presentation.theme.manager import set_surface_color
 from src.presentation.widgets import icons, metrics
-from src.presentation.widgets.buttons import action_button
-from src.presentation.widgets.data_table import Column, DataTable
-from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
-    ChipTone,
     Divider,
-    StatusDot,
     body_label,
     mono_label,
     muted_label,
@@ -174,7 +168,7 @@ class SupportChatWidget(QWidget):
 
         # ------------------------------ başlıq ------------------------------ #
         header = QWidget()
-        header.setFixedHeight(58)
+        header.setFixedHeight(56)
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(18, 0, 18, 0)
         header_layout.setSpacing(12)
@@ -200,8 +194,8 @@ class SupportChatWidget(QWidget):
         identity = QWidget()
         identity_layout = QVBoxLayout(identity)
         identity_layout.setContentsMargins(0, 0, 0, 0)
-        identity_layout.setSpacing(2)
-        identity_layout.addWidget(title_label("KompasOS Dəstək", size=14))
+        identity_layout.setSpacing(4)
+        identity_layout.addWidget(title_label("KompasOS Dəstək", size=15))
         status = muted_label("Onlayn · adətən 10 dəq içində")
         status.setStyleSheet(f"color: {self._theme.color('--color-success')};")
         identity_layout.addWidget(status)
@@ -225,7 +219,7 @@ class SupportChatWidget(QWidget):
         self._messages_host = QWidget()
         self._messages_layout = QVBoxLayout(self._messages_host)
         self._messages_layout.setContentsMargins(18, 18, 18, 18)
-        self._messages_layout.setSpacing(14)
+        self._messages_layout.setSpacing(16)
         self._messages_layout.addStretch(1)
         self._scroll.setWidget(self._messages_host)
         panel.body().addWidget(self._scroll, 1)
@@ -236,7 +230,7 @@ class SupportChatWidget(QWidget):
         composer = QWidget()
         composer_layout = QHBoxLayout(composer)
         composer_layout.setContentsMargins(16, 14, 16, 14)
-        composer_layout.setSpacing(10)
+        composer_layout.setSpacing(12)
 
         self._input = QLineEdit()
         self._input.setPlaceholderText("Mesaj yazın…")
@@ -350,221 +344,20 @@ class SupportChatWidget(QWidget):
 # --------------------------------------------------------------------------- #
 
 
-class DeveloperPanelScreen(Screen):
-    """Tenant cədvəli + detal paneli (telemetriya, ticket, crash).
-
-    Signals:
-        tenant_selected: `tenant_id`.
-        activation_toggled: (`tenant_id`, aktiv olsun?).
-        search_changed: Axtarış mətni.
-    """
-
-    tenant_selected = Signal(str)
-    activation_toggled = Signal(str, bool)
-    search_changed = Signal(str)
-
-    _STATUS_TONES: Final[dict[str, ChipTone]] = {
-        "Aktiv": "success",
-        "Deaktiv": "danger",
-    }
-
-    def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
-        super().__init__(theme, padded=False, parent=parent)
-        self._tenants: list[dict[str, str]] = []
-        self._current: str | None = None
-        self._current_active = True
-
-        container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(26, 20, 26, 20)
-        left_layout.setSpacing(12)
-
-        toolbar = QWidget()
-        toolbar_layout = QHBoxLayout(toolbar)
-        toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        self._summary = muted_label("")
-        toolbar_layout.addWidget(self._summary)
-        toolbar_layout.addWidget(stretch())
-        self._search = QLineEdit()
-        self._search.setPlaceholderText("Tenant axtar")
-        self._search.setProperty("variant", "form")
-        self._search.setFixedWidth(260)
-        self._search.textChanged.connect(self.search_changed)
-        toolbar_layout.addWidget(self._search)
-        left_layout.addWidget(toolbar)
-
-        self._table = DataTable(
-            [
-                Column("Tenant", 230),
-                Column("Versiya", 110, mono=True),
-                Column("İstifadəçi", 110),
-                Column("Son aktivlik", 150),
-                Column("Vəziyyət"),
-            ],
-            theme,
-            footnote=(
-                "Deaktiv edilmiş tenant-da bütün istifadəçilər LICENSE_INACTIVE ekranını görür."
-            ),
-        )
-        self._table.row_selected.connect(self._on_row)
-        left_layout.addWidget(self._table)
-        layout.addWidget(left, 1)
-
-        layout.addWidget(self._build_detail_panel())
-        self.add(container)
-
-    def _build_detail_panel(self) -> QWidget:
-        panel = QWidget()
-        panel.setFixedWidth(metrics.DETAIL_PANEL_WIDTH)
-        panel.setStyleSheet(
-            f"background-color: {self.theme.color('--color-card-bg')};"
-            f"border-left: 1px solid {self.theme.color('--color-card-border')};"
-        )
-
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(22, 22, 22, 22)
-        layout.setSpacing(16)
-
-        from src.presentation.widgets.primitives import section_label  # noqa: PLC0415
-
-        layout.addWidget(section_label("Tenant detalı"))
-        self._detail_name = title_label("", size=18)
-        layout.addWidget(self._detail_name)
-        self._detail_meta = mono_label("", muted=True)
-        layout.addWidget(self._detail_meta)
-
-        self._toggle_button = action_button("Deaktiv Et")
-        self._toggle_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._toggle_button.clicked.connect(self._on_toggle)
-        layout.addWidget(self._toggle_button)
-
-        self._telemetry = self._build_metric_card("Telemetriya (7 gün)")
-        layout.addWidget(self._telemetry)
-
-        self._tickets = self._build_metric_card("Açıq ticket-lər")
-        layout.addWidget(self._tickets)
-
-        self._crashes = self._build_metric_card("Son crash hesabatları")
-        layout.addWidget(self._crashes)
-
-        layout.addStretch(1)
-        return panel
-
-    def _build_metric_card(self, title: str) -> Card:
-        # Detal panelinin İÇİNDƏ oturur — maketdə `border-radius: 11px`.
-        card = Card(padding=16, spacing=10, surface="panel")
-        card.add(title_label(title, size=13))
-        rows = QVBoxLayout()
-        rows.setSpacing(10)
-        holder = QWidget()
-        holder.setLayout(rows)
-        card.add(holder)
-        card.setProperty("rows_layout", None)
-        # `QVBoxLayout`-u xassə kimi saxlamaq olmur (Qt meta-tipi deyil),
-        # ona görə birbaşa atribut kimi bağlanır.
-        card.rows_layout = rows  # type: ignore[attr-defined]
-        return card
-
-    # ------------------------------- doldurma -------------------------------- #
-
-    def set_tenants(self, tenants: list[dict[str, str]], *, summary: str) -> None:
-        self._tenants = tenants
-        self._summary.setText(summary)
-        self._table.clear()
-
-        for tenant in tenants:
-            status = tenant.get("status", "Aktiv")
-            tone = self._STATUS_TONES.get(status)
-            if tone is None:
-                # "Sınaq — 12 gün" kimi dəyişkən mətnlər xəbərdarlıq tonundadır.
-                tone = "warning"
-            status_cell = QWidget()
-            status_layout = QHBoxLayout(status_cell)
-            status_layout.setContentsMargins(0, 0, 0, 0)
-            status_layout.setSpacing(8)
-            dot_tokens = {
-                "success": "--color-success",
-                "danger": "--color-danger",
-                "warning": "--color-warning",
-            }
-            status_layout.addWidget(StatusDot(self.theme.color(dot_tokens[tone])))
-            status_layout.addWidget(body_label(status, size=13, wrap=False))
-            status_layout.addStretch(1)
-
-            self._table.add_row(
-                [
-                    tenant["name"],
-                    mono_label(tenant.get("version", "")),
-                    tenant.get("users", ""),
-                    tenant.get("last_seen", ""),
-                    status_cell,
-                ]
-            )
-
-        if tenants:
-            self._table.select(0)
-            self._on_row(0)
-        self.show_content()
-
-    def _on_row(self, index: int) -> None:
-        if not (0 <= index < len(self._tenants)):
-            return
-        tenant = self._tenants[index]
-        self._current = tenant.get("id", tenant["name"])
-        self._current_active = tenant.get("status") == "Aktiv"
-        self._detail_name.setText(tenant["name"])
-        self._detail_meta.setText(
-            f"tenant_id: {tenant.get('id', '—')} · lisenziya {tenant.get('license_until', '—')}"
-        )
-        self._toggle_button.setText("Deaktiv Et" if self._current_active else "Aktivləşdir")
-        self.tenant_selected.emit(self._current)
-
-    def _on_toggle(self) -> None:
-        if self._current is not None:
-            self.activation_toggled.emit(self._current, not self._current_active)
-
-    def _fill(self, card: Card, rows: list[tuple[str, str, str]]) -> None:
-        layout = card.rows_layout  # type: ignore[attr-defined]
-        clear_layout(layout)
-
-        tokens = {
-            "": "--color-text-primary",
-            "warning": "--color-warning",
-            "danger": "--color-danger",
-        }
-        for name, value, tone in rows:
-            row = QWidget()
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(10)
-            if tone:
-                row_layout.addWidget(StatusDot(self.theme.color(tokens[tone]), size=7))
-            row_layout.addWidget(body_label(name, size=13, wrap=False))
-            row_layout.addWidget(stretch())
-            value_label = mono_label(value)
-            if tone:
-                value_label.setStyleSheet(f"color: {self.theme.color(tokens[tone])};")
-            row_layout.addWidget(value_label)
-            layout.addWidget(row)
-
-    def set_telemetry(self, rows: list[tuple[str, str, str]]) -> None:
-        self._fill(self._telemetry, rows)
-
-    def set_tickets(self, rows: list[tuple[str, str, str]]) -> None:
-        self._fill(self._tickets, rows)
-
-    def set_crashes(self, rows: list[tuple[str, str, str]]) -> None:
-        self._fill(self._crashes, rows)
-
-    def table(self) -> DataTable:
-        return self._table
-
-
+# --------------------------------------------------------------------------- #
+# DEVELOPER PANELİ BURADA DEYİL
+# --------------------------------------------------------------------------- #
+# Bu faylda əvvəllər `DeveloperPanelScreen` adlı ikinci bir panel vardı: maket
+# dövründən qalmış, HEÇ YERDƏN qurulmayan bir sinif. Nə `app.py`, nə
+# `preview_screens`, nə də testlər ona toxunurdu — üç siqnalı da (axtarış,
+# müştəri seçimi, aktivləşdirmə) məhz buna görə ölü idi.
+#
+# CANLI panel `src/developer_panel/ui.py::DeveloperPanelWindow`-dur və
+# `--gui --developer-mode` onu açır (`main.py::_run_developer_panel`). İki
+# nüsxəni saxlamaq təhlükəli idi: hansısa düzəliş səhv panelə yazıla bilərdi
+# və fərq yalnız hazırlayıcı rejimində, yəni müştəridə görünməyən yerdə üzə
+# çıxardı. Ona görə ölü nüsxə silindi.
+#
 # --------------------------------------------------------------------------- #
 # 23 — LICENSE_INACTIVE
 # --------------------------------------------------------------------------- #
@@ -592,13 +385,13 @@ class LicenseInactiveScreen(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setStyleSheet(f"background-color: {theme.color('--color-content-bg')};")
+        set_surface_color(self, theme.color("--color-content-bg"))
 
         outer = QVBoxLayout(self)
         outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Lisenziya bloklaması — maketdə mərkəzi `620px` kart, `14px` künc.
-        card = Card(padding=44, spacing=24, surface="modal", shadow=True)
+        card = Card(padding=40, spacing=20, surface="modal", shadow=True)
         card.setFixedWidth(620)
         card.body().setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
@@ -659,7 +452,6 @@ class LicenseInactiveScreen(QWidget):
 
 __all__ = [
     "ChatBubble",
-    "DeveloperPanelScreen",
     "LicenseInactiveScreen",
     "SupportChatWidget",
 ]

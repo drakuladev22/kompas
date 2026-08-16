@@ -111,7 +111,7 @@ class AnnualLeaveInboxScreen(Screen):
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_layout.setSpacing(10)
+        toolbar_layout.setSpacing(12)
         self._summary = muted_label("")
         toolbar_layout.addWidget(self._summary)
         toolbar_layout.addWidget(stretch())
@@ -228,7 +228,7 @@ class AnnualLeaveRequestDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=26, spacing=16)
+        card = Card(padding=24, spacing=16)
         layout.addWidget(card)
         card.add(title_label("İllik Məzuniyyət Sorğusu", size=19))
         card.add(
@@ -278,7 +278,7 @@ class AnnualLeaveRequestDialog(QDialog):
         box = QWidget()
         box_layout = QVBoxLayout(box)
         box_layout.setContentsMargins(0, 0, 0, 0)
-        box_layout.setSpacing(7)
+        box_layout.setSpacing(8)
         box_layout.addWidget(field_label(label))
 
         combo = QComboBox()

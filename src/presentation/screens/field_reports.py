@@ -221,9 +221,9 @@ class FieldReportScreen(Screen):
     # ------------------------------- quruluş --------------------------------- #
 
     def _build_form_card(self) -> Card:
-        card = Card(padding=22, spacing=14)
+        card = Card(padding=20, spacing=12)
 
-        self._form_title = title_label("Sahə hesabatı", size=17)
+        self._form_title = title_label("Sahə hesabatı", size=19)
         card.add(self._form_title)
         self._form_description = muted_label("")
         self._form_description.setWordWrap(True)
@@ -253,7 +253,7 @@ class FieldReportScreen(Screen):
         photo_row = QWidget()
         photo_layout = QHBoxLayout(photo_row)
         photo_layout.setContentsMargins(0, 0, 0, 0)
-        photo_layout.setSpacing(10)
+        photo_layout.setSpacing(12)
         photo_layout.addWidget(self._photo_label, stretch=1)
         pick = secondary_button("Şəkil Seç")
         pick.clicked.connect(self.pick_photos)
@@ -265,7 +265,7 @@ class FieldReportScreen(Screen):
         return card
 
     def _build_checklist_card(self) -> Card:
-        card = Card(padding=22, spacing=14)
+        card = Card(padding=20, spacing=12)
         card.add(title_label("Checklist", size=15))
         card.add(
             muted_label(
@@ -288,7 +288,7 @@ class FieldReportScreen(Screen):
         add_row = QWidget()
         add_layout = QHBoxLayout(add_row)
         add_layout.setContentsMargins(0, 0, 0, 0)
-        add_layout.setSpacing(10)
+        add_layout.setSpacing(12)
         add_layout.addWidget(stretch())
         add_button = action_button(
             "Bənd Əlavə Et",
@@ -304,7 +304,7 @@ class FieldReportScreen(Screen):
         nav_row = QWidget()
         nav_layout = QHBoxLayout(nav_row)
         nav_layout.setContentsMargins(0, 0, 0, 0)
-        nav_layout.setSpacing(10)
+        nav_layout.setSpacing(12)
         self._previous_button = secondary_button("← Əvvəlki")
         self._previous_button.clicked.connect(self.go_previous)
         nav_layout.addWidget(self._previous_button)
@@ -319,7 +319,7 @@ class FieldReportScreen(Screen):
         self._step_host = QWidget()
         self._step_layout = QVBoxLayout(self._step_host)
         self._step_layout.setContentsMargins(0, 0, 0, 0)
-        self._step_layout.setSpacing(10)
+        self._step_layout.setSpacing(12)
         card.add(self._step_host)
 
         self._checklist_message = muted_label("")
@@ -329,7 +329,7 @@ class FieldReportScreen(Screen):
         return card
 
     def _build_actions_card(self) -> Card:
-        card = Card(padding=18, spacing=12)
+        card = Card(padding=20, spacing=12)
 
         row = QWidget()
         layout = QHBoxLayout(row)
@@ -357,7 +357,7 @@ class FieldReportScreen(Screen):
         holder = QWidget()
         layout = QVBoxLayout(holder)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
 
         layout.addWidget(title_label("Açıq hesabatlar", size=15))
         self._list_notice = muted_label("")
@@ -384,7 +384,7 @@ class FieldReportScreen(Screen):
         card.add(field_label(label))
         combo = QComboBox()
         combo.setProperty("variant", "form")
-        combo.setMinimumHeight(46)
+        combo.setMinimumHeight(48)
         card.add(combo)
         return combo
 
@@ -618,7 +618,7 @@ class FieldReportScreen(Screen):
             return
 
         entry = self._items[self._step]
-        panel = Card(surface="panel", padding=16, spacing=10)
+        panel = Card(surface="panel", padding=16, spacing=12)
         panel.add(body_label(f"{self._step + 1}. {entry.item_text}", size=15))
 
         chips = QWidget()
@@ -637,7 +637,7 @@ class FieldReportScreen(Screen):
         panel.add(field_label("Qeyd (düzəliş tapşırığının mətninə düşür)"))
         note = QPlainTextEdit()
         note.setProperty("variant", "form")
-        note.setMinimumHeight(70)
+        note.setMinimumHeight(72)
         note.setPlainText(entry.note)
         note.textChanged.connect(lambda: self._on_note_changed(note.toPlainText()))
         panel.add(note)
@@ -645,7 +645,7 @@ class FieldReportScreen(Screen):
         photo_row = QWidget()
         photo_layout = QHBoxLayout(photo_row)
         photo_layout.setContentsMargins(0, 0, 0, 0)
-        photo_layout.setSpacing(10)
+        photo_layout.setSpacing(12)
         photo_layout.addWidget(
             muted_label(_file_name(entry.photo_path) or "Şəkil seçilməyib"), stretch=1
         )
@@ -660,7 +660,7 @@ class FieldReportScreen(Screen):
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(18)
+        layout.setSpacing(16)
 
         passed = QRadioButton("Keçdi")
         failed = QRadioButton("Keçmədi")

@@ -235,7 +235,7 @@ class InfrastructureScreen(Screen):
         # ------------------------------ gedişat ------------------------------ #
         phases_card = Card()
         phases_body = phases_card.body()
-        phases_body.addWidget(title_label("Keçid addımları", size=14))
+        phases_body.addWidget(title_label("Keçid addımları", size=15))
         phases_body.addWidget(Divider())
         for phase in ALL_PHASES:
             widget = PhaseRow(phase, theme)
@@ -244,6 +244,30 @@ class InfrastructureScreen(Screen):
         self.add(phases_card)
 
         # ------------------------------ jurnal ------------------------------- #
+        #
+        # «YENİLƏ» DÜYMƏSİ NİYƏ BURADA
+        # ─────────────────────────────────────────────────────────────────────
+        # `history_requested` siqnalı elan olunmuşdu və `controllers/
+        # infrastructure.py` onu ARTIQ dinləyirdi (`refresh`-ə bağlı), lakin
+        # ekranda onu yayacaq HEÇ BİR element yox idi — yəni bağlantının bir
+        # ucu boşda qalmışdı və tarixçə yalnız ekran açılanda oxunurdu. Baza
+        # keçidi isə DƏQİQƏLƏRLƏ sürən əməliyyatdır: istifadəçi nəticəni
+        # görmək üçün ekranı tərk edib qayıtmalı olurdu.
+        #
+        # Düymə kartın BAŞLIQ sətrindədir (design.md dizayn dili, qərar 3:
+        # «kart başlığı öz əməliyyatını daşıyır») — cədvəlin altına qoysaydıq,
+        # uzun jurnalda ekranın dibində qalardı.
+        history_header = QWidget()
+        history_header_layout = QHBoxLayout(history_header)
+        history_header_layout.setContentsMargins(0, 0, 0, 0)
+        history_header_layout.setSpacing(12)
+        history_header_layout.addWidget(title_label("Keçid tarixçəsi", size=15))
+        history_header_layout.addWidget(stretch())
+        self._history_refresh = secondary_button("Yenilə")
+        self._history_refresh.clicked.connect(self.history_requested)
+        history_header_layout.addWidget(self._history_refresh)
+        self.add(history_header)
+
         self._history_host = QWidget()
         self._history_layout = QVBoxLayout(self._history_host)
         self._history_layout.setContentsMargins(0, 0, 0, 0)
@@ -354,17 +378,17 @@ class MigrationConfirmDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=26, spacing=16)
+        card = Card(padding=24, spacing=16)
         layout.addWidget(card)
 
-        card.add(title_label("Baza keçidi başlasın?", size=20))
-        card.add(body_label(summary, size=14))
+        card.add(title_label("Baza keçidi başlasın?", size=19))
+        card.add(body_label(summary, size=13))
         card.add(Divider())
 
         # Ön yoxlama xəbərdarlıqları TƏSDİQDƏN ƏVVƏL göstərilir: onları
         # keçiddən sonra göstərmək məlumatı gec çatdırmaq olardı.
         if warnings:
-            card.add(title_label("Ön yoxlama", size=14))
+            card.add(title_label("Ön yoxlama", size=15))
             for text in warnings:
                 card.add(body_label(f"• {text}", size=13))
         else:
@@ -488,8 +512,8 @@ class WidgetRow(QWidget):
         text_box = QWidget()
         text_layout = QVBoxLayout(text_box)
         text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(2)
-        text_layout.addWidget(title_label(title, size=14))
+        text_layout.setSpacing(4)
+        text_layout.addWidget(title_label(title, size=15))
         caption = muted_label(description)
         caption.setWordWrap(True)
         text_layout.addWidget(caption)
@@ -692,7 +716,7 @@ class DashboardBuilderScreen(Screen):
         # olduğunu göstərir. Onsuz istifadəçi "sütun 2, en 1" yazıb nəticəni
         # yalnız İdarə Panelini açandan sonra görərdi.
         self._preview_card = Card()
-        self._preview_card.add(title_label("Şəbəkə önizləməsi", size=14))
+        self._preview_card.add(title_label("Şəbəkə önizləməsi", size=15))
         self._preview_host = QWidget()
         self._preview_grid = QGridLayout(self._preview_host)
         self._preview_grid.setContentsMargins(0, 0, 0, 0)
@@ -1030,7 +1054,7 @@ class PluginScreen(Screen):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(10)
+        head_layout.setSpacing(12)
         head_layout.addWidget(title_label(plugin.get("name", ""), size=15))
         head_layout.addWidget(Chip(f"v{plugin.get('version', '?')}", "neutral"))
 
@@ -1112,11 +1136,11 @@ class PluginPageScreen(Screen):
     ) -> None:
         super().__init__(theme, parent=parent)
 
-        source = Card(padding=16, spacing=10)
+        source = Card(padding=16, spacing=12)
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(10)
+        head_layout.setSpacing(12)
         head_layout.addWidget(title_label(plugin_name, size=15))
         head_layout.addWidget(Chip("Plugin", "info"))
         head_layout.addWidget(stretch())

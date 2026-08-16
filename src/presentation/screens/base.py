@@ -484,7 +484,7 @@ def section_header(title: str, subtitle: str = "") -> QWidget:
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(4)
 
-    heading = title_label(title, size=16)
+    heading = title_label(title, size=15)
     heading.setAlignment(Qt.AlignmentFlag.AlignLeft)
     layout.addWidget(heading)
 
@@ -528,11 +528,11 @@ def _section_error_banner() -> tuple[QWidget, QLabel]:
         stretch,
     )
 
-    card = Card(padding=14, spacing=10)
+    card = Card(padding=16, spacing=12)
     line = QWidget()
     layout = QHBoxLayout(line)
     layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(10)
+    layout.setSpacing(12)
 
     chip = Chip(SECTION_ERROR_CHIP, "danger")
     layout.addWidget(chip, 0, Qt.AlignmentFlag.AlignTop)

@@ -18,7 +18,7 @@ istifadə edərək HR görünüşünü verir — yeni bir üslub icad etmədən.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -80,7 +80,7 @@ class TaskCard(Card):
         reviewable: bool = False,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(padding=14, spacing=8, parent=parent)
+        super().__init__(padding=16, spacing=8, parent=parent)
         task_id = task.get("id", "")
 
         self.add(title_label(task.get("title", ""), size=14))
@@ -190,7 +190,7 @@ class TasksScreen(Screen):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(10)
+        head_layout.setSpacing(12)
         head_layout.addWidget(title_label(title, size=15))
         count = Chip("0", "neutral")
         self._column_counts[key] = count
@@ -238,11 +238,11 @@ class SalesPointsScreen(Screen):
     """Xal balansı, tarixçə və mükafat kataloqu.
 
     Signals:
-        appeal_requested: "Etiraz Et".
-        reward_requested: Mükafat adı.
+        appeal_requested: Etiraz edilən xal sətrinin `entry_id`-si.
+        reward_requested: Mükafatın `reward_id`-si.
     """
 
-    appeal_requested = Signal()
+    appeal_requested = Signal(str)
     reward_requested = Signal(str)
 
     _HISTORY_TONES: Final[dict[str, ChipTone]] = {
@@ -260,15 +260,15 @@ class SalesPointsScreen(Screen):
         summary_layout.setContentsMargins(0, 0, 0, 0)
         summary_layout.setSpacing(metrics.CARD_SPACING)
 
-        self._balance = Card(padding=22, spacing=8)
+        self._balance = Card(padding=20, spacing=8)
         self._balance.add(muted_label("Cari balans"))
-        self._balance_value = title_label("0", size=34)
+        self._balance_value = title_label("0", size=32)
         self._balance.add(self._balance_value)
         self._balance_delta = muted_label("")
         self._balance.add(self._balance_delta)
         summary_layout.addWidget(self._balance, 1)
 
-        self._next_reward = Card(padding=22, spacing=10)
+        self._next_reward = Card(padding=20, spacing=12)
         self._next_reward.add(muted_label("Növbəti mükafat"))
         self._next_reward_value = title_label("—", size=22)
         self._next_reward.add(self._next_reward_value)
@@ -276,7 +276,7 @@ class SalesPointsScreen(Screen):
         self._next_reward.add(self._reward_meter)
         summary_layout.addWidget(self._next_reward, 1)
 
-        self._rank = Card(padding=22, spacing=8)
+        self._rank = Card(padding=20, spacing=8)
         self._rank.add(muted_label("Filial reytinqi"))
         self._rank_value = title_label("—", size=22)
         self._rank.add(self._rank_value)
@@ -288,8 +288,8 @@ class SalesPointsScreen(Screen):
         history_head = QWidget()
         history_head_layout = QHBoxLayout(history_head)
         history_head_layout.setContentsMargins(0, 0, 0, 0)
-        history_head_layout.setSpacing(10)
-        history_head_layout.addWidget(title_label("Xal tarixçəsi", size=16))
+        history_head_layout.setSpacing(12)
+        history_head_layout.addWidget(title_label("Xal tarixçəsi", size=15))
         self._history_period = muted_label("")
         history_head_layout.addWidget(self._history_period)
         history_head_layout.addWidget(stretch())
@@ -301,25 +301,30 @@ class SalesPointsScreen(Screen):
                 Column("Səbəb"),
                 Column("Vəziyyət", 160),
                 Column("Xal", 100),
+                # Etiraz sütunu — sətir-səviyyəli düymə (bax `set_history`).
+                Column("Etiraz", 120),
             ],
             theme,
         )
         self.add(self._history)
 
-        appeal_row = QWidget()
-        appeal_layout = QHBoxLayout(appeal_row)
-        appeal_layout.setContentsMargins(0, 0, 0, 0)
-        appeal_layout.addWidget(
-            muted_label("Xalın düzgün hesablanmadığını düşünürsünüzsə etiraz edə bilərsiniz.")
+        # ETİRAZ DÜYMƏSİ SƏTİRDƏDİR, EKRANDA DEYİL.
+        #
+        # Əvvəl ekranın altında TƏK bir «Etiraz Et» düyməsi vardı və o,
+        # arqumentsiz siqnal yayırdı — yəni «hansı xal sətrinə etiraz?» sualı
+        # cavabsız qalırdı. `SalesPointsUseCase.open_dispute` isə məhz
+        # `entry_id` tələb edir, ona görə düymə heç vaxt bağlana bilməzdi.
+        # Sətir-səviyyəli düymə həm sualı həll edir, həm də 72 saatlıq
+        # pəncərəni sətir-sətir göstərməyə imkan verir.
+        self.add(
+            muted_label(
+                "Xalın düzgün hesablanmadığını düşünürsünüzsə həmin sətirdəki "
+                "«Etiraz» düyməsini basın (72 saat ərzində)."
+            )
         )
-        appeal_layout.addWidget(stretch())
-        appeal = secondary_button("Etiraz Et")
-        appeal.clicked.connect(self.appeal_requested)
-        appeal_layout.addWidget(appeal)
-        self.add(appeal_row)
 
         # ---------------------------- mükafatlar ---------------------------- #
-        self.add(title_label("Mükafat kataloqu", size=16))
+        self.add(title_label("Mükafat kataloqu", size=15))
         self._catalog = QWidget()
         self._catalog_layout = QHBoxLayout(self._catalog)
         self._catalog_layout.setContentsMargins(0, 0, 0, 0)
@@ -361,12 +366,26 @@ class SalesPointsScreen(Screen):
             )
             points_label.setStyleSheet(f"color: {self.theme.color(token)};")
 
+            # Etiraz YALNIZ pəncərəsi açıq sətirdə mümkündür; `can_appeal`
+            # açarını oxu yolu hesablayır (72 saatlıq qayda domendədir və
+            # ekran onu TƏKRAR HESABLAMIR — iki mənbə sükutla ayrılardı).
+            entry_id = entry.get("entry_id", "")
+            if entry.get("can_appeal") == "1" and entry_id:
+                action: Any = secondary_button("Etiraz")
+                action.setProperty("compact", "true")
+                action.clicked.connect(
+                    lambda _=False, key=entry_id: self.appeal_requested.emit(key)
+                )
+            else:
+                action = muted_label("—")
+
             self._history.add_row(
                 [
                     mono_label(entry.get("date", "")),
                     entry.get("reason", ""),
                     Chip(status, self._HISTORY_TONES.get(status, "neutral")),
                     points_label,
+                    action,
                 ]
             )
 
@@ -376,7 +395,7 @@ class SalesPointsScreen(Screen):
 
         for reward in rewards:
             cost = int(reward["cost"])
-            card = Card(padding=18, spacing=10)
+            card = Card(padding=20, spacing=12)
 
             thumbnail = plain_label()
             thumbnail.setFixedHeight(72)
@@ -389,14 +408,15 @@ class SalesPointsScreen(Screen):
             )
             card.add(thumbnail)
 
-            card.add(title_label(reward["name"], size=14))
+            card.add(title_label(reward["name"], size=15))
             card.add(muted_label(f"{cost} xal"))
 
             affordable = balance >= cost
             if affordable:
                 button = action_button("Al")
+                reward_id = reward.get("id", "")
                 button.clicked.connect(
-                    lambda _=False, name=reward["name"]: self.reward_requested.emit(name)
+                    lambda _=False, key=reward_id: self.reward_requested.emit(key)
                 )
             else:
                 # "Çatmır" düyməsi söndürülür — basılabilən görünüb heç nə
@@ -446,13 +466,13 @@ class FineAppealScreen(Screen):
         summary_layout.setContentsMargins(0, 0, 0, 0)
         summary_layout.setSpacing(metrics.CARD_SPACING)
 
-        self._month_total = Card(padding=20, spacing=6)
+        self._month_total = Card(padding=20, spacing=8)
         self._month_total.add(muted_label("Bu ay"))
         self._month_total_value = title_label("—", size=26)
         self._month_total.add(self._month_total_value)
         summary_layout.addWidget(self._month_total, 1)
 
-        self._open_appeals = Card(padding=20, spacing=6)
+        self._open_appeals = Card(padding=20, spacing=8)
         self._open_appeals.add(muted_label("Açıq etiraz"))
         self._open_appeals_value = title_label("0", size=26)
         self._open_appeals.add(self._open_appeals_value)
@@ -460,7 +480,7 @@ class FineAppealScreen(Screen):
         summary_layout.addWidget(stretch(), 2)
         self.add(summary)
 
-        self.add(title_label("Cərimə tarixçəm", size=16))
+        self.add(title_label("Cərimə tarixçəm", size=15))
 
         self._history_layout = QVBoxLayout()
         self._history_layout.setSpacing(12)
@@ -474,13 +494,13 @@ class FineAppealScreen(Screen):
         self.body().addStretch(1)
 
     def _build_form(self, reasons: list[str]) -> Card:
-        card = Card(padding=22, spacing=16)
+        card = Card(padding=20, spacing=16)
         self._form_card = card
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(10)
+        head_layout.setSpacing(12)
         head_layout.addWidget(title_label("Yeni etiraz", size=15))
         self._form_subject = muted_label("")
         head_layout.addWidget(self._form_subject)
@@ -496,7 +516,7 @@ class FineAppealScreen(Screen):
         explanation_box = QWidget()
         explanation_layout = QVBoxLayout(explanation_box)
         explanation_layout.setContentsMargins(0, 0, 0, 0)
-        explanation_layout.setSpacing(7)
+        explanation_layout.setSpacing(8)
         explanation_layout.addWidget(field_label("İzah"))
         self._explanation = QPlainTextEdit()
         self._explanation.setPlaceholderText("Nə baş verdiyini qısa izah edin.")
@@ -513,7 +533,7 @@ class FineAppealScreen(Screen):
         document_box = QWidget()
         document_layout = QVBoxLayout(document_box)
         document_layout.setContentsMargins(0, 0, 0, 0)
-        document_layout.setSpacing(7)
+        document_layout.setSpacing(8)
         document_layout.addWidget(field_label("Sənəd (istəyə görə)"))
         self._document = PhotoDropZone(self.theme)
         document_layout.addWidget(self._document)
@@ -540,7 +560,7 @@ class FineAppealScreen(Screen):
         clear_layout(self._history_layout)
 
         for fine in fines:
-            card = Card(padding=16, spacing=6)
+            card = Card(padding=16, spacing=8)
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
@@ -636,12 +656,12 @@ class FineAppealInboxScreen(Screen):
             return
 
         for appeal in appeals:
-            card = Card(padding=18, spacing=12)
+            card = Card(padding=20, spacing=12)
 
             head = QWidget()
             head_layout = QHBoxLayout(head)
             head_layout.setContentsMargins(0, 0, 0, 0)
-            head_layout.setSpacing(10)
+            head_layout.setSpacing(12)
             head_layout.addWidget(title_label(appeal.get("employee", ""), size=15))
             head_layout.addWidget(Chip(appeal.get("fine_type", ""), "neutral"))
             head_layout.addWidget(stretch())
@@ -664,7 +684,7 @@ class FineAppealInboxScreen(Screen):
             actions = QWidget()
             actions_layout = QHBoxLayout(actions)
             actions_layout.setContentsMargins(0, 0, 0, 0)
-            actions_layout.setSpacing(10)
+            actions_layout.setSpacing(12)
             actions_layout.addWidget(stretch())
 
             appeal_id = appeal.get("id", "")
@@ -743,7 +763,7 @@ class UnassignedSalesScreen(Screen):
 
         # Xal hesablanmasının DAYANDIĞINI açıq yazmaq vacibdir — əks halda
         # işçilər "xalım gəlmir" deyə dəstəyə müraciət edərdi.
-        self._banner = Card(padding=14, spacing=6)
+        self._banner = Card(padding=16, spacing=8)
         self._banner_text = body_label("", size=13)
         self._banner.add(self._banner_text)
         self.add(self._banner)

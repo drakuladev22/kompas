@@ -153,7 +153,7 @@ class EmptyState(QWidget):
         heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
         inner.addWidget(heading)
 
-        description = body_label(message, size=14)
+        description = body_label(message, size=13)
         description.setAlignment(Qt.AlignmentFlag.AlignCenter)
         description.setMaximumWidth(metrics.STATE_TEXT_MAX_WIDTH)
         description.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
@@ -210,14 +210,14 @@ class EmptyState(QWidget):
         if not rows:
             return
 
-        card = Card(padding=14, spacing=8)
+        card = Card(padding=16, spacing=8)
         card.setMaximumWidth(metrics.STATE_TEXT_MAX_WIDTH + 120)
 
         for index, (name, value) in enumerate(rows):
             line = QWidget()
             line_layout = QHBoxLayout(line)
             line_layout.setContentsMargins(0, 0, 0, 0)
-            line_layout.setSpacing(10)
+            line_layout.setSpacing(12)
 
             key_label = muted_label(name)
             line_layout.addWidget(key_label)
@@ -299,7 +299,7 @@ class LoadingState(QWidget):
 
         if show_filters:
             filters = QHBoxLayout()
-            filters.setSpacing(10)
+            filters.setSpacing(12)
             for index, width in enumerate((110, 150, 170)):
                 block = Skeleton(width, 32, delay_ms=index * 100)
                 self._blocks.append(block)
@@ -322,7 +322,7 @@ class LoadingState(QWidget):
         card = Card(padding=16, spacing=0)
 
         line = QHBoxLayout()
-        line.setSpacing(18)
+        line.setSpacing(16)
 
         avatar = Skeleton(46, 46, delay_ms=delay)
         self._blocks.append(avatar)

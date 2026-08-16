@@ -71,7 +71,7 @@ class OpenShiftMarketCard(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=18, spacing=12)
+        card = Card(padding=20, spacing=12)
         layout.addWidget(card)
 
         head = QWidget()
@@ -123,7 +123,7 @@ class OpenShiftMarketCard(QWidget):
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
 
         layout.addWidget(body_label(row["date"], size=13, wrap=False))
         layout.addWidget(muted_label(f"{row['work_mode']} · {row['store']}", size=12))
@@ -169,7 +169,7 @@ class OpenShiftPostDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=26, spacing=16)
+        card = Card(padding=24, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Açıq Növbə Elan Et", size=19))
         card.add(
@@ -217,7 +217,7 @@ class OpenShiftPostDialog(QDialog):
         box = QWidget()
         box_layout = QVBoxLayout(box)
         box_layout.setContentsMargins(0, 0, 0, 0)
-        box_layout.setSpacing(7)
+        box_layout.setSpacing(8)
         box_layout.addWidget(field_label(label))
 
         combo = QComboBox()

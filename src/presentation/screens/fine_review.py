@@ -256,7 +256,7 @@ class MonthlyFineReviewScreen(Screen):
         self.add(self._error)
 
         self._groups_layout = QVBoxLayout()
-        self._groups_layout.setSpacing(14)
+        self._groups_layout.setSpacing(16)
         holder = QWidget()
         holder.setLayout(self._groups_layout)
         self.add(holder)
@@ -282,7 +282,7 @@ class MonthlyFineReviewScreen(Screen):
         period_box = QWidget()
         period_layout = QVBoxLayout(period_box)
         period_layout.setContentsMargins(0, 0, 0, 0)
-        period_layout.setSpacing(7)
+        period_layout.setSpacing(8)
         period_layout.addWidget(field_label("İcmal dövrü"))
 
         self._period = QComboBox()
@@ -313,7 +313,7 @@ class MonthlyFineReviewScreen(Screen):
 
     def _build_footer(self) -> QWidget:
         card = Card(padding=20, spacing=12)
-        card.add(title_label("Nəşr", size=16))
+        card.add(title_label("Nəşr", size=15))
         card.add(muted_label(IRREVERSIBLE_NOTE, size=12))
 
         row = QWidget()
@@ -434,8 +434,8 @@ class MonthlyFineReviewScreen(Screen):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(10)
-        head_layout.addWidget(title_label(group.store, size=16))
+        head_layout.setSpacing(12)
+        head_layout.addWidget(title_label(group.store, size=15))
         head_layout.addWidget(muted_label(f"{group.count_text} · {group.total_text}"))
         head_layout.addWidget(stretch())
 
@@ -621,16 +621,16 @@ class PublishConfirmDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=26, spacing=14)
+        card = Card(padding=24, spacing=12)
         layout.addWidget(card)
 
-        card.add(title_label("Cərimələr bütün filiallara göndərilsin?", size=20))
+        card.add(title_label("Cərimələr bütün filiallara göndərilsin?", size=19))
         card.add(
             body_label(
                 f"Dövr: {summary.period_text}. "
                 f"{summary.publish_count} cərimə {summary.store_count} filialda "
                 f"işçilərə açılacaq — ümumi məbləğ {summary.amount_text}.",
-                size=14,
+                size=13,
             )
         )
         if summary.discard_count:
@@ -640,7 +640,7 @@ class PublishConfirmDialog(QDialog):
                 body_label(
                     f"{summary.discard_count} cərimə silinəcək — qeyd auditdə qalır, "
                     "lakin işçidən tutulmayacaq.",
-                    size=14,
+                    size=13,
                 )
             )
         card.add(Divider())

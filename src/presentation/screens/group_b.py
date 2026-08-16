@@ -174,7 +174,7 @@ class QueueRow(Card):
         line = QWidget()
         layout = QHBoxLayout(line)
         layout.setContentsMargins(4, 0, 4, 0)
-        layout.setSpacing(18)
+        layout.setSpacing(16)
 
         layout.addWidget(
             Avatar(
@@ -189,7 +189,7 @@ class QueueRow(Card):
         identity_layout = QVBoxLayout(identity)
         identity_layout.setContentsMargins(0, 0, 0, 0)
         identity_layout.setSpacing(4)
-        name = title_label(entry.employee_name, size=14)
+        name = title_label(entry.employee_name, size=15)
         identity_layout.addWidget(name)
         identity_layout.addWidget(muted_label(f"{entry.store_name} · {entry.position_name}"))
         layout.addWidget(identity)
@@ -332,11 +332,11 @@ class OperatorQueueScreen(Screen):
         self.add(self._filter_bar)
 
         # --- iVMS xatırladıcısı — bax modul başlığı --- #
-        reminder = Card(padding=12, spacing=0)
+        reminder = Card(padding=16, spacing=0)
         reminder_line = QWidget()
         reminder_layout = QHBoxLayout(reminder_line)
         reminder_layout.setContentsMargins(0, 0, 0, 0)
-        reminder_layout.setSpacing(10)
+        reminder_layout.setSpacing(12)
         from src.presentation.widgets import icons  # noqa: PLC0415
 
         glyph = plain_label()
@@ -486,10 +486,24 @@ class OperatorQueueScreen(Screen):
         return entry.store_name == self._active_store
 
     def set_filter(self, key: str) -> None:
-        """Süzgəci dəyişir; aktiv çip dolu fon alır."""
+        """Süzgəci dəyişir; aktiv çip dolu fon alır və SİYAHI yenidən süzülür.
+
+        ÇİPİN RƏNGİ NƏTİCƏ DEYİL — əvvəllər burada yalnız `_active_filter`
+        təyin olunub siqnal yayılırdı, yəni çip dolu fon alırdı, siyahı isə
+        toxunulmaz qalırdı. `filter_changed`-i isə heç bir kontroller
+        dinləmirdi. Nəticə istifadəçi üçün ən pis formadaydı: düymə "işlədi"
+        kimi görünür, məzmun isə süzgəcə uyğun gəlmir — səhv ekranda deyil,
+        operatorun oxuduğu rəqəmdədir.
+
+        Yenidən süzmə `set_store_filter` ilə EYNİ yoldan gedir (keşlənmiş
+        sətirlər, bazaya sorğu YOX) — iki süzgəc `_matches`-də VƏ ilə
+        birləşdiyi üçün ayrı yol saxlamaq ikisinin sükutla ayrılmasına
+        gətirərdi.
+        """
         self._active_filter = key
         for chip_key, chip in self._filter_chips.items():
             chip.set_tone("info" if chip_key == key else "neutral")
+        self.set_entries(list(self._entries))
         self.filter_changed.emit(key)
 
     def _on_store_selected(self) -> None:
@@ -579,26 +593,26 @@ class ManualTimeOverrideDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=28, spacing=20)
+        card = Card(padding=24, spacing=20)
         layout.addWidget(card)
 
         # ------------------------------ başlıq ------------------------------ #
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(10)
+        head_layout.setSpacing(12)
 
         head_text = QWidget()
         head_text_layout = QVBoxLayout(head_text)
         head_text_layout.setContentsMargins(0, 0, 0, 0)
         head_text_layout.setSpacing(4)
-        head_text_layout.addWidget(title_label("Vaxtı Manual Düzəlt", size=20))
+        head_text_layout.addWidget(title_label("Vaxtı Manual Düzəlt", size=19))
         head_text_layout.addWidget(muted_label(f"{employee_name} · {store_name} · {kind}"))
         head_layout.addWidget(head_text)
         head_layout.addWidget(stretch())
 
         close = secondary_button("×")
-        close.setFixedWidth(42)
+        close.setFixedWidth(40)
         close.clicked.connect(self.reject)
         head_layout.addWidget(close)
         card.add(head)
@@ -613,9 +627,9 @@ class ManualTimeOverrideDialog(QDialog):
         system_box = QWidget()
         system_layout = QVBoxLayout(system_box)
         system_layout.setContentsMargins(0, 0, 0, 0)
-        system_layout.setSpacing(7)
+        system_layout.setSpacing(8)
         system_layout.addWidget(field_label("Sistem qeydi"))
-        system_value = mono_label(system_time, size=18)
+        system_value = mono_label(system_time, size=19)
         system_layout.addWidget(system_value)
         times_layout.addWidget(system_box)
 
@@ -636,7 +650,7 @@ class ManualTimeOverrideDialog(QDialog):
         reason_box = QWidget()
         reason_layout = QVBoxLayout(reason_box)
         reason_layout.setContentsMargins(0, 0, 0, 0)
-        reason_layout.setSpacing(7)
+        reason_layout.setSpacing(8)
         reason_layout.addWidget(field_label("Səbəb *"))
 
         self._reason = QPlainTextEdit()
@@ -654,8 +668,8 @@ class ManualTimeOverrideDialog(QDialog):
         card.add(reason_box)
 
         # -------------------------- dual-control ---------------------------- #
-        self._dual_control = Card(padding=14, spacing=6)
-        self._dual_control.add(title_label("Cüt Nəzarətli Təsdiq Tələb Olunacaq", size=14))
+        self._dual_control = Card(padding=16, spacing=8)
+        self._dual_control.add(title_label("Cüt Nəzarətli Təsdiq Tələb Olunacaq", size=15))
         self._dual_control_detail = body_label("", size=13)
         self._dual_control.add(self._dual_control_detail)
         self._dual_control.setVisible(False)
@@ -758,7 +772,7 @@ class PhotoDropZone(Card):
     file_selected = Signal(str)
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
-        super().__init__(padding=22, spacing=8, parent=parent)
+        super().__init__(padding=20, spacing=8, parent=parent)
         self._theme = theme
         self._path = ""
         self.setAcceptDrops(True)
@@ -784,7 +798,7 @@ class PhotoDropZone(Card):
         self._glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.add(self._glyph)
 
-        self._title = body_label("Şəkil əlavə et", size=14)
+        self._title = body_label("Şəkil əlavə et", size=13)
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.add(self._title)
 
@@ -878,7 +892,7 @@ class FineEntryScreen(Screen):
         ]
 
         self.add(self._build_form(fine_types, stores, employees))
-        self.add(title_label("Bu ayın cərimələri", size=16))
+        self.add(title_label("Bu ayın cərimələri", size=15))
         self._summary = muted_label("")
         self.add(self._summary)
 
@@ -906,12 +920,12 @@ class FineEntryScreen(Screen):
     # -------------------------------- forma ---------------------------------- #
 
     def _build_form(self, fine_types: list[str], stores: list[str], employees: list[str]) -> Card:
-        card = Card(padding=22, spacing=18)
+        card = Card(padding=20, spacing=16)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.addWidget(title_label("Yeni Cərimə", size=16))
+        head_layout.addWidget(title_label("Yeni Cərimə", size=15))
         head_layout.addWidget(stretch())
         card.add(head)
         card.add(Divider())
@@ -919,7 +933,7 @@ class FineEntryScreen(Screen):
         grid = QWidget()
         grid_layout = QHBoxLayout(grid)
         grid_layout.setContentsMargins(0, 0, 0, 0)
-        grid_layout.setSpacing(18)
+        grid_layout.setSpacing(16)
 
         self._type = FormField("Cərimə Növü", widget=self._combo(fine_types))
         grid_layout.addWidget(self._type, 1)
@@ -938,7 +952,7 @@ class FineEntryScreen(Screen):
         second = QWidget()
         second_layout = QHBoxLayout(second)
         second_layout.setContentsMargins(0, 0, 0, 0)
-        second_layout.setSpacing(18)
+        second_layout.setSpacing(16)
 
         date_edit = QDateEdit()
         date_edit.setDisplayFormat("dd.MM.yyyy")
@@ -960,7 +974,7 @@ class FineEntryScreen(Screen):
         photo_box = QWidget()
         photo_layout = QVBoxLayout(photo_box)
         photo_layout.setContentsMargins(0, 0, 0, 0)
-        photo_layout.setSpacing(7)
+        photo_layout.setSpacing(8)
         photo_layout.addWidget(field_label("Foto Sübutu *"))
         self._photo = PhotoDropZone(self.theme)
         photo_layout.addWidget(self._photo)

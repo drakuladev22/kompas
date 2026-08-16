@@ -174,7 +174,7 @@ class PageHeader(QWidget):
         self._slot = QWidget()
         slot_layout = QHBoxLayout(self._slot)
         slot_layout.setContentsMargins(0, 0, 0, 0)
-        slot_layout.setSpacing(10)
+        slot_layout.setSpacing(12)
         self._slot_layout = slot_layout
         layout.addWidget(self._slot)
 

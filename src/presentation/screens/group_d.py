@@ -60,7 +60,7 @@ from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.charts import Meter
 from src.presentation.widgets.data_table import Column, DataTable
-from src.presentation.widgets.forms import FormField
+from src.presentation.widgets.forms import FormField, field_label
 from src.presentation.widgets.help_hint import HelpButton
 from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
@@ -93,7 +93,7 @@ def _metric_card(
     tone: str,
 ) -> Card:
     """Diaqnostika kartı — rəng-kodlaşdırılmış status nöqtəsi ilə."""
-    card = Card(padding=18, spacing=10)
+    card = Card(padding=20, spacing=12)
 
     head = QWidget()
     head_layout = QHBoxLayout(head)
@@ -104,7 +104,7 @@ def _metric_card(
     head_layout.addWidget(stretch())
     card.add(head)
 
-    card.add(title_label(value, size=24))
+    card.add(title_label(value, size=26))
     card.add(muted_label(caption))
     card.body().addStretch(1)
     return card
@@ -253,8 +253,8 @@ class ErpServersScreen(Screen):
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(metrics.CARD_SPACING)
 
-        self._mapping = Card(padding=18, spacing=10)
-        self._mapping.add(title_label("Mağaza — Server xəritələmə", size=14))
+        self._mapping = Card(padding=20, spacing=12)
+        self._mapping.add(title_label("Mağaza — Server xəritələmə", size=15))
         self._mapping_rows = QVBoxLayout()
         self._mapping_rows.setSpacing(8)
         mapping_holder = QWidget()
@@ -264,8 +264,8 @@ class ErpServersScreen(Screen):
         self._mapping.add(self._mapping_note)
         bottom_layout.addWidget(self._mapping, 1)
 
-        self._sync = Card(padding=18, spacing=10)
-        self._sync.add(title_label("Son sinxronizasiya", size=14))
+        self._sync = Card(padding=20, spacing=12)
+        self._sync.add(title_label("Son sinxronizasiya", size=15))
         self._sync_rows = QVBoxLayout()
         self._sync_rows.setSpacing(8)
         sync_holder = QWidget()
@@ -364,7 +364,7 @@ class ErpServersScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(10)
+            layout.setSpacing(12)
             layout.addWidget(StatusDot(self.theme.color(tones.get(tone, "--color-success"))))
             layout.addWidget(body_label(name, size=13, wrap=False))
             layout.addWidget(stretch())
@@ -425,7 +425,7 @@ class _ConnectorCard(ClickableCard):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(10)
+        head_layout.setSpacing(12)
 
         glyph = plain_label()
         glyph.setPixmap(
@@ -451,7 +451,7 @@ class _ConnectorCard(ClickableCard):
         self._mark = QWidget()
         mark_layout = QHBoxLayout(self._mark)
         mark_layout.setContentsMargins(0, 0, 0, 0)
-        mark_layout.setSpacing(6)
+        mark_layout.setSpacing(8)
         check = plain_label()
         check.setPixmap(
             icons.render("check", theme.color("--color-accent"), size=14, stroke_width=1.8)
@@ -590,10 +590,10 @@ class ServerConnectionWizard(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=26, spacing=18)
+        card = Card(padding=24, spacing=16)
         layout.addWidget(card)
 
-        self._heading = title_label("Yeni 1C Serveri", size=20)
+        self._heading = title_label("Yeni 1C Serveri", size=19)
         card.add(self._heading)
         card.add(
             muted_label(
@@ -873,7 +873,7 @@ class ServerConnectionWizard(QDialog):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
+        layout.setSpacing(16)
         return panel, layout
 
     def _register_panel(self, connector_type: ConnectorType, panel: QWidget) -> None:
@@ -1197,9 +1197,9 @@ class BackupScreen(Screen):
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(metrics.CARD_SPACING)
 
-        self._storage = Card(padding=18, spacing=10)
-        self._storage.add(title_label("Saxlama", size=14))
-        self._storage_value = title_label("—", size=20)
+        self._storage = Card(padding=20, spacing=12)
+        self._storage.add(title_label("Saxlama", size=15))
+        self._storage_value = title_label("—", size=19)
         self._storage.add(self._storage_value)
         self._storage_meter = Meter(theme)
         self._storage.add(self._storage_meter)
@@ -1207,8 +1207,8 @@ class BackupScreen(Screen):
         self._storage.add(self._storage_caption)
         bottom_layout.addWidget(self._storage, 1)
 
-        schedule = Card(padding=18, spacing=12)
-        schedule.add(title_label("Cədvəl", size=14))
+        schedule = Card(padding=20, spacing=12)
+        schedule.add(title_label("Cədvəl", size=15))
 
         auto_row = QWidget()
         auto_layout = QHBoxLayout(auto_row)
@@ -1303,16 +1303,16 @@ class RestoreConfirmDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=26, spacing=16)
+        card = Card(padding=24, spacing=16)
         layout.addWidget(card)
 
-        card.add(title_label("Bu nöqtəyə bərpa edilsin?", size=20))
+        card.add(title_label("Bu nöqtəyə bərpa edilsin?", size=19))
         card.add(
             body_label(
                 f"{backup_date} tarixli ehtiyat nüsxə bərpa olunacaq. Bu tarixdən "
                 "SONRAKI bütün məlumatlar — davamiyyət qeydləri, cərimələr, "
                 "tapşırıqlar — İTİRİLƏCƏK.",
-                size=14,
+                size=13,
             )
         )
 
@@ -1403,8 +1403,8 @@ class HealthScreen(Screen):
         self._metrics_layout.setSpacing(metrics.CARD_SPACING)
         self.add(self._metrics_host)
 
-        self._latency = Card(padding=18, spacing=10)
-        self._latency.add(title_label("1C sinxron gecikməsi — server üzrə", size=14))
+        self._latency = Card(padding=20, spacing=12)
+        self._latency.add(title_label("1C sinxron gecikməsi — server üzrə", size=15))
         self._latency_rows = QVBoxLayout()
         self._latency_rows.setSpacing(8)
         latency_holder = QWidget()
@@ -1412,10 +1412,10 @@ class HealthScreen(Screen):
         self._latency.add(latency_holder)
         self.add(self._latency)
 
-        self._alerts = Card(padding=18, spacing=10)
-        self._alerts.add(title_label("Aktiv xəbərdarlıqlar", size=14))
+        self._alerts = Card(padding=20, spacing=12)
+        self._alerts.add(title_label("Aktiv xəbərdarlıqlar", size=15))
         self._alerts_rows = QVBoxLayout()
-        self._alerts_rows.setSpacing(10)
+        self._alerts_rows.setSpacing(12)
         alerts_holder = QWidget()
         alerts_holder.setLayout(self._alerts_rows)
         self._alerts.add(alerts_holder)
@@ -1454,7 +1454,7 @@ class HealthScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(10)
+            layout.setSpacing(12)
             layout.addWidget(StatusDot(self.theme.color(tones.get(tone, "--color-success"))))
             layout.addWidget(mono_label(name))
             layout.addWidget(stretch())
@@ -1474,7 +1474,7 @@ class HealthScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(10)
+            layout.setSpacing(12)
             layout.addWidget(StatusDot(self.theme.color(tones.get(tone, "--color-warning"))))
             layout.addWidget(body_label(text, size=13), 1)
             layout.addWidget(mono_label(time_text, muted=True))
@@ -1616,7 +1616,7 @@ class AuditScreen(Screen):
         self._pagination = QWidget()
         self._pagination_layout = QHBoxLayout(self._pagination)
         self._pagination_layout.setContentsMargins(0, 0, 0, 0)
-        self._pagination_layout.setSpacing(6)
+        self._pagination_layout.setSpacing(8)
         self.add(self._pagination)
 
     def _emit_filters(self) -> None:
@@ -1665,7 +1665,7 @@ class AuditScreen(Screen):
             button = secondary_button(text)
             # Dar düymə: geniş yan doldurma 46px-lik enə sığmır (bax QSS).
             button.setProperty("compact", "true")
-            button.setFixedWidth(46)
+            button.setFixedWidth(48)
             button.setEnabled(enabled)
             button.clicked.connect(lambda _=False, p=page: self.page_changed.emit(p))
             self._pagination_layout.addWidget(button)
@@ -1703,7 +1703,6 @@ class SettingsScreen(Screen):
     """
 
     theme_selected = Signal(str)
-    language_selected = Signal(str)
     notification_changed = Signal(str, bool)
     password_change_requested = Signal()
     sessions_close_requested = Signal()
@@ -1753,13 +1752,13 @@ class SettingsScreen(Screen):
         self.body().addStretch(1)
 
     def _build_appearance(self) -> Card:
-        card = Card(padding=20, spacing=14)
+        card = Card(padding=20, spacing=12)
         card.add(title_label("Görünüş", size=15))
 
         options = QWidget()
         options_layout = QHBoxLayout(options)
         options_layout.setContentsMargins(0, 0, 0, 0)
-        options_layout.setSpacing(10)
+        options_layout.setSpacing(12)
 
         for key, label in self._THEME_OPTIONS:
             button = secondary_button(label)
@@ -1771,11 +1770,28 @@ class SettingsScreen(Screen):
         card.add(options)
 
         card.add(Divider())
-        self._language = QComboBox()
-        self._language.setProperty("variant", "form")
-        self._language.addItems(["Azərbaycan dili"])
-        self._language.currentTextChanged.connect(self.language_selected)
-        card.add(FormField("İnterfeys dili", widget=self._language))
+        # DİL SEÇİCİSİ DEYİL, GÖSTƏRİCİDİR.
+        #
+        # Spesifikasiya (bölmə 9) açıq yazır: «dil seçimi hazırda göstərilmir,
+        # çünki yalnız bir dil var». Bazada da qayda eynidir —
+        # `user_preferences.language` sütununda `CHECK (language IN ('az'))`.
+        #
+        # Əvvəl burada TƏK bəndli açılan siyahı vardı: istifadəçi onu açır,
+        # bir seçim görür, bağlayır — yəni idarəedici görünüşü daşıyan, lakin
+        # heç nə seçdirməyən bir element. `language_selected` siqnalı da elə
+        # buna görə heç vaxt işə düşmürdü. Sətir QALIR (istifadəçi cari dili
+        # görməlidir), idarəedici isə göstəriciyə çevrilib.
+        # `FormField` YALNIZ redaktə edilə bilən idarəediciləri qəbul edir
+        # (tip imzası ilə qorunur) — göstərici sətri əl ilə qurulur.
+        language_row = QWidget()
+        language_layout = QHBoxLayout(language_row)
+        language_layout.setContentsMargins(0, 0, 0, 0)
+        language_layout.setSpacing(12)
+        language_layout.addWidget(field_label("İnterfeys dili"))
+        language_layout.addWidget(stretch())
+        self._language = body_label("Azərbaycan dili", size=13, wrap=False)
+        language_layout.addWidget(self._language)
+        card.add(language_row)
         return card
 
     def select_theme(self, key: str) -> None:
@@ -1788,7 +1804,7 @@ class SettingsScreen(Screen):
         self.theme_selected.emit(key)
 
     def _build_notifications(self) -> Card:
-        card = Card(padding=20, spacing=14)
+        card = Card(padding=20, spacing=12)
         card.add(title_label("Bildirişlər", size=15))
 
         for index, (key, title, description) in enumerate(self._NOTIFICATIONS):
@@ -1802,7 +1818,7 @@ class SettingsScreen(Screen):
             text_box = QWidget()
             text_layout = QVBoxLayout(text_box)
             text_layout.setContentsMargins(0, 0, 0, 0)
-            text_layout.setSpacing(2)
+            text_layout.setSpacing(4)
             text_layout.addWidget(body_label(title, size=13, wrap=False))
             text_layout.addWidget(muted_label(description))
             layout.addWidget(text_box)
@@ -1817,8 +1833,24 @@ class SettingsScreen(Screen):
             card.add(row)
         return card
 
+    def set_notification_prefs(self, prefs: dict[str, bool]) -> None:
+        """Saxlanmış açar vəziyyətlərini ekrana qaytarır (miqrasiya 058).
+
+        AÇAR YOXDURSA KANAL AÇIQ QALIR: sətri olmayan istifadəçi bugünkü
+        davranışı görməlidir — əks qayda miqrasiya anında hamının bildirişini
+        sükutla kəsərdi. Eyni əsaslandırma repo-dadır.
+
+        Siqnal bloklanır: `setChecked` `toggled`-i işə salır və o, yükləmə
+        anında «istifadəçi dəyişdi» kimi oxunardı — nəticədə ekran açılan kimi
+        yazı əməliyyatı baş verərdi.
+        """
+        for key, toggle in self._notification_toggles.items():
+            toggle.blockSignals(True)
+            toggle.setChecked(prefs.get(key, True))
+            toggle.blockSignals(False)
+
     def _build_security(self) -> Card:
-        card = Card(padding=20, spacing=14)
+        card = Card(padding=20, spacing=12)
         card.add(title_label("Təhlükəsizlik", size=15))
 
         password_row = QWidget()
@@ -1827,7 +1859,7 @@ class SettingsScreen(Screen):
         password_text = QWidget()
         password_text_layout = QVBoxLayout(password_text)
         password_text_layout.setContentsMargins(0, 0, 0, 0)
-        password_text_layout.setSpacing(2)
+        password_text_layout.setSpacing(4)
         password_text_layout.addWidget(body_label("Şifrə", size=13, wrap=False))
         self._password_age = muted_label("")
         password_text_layout.addWidget(self._password_age)
@@ -1845,7 +1877,7 @@ class SettingsScreen(Screen):
         lock_text = QWidget()
         lock_text_layout = QVBoxLayout(lock_text)
         lock_text_layout.setContentsMargins(0, 0, 0, 0)
-        lock_text_layout.setSpacing(2)
+        lock_text_layout.setSpacing(4)
         lock_text_layout.addWidget(body_label("Avtomatik kilid", size=13, wrap=False))
         lock_text_layout.addWidget(muted_label("Hərəkətsizlik zamanı proqram kilidlənir"))
         lock_layout.addWidget(lock_text)
@@ -1865,7 +1897,7 @@ class SettingsScreen(Screen):
         sessions_text = QWidget()
         sessions_text_layout = QVBoxLayout(sessions_text)
         sessions_text_layout.setContentsMargins(0, 0, 0, 0)
-        sessions_text_layout.setSpacing(2)
+        sessions_text_layout.setSpacing(4)
         sessions_text_layout.addWidget(body_label("Aktiv sessiyalar", size=13, wrap=False))
         self._sessions_label = muted_label("")
         sessions_text_layout.addWidget(self._sessions_label)
@@ -1894,7 +1926,9 @@ class SettingsScreen(Screen):
         )
         return {
             "theme": active_theme,
-            "language": self._language.currentText(),
+            # Dil DƏYİŞDİRİLƏ BİLMİR (bax `_build_appearance`) — payload-da
+            # yenə göndərilir ki, çağıran tərəf tam vəziyyəti görsün.
+            "language": self._language.text(),
             "notifications": {
                 key: toggle.isChecked() for key, toggle in self._notification_toggles.items()
             },
@@ -1976,10 +2010,10 @@ class DriveConnectionScreen(Screen):
         status_row = QWidget()
         status_layout = QHBoxLayout(status_row)
         status_layout.setContentsMargins(0, 0, 0, 0)
-        status_layout.setSpacing(10)
+        status_layout.setSpacing(12)
         self._status_dot = StatusDot(theme.color("--color-text-muted"))
         status_layout.addWidget(self._status_dot)
-        self._account = body_label("Hesab qoşulmayıb", size=14, wrap=False)
+        self._account = body_label("Hesab qoşulmayıb", size=13, wrap=False)
         status_layout.addWidget(self._account)
         status_layout.addWidget(stretch())
         self._status_chip = Chip("Qoşulmayıb", "neutral")
@@ -2000,7 +2034,7 @@ class DriveConnectionScreen(Screen):
         actions = QWidget()
         actions_layout = QHBoxLayout(actions)
         actions_layout.setContentsMargins(0, 0, 0, 0)
-        actions_layout.setSpacing(10)
+        actions_layout.setSpacing(12)
         actions_layout.addWidget(stretch())
 
         # Kontekstual kömək (audit G-4) — kartdakı qeyd yalnız arxivlənməni
@@ -2025,7 +2059,7 @@ class DriveConnectionScreen(Screen):
         self.add(self._status_card)
 
         # Razılıq gedərkən görünən kart — ünvan + gözləmə mətni.
-        self._pending = Card(padding=20, spacing=10)
+        self._pending = Card(padding=20, spacing=12)
         self._pending.add(title_label("Brauzerdə razılıq gözlənilir", size=15))
         self._pending.add(
             muted_label(
@@ -2079,7 +2113,7 @@ class DriveConnectionScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(10)
+            layout.setSpacing(12)
             layout.addWidget(body_label(account, size=13, wrap=False))
             layout.addWidget(stretch())
             layout.addWidget(mono_label(when))
@@ -2186,11 +2220,11 @@ class RootControlScreen(Screen):
         self._structural: set[str] = set()
         self._face_scope_toggles: dict[str, ToggleSwitch] = {}
 
-        banner = Card(padding=14, spacing=6)
+        banner = Card(padding=16, spacing=8)
         banner_row = QWidget()
         banner_layout = QHBoxLayout(banner_row)
         banner_layout.setContentsMargins(0, 0, 0, 0)
-        banner_layout.setSpacing(10)
+        banner_layout.setSpacing(12)
         banner_layout.addWidget(Chip("ROOT rejimi", "danger"))
         banner_layout.addWidget(body_label("Bütün əməliyyatlar audit jurnalına yazılır.", size=13))
         banner_layout.addWidget(stretch())
@@ -2212,7 +2246,7 @@ class RootControlScreen(Screen):
         banner.add(banner_row)
         self.add(banner)
 
-        self._limits = Card(padding=20, spacing=14)
+        self._limits = Card(padding=20, spacing=12)
         self._limits.add(title_label("Dinamik limitlər", size=15))
         self._limits_rows = QVBoxLayout()
         self._limits_rows.setSpacing(12)
@@ -2224,7 +2258,7 @@ class RootControlScreen(Screen):
         self.add(self._build_break_card())
         self.add(self._build_face_card())
 
-        self._modules = Card(padding=20, spacing=14)
+        self._modules = Card(padding=20, spacing=12)
         self._modules.add(title_label("Modul açarları", size=15))
         self._modules_rows = QVBoxLayout()
         self._modules_rows.setSpacing(12)
@@ -2261,7 +2295,7 @@ class RootControlScreen(Screen):
         müxtəlif dəyər yazıb «Tətbiq Et» basmaq mümkün olardı və hansının
         qazandığı düymələrin sırasından asılı qalardı.
         """
-        card = Card(padding=20, spacing=14)
+        card = Card(padding=20, spacing=12)
         card.add(title_label("Fasilə Parametrləri", size=15))
         card.add(
             muted_label(
@@ -2328,7 +2362,7 @@ class RootControlScreen(Screen):
         (`FaceStoreScope.is_global`) — yəni İŞLƏYİR. İzah olmasaydı, boş sahə
         «söndürülüb» kimi oxunardı və Root pilot yayımını tərsinə anlayardı.
         """
-        card = Card(padding=20, spacing=14)
+        card = Card(padding=20, spacing=12)
         card.add(title_label("Face Control", size=15))
         card.add(
             muted_label(
@@ -2473,7 +2507,7 @@ class RootControlScreen(Screen):
             )
 
     def _build_registry(self) -> Card:
-        card = Card(padding=20, spacing=14)
+        card = Card(padding=20, spacing=12)
         card.add(title_label("İcazə registri", size=15))
 
         self._registry_rows = QVBoxLayout()
@@ -2486,7 +2520,7 @@ class RootControlScreen(Screen):
         create_row = QWidget()
         create_layout = QHBoxLayout(create_row)
         create_layout.setContentsMargins(0, 0, 0, 0)
-        create_layout.setSpacing(10)
+        create_layout.setSpacing(12)
 
         # Yer tutucu `can_` ilə başlayır, çünki `PermissionFlag` bu prefiksi
         # TƏLƏB EDİR (bax `authorization.PermissionFlag.__post_init__`).
@@ -2501,13 +2535,13 @@ class RootControlScreen(Screen):
         self._new_flag_category = QLineEdit()
         self._new_flag_category.setPlaceholderText("Kateqoriya")
         self._new_flag_category.setProperty("variant", "form")
-        self._new_flag_category.setFixedWidth(170)
+        self._new_flag_category.setFixedWidth(168)
         create_layout.addWidget(self._new_flag_category)
 
         self._new_flag_kind = QComboBox()
         self._new_flag_kind.setProperty("variant", "form")
         self._new_flag_kind.addItems(["Standart", "Hardlock"])
-        self._new_flag_kind.setFixedWidth(150)
+        self._new_flag_kind.setFixedWidth(152)
         create_layout.addWidget(self._new_flag_kind)
 
         create = secondary_button("Yarat")
@@ -2670,7 +2704,7 @@ class RootControlScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(10)
+            layout.setSpacing(12)
             layout.addWidget(mono_label(name))
             layout.addWidget(stretch())
             layout.addWidget(

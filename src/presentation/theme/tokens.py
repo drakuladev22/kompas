@@ -308,7 +308,15 @@ DARK_THEME: Final[dict[str, str]] = {
     "--color-sidebar-border": "#22314D",
     "--color-nav-item-text": "#C4D0E2",
     "--color-nav-item-icon": "#8394AE",
-    "--color-nav-active-bg": "#142443",
+    # DESIGN.MD REDİZAYNI — AKTİV HƏB GÖRÜNMƏLİDİR.
+    # Əvvəl `#142443` idi: yan panel fonu `#0F1B30`-dur, yəni fərq gözlə
+    # seçilmirdi və aktiv maddə faktiki olaraq YALNIZ fokus halqası ilə
+    # tanınırdı — halbuki fokus halqası klaviatura vəziyyətidir, aktivlik
+    # deyil. İkisi qarışanda istifadəçi Tab basanda "səhifə dəyişdi" sanır.
+    # `design_reference/navbar.jpg` və `tasks.jpg` hər ikisi aydın görünən
+    # dolu həb göstərir. Yeni dəyər Navy ailəsində qalır, mətn kontrastı isə
+    # 10:1-dən yuxarıdır.
+    "--color-nav-active-bg": "#1E3260",
     "--color-nav-active-text": "#E8EDF5",
     # --- əsas hərəkət düyməsi ---
     "--color-action-bg": BRAND_AMBER,
@@ -350,10 +358,23 @@ METRICS: Final[dict[str, str]] = {
     "--radius-md": "8",
     "--radius-lg": "12",
     # --- maketin öz radius pilləsi (bax modul başlığındakı izah) ---
+    #
+    # DESIGN.MD REDİZAYNI — PİLLƏ GENİŞLƏNDİ, ARDICILLIQ SAXLANILDI.
+    # `design_reference/`-dəki hər referans eyni münasibəti göstərir: idarəetmə
+    # elementi kartdan DAHA AZ yumşaqdır, kart isə moduldan az. Köhnə pillədə
+    # bu fərq 9→11→14 idi, yəni gözlə seçilmirdi və nəticədə hər şey "eyni
+    # dərəcədə yuvarlaq" görünürdü. Yeni pillə fərqi genişləndirir (10→14→16)
+    # ki, iyerarxiya formadan da oxunsun, təkcə ölçüdən yox.
     "--radius-badge": "5",
-    "--radius-control": "9",
-    "--radius-panel": "11",
-    "--radius-modal": "14",
+    "--radius-control": "10",
+    "--radius-panel": "14",
+    "--radius-modal": "16",
+    #: Tam yuvarlaq çip/həb — `border-radius` hündürlüyün yarısını keçəndə Qt
+    #: onu avtomatik kəsir, ona görə böyük sabit təhlükəsizdir.
+    "--radius-pill": "999",
+    #: Təqvim gün xanası (`design_reference/calendar.jpg`) — kartdan kiçik,
+    #: idarəetmədən böyük: xana nə düymədir, nə də kart.
+    "--radius-cell": "12",
     "--border-width": "1",
     "--focus-ring-width": "2",
     # Kassa PC-lərində toxunma ekranı ola bilər — minimum hədəf ölçüsü.

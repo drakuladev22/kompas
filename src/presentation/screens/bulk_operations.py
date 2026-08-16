@@ -159,8 +159,8 @@ class BulkOperationsScreen(Screen):
     # ------------------------------- CSV idxalı -------------------------------- #
 
     def _build_import_card(self) -> Card:
-        card = Card(padding=22, spacing=14)
-        card.add(title_label("CSV İşçi İdxalı", size=17))
+        card = Card(padding=20, spacing=12)
+        card.add(title_label("CSV İşçi İdxalı", size=19))
         card.add(
             muted_label(
                 "Əvvəlcə fayl seçib ÖNİZLƏYİN — sətir-sətir xəta aşağıda göstərilir. "
@@ -174,7 +174,7 @@ class BulkOperationsScreen(Screen):
         file_row = QWidget()
         file_row_layout = QHBoxLayout(file_row)
         file_row_layout.setContentsMargins(0, 0, 0, 0)
-        file_row_layout.setSpacing(10)
+        file_row_layout.setSpacing(12)
         self._file_label = muted_label("Fayl seçilməyib")
         file_row_layout.addWidget(self._file_label, stretch=1)
         pick_button = secondary_button("CSV Faylı Seç")
@@ -185,7 +185,7 @@ class BulkOperationsScreen(Screen):
         actions_row = QWidget()
         actions_layout = QHBoxLayout(actions_row)
         actions_layout.setContentsMargins(0, 0, 0, 0)
-        actions_layout.setSpacing(10)
+        actions_layout.setSpacing(12)
         actions_layout.addWidget(stretch())
         preview_button = secondary_button("Önizlə")
         preview_button.clicked.connect(self._on_preview_clicked)
@@ -320,13 +320,13 @@ class BulkOperationsScreen(Screen):
     # ----------------------------- mağaza şablonu ------------------------------ #
 
     def _build_template_card(self) -> Card:
-        card = Card(padding=22, spacing=14)
+        card = Card(padding=20, spacing=12)
 
         header = QWidget()
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(10)
-        header_layout.addWidget(title_label("Mağaza Şablonları", size=17))
+        header_layout.setSpacing(12)
+        header_layout.addWidget(title_label("Mağaza Şablonları", size=19))
         header_layout.addWidget(stretch())
         capture_button = action_button(
             "Şablon Çıxar", icon_name="plus", icon_color=self.theme.color("--color-action-text")
@@ -436,7 +436,7 @@ class StoreTemplateCaptureDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=26, spacing=16)
+        card = Card(padding=24, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Mağaza Şablonu Çıxar", size=19))
         card.add(
@@ -522,9 +522,9 @@ class StoreTemplateApplyDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=26, spacing=16)
+        card = Card(padding=24, spacing=16)
         layout.addWidget(card)
-        card.add(title_label(f"«{template_name}» şablonunu tətbiq et", size=17))
+        card.add(title_label(f"«{template_name}» şablonunu tətbiq et", size=19))
         card.add(Divider())
 
         card.add(field_label("Şablonda İSTİNAD kimi saxlanılan rollar"))
@@ -625,7 +625,7 @@ class BulkImportResultDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=26, spacing=16)
+        card = Card(padding=24, spacing=16)
         layout.addWidget(card)
         card.add(title_label("İdxal Nəticəsi", size=19))
         card.add(
@@ -634,7 +634,7 @@ class BulkImportResultDialog(QDialog):
 
         if errors:
             card.add(Divider())
-            card.add(body_label("Rədd edilən sətirlər", size=14))
+            card.add(body_label("Rədd edilən sətirlər", size=13))
             error_table = DataTable(_PREVIEW_COLUMNS, theme)
             for row in errors:
                 error_table.add_row([mono_label(row.get("row", "")), row.get("message", "")])
@@ -647,7 +647,7 @@ class BulkImportResultDialog(QDialog):
         self._created = list(created)
         if self._created:
             card.add(Divider())
-            card.add(body_label("Müvəqqəti şifrələr", size=14))
+            card.add(body_label("Müvəqqəti şifrələr", size=13))
             warning = muted_label(
                 "DİQQƏT: bu siyahı YALNIZ İNDİ göstərilir və pəncərə bağlanandan sonra "
                 "BİR DAHA GÖSTƏRİLMƏYƏCƏK — heç yerdə (audit, jurnal) saxlanmır. "

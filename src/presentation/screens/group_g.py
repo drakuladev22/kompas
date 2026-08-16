@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.presentation.screens.base import Screen
-from src.presentation.theme.manager import enable_styled_background
+from src.presentation.theme.manager import enable_styled_background, set_surface_color
 from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.forms import FormField
@@ -101,7 +101,7 @@ class NotificationItem(QWidget):
         # oxuyucusu sətri "… — oxunmamış" kimi elan edir. Vizual dizayn
         # dəyişmir, məlumat isə ikinci kanaldan da keçir.
         if unread:
-            self.setStyleSheet(f"background-color: {theme.color('--color-neutral-bg')};")
+            set_surface_color(self, theme.color("--color-neutral-bg"))
         title_text = notification.get("title", "")
         self.setAccessibleName(f"{title_text} — oxunmamış" if unread else title_text)
         self.setAccessibleDescription(notification.get("body", ""))
@@ -196,7 +196,7 @@ class NotificationPanel(Card):
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(20, 18, 20, 18)
         header_layout.setSpacing(12)
-        header_layout.addWidget(title_label("Bildirişlər", size=16))
+        header_layout.addWidget(title_label("Bildirişlər", size=15))
 
         self._unread_chip = Chip("", "warning")
         self._unread_chip.setVisible(False)
@@ -242,7 +242,7 @@ class NotificationPanel(Card):
         footer = QWidget()
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(20, 14, 20, 14)
-        footer_layout.setSpacing(10)
+        footer_layout.setSpacing(12)
 
         see_all = LinkLabel("Bütün bildirişlərə bax")
         see_all.clicked.connect(self.see_all_requested)
@@ -251,11 +251,20 @@ class NotificationPanel(Card):
         footer_layout.addWidget(muted_label("30 gün saxlanılır"))
         self.add(footer)
 
+        #: Sonuncu doldurulmuş dəst — süzgəc dəyişəndə yenidən süzülür.
+        #: `set_filter` aşağıda çağırıldığı üçün BU SƏTİR ondan əvvəl olmalıdır.
+        self._notifications: list[dict[str, str]] = []
+
         self.set_filter("all")
 
     # ------------------------------- məzmun ---------------------------------- #
 
     def set_notifications(self, notifications: list[dict[str, str]]) -> None:
+        # DƏST ƏVVƏLCƏ SAXLANILIR: əvvəllər bu sətir metodun SONUNDA idi və
+        # "görünən bildiriş yoxdur" halında `return` ona çatmırdı — yəni boş
+        # nəticə verən bir süzgəcdən sonra keş köhnə qalır, «Hamısı»na qayıdış
+        # isə əvvəlki dəsti göstərərdi.
+        self._notifications = list(notifications)
         clear_layout(self._list_layout, keep_last=1)
 
         unread = sum(1 for n in notifications if n.get("unread") == "1")
@@ -278,17 +287,24 @@ class NotificationPanel(Card):
             item.clicked.connect(self.notification_clicked)
             self._list_layout.insertWidget(self._list_layout.count() - 1, item)
 
-        self._notifications = notifications
-
     def _matches(self, notification: dict[str, str]) -> bool:
         if self._active_filter == "all":
             return True
         return notification.get("category", "system") == self._active_filter
 
     def set_filter(self, key: str) -> None:
+        """Süzgəci dəyişir və SİYAHINI yenidən qurur.
+
+        Çipin rəngini dəyişib siyahını olduğu kimi saxlamaq ən aldadıcı
+        formadır: istifadəçi «Cərimə» çipini seçir, ekranda isə sistem
+        bildirişləri qalır — o, bunu süzgəcin nəticəsi sayır və "cərimə
+        bildirişi yoxdur" qənaətinə gəlir. `filter_changed` siqnalını heç bir
+        kontroller dinləmirdi, yəni süzgəc heç bir yerdə tətbiq olunmurdu.
+        """
         self._active_filter = key
         for chip_key, chip in self._filter_chips.items():
             chip.set_tone("info" if chip_key == key else "neutral")
+        self.set_notifications(list(self._notifications))
         self.filter_changed.emit(key)
 
     @property
@@ -404,11 +420,11 @@ class ProfileScreen(Screen):
     def _build_identity(
         self, full_name: str, role_name: str, store_name: str, member_since: str
     ) -> Card:
-        card = Card(padding=22, spacing=0)
+        card = Card(padding=20, spacing=0)
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(18)
+        layout.setSpacing(16)
 
         self._avatar = Avatar(
             full_name,
@@ -464,7 +480,7 @@ class ProfileScreen(Screen):
         card.add(title_label("Rol və səlahiyyət", size=15))
         card.add(Divider())
         self._role_rows = QVBoxLayout()
-        self._role_rows.setSpacing(10)
+        self._role_rows.setSpacing(12)
         holder = QWidget()
         holder.setLayout(self._role_rows)
         card.add(holder)
@@ -475,7 +491,7 @@ class ProfileScreen(Screen):
         card.add(section_label("Son giriş tarixçəsi"))
         card.add(Divider())
         self._session_rows = QVBoxLayout()
-        self._session_rows.setSpacing(10)
+        self._session_rows.setSpacing(12)
         holder = QWidget()
         holder.setLayout(self._session_rows)
         card.add(holder)
@@ -489,7 +505,7 @@ class ProfileScreen(Screen):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(10)
+        buttons_layout.setSpacing(12)
 
         change = secondary_button("Şifrəni Dəyiş")
         change.clicked.connect(self.password_change_requested)
@@ -530,7 +546,7 @@ class ProfileScreen(Screen):
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
         self._face_chip = Chip("Qeydiyyatsız", "neutral")
         layout.addWidget(self._face_chip)
         self._face_enrolled_at = mono_label("")
@@ -604,7 +620,7 @@ class ProfileScreen(Screen):
         card.add(Divider())
 
         self._performance_rows = QVBoxLayout()
-        self._performance_rows.setSpacing(14)
+        self._performance_rows.setSpacing(16)
         holder = QWidget()
         holder.setLayout(self._performance_rows)
         card.add(holder)
@@ -637,7 +653,7 @@ class ProfileScreen(Screen):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(10)
+        head_layout.setSpacing(12)
         head_layout.addWidget(title_label(row.get("period", ""), size=14))
         head_layout.addWidget(stretch())
         score_text = row.get("overall_score", "")
@@ -686,7 +702,7 @@ class ProfileScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(10)
+            layout.setSpacing(12)
             layout.addWidget(mono_label(time_text))
             layout.addWidget(body_label(device, size=13, wrap=False))
             layout.addWidget(stretch())
@@ -701,7 +717,7 @@ class ProfileScreen(Screen):
             row = QWidget()
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(10)
+            row_layout.setSpacing(12)
             row_layout.addWidget(muted_label(name))
             row_layout.addWidget(stretch())
             row_layout.addWidget(body_label(value, size=13, wrap=False))

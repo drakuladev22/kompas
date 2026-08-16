@@ -116,11 +116,11 @@ class HelpDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=24, spacing=14)
+        card = Card(padding=24, spacing=12)
         layout.addWidget(card)
 
-        card.add(title_label(title, size=18))
-        intro_label = body_label(intro, size=14)
+        card.add(title_label(title, size=19))
+        intro_label = body_label(intro, size=13)
         intro_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         card.add(intro_label)
         card.add(Divider())
@@ -146,7 +146,7 @@ class HelpDialog(QDialog):
         row = QWidget()
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(10)
+        row_layout.setSpacing(12)
 
         number = plain_label(str(index))
         number.setFixedSize(_STEP_BADGE_SIZE, _STEP_BADGE_SIZE)

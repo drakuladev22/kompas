@@ -111,7 +111,7 @@ class CatalogScreen(Screen):
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_layout.setSpacing(10)
+        toolbar_layout.setSpacing(12)
         self._summary = muted_label("")
         toolbar_layout.addWidget(self._summary)
         toolbar_layout.addWidget(stretch())
@@ -231,7 +231,7 @@ class CatalogEntryDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=26, spacing=18)
+        card = Card(padding=24, spacing=16)
         layout.addWidget(card)
         card.add(title_label(title, size=19))
         card.add(Divider())
@@ -466,7 +466,6 @@ class ReportExportScreen(Screen):
     Signals:
         preflight_requested: Hesabat açarı — doğrulamanı işə salır.
         export_requested: Hesabat açarı — HR təsdiqlədi, fayl yazılsın.
-        period_changed: `YYYY-MM`.
         role_filter_changed: Seçilmiş rol kodu (boş = bütün rollar).
         range_changed: (başlanğıc, bitmə) ISO mətnləri; İKİSİ DƏ BOŞ = `[Tam Ay]`.
         correction_requested: «Düzəliş Et» — kontroller dialoqu açır.
@@ -474,7 +473,6 @@ class ReportExportScreen(Screen):
 
     preflight_requested = Signal(str)
     export_requested = Signal(str)
-    period_changed = Signal(str)
     role_filter_changed = Signal(str)
     range_changed = Signal(str, str)
     correction_requested = Signal()
@@ -609,7 +607,7 @@ class ReportExportScreen(Screen):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(10)
+        head_layout.setSpacing(12)
 
         glyph = plain_label()
         glyph.setFixedSize(32, 32)
@@ -650,8 +648,8 @@ class ReportExportScreen(Screen):
         edilmiş düzəlişlər → təsdiq. Ayrı kartlar bu ardıcıllığı vizual olaraq
         pozardı.
         """
-        card = Card(padding=22, spacing=14)
-        card.add(title_label("Export-öncəsi Doğrulama", size=17))
+        card = Card(padding=20, spacing=12)
+        card.add(title_label("Export-öncəsi Doğrulama", size=19))
         card.add(
             muted_label(
                 "Fayl yaranmazdan ƏVVƏL şübhəli sətirlər burada göstərilir. "
@@ -688,7 +686,7 @@ class ReportExportScreen(Screen):
         corrections_head = QWidget()
         head_layout = QHBoxLayout(corrections_head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(10)
+        head_layout.setSpacing(12)
         head_layout.addWidget(title_label("Manual düzəlişlər", size=15))
         head_layout.addWidget(stretch())
         self._correction_button = secondary_button("Düzəliş Et")
@@ -795,6 +793,15 @@ class ReportExportScreen(Screen):
     # ------------------------------ setter API -------------------------------- #
 
     def set_period(self, label: str) -> None:
+        """Cari dövrün ADI — YALNIZ göstərici.
+
+        Dövr istifadəçi tərəfindən BURADAN dəyişdirilmir: seçim `range_changed`
+        ilə tarix aralığı üzərindən edilir (kompas1.md Faza 8) və ad ondan
+        hesablanır. Ekranda əvvəllər `period_changed` adlı bir siqnal da vardı;
+        onu heç nə yaymırdı və heç nə dinləmirdi — yəni API oxuyana «dövr
+        seçilə bilər» deyib bunu yerinə yetirmirdi. Siqnal silindi, ad isə
+        göstərici olaraq qaldı.
+        """
         self._period_label.setText(label)
 
     def set_lock_summary(
@@ -1073,7 +1080,7 @@ class ExportCorrectionDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=26, spacing=18)
+        card = Card(padding=24, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Export Düzəlişi", size=19))
         card.add(
@@ -1114,7 +1121,7 @@ class ExportCorrectionDialog(QDialog):
         reason_box = QWidget()
         reason_layout = QVBoxLayout(reason_box)
         reason_layout.setContentsMargins(0, 0, 0, 0)
-        reason_layout.setSpacing(7)
+        reason_layout.setSpacing(8)
         reason_layout.addWidget(field_label("Səbəb (MƏCBURİ)"))
         self._reason = QPlainTextEdit()
         self._reason.setPlaceholderText(
@@ -1340,7 +1347,7 @@ class HelpTopicCard(Card):
             row = QWidget()
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(10)
+            row_layout.setSpacing(12)
 
             number = plain_label(str(index))
             number.setFixedSize(22, 22)
@@ -1425,8 +1432,33 @@ class HelpCenterScreen(Screen):
         self._topics_layout.addStretch(1)
         scroll.setWidget(host)
         self.add(scroll)
+        #: Çipdən kartına keçid üçün — `_on_topic` bunu işlədir.
+        self._scroll = scroll
+        self._topic_cards: dict[str, QWidget] = {}
 
         self.set_visible_topics(None)
+
+    def _on_topic(self, key: str) -> None:
+        """Mövzu çipi — HƏMİN KARTA sürüşdürür.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ SÜZGƏC DEYİL, SÜRÜŞDÜRMƏ
+        ──────────────────────────────────────────────────────────────────────
+        Çip basılanda digər mövzuları GİZLƏTSƏYDİK, istifadəçi «bu ekranda
+        yalnız bir mövzu var» nəticəsinə gələr və geri qayıtmaq üçün ikinci
+        bir «hamısı» düyməsi axtarardı. Yardım mətni isə tez-tez qonşu
+        mövzuya baxmağı tələb edir (məs. «cərimə» ilə «etiraz»).
+
+        Çip burada İNDEKSDİR: siyahı olduğu kimi qalır, ekran sadəcə lazımi
+        yerə gedir — uzun sənəddə mündəricat necə işləyirsə, elə.
+
+        Siqnal SAXLANILIR: kontroller lazım olsa (məs. hansı mövzunun ən çox
+        oxunduğunu saymaq) ona qoşula bilər.
+        """
+        card = self._topic_cards.get(key)
+        if card is not None:
+            self._scroll.ensureWidgetVisible(card)
+        self.topic_selected.emit(key)
 
     def set_visible_topics(self, keys: frozenset[str] | None) -> None:
         """Mövzuları süzür.
@@ -1455,12 +1487,14 @@ class HelpCenterScreen(Screen):
             # düz mətndir, tooltip isə ayrıca süzülməlidir. Mövzu başlıqları
             # hazırda sabitdir, lakin siyahı plagin/DB mənbəyinə açıqdır.
             chip.setToolTip(plain_tooltip(title))
-            chip.clicked.connect(self.topic_selected)
+            chip.clicked.connect(self._on_topic)
             self._chip_layout.addWidget(chip)
         self._chip_layout.addWidget(stretch())
 
-        for _key, title, steps in topics:
+        self._topic_cards.clear()
+        for key, title, steps in topics:
             card = HelpTopicCard(title, steps, self.theme)
+            self._topic_cards[key] = card
             self._topics_layout.insertWidget(self._topics_layout.count() - 1, card)
 
         self.show_content()

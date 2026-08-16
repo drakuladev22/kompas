@@ -195,7 +195,7 @@ class DashboardScreen(Screen):
         chart_head = QWidget()
         chart_head_layout = QHBoxLayout(chart_head)
         chart_head_layout.setContentsMargins(0, 0, 0, 0)
-        chart_head_layout.setSpacing(10)
+        chart_head_layout.setSpacing(12)
         chart_head_layout.addWidget(title_label("Cərimələr — filial üzrə", size=15))
         self._chart_period = muted_label("")
         chart_head_layout.addWidget(self._chart_period)
@@ -226,10 +226,10 @@ class DashboardScreen(Screen):
         self._leaders = RankList("Xal liderləri")
         bottom_layout.addWidget(self._leaders, 1)
 
-        self._health = Card(padding=18, spacing=12)
-        self._health.add(title_label("Server sağlamlığı", size=14))
+        self._health = Card(padding=20, spacing=12)
+        self._health.add(title_label("Server sağlamlığı", size=15))
         self._health_rows = QVBoxLayout()
-        self._health_rows.setSpacing(10)
+        self._health_rows.setSpacing(12)
         health_holder = QWidget()
         health_holder.setLayout(self._health_rows)
         self._health.add(health_holder)
@@ -442,11 +442,11 @@ class DashboardScreen(Screen):
             layout.removeWidget(widget)
 
     def _build_ranking_card(self) -> Card:
-        card = Card(padding=18, spacing=12)
+        card = Card(padding=20, spacing=12)
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(10)
+        head_layout.setSpacing(12)
         head_layout.addWidget(title_label("Çox-Mağaza Reytinq Cədvəli", size=15))
         head_layout.addWidget(stretch())
         self._ranking_metric_combo = QComboBox()
@@ -472,7 +472,7 @@ class DashboardScreen(Screen):
         return card
 
     def _build_store_vs_network_card(self, theme: ThemeManager) -> tuple[Card, QLabel, BarChart]:
-        card = Card(padding=18, spacing=12)
+        card = Card(padding=20, spacing=12)
         card.add(title_label("Mağaza — Şəbəkə Ortalaması", size=15))
         subtitle = muted_label("")
         card.add(subtitle)
@@ -484,7 +484,7 @@ class DashboardScreen(Screen):
         return card, subtitle, chart
 
     def _build_trend_card(self, theme: ThemeManager) -> tuple[Card, QLabel, BarChart]:
-        card = Card(padding=18, spacing=12)
+        card = Card(padding=20, spacing=12)
         title = title_label("Zaman-üzrə Trend", size=15)
         card.add(title)
         chart = BarChart(theme)
@@ -493,7 +493,7 @@ class DashboardScreen(Screen):
         return card, title, chart
 
     def _build_outlier_card(self) -> tuple[Card, QLabel, QVBoxLayout]:
-        card = Card(padding=18, spacing=10)
+        card = Card(padding=20, spacing=12)
         card.add(title_label("Kritik-Kənar (Outlier) Kartı", size=15))
         summary = body_label("", size=13)
         summary.setWordWrap(True)
@@ -507,7 +507,7 @@ class DashboardScreen(Screen):
         return card, summary, rows_layout
 
     def _build_break_overuse_card(self) -> tuple[Card, QVBoxLayout]:
-        card = Card(padding=18, spacing=10)
+        card = Card(padding=20, spacing=12)
         card.add(title_label("Gündəlik fasilə həddini aşanlar", size=15))
         card.add(
             muted_label(
@@ -543,7 +543,7 @@ class DashboardScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(10)
+            layout.setSpacing(12)
             layout.addWidget(body_label(name, size=13, wrap=False))
             layout.addWidget(stretch())
             layout.addWidget(Chip(warning, "warning"))
@@ -590,7 +590,7 @@ class DashboardScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(10)
+            layout.setSpacing(12)
             layout.addWidget(StatusDot(self.theme.color(tones.get(tone, "--color-success"))))
             layout.addWidget(body_label(name, size=13, wrap=False))
             layout.addWidget(stretch())
@@ -684,7 +684,7 @@ class DashboardScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(10)
+            layout.setSpacing(12)
             layout.addWidget(body_label(name, size=13, wrap=False))
             layout.addWidget(stretch())
             layout.addWidget(Chip(detail, "warning"))
@@ -817,7 +817,7 @@ class PermissionMatrixScreen(Screen):
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(16, 20, 16, 20)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
 
         layout.addWidget(title_label("Vəzifələr", size=15))
 
@@ -882,7 +882,7 @@ class PermissionMatrixScreen(Screen):
         head_layout.setContentsMargins(0, 0, 0, 0)
         head_layout.setSpacing(12)
 
-        self._matrix_title = title_label("", size=17)
+        self._matrix_title = title_label("", size=19)
         head_layout.addWidget(self._matrix_title)
         self._matrix_count = muted_label("")
         head_layout.addWidget(self._matrix_count)
@@ -915,7 +915,7 @@ class PermissionMatrixScreen(Screen):
         self._groups_host = QWidget()
         self._groups_layout = QVBoxLayout(self._groups_host)
         self._groups_layout.setContentsMargins(0, 0, 0, 0)
-        self._groups_layout.setSpacing(18)
+        self._groups_layout.setSpacing(16)
         scroll.setWidget(self._groups_host)
         layout.addWidget(scroll, 1)
 
@@ -928,8 +928,8 @@ class PermissionMatrixScreen(Screen):
         return panel
 
     def _build_override_card(self) -> Card:
-        card = Card(padding=16, spacing=10)
-        card.add(title_label("Fərdi İstisna", size=14))
+        card = Card(padding=16, spacing=12)
+        card.add(title_label("Fərdi İstisna", size=15))
         card.add(muted_label("Bir istifadəçiyə rolundan kənar icazə vermək"))
         self._override_search = QLineEdit()
         self._override_search.setPlaceholderText("İstifadəçi axtar")
@@ -967,8 +967,8 @@ class PermissionMatrixScreen(Screen):
         total_count = 0
 
         for group_name, items in groups:
-            card = Card(padding=18, spacing=12)
-            card.add(title_label(group_name, size=14))
+            card = Card(padding=20, spacing=12)
+            card.add(title_label(group_name, size=15))
             card.add(Divider())
 
             grid = QGridLayout()
@@ -1072,13 +1072,13 @@ class RoleCreateDialog(QDialog):
         self._theme = theme
         self.setWindowTitle("Yeni Vəzifə")
         self.setModal(True)
-        self.setMinimumWidth(470)
+        self.setMinimumWidth(472)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=26, spacing=18)
+        card = Card(padding=24, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Yeni Vəzifə", size=19))
         card.add(Divider())
@@ -1236,7 +1236,7 @@ class UsersScreen(Screen):
         self._search.setPlaceholderText("Ad, rol və ya mağaza")
         self._search.setProperty("variant", "form")
         self._search.setFixedWidth(320)
-        self._search.textChanged.connect(self.search_changed)
+        self._search.textChanged.connect(self._on_search)
         toolbar_layout.addWidget(self._search)
         toolbar_layout.addWidget(stretch())
 
@@ -1261,6 +1261,9 @@ class UsersScreen(Screen):
         toolbar_layout.addWidget(create)
         self.add(toolbar)
 
+        #: Sonuncu doldurulmuş dəst — axtarış onun üzərində işləyir.
+        self._users: list[dict[str, str]] = []
+
         self._table = DataTable(
             [
                 Column("İşçi", 260),
@@ -1281,7 +1284,62 @@ class UsersScreen(Screen):
         """Kontekstual kömək düyməsi — kontroller/testlər üçün."""
         return self._help
 
+    def search_field(self) -> QLineEdit:
+        """Axtarış sahəsi — kontroller/testlər üçün."""
+        return self._search
+
     def set_users(self, users: list[dict[str, str]]) -> None:
+        """Siyahını təzələyir; aktiv axtarış şərti QORUNUR.
+
+        SƏTİRLƏR KEŞLƏNİR: axtarış hər hərfdə bazaya sorğu göndərməməlidir —
+        `screen_data` onsuz da bütün dəsti gətirir və hər vuruşda yeni sorğu
+        kadrı dondurardı. Eyni səbəblə yenidən oxumadan sonra süzgəc sıfırlanmır:
+        yazı əməliyyatından (məs. «PIN Sıfırla») sonra siyahı yenilənir və
+        operator axtardığı adamı yenidən yazmalı olsaydı, bu, hər əməliyyatdan
+        sonra təkrarlanan bir cəza olardı.
+        """
+        self._users = list(users)
+        self._render()
+
+    def _on_search(self, text: str) -> None:
+        """Axtarış sahəsi — SİYAHINI süzür, sonra siqnalı yayır.
+
+        Əvvəllər `textChanged` birbaşa `search_changed` siqnalına relay
+        olunurdu və həmin siqnalı heç bir kontroller dinləmirdi: istifadəçi
+        yazırdı, siyahı isə toxunulmaz qalırdı. Boş ekranın mətni («Axtarış
+        şərtinə uyğun işçi yoxdur») süzgəcin MÖVCUD olduğunu vəd edirdi —
+        yəni interfeys bir davranış vəd edib onu yerinə yetirmirdi.
+
+        Siqnal SAXLANILIR: server-tərəfli axtarış lazım olsa, kontroller ona
+        qoşulub `set_users` ilə daha dar dəst göndərə bilər — yerli süzgəc
+        həmin dəstin üzərində işləməyə davam edir.
+        """
+        self._render()
+        self.search_changed.emit(text)
+
+    def _matches_search(self, user: dict[str, str]) -> bool:
+        """Ad, istifadəçi adı, rol və mağaza üzrə uyğunluq (registrsiz).
+
+        Dörd sahənin hamısı yoxlanılır, çünki yer tutucusu məhz bunu vəd edir
+        («Ad, rol və ya mağaza»); `username` əlavə olunub, çünki cədvəldə
+        adın altında GÖRÜNÜR və görünən mətnə görə axtara bilməmək izahsız
+        olardı.
+        """
+        needle = self._search.text().strip().casefold()
+        if not needle:
+            return True
+        haystack = " ".join(
+            (
+                user.get("full_name", ""),
+                user.get("username", ""),
+                user.get("role", ""),
+                user.get("store", ""),
+            )
+        )
+        return needle in haystack.casefold()
+
+    def _render(self) -> None:
+        users = [user for user in self._users if self._matches_search(user)]
         self._table.clear()
         if not users:
             self.show_empty(
@@ -1295,7 +1353,7 @@ class UsersScreen(Screen):
             identity = QWidget()
             identity_layout = QVBoxLayout(identity)
             identity_layout.setContentsMargins(0, 0, 0, 0)
-            identity_layout.setSpacing(2)
+            identity_layout.setSpacing(4)
             identity_layout.addWidget(body_label(user["full_name"], size=13, wrap=False))
             identity_layout.addWidget(mono_label(user["username"], muted=True))
 
@@ -1363,13 +1421,13 @@ class PosThresholdDialog(QDialog):
         self._theme = theme
         self.setWindowTitle("POS Səlahiyyəti")
         self.setModal(True)
-        self.setMinimumWidth(470)
+        self.setMinimumWidth(472)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=26, spacing=18)
+        card = Card(padding=24, spacing=16)
         layout.addWidget(card)
         card.add(title_label("POS Səlahiyyəti", size=19))
         card.add(muted_label(employee_name))
@@ -1401,7 +1459,7 @@ class PosThresholdDialog(QDialog):
         note_box = QWidget()
         note_layout = QVBoxLayout(note_box)
         note_layout.setContentsMargins(0, 0, 0, 0)
-        note_layout.setSpacing(7)
+        note_layout.setSpacing(8)
         note_layout.addWidget(field_label("Qeyd (səbəb)"))
         self._note = QPlainTextEdit()
         self._note.setPlainText(note)
@@ -1522,7 +1580,7 @@ class EmployeeDocumentDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=26, spacing=18)
+        card = Card(padding=24, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Sənədlər", size=19))
         card.add(muted_label(employee_name))
@@ -1552,7 +1610,7 @@ class EmployeeDocumentDialog(QDialog):
         card.add(self._table)
 
         card.add(Divider())
-        card.add(body_label("Yeni sənəd əlavə et", size=14))
+        card.add(body_label("Yeni sənəd əlavə et", size=13))
 
         self._doc_type = FormField("Sənəd növü", placeholder="məsələn MUQAVILE, SANITAR_KITABCA")
         card.add(self._doc_type)
@@ -1590,7 +1648,7 @@ class EmployeeDocumentDialog(QDialog):
         file_row = QWidget()
         file_row_layout = QHBoxLayout(file_row)
         file_row_layout.setContentsMargins(0, 0, 0, 0)
-        file_row_layout.setSpacing(10)
+        file_row_layout.setSpacing(12)
         self._file_label = muted_label("Fayl seçilməyib")
         file_row_layout.addWidget(self._file_label, stretch=1)
         pick_button = secondary_button("Fayl Seç")
@@ -1747,7 +1805,14 @@ class ShiftPlanningScreen(Screen):
     LEGEND: Final = (
         ("S", "Səhər 09:00–18:00", "--color-info"),
         ("A", "Axşam 13:00–22:00", "--color-warning"),
-        ("", "İstirahət günü", "--color-neutral-bg"),
+        # İSTİRAHƏT GÜNÜ — MƏTN RƏNGİ FON RƏNGİ İLƏ EYNİ OLA BİLMƏZ.
+        # Əvvəl burada `--color-neutral-bg` yazılırdı, nişanın FONU isə elə
+        # həmin tokendir: nəticədə «—» işarəsi hər iki temada tam görünməz
+        # qalırdı (ölçüldü: 1.12:1 işıqlı, 1.14:1 tünd). Əfsanə sətri boş
+        # kvadrat kimi görünürdü və oxucu «istirahət günü» kodunun nə olduğunu
+        # bilmirdi. Rəng cütü palitrada düzgün idi — səhv onun İŞLƏNDİYİ
+        # yerdə idi, ona görə `check_contrast.py` bunu tuta bilmirdi.
+        ("", "İstirahət günü", "--color-text-muted"),
         ("M", "Məzuniyyət", "--color-text-muted"),
     )
 
@@ -1794,7 +1859,7 @@ class ShiftPlanningScreen(Screen):
         previous.clicked.connect(lambda: self.month_changed.emit(-1))
         layout.addWidget(previous)
 
-        self._month_label = title_label("", size=16)
+        self._month_label = title_label("", size=15)
         layout.addWidget(self._month_label)
 
         nxt = secondary_button("›")
@@ -1834,13 +1899,13 @@ class ShiftPlanningScreen(Screen):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(metrics.CARD_SPACING)
 
-        legend = Card(padding=16, spacing=10)
-        legend.add(title_label("Növbə kodları", size=14))
+        legend = Card(padding=16, spacing=12)
+        legend.add(title_label("Növbə kodları", size=15))
         for code, description, token in self.LEGEND:
             row = QWidget()
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(10)
+            row_layout.setSpacing(12)
             badge = plain_label(code or "—")
             badge.setFixedSize(26, 26)
             badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1855,8 +1920,8 @@ class ShiftPlanningScreen(Screen):
             legend.add(row)
         layout.addWidget(legend, 1)
 
-        templates = Card(padding=16, spacing=10)
-        templates.add(title_label("İş Rejimi Şablonları", size=14))
+        templates = Card(padding=16, spacing=12)
+        templates.add(title_label("İş Rejimi Şablonları", size=15))
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
@@ -1875,8 +1940,8 @@ class ShiftPlanningScreen(Screen):
         )
         layout.addWidget(templates, 1)
 
-        self._summary = Card(padding=16, spacing=10)
-        self._summary.add(title_label("Ayın xülasəsi", size=14))
+        self._summary = Card(padding=16, spacing=12)
+        self._summary.add(title_label("Ayın xülasəsi", size=15))
         self._summary_rows = QVBoxLayout()
         self._summary_rows.setSpacing(8)
         holder = QWidget()
@@ -1895,10 +1960,10 @@ class ShiftPlanningScreen(Screen):
         İkisini eyni kartda göstərmək təxmini fakt kimi oxutdurardı; #13-ün
         açıq tələbi isə istifadəçinin onu proqnoz sanmamasıdır.
         """
-        self._staffing_card = Card(padding=16, spacing=10)
+        self._staffing_card = Card(padding=16, spacing=12)
         self._staffing_card.add(title_label("Tarixi nümunə (məsləhət)", size=14))
         self._staffing_rows = QVBoxLayout()
-        self._staffing_rows.setSpacing(6)
+        self._staffing_rows.setSpacing(8)
         holder = QWidget()
         holder.setLayout(self._staffing_rows)
         self._staffing_card.add(holder)
@@ -1999,7 +2064,7 @@ class ShiftPlanningScreen(Screen):
             number_font.setPixelSize(11)
             number_label.setFont(number_font)
             cell_layout.addWidget(number_label)
-            weekday_label = muted_label(weekday, size=10)
+            weekday_label = muted_label(weekday, size=11)
             weekday_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             cell_layout.addWidget(weekday_label)
             self._matrix_grid.addWidget(cell, 0, column)
@@ -2129,11 +2194,11 @@ class DailyRosterScreen(Screen):
         self._stats = QWidget()
         self._stats_layout = QHBoxLayout(self._stats)
         self._stats_layout.setContentsMargins(0, 0, 0, 0)
-        self._stats_layout.setSpacing(10)
+        self._stats_layout.setSpacing(12)
         self.add(self._stats)
 
         # Uyğunsuzluq xəbərdarlığı — HR planı ilə faktiki giriş uyuşmayanda.
-        self._mismatch = Card(padding=14, spacing=8)
+        self._mismatch = Card(padding=16, spacing=8)
         self._mismatch_text = body_label("", size=13)
         self._mismatch.add(self._mismatch_text)
         self._mismatch.setVisible(False)
@@ -2296,7 +2361,7 @@ class ShiftSwapScreen(Screen):
         from src.presentation.widgets.primitives import section_label  # noqa: PLC0415
 
         layout.addWidget(section_label("Sorğu detalı"))
-        self._detail_title = title_label("", size=18)
+        self._detail_title = title_label("", size=19)
         layout.addWidget(self._detail_title)
 
         self._detail_rows = QVBoxLayout()
@@ -2310,7 +2375,7 @@ class ShiftSwapScreen(Screen):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(10)
+        buttons_layout.setSpacing(12)
 
         reject = secondary_button("Rədd Et")
         reject.clicked.connect(self._emit_rejected)
@@ -2345,9 +2410,9 @@ class ShiftSwapScreen(Screen):
             head = QWidget()
             head_layout = QHBoxLayout(head)
             head_layout.setContentsMargins(0, 0, 0, 0)
-            head_layout.setSpacing(10)
+            head_layout.setSpacing(12)
             head_layout.addWidget(
-                title_label(f"{request['from_name']} → {request['to_name']}", size=14)
+                title_label(f"{request['from_name']} → {request['to_name']}", size=15)
             )
             head_layout.addWidget(stretch())
             head_layout.addWidget(Chip(request.get("status", "Gözləyir"), "warning"))

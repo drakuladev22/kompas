@@ -40,8 +40,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final, Literal
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath
+from PySide6.QtCore import QEasingCurve, QPointF, QPropertyAnimation, QRectF, Qt, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QPainter,
+    QPainterPath,
+    QPaintEvent,
+    QPen,
+    QPolygonF,
+)
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
@@ -59,7 +67,7 @@ from src.presentation.widgets import metrics
 from src.presentation.widgets.safe_text import plain_tooltip
 
 if TYPE_CHECKING:
-    from PySide6.QtGui import QKeyEvent, QMouseEvent, QPaintEvent
+    from PySide6.QtGui import QKeyEvent, QMouseEvent
 
 #: Nişan tonları — QSS-dəki `QLabel[chip="…"]` seçiciləri ilə eynidir.
 ChipTone = Literal["success", "warning", "danger", "info", "neutral"]
@@ -290,24 +298,63 @@ class Divider(QFrame):
 # --------------------------------------------------------------------------- #
 
 
+#: Aparıcı nişanın diametri — `metrics.STATUS_DOT_SIZE` ilə eyni ailədən.
+_GLYPH_SIZE: Final = 8
+#: Nişan üçün ayrılan sol boşluq (nişan + mətnə qədər nəfəs).
+_GLYPH_GUTTER: Final = 18
+
+
 class Chip(QLabel):
     """Yumşaq fonlu status nişanı — "Boş vəziyyət", "5 yeni", "Aktiv".
 
     Ton QSS-ə `chip` xüsusiyyəti ilə ötürülür; rəng cütləri `tokens.py`-da
     WCAG AA üçün kalibrlənib (bax orada "DİZAYN MAKETİ İLƏ FƏRQLƏR").
+
+    ──────────────────────────────────────────────────────────────────────────
+    APARICI NİŞAN (`dot=True`) — NİYƏ FORMA, NİYƏ TƏKCƏ RƏNG
+    ──────────────────────────────────────────────────────────────────────────
+    `design_reference/tasks.jpg` status çiplərini üç FƏRQLİ formada göstərir
+    (dolu nöqtə / işarə / boş halqa), `design_reference/permission.jpg` isə
+    birbaşa göstərişdir: «az vizual səs-küy = güclü status siqnalı».
+
+    Bu, bəzək deyil. KompasOS-un bütün ekranları bir işçinin VƏZİYYƏTİ
+    ətrafında qurulub, vəziyyət isə yalnız rənglə verilsəydi:
+      * rəng korluğunda (kişilərin ~8%-i) `success` və `danger` eyni görünərdi
+        — mağaza müdirlərinin çoxu kişidir;
+      * ağ-qara çap edilmiş aylıq cərimə hesabatında fərq TAMAMİLƏ itərdi,
+        halbuki həmin hesabat mübahisə halında sübutdur.
+    Forma hər iki halda sağ qalır.
+
+    Nişan `text()`-ə TOXUNMUR — mətnə "● " əlavə etsəydik, hər testin və hər
+    `text()` müqayisəsinin gözləntisi dəyişərdi və nişan məlumat olmaqdan
+    çıxıb sətrin bir hissəsinə çevrilərdi. Ona görə o, `paintEvent`-də
+    çəkilir, yeri isə `contentsMargins` ilə ayrılır.
+
+    Nişan rəngi AYRICA token DEYİL: `palette().windowText()`, yəni çipin öz
+    mətn rəngi işlədilir. Beləliklə hər yeni ton avtomatik düzgün rəng alır və
+    kontrast yoxlayıcısına yeni cüt əlavə olunmur (mətnlə eyni cütdür).
     """
 
     def __init__(
-        self, text: str, tone: ChipTone = "neutral", *, parent: QWidget | None = None
+        self,
+        text: str,
+        tone: ChipTone = "neutral",
+        *,
+        dot: bool = False,
+        parent: QWidget | None = None,
     ) -> None:
         super().__init__(text, parent)
         self.setTextFormat(Qt.TextFormat.PlainText)  # bax modul başlığı
         self.setProperty("chip", tone)
+        self._tone: ChipTone = tone
+        self._dot = dot
         font = self.font()
         font.setPixelSize(metrics.FONT_CAPTION)
         self.setFont(font)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        if dot:
+            self.setContentsMargins(_GLYPH_GUTTER, 0, 0, 0)
 
     def set_tone(self, tone: ChipTone) -> None:
         """Tonu dəyişir və üslubu yenidən hesablatdırır.
@@ -316,10 +363,63 @@ class Chip(QLabel):
         `polish` olmadan nişan köhnə rəngdə qalardı.
         """
         self.setProperty("chip", tone)
+        self._tone = tone
         style = self.style()
         style.unpolish(self)
         style.polish(self)
         self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 - Qt adlandırması
+        super().paintEvent(event)
+        if not self._dot:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = self.palette().windowText().color()
+        left = (_GLYPH_GUTTER - _GLYPH_SIZE) // 2
+        top = (self.height() - _GLYPH_SIZE) // 2
+        box = QRectF(left, top, _GLYPH_SIZE, _GLYPH_SIZE)
+
+        if self._tone == "success":
+            # İŞARƏ: "tamamlandı" bitmiş bir hərəkətdir — nöqtə isə davam edən
+            # vəziyyəti bildirir. İkisini eyni formada göstərmək «təsdiqləndi»
+            # ilə «gözləyir» arasındakı fərqi silərdi.
+            pen = QPen(color, 1.6)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            path = QPainterPath()
+            path.moveTo(box.left(), box.center().y())
+            path.lineTo(box.center().x() - 0.5, box.bottom() - 1.0)
+            path.lineTo(box.right(), box.top())
+            painter.drawPath(path)
+        elif self._tone == "warning":
+            # BOŞ HALQA: "hələ tamamlanmayıb" — daxili boşluq gözlə də
+            # "içi dolmayıb" kimi oxunur.
+            painter.setPen(QPen(color, 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(box.adjusted(0.75, 0.75, -0.75, -0.75))
+        elif self._tone == "danger":
+            # ROMB: dairədən kəskin fərqlənən yeganə sadə forma; 8px-də belə
+            # "xəbərdarlıq" kimi oxunur (yol nişanları ilə eyni məntiq).
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            diamond = QPolygonF(
+                [
+                    QPointF(box.center().x(), box.top()),
+                    QPointF(box.right(), box.center().y()),
+                    QPointF(box.center().x(), box.bottom()),
+                    QPointF(box.left(), box.center().y()),
+                ]
+            )
+            painter.drawPolygon(diamond)
+        else:
+            # DOLU NÖQTƏ: davam edən/neytral vəziyyət (`info`, `neutral`).
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawEllipse(box)
+        painter.end()
 
 
 class FilterChip(Chip):

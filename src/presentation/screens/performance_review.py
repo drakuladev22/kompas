@@ -91,8 +91,8 @@ class PerformanceReviewScreen(Screen):
     # ------------------------------- forma kartı ------------------------------ #
 
     def _build_form_card(self) -> Card:
-        card = Card(padding=22, spacing=14)
-        card.add(title_label("Yeni Qiymətləndirmə", size=17))
+        card = Card(padding=20, spacing=12)
+        card.add(title_label("Yeni Qiymətləndirmə", size=19))
         card.add(Divider())
 
         self._employee = FormField("İşçi", widget=QComboBox())
@@ -110,13 +110,13 @@ class PerformanceReviewScreen(Screen):
         self._kpi_host = QWidget()
         self._kpi_layout = QVBoxLayout(self._kpi_host)
         self._kpi_layout.setContentsMargins(0, 0, 0, 0)
-        self._kpi_layout.setSpacing(10)
+        self._kpi_layout.setSpacing(12)
         card.add(self._kpi_host)
 
         card.add(field_label("Qeyd"))
         self._notes = QPlainTextEdit()
         self._notes.setProperty("variant", "form")
-        self._notes.setMinimumHeight(90)
+        self._notes.setMinimumHeight(88)
         self._notes.setPlaceholderText("Sərbəst rəy (könüllü)…")
         card.add(self._notes)
 
@@ -137,12 +137,12 @@ class PerformanceReviewScreen(Screen):
         return card
 
     def _build_history_card(self) -> Card:
-        card = Card(padding=22, spacing=12)
+        card = Card(padding=20, spacing=12)
         card.add(section_label("Keçmiş Dövrlər"))
         card.add(Divider())
 
         self._history_rows = QVBoxLayout()
-        self._history_rows.setSpacing(14)
+        self._history_rows.setSpacing(16)
         holder = QWidget()
         holder.setLayout(self._history_rows)
         card.add(holder)
@@ -178,12 +178,12 @@ class PerformanceReviewScreen(Screen):
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
         layout.addWidget(body_label(label, size=13), 1)
 
         combo = QComboBox()
         combo.setProperty("variant", "form")
-        combo.setFixedWidth(70)
+        combo.setFixedWidth(72)
         for score in _SCORE_CHOICES:
             combo.addItem(str(score), score)
         # Orta bal ilkin dəyər kimi seçilir — boş buraxılmış KPI görünüşü

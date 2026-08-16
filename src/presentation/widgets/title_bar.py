@@ -74,7 +74,7 @@ class TitleBar(QWidget):
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
 
         # Loqo — maketdə 16×16 amber kvadrat, 5px künc.
         logo = QWidget()
