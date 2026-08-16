@@ -41,6 +41,26 @@
 # Siyahı Face Control (`facecontrol.md` Faza 3) ilə DOLDU və səbəb yuxarıdakı
 # qaydanın İSTİSNASIDIR — bax `_FACE_HIDDEN_IMPORTS` blokunun şərhi.
 # =============================================================================
+# =============================================================================
+# CREDENTIALS PAKETƏ DAXİL EDİLMİR (DB-4 Faza 2 qərarı)
+# =============================================================================
+# `datas` siyahısında NƏ `.env`, NƏ `connection.json`, NƏ də hər hansı DSN var
+# — və bu, unudulmuş addım deyil, QƏRARDIR:
+#
+#   * Tenant bazasının DSN-i HƏR MÜŞTƏRİDƏ FƏRQLİDİR. Onu paketə salsaydıq,
+#     hər müştəri üçün ayrıca `.exe` qurmaq lazım gələrdi və bir müştərinin
+#     paketi digərinin bazasına açar daşıyardı.
+#   * Vendor bazasının DSN-i müştəri paketinə ÜMUMİYYƏTLƏ düşmür: qərar (DB-3)
+#     budur ki, müştəri o bazaya nə yazır, nə oxuyur.
+#   * `service_role` açarı heç bir halda paketə daxil edilmir.
+#
+# Konfiqurasiya paketin KƏNARINDA yaşayır:
+#     %PROGRAMDATA%\KompasOS\connection.json   (parol AES-256-GCM ilə şifrəli)
+# Oxuma sırası: `DATABASE_URL` → həmin fayl → «Bağlantı Ayarları» ekranı.
+#
+# `tests/unit/test_packaging_credentials.py` bu faylın credentials daşımadığını
+# maşınla yoxlayır — şərh bir gün köhnələ bilər, test yox.
+# =============================================================================
 import os
 
 from PyInstaller.utils.hooks import collect_data_files  # noqa: F821 — spec mühitində mövcuddur

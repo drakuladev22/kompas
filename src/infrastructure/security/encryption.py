@@ -181,8 +181,26 @@ class WindowsDpapiKeyProvider:
 
     name = "windows_dpapi"
 
-    def __init__(self, blob_path: Path | None = None) -> None:
+    def __init__(self, blob_path: Path | None = None, *, machine_scope: bool = False) -> None:
+        """
+        Args:
+            machine_scope: `True` → blob MAŞINA bağlanır (`CRYPTPROTECT_
+                LOCAL_MACHINE`), yəni həmin kompüterin HƏR istifadəçisi onu
+                aça bilir.
+
+                NİYƏ LAZIMDIR: mağaza PC-si PAYLAŞILAN cihazdır və kiosk
+                nəzarətçisi başqa hesabla işləyə bilər. İstifadəçi-əhatəli
+                blob o halda ikinci hesabda AÇILMIR — proqram «açar yoxdur»
+                deyib bağlantı konfiqurasiyasını itirmiş kimi davranardı.
+
+                NİYƏ DEFOLT DEYİL: maşın əhatəsi qorumanı ZƏİFLƏDİR — həmin
+                kompüterdə kod icra edə bilən hər kəs blobu aça bilir.
+                Fərdi istifadəçi məlumatı (şifrələmə açarı) üçün istifadəçi
+                əhatəsi doğru qərardır; yalnız PAYLAŞILAN konfiqurasiya
+                (bağlantı parolu) maşın əhatəsinə keçir.
+        """
         self._blob_path = blob_path or self._default_path()
+        self._machine_scope = machine_scope
 
     @staticmethod
     def _default_path() -> Path:
@@ -197,13 +215,25 @@ class WindowsDpapiKeyProvider:
         return self._blob_path
 
     @property
+    def _flags(self) -> int:
+        """`CRYPTPROTECT_UI_FORBIDDEN` (+ istəyə görə `LOCAL_MACHINE`).
+
+        Deşifrələmədə də EYNİ bayraq verilir: `CryptUnprotectData` maşın
+        blobunu bayraqsız da açır, lakin ikisini fərqli yazsaq oxucu hansı
+        əhatənin qüvvədə olduğunu koddan çıxara bilməzdi.
+        """
+        return 0x1 | (0x4 if self._machine_scope else 0)
+
+    @property
     def is_supported(self) -> bool:
         return sys.platform == "win32"
 
     # ------------------------------ DPAPI ---------------------------------- #
 
     @staticmethod
-    def _dpapi_call(data: bytes, *, protect: bool) -> bytes:  # pragma: no cover - OS API
+    def _dpapi_call(  # pragma: no cover - OS API
+        data: bytes, *, protect: bool, flags: int = 0x1
+    ) -> bytes:
         import ctypes
         from ctypes import wintypes
 
@@ -222,6 +252,7 @@ class WindowsDpapiKeyProvider:
 
         function = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
         # CRYPTPROTECT_UI_FORBIDDEN = 0x1 — kiosk rejimində heç bir dialoq açılmasın.
+        # CRYPTPROTECT_LOCAL_MACHINE = 0x4 — blob maşına bağlanır (bax `__init__`).
         if protect:
             ok = function(
                 ctypes.byref(blob_in),
@@ -229,7 +260,7 @@ class WindowsDpapiKeyProvider:
                 None,
                 None,
                 None,
-                0x1,
+                flags,
                 ctypes.byref(blob_out),
             )
         else:
@@ -239,7 +270,7 @@ class WindowsDpapiKeyProvider:
                 None,
                 None,
                 None,
-                0x1,
+                flags,
                 ctypes.byref(blob_out),
             )
 
@@ -261,7 +292,7 @@ class WindowsDpapiKeyProvider:
             return None
         try:
             protected = self._blob_path.read_bytes()
-            plaintext = self._dpapi_call(protected, protect=False)
+            plaintext = self._dpapi_call(protected, protect=False, flags=self._flags)
             payload: dict[str, Any] = json.loads(plaintext.decode("utf-8"))
         except EncryptionKeyError:
             raise
@@ -290,7 +321,7 @@ class WindowsDpapiKeyProvider:
         payload = json.dumps(
             {"primary": material.primary, "previous": list(material.previous)}
         ).encode("utf-8")
-        protected = self._dpapi_call(payload, protect=True)
+        protected = self._dpapi_call(payload, protect=True, flags=self._flags)
 
         self._blob_path.parent.mkdir(parents=True, exist_ok=True)
         self._blob_path.write_bytes(protected)

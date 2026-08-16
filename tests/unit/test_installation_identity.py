@@ -179,7 +179,7 @@ def test_unreadable_uuid_in_file_is_replaced(tmp_path: Path) -> None:
 
 
 class _Database:
-    """`Database`-in yalnız `open()`-i işlənir — bağlantı qurulmur."""
+    """`TenantDatabase`-in yalnız `open()`-i işlənir — bağlantı qurulmur."""
 
     def open(self) -> None:
         return None
@@ -197,11 +197,13 @@ def test_build_context_no_longer_fails_without_a_tenant_id(
     `self_hosted` bayrağı da yoxlanılır: identifikator bu maşında yarandığı
     üçün sihirbaz `license_tenants` sətrini özü qurmalıdır.
     """
-    from src.infrastructure.persistence import connection as connection_module
+    from src.infrastructure.persistence import connection_types
     from src.presentation.composition import build_context
 
     monkeypatch.setenv("KOMPASOS_INSTALLATION_PATH", str(_store(tmp_path)))
-    monkeypatch.setattr(connection_module, "Database", _Database)
+    # SEAM `connection_types`-dədir, `connection` DEYİL: `build_context`
+    # bağlantını `TenantDatabase` kimi qurur (DB-4 Faza 1 tip ayırıcısı).
+    monkeypatch.setattr(connection_types, "TenantDatabase", _Database)
 
     context = build_context()
 
@@ -213,13 +215,15 @@ def test_build_context_marks_a_licensed_installation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Mühitdən gələn identifikator = lisenziyalı quraşdırma."""
-    from src.infrastructure.persistence import connection as connection_module
+    from src.infrastructure.persistence import connection_types
     from src.presentation.composition import build_context
 
     licensed = uuid.uuid4()
     monkeypatch.setenv(_ENV, str(licensed))
     monkeypatch.setenv("KOMPASOS_INSTALLATION_PATH", str(_store(tmp_path)))
-    monkeypatch.setattr(connection_module, "Database", _Database)
+    # SEAM `connection_types`-dədir, `connection` DEYİL: `build_context`
+    # bağlantını `TenantDatabase` kimi qurur (DB-4 Faza 1 tip ayırıcısı).
+    monkeypatch.setattr(connection_types, "TenantDatabase", _Database)
 
     context = build_context()
 

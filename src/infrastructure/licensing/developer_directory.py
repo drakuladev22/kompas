@@ -65,7 +65,7 @@ from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
-    from src.infrastructure.persistence.connection import Database
+    from src.infrastructure.persistence.connection_types import TenantDatabase
 
 _log = get_logger(__name__)
 _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
@@ -230,9 +230,16 @@ class DeveloperTenantDirectory:
     cədvəldir (`connection.py`-dakı siyahıya bax) — `app.tenant_id` təyin
     etmək burada mənasızdır. Panel `service_role` bağlantısı ilə işlədiyi
     üçün RLS onu məhdudlaşdırmır.
+
+    BAĞLANTI TİPİ `TenantDatabase`-dir, `VendorDatabase` DEYİL (DB-4 Faza 1):
+    sinif `license_tenants` ilə yanaşı `employees`, `stores`, `erp_servers`,
+    `sync_conflicts` kimi TAMAMİLƏ tenant cədvəllərini də oxuyur (bax
+    `active_admin_count` və `telemetry`). Yəni onu DB-3-ün ayrıca vendor
+    bazasına yönəltmək sorğuların yarısını mövcud OLMAYAN cədvəllərə
+    göndərərdi.
     """
 
-    def __init__(self, database: Database, *, require_developer_mode: bool = True) -> None:
+    def __init__(self, database: TenantDatabase, *, require_developer_mode: bool = True) -> None:
         if require_developer_mode and not developer_mode_enabled():
             raise DeveloperModeRequiredError(
                 f"`{DEVELOPER_MODE_ENV}` və `{SERVICE_ROLE_ENV}` təyin edilməyib",

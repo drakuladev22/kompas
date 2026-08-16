@@ -200,7 +200,7 @@ def _developer_cli(monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> dict[str
     import src.main as main_module
     from src.developer_panel import console as console_module
     from src.infrastructure.licensing import developer_directory as directory_module
-    from src.infrastructure.persistence import connection as connection_module
+    from src.infrastructure.persistence import connection_types
 
     captured: dict[str, Any] = {}
 
@@ -213,7 +213,10 @@ def _developer_cli(monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> dict[str
     monkeypatch.setattr(
         directory_module, "DeveloperTenantDirectory", lambda database: _FakeDirectory()
     )
-    monkeypatch.setattr(connection_module, "Database", object)
+    # SEAM `connection_types`-dədir: `_run_developer_panel` bağlantını
+    # `TenantDatabase` kimi qurur (DB-4 Faza 1) — `Database`-i əvəzləmək
+    # artıq HEÇ NƏYİ tutmur və test real bazaya qoşulmağa çalışardı.
+    monkeypatch.setattr(connection_types, "TenantDatabase", object)
     monkeypatch.setattr(main_module, "_build_release_publisher", lambda database: None)
     monkeypatch.setattr(main_module, "configure_logging", lambda **kwargs: "logs")
     monkeypatch.setattr(main_module, "install_global_exception_hook", lambda: None)

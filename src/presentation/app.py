@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from src.domain.value_objects.credentials import Username
     from src.domain.value_objects.identifiers import EmployeeId, LeaveTypeId, TenantId
     from src.infrastructure.persistence.mappers import Credentials
-    from src.presentation.composition import ApplicationContext
+    from src.presentation.composition import ApplicationContext, StartupFailureKind
     from src.presentation.controllers.auth import AuthController
     from src.presentation.controllers.fine_entry import FineEntryController
     from src.presentation.controllers.kiosk import KioskController, KioskOutcome
@@ -1925,6 +1925,87 @@ class KompasApplication:
         self._window.set_content(screen)
         self._window.show()
 
+    def show_startup_failure(
+        self,
+        *,
+        message: str,
+        kind: StartupFailureKind,
+        rebuild: Callable[[], ApplicationContext],
+    ) -> None:
+        """Başlanğıc nasazlığını NÖVÜNƏ uyğun ekranla göstərir (DB-4 Faza 4).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ PROSESİ YENİDƏN BAŞLATMIRIQ
+        ──────────────────────────────────────────────────────────────────────
+        «Yenidən cəhd et» düyməsi tətbiqi bağlayıb açsaydı, istifadəçi Windows
+        UAC/antivirus gecikməsini hər cəhddə yenidən keçərdi və ayarlar
+        ekranında yazdıqları itərdi. `rebuild` isə eyni prosesdə `build_context`
+        -i yenidən çağırır: uğurda örtük normal axına qoşulur, uğursuzluqda
+        YENİ nasazlıq növü ilə eyni ekran qayıdır — yəni parol düzəldikdən sonra
+        mesaj «şəbəkə xətası»na dəyişə bilər və istifadəçi irəlilədiyini görür.
+        """
+        from src.presentation.screens.group_a_entry import (  # noqa: PLC0415
+            FatalStartupScreen,
+        )
+
+        screen = FatalStartupScreen(
+            self._theme,
+            message=message,
+            retry=True,
+            configure=kind.is_configuration_problem,
+        )
+        # `lambda` MƏCBURİDİR: PySide6 bağlı metodu ZƏİF saxlayır və ekranla
+        # birlikdə yığılan metod siqnalı sükutla kəsərdi (CLAUDE.md §6).
+        screen.retry_requested.connect(lambda: self._attempt_startup(rebuild))
+        screen.configure_requested.connect(lambda: self.show_connection_settings(rebuild))
+        self._window.set_content(screen)
+        self._window.show()
+
+    def show_connection_settings(self, rebuild: Callable[[], ApplicationContext]) -> None:
+        """«Bağlantı Ayarları» ekranı — girişdən ƏVVƏL açılan yeganə yazı yolu."""
+        from src.presentation.controllers.connection_settings import (  # noqa: PLC0415
+            ConnectionSettingsController,
+        )
+        from src.presentation.screens.group_a_entry import (  # noqa: PLC0415
+            ConnectionSettingsScreen,
+        )
+
+        screen = ConnectionSettingsScreen(self._theme)
+        controller = ConnectionSettingsController(
+            on_saved=lambda: self._attempt_startup(rebuild),
+        )
+        controller.attach(screen)
+        # İmtina fatal ekrana QAYIDIR, tətbiqi bağlamır: istifadəçi ayarları
+        # dəyişmək istəmirsə də əlaqə ünvanını görməlidir (bölmə 8).
+        screen.cancelled.connect(lambda: self._attempt_startup(rebuild))
+        self._window.set_content(screen)
+        self._window.show()
+
+    def _attempt_startup(self, rebuild: Callable[[], ApplicationContext]) -> None:
+        """Konteksti yenidən qurmağa cəhd edir; uğurda normal axına keçir."""
+        from src.presentation.composition import StartupError  # noqa: PLC0415
+
+        try:
+            context = rebuild()
+        except StartupError as exc:
+            _log.warning("STARTUP_RETRY_FAILED", extra=exc.to_dict())
+            self.show_startup_failure(message=exc.user_message, kind=exc.kind, rebuild=rebuild)
+            return
+
+        self.adopt_context(context)
+
+    def adopt_context(self, context: ApplicationContext) -> None:
+        """Gec qurulmuş konteksti mənimsəyir və örtüyü normal axına salır.
+
+        Kontekst KONSTRUKTORDA verilə bilməzdi: bu yol məhz konstruktor
+        anında bazanın əlçatmaz olduğu haldır. Kontroller burada qurulur,
+        çünki `_build_auth_controller` konteksti tələb edir.
+        """
+        self._context = context
+        self.set_auth_controller(_build_auth_controller(context))
+        _log.info("STARTUP_RECOVERED", extra={"tenant_id": str(context.tenant_id)})
+        self.start()
+
     # -------------------------------- tema ------------------------------------ #
 
     def _on_theme_selected(self, key: str) -> None:
@@ -2277,6 +2358,8 @@ def run(
     theme: ThemeMode = ThemeMode.SYSTEM,
     context: ApplicationContext | None = None,
     startup_error: str = "",
+    startup_failure_kind: StartupFailureKind | None = None,
+    rebuild_context: Callable[[], ApplicationContext] | None = None,
 ) -> int:
     """GUI-ni işə salır və çıxış kodunu qaytarır.
 
@@ -2284,6 +2367,12 @@ def run(
         context: Canlı obyekt qrafı (`main.py` qurur). `None` → önizləmə.
         startup_error: Kontekst qurula bilmədisə istifadəçiyə göstəriləcək
             izah. Boş DEYİLSƏ fatal başlanğıc ekranı açılır (bölmə 8).
+        startup_failure_kind: Nasazlığın növü (DB-4 Faza 4). Verilibsə ekran
+            növə uyğun düymələri göstərir; verilməyibsə köhnə davranış qalır —
+            yalnız mətn və əlaqə ünvanı.
+        rebuild_context: `build_context` çağırışı. «Yenidən cəhd et» və
+            ayarlar ekranı ONA bağlıdır; ötürülməzsə düymələr göstərilmir,
+            çünki basılanda edəcəkləri heç nə olmazdı.
     """
     existing = QApplication.instance()
     # `instance()` bazis tip qaytarır; GUI üçün məhz `QApplication` lazımdır.
@@ -2299,7 +2388,14 @@ def run(
     if startup_error:
         # Kiosk rejimində belə fatal ekran göstərilir: mağaza işçisi "proqram
         # açılmır" deyib zəng etməkdənsə ekranda əlaqə ünvanını görməlidir.
-        application.show_fatal_error(startup_error)
+        if startup_failure_kind is not None and rebuild_context is not None:
+            application.show_startup_failure(
+                message=startup_error,
+                kind=startup_failure_kind,
+                rebuild=rebuild_context,
+            )
+        else:
+            application.show_fatal_error(startup_error)
     elif kiosk:
         if context is not None:
             controller = _build_kiosk_controller(context)

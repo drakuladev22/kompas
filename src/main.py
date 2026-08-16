@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     # Bu iki modul yalnız `--developer-mode` yolunda lazımdır və orada
     # funksiya daxilində idxal olunur (bax `_run_developer_panel`). Burada
     # yalnız tip yoxlaması üçün görünürlər — icra zamanı yüklənmirlər.
-    from src.infrastructure.persistence.connection import Database
+    from src.infrastructure.persistence.connection_types import TenantDatabase
     from src.infrastructure.updates.publisher import ReleasePublisher
 
 PRODUCTION_ENVS = frozenset({"PRODUCTION", "STAGING"})
@@ -367,9 +367,22 @@ def _run_developer_panel(args: argparse.Namespace) -> int:
             context={"required_env": [DEVELOPER_MODE_ENV, SERVICE_ROLE_ENV]},
         )
 
-    from src.infrastructure.persistence.connection import Database  # noqa: PLC0415
+    from src.infrastructure.persistence.connection_types import (  # noqa: PLC0415
+        TenantDatabase,
+    )
 
-    database = Database()
+    # `TenantDatabase` — HALBUKİ BU, HAZIRLAYICI PANELİDİR
+    # -------------------------------------------------------------------------
+    # Panel lisenziya reyestrini oxuyur, lakin həmin cədvəllər (`license_tenants`,
+    # `tenant_check_ins`, `license_audit_log`) BU GÜN tenant sxemindədir —
+    # `service_role` + RLS qərarının nəticəsidir (CLAUDE.md §9, Master Panel).
+    # Yəni DSN mənbəyi `DATABASE_URL`-dir və tip də məhz onu deməlidir.
+    #
+    # DB-3-ün qurduğu AYRICA vendor bazası (`migrations/vendor/`) hələ bu
+    # panelin mənbəyi DEYİL. Köçürmə olduqda dəyişməli olan yer BURADIR və
+    # `VendorDatabase.from_env()` onu tələb edəcək — o vaxta qədər tipin açıq
+    # yazılması köçürmənin hansı sətirdən başlayacağını göstərir.
+    database = TenantDatabase()
     directory = DeveloperTenantDirectory(database)
     publisher = _build_release_publisher(database)
 
@@ -428,6 +441,7 @@ def _run_gui(args: argparse.Namespace) -> int:
 
     context = None
     startup_error = ""
+    startup_failure_kind = None
     if not args.preview:
         try:
             context = build_context()
@@ -435,6 +449,11 @@ def _run_gui(args: argparse.Namespace) -> int:
             # Proses BURADA dayanmır: istifadəçi izahlı ekran görməlidir,
             # konsola yazılmış bir sətir deyil (mağaza PC-sində konsol yoxdur).
             startup_error = exc.user_message
+            # NÖV DƏ ÖTÜRÜLÜR (DB-4 Faza 4): ekran «yenidən cəhd et» ilə
+            # «bağlantı ayarları» arasında məhz ona görə seçim edir. Yalnız
+            # mətn ötürsəydik, şəbəkə nasazlığı da, konfiqurasiya boşluğu da
+            # eyni çıxılmaz ekranı verərdi.
+            startup_failure_kind = exc.kind
             get_logger(__name__, channel=LogChannel.ERROR).critical(
                 "GUI_STARTUP_ERROR", extra=exc.to_dict()
             )
@@ -445,6 +464,10 @@ def _run_gui(args: argparse.Namespace) -> int:
         theme=ThemeMode(args.theme),
         context=context,
         startup_error=startup_error,
+        startup_failure_kind=startup_failure_kind,
+        # ÖNİZLƏMƏ REJİMİNDƏ `None`: orada baza ümumiyyətlə tələb olunmur,
+        # yəni «yenidən cəhd et» düyməsi mənasız olardı.
+        rebuild_context=None if args.preview else build_context,
     )
 
 
@@ -562,7 +585,7 @@ def _run_watchdog(args: argparse.Namespace) -> int:
     return EXIT_WATCHDOG_RESTART_LIMIT if outcome.hit_restart_limit else 0
 
 
-def _build_release_publisher(database: Database) -> ReleasePublisher | None:
+def _build_release_publisher(database: TenantDatabase) -> ReleasePublisher | None:
     """Yayım qatı — Supabase ünvanı yoxdursa `None` (bölmə yalnız o zaman gizlənir).
 
     Naşir yoxlayıcısı BURADA qurulur ki, panel yayımdan ƏVVƏL imzanı yoxlaya

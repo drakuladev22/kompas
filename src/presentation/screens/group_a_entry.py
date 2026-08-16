@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLineEdit,
     QProgressBar,
+    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -765,10 +766,31 @@ class FatalStartupScreen(QWidget):
     Bölmə 8: "hər fatal başlanğıc-xətası ekranında STATİK e-poçt ünvanı
     göstərilir". Ünvanı bazadan oxumaq mənasız olardı — məhz baza əlçatmaz
     olduğu üçün bu ekran görünür. Ona görə mətn koddadır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    DÜYMƏLƏR İSTƏYƏ BAĞLIDIR VƏ DEFOLT YOXDUR (DB-4 Faza 4)
+    ──────────────────────────────────────────────────────────────────────────
+    Ekran əvvəl yalnız mətn göstərirdi və istifadəçinin yeganə hərəkəti
+    proqramı bağlamaq idi. İndi çağıran tərəf nasazlığın NÖVÜNƏ görə düymə
+    əlavə edə bilir:
+
+        `retry=True`      → server müvəqqəti əlçatmazdır, təkrar cəhd MƏNALIDIR;
+        `configure=True`  → bağlantı məlumatı yoxdur/yanlışdır.
+
+    Hər ikisi defolt `False`-dur: səhv nasazlıqda «Yenidən cəhd et» göstərmək
+    istifadəçini nəticəsiz döngəyə salar, «Ayarlar» isə DÜZGÜN dəyərləri
+    dəyişməyə sövq edərdi. Yəni düymənin OLMAMASI da qərardır.
+
+    Signals:
+        retry_requested: «Yenidən cəhd et» basıldı.
+        configure_requested: «Bağlantı Ayarları» basıldı.
     """
 
     #: Tətbiq açılmadıqda müştərinin yeganə çıxış yolu (bölmə 8).
     FALLBACK_CONTACT: Final = "dəstək@kompas.az · +994 12 000 00 00"
+
+    retry_requested = Signal()
+    configure_requested = Signal()
 
     def __init__(
         self,
@@ -776,6 +798,8 @@ class FatalStartupScreen(QWidget):
         *,
         message: str,
         contact: str = FALLBACK_CONTACT,
+        retry: bool = False,
+        configure: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -802,6 +826,32 @@ class FatalStartupScreen(QWidget):
         detail.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
         card.body().addWidget(detail, alignment=Qt.AlignmentFlag.AlignHCenter)
 
+        self._retry_button: QPushButton | None = None
+        self._configure_button: QPushButton | None = None
+        if retry or configure:
+            actions = QWidget()
+            actions_layout = QHBoxLayout(actions)
+            actions_layout.setContentsMargins(0, 0, 0, 0)
+            actions_layout.setSpacing(12)
+            actions_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+            if retry:
+                self._retry_button = action_button("Yenidən Cəhd Et")
+                self._retry_button.setMinimumHeight(44)
+                self._retry_button.clicked.connect(self.retry_requested.emit)
+                actions_layout.addWidget(self._retry_button)
+
+            if configure:
+                # KONFİQURASİYA HALINDA ƏSAS DÜYMƏ ODUR, «təkrar cəhd» yox:
+                # məlumat yoxdursa təkrar cəhd tərifə görə eyni nəticəni verir.
+                factory = action_button if not retry else secondary_button
+                self._configure_button = factory("Bağlantı Ayarları")
+                self._configure_button.setMinimumHeight(44)
+                self._configure_button.clicked.connect(self.configure_requested.emit)
+                actions_layout.addWidget(self._configure_button)
+
+            card.add(actions)
+
         card.add(Divider())
 
         hint = muted_label("Problem davam edərsə bu ünvanla əlaqə saxlayın:")
@@ -815,9 +865,193 @@ class FatalStartupScreen(QWidget):
         outer.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
 
 
+# --------------------------------------------------------------------------- #
+# 05 — Bağlantı Ayarları (DB-4 Faza 4)
+# --------------------------------------------------------------------------- #
+
+
+class ConnectionSettingsScreen(QWidget):
+    """Baza bağlantı məlumatlarını daxil etmə ekranı — GİRİŞDƏN ƏVVƏL.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ BU EKRAN SİHİRBAZIN İÇİNDƏ DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    İlk Quraşdırma Sihirbazı Root hesabını BAZAYA yazır — yəni işləmək üçün
+    bağlantı ARTIQ lazımdır. DSN-i onun içində soruşmaq sihirbazı özündən əvvəl
+    işləməyə məcbur edərdi (bax `infrastructure/config/connection_file.py`).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ GİRİŞ TƏLƏB OLUNMUR
+    ──────────────────────────────────────────────────────────────────────────
+    «Görmək = səlahiyyətin olması» qaydası BAZADAKI məlumata aiddir; burada isə
+    heç bir baza məlumatı göstərilmir və göstərilə də bilməz — ekran məhz baza
+    əlçatmaz olduğu üçün açılır. Səlahiyyəti bazadan yoxlamaq üçün bazaya
+    qoşulmaq lazımdır, qoşulmaq üçünsə bu ekran. Qoruma FİZİKİDİR: fayl
+    `%PROGRAMDATA%`-dədir və ora yazmaq administrator hüququ tələb edir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    PAROL SAHƏSİ BOŞ AÇILIR
+    ──────────────────────────────────────────────────────────────────────────
+    Mövcud host/istifadəçi doldurulur ki, istifadəçi «hansı serverə baxır?»
+    sualını cavablasın. Parol isə YÜKLƏNMİR: onu ekrana çıxarmaq üçün əvvəlcə
+    deşifrələmək lazımdır və o vərdiş paylaşılan mağaza kompüterində parolu
+    çiynin üstündən oxunan hala gətirərdi. Boş qalarsa mövcud parol saxlanılır.
+
+    Signals:
+        submitted: `dict` — host, port, database, username, password, sslmode.
+        cancelled: istifadəçi imtina etdi.
+    """
+
+    submitted = Signal(dict)
+    cancelled = Signal()
+
+    #: Kartın eni giriş kartından (420) GENİŞDİR — DSN sahələri uzundur
+    #: (Supabase host adı ~40 simvol) və dar kartda mətn kəsilirdi.
+    #:
+    #: Dəyər `FatalStartupScreen` ilə EYNİDİR və bu, təsadüf deyil: istifadəçi
+    #: iki ekran arasında irəli-geri keçir, fərqli en isə kartın hər keçiddə
+    #: «sıçraması» kimi görünərdi. 560 həm də layihənin mövcud forma enidir
+    #: (səkkiz ekranda `setMinimumWidth(560)`) — yeni ad-hoc ölçü yaratmaq
+    #: dizayn səpələnməsi qapısını da pozardı (`test_design_symmetry.py`).
+    CARD_WIDTH: Final = 560
+
+    #: TCP portunun yuxarı həddi — protokol faktıdır, Root parametri deyil.
+    MAX_PORT: Final = 65535
+
+    def __init__(
+        self,
+        theme: ThemeManager,
+        *,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._theme = theme
+        set_surface_color(self, theme.color("--color-content-bg"))
+
+        outer = QVBoxLayout(self)
+        outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Doldurma və aralıq qonşu giriş ekranları ilə EYNİDİR (`AdminLoginScreen`,
+        # `FatalStartupScreen`): istifadəçi bu üç ekran arasında keçir və ad-hoc
+        # 36px kartın hər keçiddə bir neçə piksel «tərpənməsi» kimi görünərdi.
+        card = Card(padding=40, spacing=16, surface="modal", shadow=True)
+        card.setFixedWidth(self.CARD_WIDTH)
+
+        heading = plain_label("Bağlantı Ayarları")
+        heading_font = heading.font()
+        heading_font.setPixelSize(22)
+        heading_font.setWeight(QFont.Weight.DemiBold)
+        heading.setFont(heading_font)
+        card.add(heading)
+
+        intro = body_label(
+            "Server məlumatlarını daxil edin. Yadda saxlamazdan əvvəl bağlantı "
+            "yoxlanılır — yalnız işləyən ayarlar saxlanılır.",
+            size=13,
+        )
+        intro.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
+        card.add(intro)
+
+        self._host = FormField(
+            "Server ünvanı", placeholder="aws-0-eu-central-1.pooler.supabase.com"
+        )
+        self._port = FormField("Port", placeholder="5432")
+        self._database = FormField("Baza adı", placeholder="postgres")
+        self._username = FormField("İstifadəçi adı", placeholder="postgres.abcdefgh")
+        self._password = FormField("Parol", password=True)
+        for field in (self._host, self._port, self._database, self._username, self._password):
+            card.add(field)
+
+        self._status = muted_label("")
+        self._status.setWordWrap(True)
+        card.add(self._status)
+
+        actions = QWidget()
+        actions_layout = QHBoxLayout(actions)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(12)
+
+        self._cancel = secondary_button("İmtina")
+        self._cancel.setMinimumHeight(44)
+        self._cancel.clicked.connect(self.cancelled.emit)
+        actions_layout.addWidget(self._cancel)
+
+        actions_layout.addWidget(stretch())
+
+        self._submit = action_button("Yoxla və Yadda Saxla")
+        self._submit.setMinimumHeight(44)
+        self._submit.clicked.connect(self._on_submit)
+        actions_layout.addWidget(self._submit)
+
+        card.add(actions)
+        outer.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        for field in (self._host, self._port, self._database, self._username, self._password):
+            widget = field.input_widget()
+            if isinstance(widget, QLineEdit):
+                widget.returnPressed.connect(self._on_submit)
+
+    # ------------------------------ setter API -------------------------------- #
+
+    def populate(self, settings: dict[str, object]) -> None:
+        """Mövcud dəyərləri göstərir (parol İSTİSNA — bax sinif başlığı)."""
+        self._host.set_text(str(settings.get("host", "")))
+        self._port.set_text(str(settings.get("port", "") or ""))
+        self._database.set_text(str(settings.get("database", "")))
+        self._username.set_text(str(settings.get("username", "")))
+
+    def set_error(self, message: str) -> None:
+        self._status.setText(message)
+        self._status.setStyleSheet(f"color: {self._theme.color('--color-danger')};")
+
+    def set_status(self, message: str) -> None:
+        self._status.setText(message)
+        self._status.setStyleSheet(f"color: {self._theme.color('--color-text-secondary')};")
+
+    def set_busy(self, busy: bool) -> None:
+        """Sınaq gedərkən düymə bloklanır — ikiqat sorğu şəbəkəni gözlədir."""
+        self._submit.setEnabled(not busy)
+        self._submit.setText("Yoxlanılır…" if busy else "Yoxla və Yadda Saxla")
+
+    # -------------------------------- daxili ---------------------------------- #
+
+    def _on_submit(self) -> None:
+        for field in (self._host, self._port, self._database, self._username):
+            field.clear_error()
+
+        host = self._host.text().strip()
+        database = self._database.text().strip() or "postgres"
+        username = self._username.text().strip()
+        raw_port = self._port.text().strip() or "5432"
+
+        if not host:
+            self._host.set_error("Server ünvanını daxil edin")
+            return
+        if not username:
+            self._username.set_error("İstifadəçi adını daxil edin")
+            return
+        if not raw_port.isdigit() or not 1 <= int(raw_port) <= self.MAX_PORT:
+            # PORT EKRANDA YOXLANILIR: yanlış port `psycopg`-də "host tapılmadı"
+            # kimi görünür və istifadəçi səhvi ünvanda axtarardı.
+            self._port.set_error("Port 1–65535 aralığında rəqəm olmalıdır")
+            return
+
+        self.submitted.emit(
+            {
+                "host": host,
+                "port": int(raw_port),
+                "database": database,
+                "username": username,
+                "password": self._password.text(),
+                "sslmode": "require",
+            }
+        )
+
+
 __all__ = [
     "LOGIN_CARD_WIDTH",
     "AdminLoginScreen",
+    "ConnectionSettingsScreen",
     "FatalStartupScreen",
     "FirstRunWizard",
     "SplashScreen",

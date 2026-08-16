@@ -55,10 +55,11 @@ o cümlədən PIN handshake, işləmir)". `license_state()` həmin qərarı veri
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Final
 
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.infrastructure.config.limits import InfrastructureLimits
@@ -139,7 +140,8 @@ if TYPE_CHECKING:
     from src.domain.value_objects.identifiers import EmployeeId, TenantId
     from src.infrastructure.erp.servers import ErpServerRepository
     from src.infrastructure.licensing.client import LicenseClient
-    from src.infrastructure.persistence.connection import Database, PostgresUnitOfWork
+    from src.infrastructure.persistence.connection import PostgresUnitOfWork
+    from src.infrastructure.persistence.connection_types import TenantDatabase
 
 _log = get_logger(__name__)
 _error_log = get_logger(__name__, channel=LogChannel.ERROR)
@@ -182,7 +184,7 @@ class _RootLimitReader:
 
     __slots__ = ("_database",)
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: TenantDatabase) -> None:
         self._database = database
 
     def get_str(self, tenant_id: TenantId, key: str, default: str) -> str:
@@ -215,7 +217,7 @@ class _StandaloneLimits:
 
     __slots__ = ("_database",)
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: TenantDatabase) -> None:
         self._database = database
 
     def get_int(self, tenant_id: TenantId, key: str, default: int) -> int:
@@ -274,7 +276,7 @@ class _StandaloneAudit:
 
     __slots__ = ("_database",)
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: TenantDatabase) -> None:
         self._database = database
 
     def record(
@@ -413,6 +415,50 @@ class _LazyFaceEngine:
         return result
 
 
+class StartupFailureKind(str, Enum):
+    """Başlanğıc uğursuzluğunun NÖVÜ — ekran davranışını bu təyin edir (DB-4 Faza 4).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ TƏK MƏTN KİFAYƏT ETMİR
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl bütün başlanğıc xətaları eyni fatal ekrana, eyni tək mətnlə düşürdü.
+    Nəticədə üç TAMAMİLƏ FƏRQLİ vəziyyət eyni görünürdü:
+
+        * server müvəqqəti əlçatmazdır → doğru hərəkət YENİDƏN CƏHDDİR;
+        * bağlantı heç vaxt konfiqurasiya edilməyib → doğru hərəkət
+          AYARLARI DAXİL ETMƏKDİR (təkrar cəhd HEÇ VAXT işləməyəcək);
+        * parol dəyişib/açılmır → yenə ayarlar, lakin BAŞQA səbəblə.
+
+    İstifadəçi ekranda «internetinizi yoxlayın» görüb şəbəkəni yoxlayırdı,
+    halbuki `connection.json` faylı ümumiyyətlə yox idi. Növ bu üç halı
+    ayırır və hər birinə DÜZGÜN düyməni verir.
+
+    `str, Enum` — layihə konvensiyası (CLAUDE.md §4): `.value` audit/log
+    çıxışında sabit qalır.
+    """
+
+    #: Server/şəbəkə əlçatmazdır — konfiqurasiya DÜZGÜNDÜR.
+    DATABASE_UNREACHABLE = "DATABASE_UNREACHABLE"
+    #: Heç bir mənbədə bağlantı məlumatı yoxdur (`DATABASE_URL` və fayl boş).
+    CREDENTIALS_MISSING = "CREDENTIALS_MISSING"
+    #: Məlumat VAR, lakin işləmir: parol yanlış, fayl korlanıb, açar dəyişib.
+    CREDENTIALS_INVALID = "CREDENTIALS_INVALID"
+    #: Quraşdırma kimliyi (`installation.json`) oxuna/yazıla bilmədi.
+    IDENTITY_UNAVAILABLE = "IDENTITY_UNAVAILABLE"
+
+    @property
+    def is_configuration_problem(self) -> bool:
+        """Bağlantı Ayarları ekranı KÖMƏK EDƏRMİ.
+
+        Şəbəkə nasazlığında ayarları açmaq istifadəçini düzgün olan dəyərləri
+        «düzəltməyə» sövq edərdi — yəni işləyən konfiqurasiyanı pozardı.
+        """
+        return self in {
+            StartupFailureKind.CREDENTIALS_MISSING,
+            StartupFailureKind.CREDENTIALS_INVALID,
+        }
+
+
 class StartupError(KompasOSError):
     """Tətbiq işə düşə bilmədi — fatal başlanğıc ekranı göstərilir.
 
@@ -422,6 +468,20 @@ class StartupError(KompasOSError):
     """
 
     user_message = "KompasOS işə düşə bilmədi."
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        user_message: str | None = None,
+        context: dict[str, Any] | None = None,
+        kind: StartupFailureKind = StartupFailureKind.DATABASE_UNREACHABLE,
+    ) -> None:
+        super().__init__(message, user_message=user_message, context=context)
+        self.kind = kind
+        # Növ log-a da düşür: dəstək zəngində «hansı ekran göründü?» sualının
+        # cavabı jurnaldan oxunmalıdır, istifadəçinin yaddaşından yox.
+        self.context.setdefault("failure_kind", kind.value)
 
 
 @dataclass
@@ -756,7 +816,7 @@ class ApplicationContext:
     def __init__(
         self,
         *,
-        database: Database,
+        database: TenantDatabase,
         tenant_id: TenantId,
         license_client: LicenseClient | None = None,
         ntp: NtpVerifier | None = None,
@@ -819,7 +879,7 @@ class ApplicationContext:
         )
 
     @property
-    def database(self) -> Database:
+    def database(self) -> TenantDatabase:
         return self._database
 
     @property
@@ -2410,6 +2470,10 @@ class ApplicationContext:
                 audit=audit,
                 clock=clock,
                 notifier=notifier,
+                # İşçi tarixçəsinin səhifə ölçüsü Root parametridir
+                # (`FINE_APPEAL_HISTORY_PAGE_SIZE`, migrations/060) — əvvəl
+                # repozitoriya defoltunda gizlənmişdi.
+                limits=repo("limits"),
             ),
             # REPOSITORY ARQUMENTİ YOXDUR VƏ BU, QƏSDƏNDİR: `publish_batch`
             # cərimələri YADDAŞDA (`dict[FineId, Fine]`) alır və mutasiya edir,
@@ -2633,7 +2697,7 @@ class ApplicationContext:
                 clock=clock,
                 toggles=repo("toggles"),
                 # `limits`: şəbəkənin sütun sayı (`DASHBOARD_GRID_COLUMNS`) —
-                # ROOT parametridir (audit G-5, migrations/058).
+                # ROOT parametridir (audit G-5, migrations/054).
                 limits=repo("limits"),
                 # Plugin-lərin verdiyi panel bölmələri (audit G-3). Səth
                 # TƏNBƏLDİR: `plugins` cədvəli yalnız Panel Qurucusu açılanda
@@ -2882,7 +2946,7 @@ def build_context(
             müştəri ən pis haldır.
     """
     from src.domain.value_objects.identifiers import TenantId  # noqa: PLC0415
-    from src.infrastructure.persistence.connection import Database  # noqa: PLC0415
+    from src.infrastructure.persistence.connection_types import TenantDatabase  # noqa: PLC0415
     from src.shared.installation import (  # noqa: PLC0415
         InstallationIdentityError,
         resolve_installation_identity,
@@ -2897,22 +2961,36 @@ def build_context(
             exc.message,
             user_message=exc.user_message,
             context=exc.context,
+            kind=StartupFailureKind.IDENTITY_UNAVAILABLE,
         ) from exc
 
     tenant_id = TenantId(identity.tenant_id)
 
+    database: TenantDatabase | None = None
     try:
-        database = Database()
+        # `TenantDatabase` — `Database` DEYİL: bu bağlantı MÜŞTƏRİNİNDİR və
+        # `ApplicationContext`-dən aşağıya axan hər yol onu məhz belə gözləyir.
+        # Bura `VendorDatabase` gəlsəydi, bütün iş sorğuları lisenziya bazasına
+        # gedər və nəticə "sətir tapılmadı" kimi görünərdi (DB-4 Faza 1).
+        database = TenantDatabase()
         database.open()
     except Exception as exc:
         _error_log.exception("DATABASE_OPEN_FAILED")
-        raise StartupError(
-            "Baza bağlantısı qurula bilmədi",
-            user_message=(
-                "Bazaya qoşulmaq mümkün olmadı. İnternet bağlantısını yoxlayın; "
-                "problem davam edərsə dəstəklə əlaqə saxlayın."
-            ),
-        ) from exc
+        # UĞURSUZ HOVUZ BAĞLANIR — TƏKRAR CƏHD ONU YIĞARDI (DB-4 Faza 4)
+        # ------------------------------------------------------------------
+        # `psycopg_pool` `open(wait=True)` çağırışında işçi saplarını istisna
+        # atılmazdan ƏVVƏL başladır. Funksiya artıq bir dəfə çağırılan yol
+        # deyil: «Yenidən Cəhd Et» düyməsi onu istənilən sayda təkrarlayır və
+        # hər uğursuz cəhd bir dəstə asılı sap qoyardı. Sızma yalnız uzun
+        # müddət qoşula bilməyən maşında — yəni məhz düymənin çox basıldığı
+        # halda — görünərdi.
+        #
+        # `database` `None` ola bilər: DSN-in özü həll olunmadıqda (`Database`
+        # konstruktorunda `build_dsn_from_env()`) obyekt heç yaranmır.
+        if database is not None:
+            with suppress(Exception):
+                database.close()
+        raise classify_connection_failure(exc) from exc
 
     context = ApplicationContext(
         database=database,
@@ -2931,6 +3009,75 @@ def build_context(
         },
     )
     return context
+
+
+#: Konfiqurasiya problemini bildirən SQLSTATE-lər — təkrar cəhd KÖMƏK ETMİR.
+#: `28P01` yanlış parol, `28000` yanlış avtorizasiya (rol yoxdur/icazəsizdir),
+#: `3D000` isə göstərilən BAZA ADI yoxdur. Üçü də ayarlar ekranına aiddir;
+#: qalan hər şey (şəbəkə, DNS, taymaut, server bağlıdır) təkrar cəhdə aiddir.
+_CONFIGURATION_SQLSTATES: Final[frozenset[str]] = frozenset({"28P01", "28000", "3D000"})
+
+
+def classify_connection_failure(exc: BaseException) -> StartupError:
+    """Bağlantı nasazlığını NÖVƏ görə ayırır (DB-4 Faza 4).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ İSTİSNANIN TİPİ İLƏ KİFAYƏTLƏNMİRİK
+    ──────────────────────────────────────────────────────────────────────────
+    `psycopg` yanlış parolu da, əlçatmaz hostu da `OperationalError` kimi
+    verir — yəni tip tək başına «şəbəkə» ilə «parol»u ayıra bilmir. Ayırıcı
+    SQLSTATE-dir və o, sətir mətnindən fərqli olaraq lokalizasiyadan və
+    server versiyasından ASILI DEYİL (mətnə baxsaydıq, Postgres-in dil
+    parametri dəyişdikdə təsnifat sükutla sıradan çıxardı).
+
+    Səhv təsnifatın qiyməti yüksəkdir: şəbəkə nasazlığını «ayarlar səhvdir»
+    kimi göstərmək istifadəçini DÜZGÜN dəyərləri dəyişməyə sövq edər.
+    Ona görə defolt HƏMİŞƏ `DATABASE_UNREACHABLE`-dir — tanınmayan hər nasazlıq
+    təkrar cəhd yoluna düşür, çünki o yol heç nəyi pozmur.
+    """
+    from src.infrastructure.config.connection_file import ConnectionFileError  # noqa: PLC0415
+    from src.shared.exceptions import ConfigurationError  # noqa: PLC0415
+
+    if isinstance(exc, ConfigurationError):
+        # `build_dsn_from_env()` heç bir mənbə tapmadı — nə dəyişən, nə fayl.
+        return StartupError(
+            "Baza bağlantısı konfiqurasiya edilməyib",
+            user_message=exc.user_message,
+            context=exc.context,
+            kind=StartupFailureKind.CREDENTIALS_MISSING,
+        )
+
+    if isinstance(exc, ConnectionFileError):
+        # Fayl VAR, lakin oxunmur: korlanıb və ya parol açılmır.
+        return StartupError(
+            "Bağlantı konfiqurasiyası oxunmadı",
+            user_message=exc.user_message,
+            context=exc.context,
+            kind=StartupFailureKind.CREDENTIALS_INVALID,
+        )
+
+    sqlstate = str(getattr(exc, "sqlstate", "") or "")
+    if sqlstate in _CONFIGURATION_SQLSTATES:
+        return StartupError(
+            "Baza bağlantı məlumatları qəbul edilmədi",
+            user_message=(
+                "Server bağlantı məlumatlarını qəbul etmədi — istifadəçi adı, "
+                "parol və ya baza adı yanlışdır. «Bağlantı Ayarları» ekranından "
+                "dəyərləri yoxlayın."
+            ),
+            context={"sqlstate": sqlstate},
+            kind=StartupFailureKind.CREDENTIALS_INVALID,
+        )
+
+    return StartupError(
+        "Baza bağlantısı qurula bilmədi",
+        user_message=(
+            "Bazaya qoşulmaq mümkün olmadı. İnternet bağlantısını yoxlayın; "
+            "problem davam edərsə dəstəklə əlaqə saxlayın."
+        ),
+        context={"sqlstate": sqlstate} if sqlstate else {},
+        kind=StartupFailureKind.DATABASE_UNREACHABLE,
+    )
 
 
 def _apply_root_pool_limits(context: ApplicationContext) -> None:
@@ -3011,4 +3158,11 @@ def _split_host_port(raw: str, *, default_port: int = 1541) -> tuple[str, int]:
         return (raw, default_port)
 
 
-__all__ = ["ApplicationContext", "Session", "StartupError", "build_context"]
+__all__ = [
+    "ApplicationContext",
+    "Session",
+    "StartupError",
+    "StartupFailureKind",
+    "build_context",
+    "classify_connection_failure",
+]

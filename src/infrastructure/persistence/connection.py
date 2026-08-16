@@ -137,11 +137,35 @@ class TenantContext:
 
 
 def build_dsn_from_env() -> str:
-    """`DATABASE_URL`-dən DSN qurur və owner rolu ilə qoşulmanı xəbərdarlıqla qeyd edir."""
+    """DSN-i həll edir: `DATABASE_URL` → konfiqurasiya faylı (DB-4 Faza 2).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ İKİ MƏNBƏ VAR VƏ SIRA MƏHZ BELƏDİR
+    ──────────────────────────────────────────────────────────────────────────
+    Mühit dəyişəni HƏMİŞƏ üstündür: inkişaf mühiti, CI və konteyner
+    quraşdırmaları onunla işləyir. Fayl onları üstələsəydi, testlər maşındakı
+    təsadüfi konfiqurasiyadan asılı olardı.
+
+    Fayl isə PAKETLƏNMİŞ quraşdırma üçündür. Ondan əvvəl yeganə yol mühit
+    dəyişəni idi — Start menyusundan açılan `.exe`-də isə o, boş olur (tətbiq
+    `.env` faylını OXUMUR). Yəni müştəri maşınında bağlantı ÜMUMİYYƏTLƏ
+    qurula bilmirdi (bax `infrastructure/config/connection_file.py`).
+
+    Raises:
+        ConfigurationError: heç bir mənbə yoxdursa. Mesaj istifadəçini
+            Bağlantı Ayarları ekranına yönləndirir — «dəyişən təyin edin»
+            göstərişi mağaza işçisi üçün mənasızdır.
+    """
     dsn = os.environ.get("DATABASE_URL", "").strip()
     if not dsn:
+        dsn = _dsn_from_connection_file()
+    if not dsn:
         raise ConfigurationError(
-            "`DATABASE_URL` təyin edilməyib",
+            "Baza bağlantısı konfiqurasiya edilməyib",
+            user_message=(
+                "Baza bağlantısı konfiqurasiya edilməyib. «Bağlantı Ayarları» "
+                "ekranından server məlumatlarını daxil edin."
+            ),
             context={"hint": "Session Pooler DSN-i istifadə edin, birbaşa host YOX"},
         )
 
@@ -168,6 +192,51 @@ def build_dsn_from_env() -> str:
             },
         )
     return dsn
+
+
+def _dsn_from_connection_file() -> str:
+    r"""`%PROGRAMDATA%\KompasOS\connection.json` → DSN (yoxdursa boş sətir).
+
+    XƏTA UDULMUR: fayl VAR, lakin oxunmursa (korlanıb, parol açılmır) səbəb
+    yuxarı qaldırılır — «konfiqurasiya yoxdur» ilə «konfiqurasiya sınıqdır»
+    istifadəçi üçün tamamilə fərqli iki haldır və birincisi yeni quraşdırma,
+    ikincisi isə nasazlıqdır.
+    """
+    from src.infrastructure.config.connection_file import load_settings  # noqa: PLC0415
+
+    settings = load_settings()
+    return settings.dsn() if settings is not None else ""
+
+
+def probe_dsn(dsn: str, *, timeout: int = 10) -> None:
+    """Verilmiş DSN ilə TƏK bağlantı açıb dərhal bağlayır (DB-4 Faza 4).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ HOVUZ DEYİL, TƏK BAĞLANTI
+    ──────────────────────────────────────────────────────────────────────────
+    Bu funksiya «Bağlantı Ayarları» ekranı üçündür: istifadəçi dəyərləri yazır,
+    YADDA SAXLAMAZDAN ƏVVƏL onların işlədiyi yoxlanılmalıdır. `Database()`
+    qursaydıq, hovuz açılışı bir neçə bağlantı yaradar və uğursuzluqda
+    `psycopg`-nin ORİJİNAL istisnası hovuz taymautunun altında itərdi — halbuki
+    ekran məhz həmin istisnanın SQLSTATE-inə görə «parol yanlışdır» ilə
+    «server əlçatmazdır» arasında seçim edir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ SINAQ MƏCBURİDİR — «YADDA SAXLA VƏ GÖR» KİFAYƏT ETMİR
+    ──────────────────────────────────────────────────────────────────────────
+    Yoxlamasız yazsaydıq, səhv dəyər faylda QALARDI və tətbiq növbəti açılışda
+    yenə eyni fatal ekrana düşərdi — istifadəçi isə artıq «düzəltdim» sanardı.
+    Yanlış konfiqurasiyanı diskə yazmamaq onu geri qaytarmaqdan ucuzdur.
+
+    Raises:
+        psycopg.Error: bağlantı qurulmadı. İstisna QƏSDƏN sarğılanmır —
+            çağıran tərəf onu SQLSTATE ilə təsnif edir (bax
+            `composition.classify_connection_failure`).
+    """
+    with psycopg.connect(dsn, connect_timeout=timeout) as conn, conn.cursor() as cur:
+        cur.execute("SELECT 1")
+        cur.fetchone()
+    _log.info("DSN_PROBE_OK")
 
 
 class Database:
@@ -834,4 +903,5 @@ __all__ = [
     "TenantContext",
     "TenantContextError",
     "build_dsn_from_env",
+    "probe_dsn",
 ]

@@ -32,7 +32,7 @@ if TYPE_CHECKING:
         DeveloperTenantDirectory,
         TenantRow,
     )
-    from src.infrastructure.persistence.connection import Database
+    from src.infrastructure.persistence.connection_types import TenantDatabase
     from src.infrastructure.updates.publisher import PackageInspection, ReleasePublisher
 
 # --------------------------------------------------------------------------- #
@@ -256,7 +256,7 @@ def run_console(
     publish_mandatory: bool = False,
     show_crashes: bool = False,
     show_tickets: bool = False,
-    database: Database | None = None,
+    database: TenantDatabase | None = None,
     recover_access: str = "",
     recovery_reference: str = "",
     recovery_contact: str = "",
@@ -424,7 +424,7 @@ def _recovery_problem(
 
 def _recover_access(
     directory: DeveloperTenantDirectory,
-    database: Database,
+    database: TenantDatabase,
     argument: str,
     *,
     reference: str,
