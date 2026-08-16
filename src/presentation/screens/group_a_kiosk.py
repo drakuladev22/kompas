@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
     QComboBox,
@@ -27,7 +27,8 @@ from PySide6.QtWidgets import (
 )
 
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
-from src.presentation.widgets import metrics
+from src.presentation.theme.manager import set_surface_color
+from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
@@ -38,13 +39,14 @@ from src.presentation.widgets.primitives import (
     mono_label,
     muted_label,
     plain_label,
+    section_label,
     stretch,
     title_label,
 )
 from src.presentation.widgets.worker_status import WorkerStatus
 
 if TYPE_CHECKING:
-    from PySide6.QtGui import QPaintEvent
+    from PySide6.QtGui import QKeyEvent, QPaintEvent
 
     from src.presentation.theme.manager import ThemeManager
     from src.presentation.widgets.primitives import ChipTone
@@ -133,9 +135,12 @@ class PinPadScreen(QWidget):
 
     Signals:
         submitted: 4 rəqəm tamamlandı (`str`).
+        face_login_requested: «Üzlə daxil ol» düyməsi.
     """
 
     submitted = Signal(str)
+    #: «Üzlə daxil ol» — PIN-ə ALTERNATİV giriş yolu.
+    face_login_requested = Signal()
 
     #: Klaviatura düzülüşü — maketdəki 3×4 şəbəkə.
     _LAYOUT: Final = (
@@ -171,7 +176,7 @@ class PinPadScreen(QWidget):
         header.setSpacing(4)
         header.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        store = title_label(store_name, size=20)
+        store = title_label(store_name, size=19)
         store.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header.addWidget(store)
 
@@ -214,11 +219,85 @@ class PinPadScreen(QWidget):
 
         layout.addSpacing(26)
         layout.addWidget(self._build_keypad(), alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        layout.addSpacing(20)
+        layout.addWidget(self._build_face_button(), alignment=Qt.AlignmentFlag.AlignHCenter)
         layout.addStretch(1)
 
         footer = muted_label("Problem yaşayırsınızsa mağaza rəhbərinizə müraciət edin.")
         footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(footer, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        # Klaviatura girişi üçün fokus EKRANIN ÖZÜNDƏDİR: klaviatura
+        # düymələri `NoFocus`-dur (basılanda halqa çıxmasın deyə), yəni
+        # `keyPressEvent` onlara getmir və ekran onu özü tutmalıdır.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def _build_face_button(self) -> QWidget:
+        """«Üzlə daxil ol» — PIN-in YANINDA, ONUN ƏVƏZİ DEYİL.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ AŞAĞIDA VƏ NİYƏ İKİNCİ DƏRƏCƏLİ GÖRÜNÜŞDƏ
+        ──────────────────────────────────────────────────────────────────────
+        Telefon üz-tanıması eyni yerdədir və istifadəçilər bu vərdişi kioska
+        gətirir: PIN əsas yoldur, üz isə sürətli alternativdir. Onu əsas düymə
+        kimi vurğulasaydıq, kamera işləmədiyi anda (mağazada tez-tez olur)
+        ekranın ƏN GÖRÜNƏN elementi işləməyən bir düymə olardı.
+
+        Kamera yoxdursa düymə GİZLƏNİR, sönük qalmır: sönük düymə «niyə
+        işləmir?» sualı yaradır və işçi onu təkrar-təkrar basır.
+        """
+        button = secondary_button("Üzlə daxil ol")
+        button.setIcon(icons.icon("face_scan", self._theme.color("--color-pin-text")))
+        button.setIconSize(QSize(icons.DEFAULT_SIZE, icons.DEFAULT_SIZE))
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setMinimumHeight(48)
+        button.clicked.connect(self.face_login_requested)
+        button.setVisible(False)
+        self._face_button = button
+        return button
+
+    def set_face_login_available(self, available: bool) -> None:
+        """Kamera və üz modulu hazırdırsa düyməni göstərir."""
+        self._face_button.setVisible(available)
+
+    def face_button(self) -> QPushButton:
+        """Üz girişi düyməsi — kontroller/testlər üçün."""
+        return self._face_button
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt adlandırması
+        """Fiziki klaviatura və NUMPAD ilə PIN daxil etmə.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ LAZIMDIR
+        ──────────────────────────────────────────────────────────────────────
+        Kiosk PC-lərinin bir hissəsində toxunma ekranı YOXDUR — orada işçi
+        klaviatura ilə işləyir. Ekranda rəqəm düymələri olduğu üçün "onsuz da
+        girmək olar" təəssüratı yaranır, halbuki siçansız/toxunmasız terminalda
+        PIN-i daxil etməyin heç bir yolu yox idi.
+
+        `text()` YOX, `key()` İŞLƏDİLİR: `Qt.Key_0…Key_9` həm əsas sıranı, həm
+        NUMPAD-ı əhatə edir və klaviatura düzülüşündən (AZ/EN/RU) asılı deyil —
+        `text()` isə düzülüşə görə dəyişə bilər.
+        """
+        if self._locked:
+            super().keyPressEvent(event)
+            return
+
+        key = event.key()
+        if Qt.Key.Key_0 <= key <= Qt.Key.Key_9:
+            self._on_key(str(key - int(Qt.Key.Key_0)))
+            event.accept()
+            return
+        if key == Qt.Key.Key_Backspace:
+            self._on_key("Sil")
+            event.accept()
+            return
+        if key in {Qt.Key.Key_Escape, Qt.Key.Key_Delete}:
+            self._on_key("Təmizlə")
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _build_keypad(self) -> QWidget:
         keypad = QWidget()
@@ -403,11 +482,11 @@ class EmployeeHomeScreen(QWidget):
         super().__init__(parent)
         self._theme = theme
         self._status = WorkerStatus.VERIFIED
-        self.setStyleSheet(f"background-color: {theme.color('--color-content-bg')};")
+        set_surface_color(self, theme.color("--color-content-bg"))
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(46, 34, 46, 34)
-        layout.setSpacing(26)
+        layout.setContentsMargins(48, 32, 48, 32)
+        layout.setSpacing(24)
 
         layout.addWidget(self._build_header(full_name, position_name, store_name))
         layout.addWidget(self._build_status_card())
@@ -433,7 +512,7 @@ class EmployeeHomeScreen(QWidget):
         header = QWidget()
         layout = QHBoxLayout(header)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(18)
+        layout.setSpacing(16)
 
         self._avatar = Avatar(
             full_name,
@@ -450,7 +529,7 @@ class EmployeeHomeScreen(QWidget):
 
         greeting = title_label(f"Salam, {full_name}", size=26)
         text_layout.addWidget(greeting)
-        text_layout.addWidget(muted_label(f"{position_name} · {store_name}", size=14))
+        text_layout.addWidget(muted_label(f"{position_name} · {store_name}", size=13))
         layout.addWidget(text_box)
 
         layout.addWidget(stretch())
@@ -468,29 +547,29 @@ class EmployeeHomeScreen(QWidget):
     # ---------------------------- status kartı -------------------------------- #
 
     def _build_status_card(self) -> QWidget:
-        card = Card(padding=26, spacing=14)
+        card = Card(padding=metrics.CARD_PADDING + 4, spacing=12)
 
-        card.add(muted_label("Cari vəziyyət"))
+        card.add(section_label("Cari vəziyyət"))
 
         status_row = QWidget()
         status_layout = QHBoxLayout(status_row)
         status_layout.setContentsMargins(0, 0, 0, 0)
-        status_layout.setSpacing(14)
+        status_layout.setSpacing(16)
 
         from src.presentation.widgets.primitives import StatusDot  # noqa: PLC0415
 
         self._status_dot = StatusDot(self._theme.color(self._status.color_token), size=14)
         status_layout.addWidget(self._status_dot)
 
-        self._status_label = title_label(self._status.label_az, size=24)
+        self._status_label = title_label(self._status.label_az, size=metrics.FONT_KIOSK_TITLE)
         status_layout.addWidget(self._status_label)
         status_layout.addWidget(stretch())
 
         # Statusa uyğun TƏK düymə (spesifikasiya) — istifadəçi nə edəcəyini
         # seçmir, sistem onu bir addıma yönəldir.
         self._action = action_button(self._status.action_az)
-        self._action.setMinimumHeight(54)
-        self._action.setMaximumHeight(54)
+        self._action.setMinimumHeight(56)
+        self._action.setMaximumHeight(56)
         action_font = self._action.font()
         action_font.setPixelSize(17)
         self._action.setFont(action_font)
@@ -498,7 +577,7 @@ class EmployeeHomeScreen(QWidget):
         status_layout.addWidget(self._action)
 
         card.add(status_row)
-        self._status_hint = body_label(self._status.hint_az, size=14)
+        self._status_hint = body_label(self._status.hint_az, size=13)
         self._status_hint.setStyleSheet(f"color: {self._theme.color('--color-text-secondary')};")
         card.add(self._status_hint)
         return card
@@ -535,8 +614,8 @@ class EmployeeHomeScreen(QWidget):
         olunmayıb) kart ümumiyyətlə görünmür — ekran bugünkü halında qalır.
         Boş açılan siyahı «sistem xarabdır» kimi oxunardı.
         """
-        card = Card(padding=22, spacing=12)
-        card.add(muted_label("Fasilə növü"))
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card.add(section_label("Fasilə növü"))
 
         row = QWidget()
         row_layout = QHBoxLayout(row)
@@ -555,7 +634,7 @@ class EmployeeHomeScreen(QWidget):
         row_layout.addWidget(stretch())
         card.add(row)
 
-        self._break_detail = body_label("", size=14)
+        self._break_detail = body_label("", size=13)
         self._break_detail.setStyleSheet(f"color: {self._theme.color('--color-text-secondary')};")
         card.add(self._break_detail)
 
@@ -639,14 +718,14 @@ class EmployeeHomeScreen(QWidget):
         return container
 
     def _build_tasks_card(self) -> Card:
-        card = Card(padding=22, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.addWidget(title_label("Açıq Tapşırıqlarım", size=16))
+        head_layout.addWidget(title_label("Açıq Tapşırıqlarım", size=metrics.FONT_CARD_TITLE))
         head_layout.addWidget(stretch())
-        self._tasks_count = title_label("0", size=16)
+        self._tasks_count = Chip("0", "info")
         head_layout.addWidget(self._tasks_count)
         card.add(head)
         card.add(Divider())
@@ -672,8 +751,8 @@ class EmployeeHomeScreen(QWidget):
             self._tasks_body.addWidget(body_label(task, size=13))
 
     def _build_points_card(self) -> Card:
-        card = Card(padding=22, spacing=12)
-        card.add(title_label("Xal Balansım", size=16))
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card.add(title_label("Xal Balansım", size=metrics.FONT_CARD_TITLE))
         card.add(Divider())
 
         self._points_value = title_label("0", size=32)
@@ -703,11 +782,11 @@ class EmployeeHomeScreen(QWidget):
         )
 
     def _build_fines_card(self) -> Card:
-        card = Card(padding=22, spacing=12)
-        card.add(title_label("Cərimələrim", size=16))
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card.add(title_label("Cərimələrim", size=metrics.FONT_CARD_TITLE))
         card.add(Divider())
 
-        self._fines_summary = title_label("—", size=18)
+        self._fines_summary = title_label("—", size=19)
         card.add(self._fines_summary)
 
         self._fines_detail = body_label("", size=13)
@@ -748,20 +827,20 @@ class EmployeeHomeScreen(QWidget):
     # --------------------------- açıq növbələr (#16) -------------------------- #
 
     def _build_open_shifts_card(self) -> Card:
-        card = Card(padding=22, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.addWidget(title_label("Açıq Növbələr", size=16))
+        head_layout.addWidget(title_label("Açıq Növbələr", size=metrics.FONT_CARD_TITLE))
         head_layout.addWidget(stretch())
-        self._open_shift_count = title_label("0", size=16)
+        self._open_shift_count = Chip("0", "info")
         head_layout.addWidget(self._open_shift_count)
         card.add(head)
         card.add(Divider())
 
         self._open_shift_body = QVBoxLayout()
-        self._open_shift_body.setSpacing(10)
+        self._open_shift_body.setSpacing(12)
         holder = QWidget()
         holder.setLayout(self._open_shift_body)
         card.add(holder)
@@ -796,7 +875,7 @@ class EmployeeHomeScreen(QWidget):
         row = QWidget()
         layout = QVBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(8)
 
         layout.addWidget(body_label(shift["date"], size=13))
         layout.addWidget(muted_label(shift["work_mode"], size=12))
@@ -832,12 +911,12 @@ class EmployeeHomeScreen(QWidget):
         balance_for`). Öz haqqını görmək üçün flag istəmək işçini öz
         məlumatından kəsərdi (`menu.py` başlığındakı self-service qaydası).
         """
-        card = Card(padding=22, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.addWidget(title_label("İllik Məzuniyyət", size=16))
+        head_layout.addWidget(title_label("İllik Məzuniyyət", size=metrics.FONT_CARD_TITLE))
         head_layout.addWidget(stretch())
         self._annual_leave_year = mono_label("", muted=True, size=12)
         head_layout.addWidget(self._annual_leave_year)
@@ -984,14 +1063,14 @@ class EmployeeHomeScreen(QWidget):
         struktur ikizidir, lakin BURADA heç bir `[...]_requested` siqnalı
         yoxdur, çünki işçinin bu kartda edə biləcəyi HEÇ BİR əməliyyat yoxdur).
         """
-        card = Card(padding=22, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.addWidget(title_label("Elanlar", size=16))
+        head_layout.addWidget(title_label("Elanlar", size=metrics.FONT_CARD_TITLE))
         head_layout.addWidget(stretch())
-        self._announcement_count = title_label("0", size=16)
+        self._announcement_count = Chip("0", "info")
         head_layout.addWidget(self._announcement_count)
         card.add(head)
         card.add(Divider())

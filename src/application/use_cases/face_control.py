@@ -151,11 +151,22 @@ if TYPE_CHECKING:
     from src.domain.value_objects.identifiers import (
         EmployeeId,
         FaceExemptionId,
+        StoreId,
         TenantId,
     )
 
 _log = get_logger(__name__)
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
+
+
+#: 1:N tanınmada ƏN YAXŞI ilə İKİNCİ arasındakı minimum məsafə fərqi.
+#:
+#: NİYƏ SABİT, NİYƏ ROOT PARAMETRİ: bu, iş qaydası deyil, tanınma alqoritminin
+#: statistik təhlükəsizlik payıdır. ROOT-a versəydik, «giriş çətinləşdi»
+#: şikayətindən sonra kimsə onu sıfıra endirər və 1:N girişi səssizcə
+#: 1:1 dəqiqliyindən aşağı düşərdi — halbuki bütün fərq elə bu paydadır.
+#: `match_tolerance` isə ROOT-dadır və qərarın ƏSAS həddini o verir.
+_IDENTIFY_MARGIN: Final = 0.08
 
 #: Qeydiyyat MÖVCUD flag ilə qorunur — yeni flag YARADILMIR (bənd 1: "YALNIZ
 #: `can_manage_employees` sahibi (admin)"). İşçi bunu ÖZÜ edə bilməz və qayda
@@ -927,6 +938,100 @@ class FaceVerificationUseCase:
             candidate=sample.embedding,
             band=band,
         )
+
+    def login_available(self, *, tenant_id: TenantId, store_id: StoreId) -> bool:
+        """Üzlə giriş bu mağazada MÜMKÜNDÜRMÜ — düymənin görünmə şərti.
+
+        `identify_for_login`-un İLK ÜÇ qapısı ilə eynidir və qəsdən belədir:
+        düymə göstərilib sonra «üz tanınmadı» demək istifadəçini yanıldardı —
+        o, nasazlıq sanıb təkrar-təkrar basardı. Şərtlər burada TƏKRAR
+        YAZILMIR, eyni sıra ilə oxunur.
+        """
+        return bool(
+            self._toggles.is_enabled(tenant_id, FeatureModule.CAMERA_VERIFICATION.value)
+            and self._store_scope.active_scope(tenant_id).covers(store_id)
+            and self._camera.is_available()
+        )
+
+    def identify_for_login(  # noqa: PLR0911 - hər `return` AYRI bir qapıdır
+        self,
+        *,
+        tenant_id: TenantId,
+        store_id: StoreId,
+        candidates: Sequence[Employee],
+    ) -> Employee | None:
+        """Kioskda duran adamı MAĞAZA daxilində tanıyır (üzlə giriş).
+
+        ──────────────────────────────────────────────────────────────────────
+        BU, `verify()`-DAN FƏRQLİ BİR RİSKDİR
+        ──────────────────────────────────────────────────────────────────────
+        `verify()` 1:1-dir — «bu adam Rəşaddırmı?». Burada isə 1:N var — «bu
+        adam kimdir?». İkincisi riyazi olaraq daha risklidir: 40 profil arasında
+        ən yaxın qonşu TƏSADÜFƏN də yaxın düşə bilər və nəticə «başqasının
+        adından giriş» olardı. Ona görə iki əlavə şərt qoyulur:
+
+            1. Ən yaxşı uyğunluq `match_tolerance` daxilində olmalıdır
+               (`verify()` ilə eyni ROOT həddi — ikinci mənbə yaranmır);
+            2. İKİNCİ ən yaxşı uyğunluq ondan `_IDENTIFY_MARGIN` qədər UZAQ
+               olmalıdır. Marja olmadan iki oxşar üzdən biri sükutla seçilərdi.
+
+        Şərtlərdən biri pozulursa nəticə `None`-dur və işçi PIN yoluna
+        qaytarılır — «bənzər üz tapıldı, keçir» kimi bir orta yol YOXDUR.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ YALNIZ MAĞAZA ƏHATƏSİ
+        ──────────────────────────────────────────────────────────────────────
+        `_cross_check` ilə eyni əsaslandırma: bütün şəbəkə üzrə axtarış həm
+        yavaşdır, həm də yalançı-müsbətə meyllidir. Kiosk onsuz da bir
+        mağazanın cihazıdır.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ JURNAL SƏTRİ YAZILMIR
+        ──────────────────────────────────────────────────────────────────────
+        `face_verification_log` bir İŞÇİNİN doğrulama tarixçəsidir və
+        `employee_id` məcburidir. Tanınmamış cəhddə isə işçi YOXDUR — sətri
+        «kimsə» adına yazmaq jurnalı korlayardı. Tanınma UĞURLU olduqda isə
+        giriş onsuz da `verify()`-dan keçir (bax `KioskController`), yəni sətir
+        orada yazılır və ikiqat qeyd yaranmır.
+        """
+        if not self._toggles.is_enabled(tenant_id, FeatureModule.CAMERA_VERIFICATION.value):
+            return None
+        if not self._store_scope.active_scope(tenant_id).covers(store_id):
+            return None
+        if not self._camera.is_available():
+            return None
+
+        gesture = secrets.choice(self._gesture_pool(tenant_id))
+        frames = self._camera.capture(count=1, gesture=gesture)
+        if not frames:
+            return None
+
+        sample = self._matcher.extract(frames[0], gesture=gesture)
+        if not sample.has_face or not sample.liveness_confirmed or sample.embedding is None:
+            return None
+
+        band = self._tolerance_band(tenant_id)
+        scored: list[tuple[float, Employee]] = []
+        for candidate in candidates:
+            profile = self._profiles.get_profile(candidate.id)
+            if profile is None or profile.embedding is None:
+                continue
+            scored.append((self._matcher.distance(profile.embedding, sample.embedding), candidate))
+
+        if not scored:
+            return None
+        scored.sort(key=lambda pair: pair[0])
+        best_distance, best_employee = scored[0]
+        if best_distance > band.match_tolerance:
+            return None
+        if len(scored) > 1 and scored[1][0] - best_distance < _IDENTIFY_MARGIN:
+            # İKİ ÜZ BİR-BİRİNƏ ÇOX YAXINDIR — seçim etmirik.
+            _security_log.warning(
+                "FACE_LOGIN_AMBIGUOUS",
+                extra={"store_id": str(store_id), "gap": round(scored[1][0] - best_distance, 4)},
+            )
+            return None
+        return best_employee
 
     # --------------------------- nəticə yolları ------------------------------ #
 

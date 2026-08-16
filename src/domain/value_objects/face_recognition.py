@@ -110,6 +110,13 @@ class FaceTriggerContext(str, Enum):
     STEP_A = "STEP_A"
     STEP_1 = "STEP_1"
     STEP_2 = "STEP_2"
+    #: Kiosk GİRİŞİ — PIN uğurlu olduqdan sonra, İşçi Ana Ekranı AÇILMAZDAN
+    #: ƏVVƏL (miqrasiya 057).
+    #:
+    #: `STEP_A` TƏKRAR İŞLƏDİLMİR: o, «bu gün işə başladı» hadisəsidir və
+    #: davamiyyət hesabatının mənbəyidir. Girişi də ora yazsaydıq, gün ərzində
+    #: kiosku beş dəfə açan işçi hesabatda beş dəfə «işə başlamış» görünərdi.
+    LOGIN = "LOGIN"
 
 
 class LivenessGesture(str, Enum):

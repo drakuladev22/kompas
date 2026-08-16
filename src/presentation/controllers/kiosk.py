@@ -213,7 +213,6 @@ class KioskController:
                 # (aşağıdakı `except KompasOSError` onu tutur).
                 employee = result.employee
                 status = self._status_for(session, employee.id)
-                return KioskOutcome(succeeded=True, status=status, employee=employee)
         except KompasOSError as exc:
             _security_log.info("KIOSK_PIN_REJECTED", extra=exc.to_dict())
             return KioskOutcome(succeeded=False, message=exc.user_message)
@@ -223,6 +222,103 @@ class KioskController:
                 succeeded=False,
                 message="Sistem xətası. Bir az sonra yenidən cəhd edin.",
             )
+
+        # ------------------------------------------------------------------ #
+        # ÜZ QAPISI GİRİŞİN ÖZÜNDƏDİR (miqrasiya 057)
+        # ------------------------------------------------------------------ #
+        # PIN dörd rəqəmdir və kiosk mağaza zalındadır — yəni onu başqasına
+        # vermək (və ya çiynin üstündən oxumaq) real ssenaridir. Qapı yalnız
+        # ƏMƏLİYYATDA olsaydı, PIN-i bilən adam üçün ekran ONSUZ DA açılardı:
+        # o, işçinin açıq tapşırıqlarını, xal balansını və cərimə tarixçəsini
+        # görərdi. Yəni məlumat sızması «İşə Başladım» basılmasa belə baş
+        # verirdi.
+        #
+        # SESSİYA BAĞLANDIQDAN SONRA çağırılır: `_face_gate` öz sessiyasını
+        # açır və MISMATCH izini AYRICA commit edir (bax onun başlığı) — iç-içə
+        # sessiya həmin izi girişin rollback-ı ilə birlikdə silərdi.
+        gate = self._face_gate(employee, FaceTriggerContext.LOGIN)
+        if not gate.allowed:
+            _security_log.warning(
+                "KIOSK_LOGIN_FACE_REJECTED",
+                extra={"employee_id": str(employee.id), "outcome": gate.face.get("outcome", "")},
+            )
+            return KioskOutcome(succeeded=False, message=gate.message, face=gate.face)
+
+        return KioskOutcome(succeeded=True, status=status, employee=employee, face=gate.face)
+
+    def authenticate_by_face(self) -> KioskOutcome:
+        """«Üzlə daxil ol» — PIN-siz giriş.
+
+        ──────────────────────────────────────────────────────────────────────
+        İKİ ADDIM: ƏVVƏLCƏ TANIMA, SONRA DOĞRULAMA
+        ──────────────────────────────────────────────────────────────────────
+        `identify_for_login` sualı «bu kimdir?» (1:N), `verify` sualı isə «bu,
+        HƏQİQƏTƏN həmin adamdırmı?» (1:1). İkincisini atlamaq cazibədardır —
+        kamera onsuz da bir dəfə işlədi — lakin ATLANMIR, çünki bütün
+        anti-fraud yan təsirləri məhz `verify`-dadır: `face_verification_log`
+        sətri, istisna qapısı, kilid sayğacı, aşağı-etibarlı işarəsi və
+        MISMATCH bildirişi. Yalnız tanıma ilə keçsəydik, üzlə giriş auditdə
+        GÖRÜNMƏZ bir yol olardı — yəni ən həssas giriş üsulu ən az izi
+        buraxardı.
+
+        İkinci kadrın qiyməti bir neçə saniyədir; izsiz giriş yolunun qiyməti
+        isə mübahisə zamanı sübutsuzluqdur.
+        """
+        try:
+            with self._context.session() as session:
+                candidates = session.uow.employees.find_by_pin_candidates(
+                    self._context.tenant_id, self._store_id
+                )
+                identified = session.face_verification.identify_for_login(
+                    tenant_id=self._context.tenant_id,
+                    store_id=self._store_id,
+                    candidates=candidates,
+                )
+                # Tanıma cəhdi jurnal yazmır (bax use case başlığı), lakin
+                # kamera/kadr vəziyyəti dəyişmiş ola bilər — commit ucuzdur və
+                # sessiyanı təmiz bağlayır.
+                session.commit()
+                if identified is None:
+                    return KioskOutcome(
+                        succeeded=False,
+                        message="Üz tanınmadı. PIN kodunuzu daxil edin.",
+                    )
+                status = self._status_for(session, identified.id)
+        except KompasOSError as exc:
+            _security_log.info("KIOSK_FACE_LOGIN_REJECTED", extra=exc.to_dict())
+            return KioskOutcome(succeeded=False, message=exc.user_message)
+        except Exception:
+            _log.exception("KIOSK_FACE_LOGIN_UNEXPECTED_ERROR")
+            return KioskOutcome(
+                succeeded=False,
+                message="Sistem xətası. PIN kodunuzu daxil edin.",
+            )
+
+        gate = self._face_gate(identified, FaceTriggerContext.LOGIN)
+        if not gate.allowed:
+            _security_log.warning(
+                "KIOSK_FACE_LOGIN_GATE_REJECTED",
+                extra={"employee_id": str(identified.id)},
+            )
+            return KioskOutcome(succeeded=False, message=gate.message, face=gate.face)
+
+        return KioskOutcome(succeeded=True, status=status, employee=identified, face=gate.face)
+
+    def face_login_available(self) -> bool:
+        """Üzlə giriş düyməsi göstərilsinmi — modul + əhatə + kamera.
+
+        Üçü də yoxlanılır, çünki hər biri AYRI səbəbdən söndürülə bilər və
+        düyməni yalnız kameraya görə göstərsəydik, modulu bağlı olan mağazada
+        işçi basar, «üz tanınmadı» görər və bunu nasazlıq sanardı.
+        """
+        try:
+            with self._context.session() as session:
+                return session.face_verification.login_available(
+                    tenant_id=self._context.tenant_id, store_id=self._store_id
+                )
+        except Exception:
+            _log.exception("KIOSK_FACE_AVAILABILITY_FAILED")
+            return False
 
     # ----------------------------- əməliyyatlar ------------------------------ #
 
