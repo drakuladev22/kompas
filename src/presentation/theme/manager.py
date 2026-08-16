@@ -157,6 +157,40 @@ def enable_styled_background(widget: QWidget) -> None:
     widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
 
+def set_surface_color(widget: QWidget, color: str) -> None:
+    """Widget-in ÖZ fonunu təyin edir — uşaqlarına SIZMADAN.
+
+    ──────────────────────────────────────────────────────────────────────
+    NİYƏ BU FUNKSİYA VAR (VƏ NİYƏ `setStyleSheet("background-color: …")` YOX)
+    ──────────────────────────────────────────────────────────────────────
+    Qt-də widget səviyyəsində qoyulmuş üslub cədvəli BÜTÜN alt ağaca tətbiq
+    olunur və seçicisiz elan (`background-color: X;`) hər uşağa da düşür.
+    Nəticə fəlakətlidir və heç bir xəta vermir: kioskun əsas düyməsi
+    (`variant=action`, Navy fon + ağ mətn) valideynin `--color-content-bg`
+    rəngini götürürdü, yəni AĞ MƏTN AÇIQ FONA düşürdü.
+
+    Ölçülmüş nəticə: düymə tək başına qurulduqda `#0B1D3A`, `EmployeeHomeScreen`
+    daxilində isə `#F4F6FA` — kontrast 1.05:1, yəni «İcazə İstəyirəm» yazısı
+    PRAKTİK OLARAQ GÖRÜNMÜRDÜ. Bu, mağaza işçisinin gün ərzində basdığı ƏSAS
+    düymədir.
+
+    Kontrast qapısı bunu tuta bilmirdi, çünki o, TOKEN cütlərini ölçür: token
+    cütü (`--color-action-bg` / `--color-action-text`) tamamilə düzgündür —
+    səhv Qt-nin kaskadındadır, palitrada deyil.
+
+    Həll: qayda widget-in ÖZ obyekt adına bağlanır (`#Ad { … }`), yəni
+    seçiciyə yalnız həmin widget uyğun gəlir. Obyekt adı yoxdursa sinif
+    adından qurulur — ad qlobal unikal olmalı deyil, seçici onsuz da bu alt
+    ağacla məhdudlaşır.
+    """
+    name = widget.objectName()
+    if not name:
+        name = f"Surface{type(widget).__name__}"
+        widget.setObjectName(name)
+    widget.setStyleSheet(f"#{name} {{ background-color: {color}; }}")
+    enable_styled_background(widget)
+
+
 def refresh_widget_style(widget: QWidget) -> None:
     """Dinamik xüsusiyyət dəyişdikdən sonra üslubu yenidən hesablatdırır.
 

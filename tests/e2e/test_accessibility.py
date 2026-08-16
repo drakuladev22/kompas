@@ -223,23 +223,31 @@ def test_focus_border_does_not_change_chip_geometry(qt_app) -> None:  # type: ig
 
     Sərhəd yalnız `:focus` halında əlavə edilsəydi, Qt widget-in ölçü hesabına
     2px əlavə edərdi və nişan fokus alanda "sıçrayardı". Ona görə yer
-    əvvəlcədən ayrılır, doldurma isə eyni qədər azaldılır: `2px + 2px = 4px`
-    (`--space-xs`) və `2px + 6px = 8px` (`--space-sm`).
+    əvvəlcədən ayrılır, doldurma isə eyni qədər azaldılır: `2px + 3px = 5px`
+    və `2px + 10px = 12px`.
 
-    Bu test həmin hesabı qoruyur: kimsə doldurmanı "sadələşdirsə", maketin
-    nişan ölçüsü sükutla böyüyərdi.
+    Bu test həmin hesabı qoruyur: kimsə doldurmanı "sadələşdirsə", nişan
+    ölçüsü sükutla böyüyərdi.
+
+    (DESIGN.MD REDİZAYNI: hesab əvvəllər `2+2=4` / `2+6=8` idi və hər iki
+    nəticə `--space-xs`/`--space-sm` tokenlərinə düşürdü. Yeni həb formasında
+    doldurma `3px 10px`-dir, cəm isə 5/12 — şkalada qarşılığı olmadığı üçün
+    hərfi yazılır. İNVARİANT DƏYİŞMƏYİB: yoxlanan şey rəqəmlər deyil,
+    «fokus ölçünü dəyişmir» qaydasıdır.)
     """
     from src.presentation.theme.qss import QSS_TEMPLATE, render
     from src.presentation.theme.tokens import theme_tokens
     from src.presentation.widgets.primitives import Chip
 
     tokens = theme_tokens(ThemeMode.LIGHT)
+    # İKİ MÜSTƏQİL ƏVƏZLƏMƏ, bir uzun blok deyil: qaydanın içinə şərh əlavə
+    # etmək (redizayn zamanı məhz belə oldu) bitişik bloku uyğunsuz edir və
+    # test "qayda dəyişib" deyib dayanırdı, halbuki YOXLADIĞI invariant
+    # toxunulmamışdı. Ayrı-ayrı sətirlər şərhə həssas deyil.
     without_focus_room = QSS_TEMPLATE.replace(
-        "    border: {{--focus-ring-width}} solid transparent;\n"
-        "    border-radius: {{--radius-md}};\n"
-        "    padding: 2px 6px;",
-        "    border-radius: {{--radius-md}};\n    padding: {{--space-xs}} {{--space-sm}};",
-    )
+        "    border: {{--focus-ring-width}} solid transparent;\n    /* DESIGN.MD REDİZAYNI:",
+        "    /* DESIGN.MD REDİZAYNI:",
+    ).replace("    padding: 3px 10px;", "    padding: 5px 12px;")
     assert without_focus_room != QSS_TEMPLATE, "nişan qaydası dəyişib — testi yeniləyin"
 
     qt_app.setStyleSheet(render(without_focus_room, tokens))
