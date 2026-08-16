@@ -964,6 +964,9 @@ class _EmployeeRepo:
     def __init__(self, employees: list[Employee] | None = None) -> None:
         self.employees = {e.id: e for e in (employees or [])}
         self.saved: list[Employee] = []
+        #: `create()` ilə yaradılanlar — `save()`-dən AYRI saxlanılır, çünki
+        #: istehsalatda da ayrıdır (`save()` `UPDATE`-dir, sətir yaratmır).
+        self.created: list[Employee] = []
 
     def get(self, employee_id: EmployeeId) -> Employee | None:
         return self.employees.get(employee_id)
@@ -980,6 +983,16 @@ class _EmployeeRepo:
     def save(self, employee: Employee) -> None:
         self.employees[employee.id] = employee
         self.saved.append(employee)
+
+    def create(
+        self,
+        employee: Employee,
+        *,
+        raw_password: str | None = None,
+        raw_pin: str | None = None,
+    ) -> None:
+        self.employees[employee.id] = employee
+        self.created.append(employee)
 
 
 class _Credentials:

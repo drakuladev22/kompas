@@ -323,6 +323,8 @@ class InMemoryEmployees:
         #: `{employee_id: {"password_hash"/"pin_hash"/"pepper_version": ...}}`
         #: — heşlər entity-də DEYİL, ayrı saxlanılır (istehsalat modeli ilə eyni).
         self.credentials: dict[EmployeeId, dict[str, Any]] = {}
+        #: `create()`-ə ötürülən XAM sirrlər — `{id: (şifrə, PIN)}`.
+        self.created_secrets: dict[EmployeeId, tuple[str | None, str | None]] = {}
 
     def get(self, employee_id: EmployeeId) -> Employee | None:
         return self.items.get(employee_id)
@@ -342,6 +344,23 @@ class InMemoryEmployees:
 
     def save(self, employee: Employee) -> None:
         self.items[employee.id] = employee
+
+    def create(
+        self,
+        employee: Employee,
+        *,
+        raw_password: str | None = None,
+        raw_pin: str | None = None,
+    ) -> None:
+        """YENİ sətir — sirri ilə birlikdə (`EmployeeWriter`).
+
+        `save()`-dən AYRIDIR, çünki istehsalatda da ayrıdır: `save()` `UPDATE`
+        edir və olmayan sətri YARATMIR. Sahtənin hər ikisini eyni cür
+        işləməsi məhz həmin fərqi gizlədirdi — «Yeni İşçi» axını testdə
+        keçir, canlı bazada isə heç nə yazmırdı.
+        """
+        self.items[employee.id] = employee
+        self.created_secrets[employee.id] = (raw_password, raw_pin)
 
     def update_credentials(
         self,

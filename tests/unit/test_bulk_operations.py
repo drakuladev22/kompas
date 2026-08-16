@@ -139,6 +139,8 @@ class RecordingAudit:
 class FakeEmployees:
     def __init__(self, employees: list[Employee] | None = None) -> None:
         self.items: dict[EmployeeId, Employee] = {e.id: e for e in employees or []}
+        #: `create()`-ə ötürülən XAM sirrlər — `{id: (şifrə, PIN)}`.
+        self.created_secrets: dict[EmployeeId, tuple[str | None, str | None]] = {}
 
     def get(self, employee_id: EmployeeId) -> Employee | None:
         return self.items.get(employee_id)
@@ -155,6 +157,21 @@ class FakeEmployees:
 
     def save(self, employee: Employee) -> None:
         self.items[employee.id] = employee
+
+    def create(
+        self,
+        employee: Employee,
+        *,
+        raw_password: str | None = None,
+        raw_pin: str | None = None,
+    ) -> None:
+        """YENİ sətir — sirri ilə birlikdə (`EmployeeWriter`).
+
+        `save()`-dən AYRIDIR, çünki istehsalatda da ayrıdır: `save()` `UPDATE`
+        edir və olmayan sətri YARATMIR (bax `user_management.EmployeeWriter`).
+        """
+        self.items[employee.id] = employee
+        self.created_secrets[employee.id] = (raw_password, raw_pin)
 
     def count_active_with_flag(self, tenant_id: TenantId, flag_code: str) -> int:
         return sum(

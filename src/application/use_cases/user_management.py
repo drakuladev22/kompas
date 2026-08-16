@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from src.domain.entities.employee import Employee
+from src.domain.interfaces.ports import EmployeeRepository
 from src.domain.value_objects.authorization import AuthorizationError, SystemRole
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
@@ -61,7 +62,6 @@ if TYPE_CHECKING:
         AuditTrail,
         CameraAssignmentRepository,
         Clock,
-        EmployeeRepository,
         FaceEmbeddingRepository,
         Notifier,
         PermissionFlagRepository,
@@ -106,6 +106,36 @@ class CredentialWriter(Protocol):
     def clear_pin_lockout(self, employee_id: EmployeeId) -> None: ...
 
 
+class EmployeeWriter(EmployeeRepository, Protocol):
+    """`EmployeeRepository` + YENİ sətir yaratma.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `save()` YETMİR — VƏ NİYƏ BU, DOMEN PORTUNA ƏLAVƏ EDİLMİR
+    ──────────────────────────────────────────────────────────────────────────
+    `save()` `UPDATE`-dir: olmayan sətir üçün SIFIR sətir dəyişdirir və heç bir
+    xəta vermir. Yəni «Yeni İşçi» axını yaddaşdakı sahtələrdə işləyir, canlı
+    bazada isə heç nə yazmırdı — nasazlıq yalnız növbəti xarici açar
+    pozuntusunda (`audit_logs.actor_id`) üzə çıxırdı.
+
+    `save()`-i upsert etmək də mümkün deyil: `chk_employee_auth` hər sətrin ən
+    azı bir autentifikasiya vasitəsi (`pin_hash`, və ya `username` +
+    `password_hash`) İLƏ YARANMASINI tələb edir, `Employee` entity-si isə
+    hash saxlamır. Ona görə sətir və sirr BİR ifadədə yazılır — bu, `save()`-in
+    genişlənməsi deyil, ayrı əməliyyatdır.
+
+    Xam sirr port sərhədində qalır, heşləmə infrastrukturdadır — `CredentialWriter`
+    ilə eyni naxış (yuxarıya bax).
+    """
+
+    def create(
+        self,
+        employee: Employee,
+        *,
+        raw_password: str | None = None,
+        raw_pin: str | None = None,
+    ) -> None: ...
+
+
 @dataclass(frozen=True)
 class EmployeeDraft:
     """Yeni/redaktə olunan işçi forması — ekranın topladığı sahələr."""
@@ -129,7 +159,7 @@ class UserManagementUseCase:
     def __init__(
         self,
         *,
-        employees: EmployeeRepository,
+        employees: EmployeeWriter,
         credentials: CredentialWriter,
         audit: AuditTrail,
         clock: Clock,
@@ -210,14 +240,11 @@ class UserManagementUseCase:
             date_of_birth=draft.date_of_birth,
         )
         self._apply_camera_stores(employee, draft.camera_store_ids, actor=actor)
-        self._employees.save(employee)
-
-        if initial_password is not None:
-            self._credentials.set_password(
-                employee_id, raw_password=initial_password, must_change=True
-            )
-        if initial_pin is not None:
-            self._credentials.set_pin(employee_id, raw_pin=initial_pin)
+        # `save()` DEYİL: o, `UPDATE`-dir və olmayan sətri yaratmır — yeni işçi
+        # canlı bazada SÜKUTLA yaranmırdı (bax `EmployeeWriter` başlığı).
+        # `must_change_password` entity-dədir və `create()` onu yazır, yəni
+        # köhnə `set_password(must_change=True)` çağırışı ilə eyni nəticə verir.
+        self._employees.create(employee, raw_password=initial_password, raw_pin=initial_pin)
 
         self._audit.record(
             tenant_id=tenant_id,

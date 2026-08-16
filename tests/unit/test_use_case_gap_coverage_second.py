@@ -227,7 +227,15 @@ def test_creating_an_employee_with_a_password_forces_a_change_on_first_login() -
     assert created.must_change_password is True
     assert created.has_password is True
     assert created.has_pin is False
-    assert ctx.credentials.passwords == [(employee_id, "Muveqqeti-123", True)]
+    # SİRR SƏTİRLƏ BİRLİKDƏ YAZILIR: `create_employee` artıq `save()` +
+    # `set_password()` cütünü işlətmir, çünki `save()` `UPDATE`-dir və olmayan
+    # sətri yaratmır (canlı bazada işçi ÜMUMİYYƏTLƏ yaranmırdı). `chk_employee_
+    # auth` da sətrin ən azı bir autentifikasiya vasitəsi İLƏ doğulmasını tələb
+    # edir. Zəmanət dəyişmir — ölçmə nöqtəsi `CredentialWriter`-dən `create()`-ə
+    # keçir; «məcburi dəyişmə» bayrağı isə yuxarıdakı `must_change_password`
+    # yoxlamasındadır.
+    assert ctx.employees.created_secrets[employee_id] == ("Muveqqeti-123", None)
+    assert ctx.credentials.passwords == [], "yaradılış anında ayrıca yazı OLMAMALIDIR"
     assert ctx.employees.get(employee_id) is created
     entry = ctx.audit.entries[0]
     assert entry["action"] == "EMPLOYEE_CREATED"
@@ -256,8 +264,10 @@ def test_creating_a_pin_only_employee_writes_no_password() -> None:
 
     assert created.has_pin is True
     assert created.must_change_password is False
+    # PIN də sətirlə birlikdə yazılır (yuxarıdakı testin şərhinə bax).
+    assert ctx.employees.created_secrets[employee_id] == (None, "4821")
     assert ctx.credentials.passwords == []
-    assert ctx.credentials.pins == [(employee_id, "4821")]
+    assert ctx.credentials.pins == []
 
 
 def test_camera_stores_are_recorded_for_a_camera_operator() -> None:

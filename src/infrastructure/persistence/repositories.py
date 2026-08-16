@@ -311,6 +311,44 @@ class PostgresEmployeeRepository(_BaseRepository):
         self._sync_overrides(employee)
         self._sync_store_assignments(employee)
 
+    def create(
+        self,
+        employee: Employee,
+        *,
+        raw_password: str | None = None,
+        raw_pin: str | None = None,
+    ) -> None:
+        """Yeni işçi sətrini SİRRİ İLƏ BİRLİKDƏ yaradır.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `save()` BUNU EDƏ BİLMİR
+        ──────────────────────────────────────────────────────────────────────
+        `save()` `UPDATE`-dir və olmayan sətri yaratmır — yəni yeni işçi üçün
+        SIFIR sətir dəyişdirir və heç bir xəta vermir. İlk Quraşdırma Sihirbazı
+        məhz buna görə canlı bazada işləmirdi: Root sətri yaranmır, ardınca
+        `audit_logs.actor_id` xarici açarı «Key is not present in table
+        "employees"» ilə çökürdü. Nasazlıq yaddaşdakı sahtələrdə GÖRÜNMÜRDÜ,
+        çünki orada `save()` upsert kimi davranır.
+
+        `save()`-i upsert etmək DƏ mümkün deyil: `chk_employee_auth` hər sətrin
+        ən azı bir autentifikasiya vasitəsi ilə YARANMASINI tələb edir
+        (`pin_hash`, və ya `username` + `password_hash`), `Employee` entity-si
+        isə heşləri SAXLAMIR. Ona görə sətir və sirri BİR ifadədə yazılır.
+
+        Heşləmə burada olur (`set_password` ilə eyni səbəb): use case xam
+        şifrəni alır, heşi görmür.
+        """
+        hashing = self._hashing()
+        credentials = Credentials(
+            employee_id=employee.id,
+            password_hash=hashing.hash_password(raw_password) if raw_password else None,
+            pin_hash=(hashing.hash_pin(raw_pin, employee_id=str(employee.id)) if raw_pin else None),
+            pepper_version=hashing.current_pepper_version,
+        )
+        self.insert(employee, credentials)
+        self._sync_overrides(employee)
+        self._sync_store_assignments(employee)
+
     def insert(self, employee: Employee, credentials: Credentials) -> None:
         """Yeni işçi — sirrlərlə birlikdə (yalnız yaradılış anında)."""
         self._execute(
