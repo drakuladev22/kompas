@@ -85,7 +85,7 @@ yerdədir — domendə `PermissionFlag.assert_grantable_to()`
 (`ANTI_FRAUD_FORBIDDEN_ROLES`), bazada isə `enforce_anti_fraud_segregation()`
 (`schema.sql` §18) — və hər ikisi HƏM rol-defoltunu, HƏM fərdi override-ı
 bloklayır. Trigger-in ÖZÜ dəyişmir: o, `permission_flags` sətrini oxuyaraq
-işləyir, yeni sətir kifayətdir (miqrasiya 060, `038` ilə eyni naxış).
+işləyir, yeni sətir kifayətdir (miqrasiya 056, `038` ilə eyni naxış).
 
 Hardlock səviyyəsi `NONE` (0) SEÇİLDİ, daha yüksəyi YOX: bölmə 5 həlli AÇIQ
 şəkildə `HR_Admin`-ə verir, `HR_Admin` isə `OPERATIONAL` (3) pilləsindədir və
@@ -122,7 +122,7 @@ _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
 
 #: Konflikt həlli qapısı — YAZI hüququdur (bax modul başlığı, SEC-018).
 #:
-#: Kataloq sətri `migrations/060`-dadır: `is_anti_fraud = TRUE`,
+#: Kataloq sətri `migrations/056`-dadır: `is_anti_fraud = TRUE`,
 #: `excludes_camera_role = TRUE`, `hardlock_level = 0`.
 RESOLVE_CONFLICT_FLAG = "can_resolve_sync_conflicts"
 

@@ -47,7 +47,7 @@ SET search_path TO kompasos, public;
 -- ---------------------------------------------------------------------------
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'redemption_status') THEN
+    IF to_regtype('redemption_status') IS NULL THEN
         CREATE TYPE redemption_status AS ENUM (
             'REQUESTED', 'APPROVED', 'REJECTED', 'FULFILLED'
         );

@@ -802,8 +802,18 @@ class ShiftSwapUseCase:
         return self._swaps.list_pending(tenant_id, store_id=store_id)
 
     def my_requests(self, employee: Employee) -> list[ShiftSwapRequest]:
-        """İşçinin öz sorğu tarixçəsi — səlahiyyət tələb olunmur."""
-        return self._swaps.list_for_employee(employee.id)
+        """İşçinin öz sorğu tarixçəsi — səlahiyyət tələb olunmur.
+
+        SƏHİFƏ ÖLÇÜSÜ ROOT-DANDIR: əvvəl repozitoriya metodunun defolt
+        arqumenti (`limit: int = 50`) qüvvədə idi və bura ötürülmürdü — yəni
+        50-dən çox sorğusu olan işçi tarixçəsinin qalanını heç bir yolla görə
+        bilmirdi və bunun bir limitdən qaynaqlandığını da bilmirdi (DB-2
+        hardcode auditi). Dəyər dəyişmir (50), sadəcə görünən yerə keçir.
+        """
+        page_size = limit_int(
+            self._limits, employee.tenant_id, SystemLimitKey.SHIFT_SWAP_HISTORY_PAGE_SIZE
+        )
+        return self._swaps.list_for_employee(employee.id, limit=page_size)
 
     # ---------------------------- menecer qeydi ------------------------------ #
 

@@ -51,11 +51,41 @@ SET search_path TO kompasos, public;
 -- ---------------------------------------------------------------------------
 -- 1. Kataloq: `app_releases` → `app_versions` (və ya sıfırdan yaratma)
 -- ---------------------------------------------------------------------------
+-- SXEM ADI SABİT YAZILMIR: `to_regclass('app_versions')` axtarış yoluna görə
+-- həll olunur. `'kompasos.app_versions'` yazılsaydı, sxem adı fərqli olan
+-- quraşdırma (test sxemi, çox-sxemli instansiya) HƏMİŞƏ `NULL` alar və
+-- miqrasiya cədvəli təkrar yaratmağa çalışardı.
 DO $$
+DECLARE
+    v_stray_rows BIGINT;
 BEGIN
-    IF to_regclass('kompasos.app_versions') IS NOT NULL THEN
+    IF to_regclass('app_versions') IS NOT NULL THEN
+        -- ------------------------------------------------------------------
+        -- TƏKRAR İCRADAN QALAN ARTIQ CƏDVƏL
+        -- ------------------------------------------------------------------
+        -- 008 `app_releases`-i `IF NOT EXISTS` ilə yaradır. Bütün dəst İKİNCİ
+        -- dəfə tətbiq olunanda `app_versions` artıq mövcud olur, yəni aşağıdakı
+        -- addəyişmə ATLANIR — nəticədə 008-in yenidən yaratdığı BOŞ
+        -- `app_releases` sxemdə qalır və iki eyni məzmunlu kataloq görünür.
+        -- DB-1 FAZA 4-ün idempotentlik təkrarı bunu aşkarladı (87 → 88 cədvəl).
+        --
+        -- BOŞ olduğu halda silinir: bu, məlumat itkisi deyil, 009-un ÖZÜNÜN
+        -- etməli olduğu addəyişmənin tamamlanmasıdır. Sətir varsa TOXUNULMUR —
+        -- kimsə ora yazıbsa, qərar insanındır.
+        IF to_regclass('app_releases') IS NOT NULL THEN
+            EXECUTE 'SELECT count(*) FROM app_releases' INTO v_stray_rows;
+            IF v_stray_rows = 0 THEN
+                DROP TABLE app_releases;
+                RAISE NOTICE 'Təkrar icradan qalan boş `app_releases` silindi.';
+            ELSE
+                RAISE WARNING
+                    '`app_releases` cədvəlində % sətir var və `app_versions` da '
+                    'mövcuddur — hansının doğru olduğuna ƏL İLƏ qərar verin.',
+                    v_stray_rows;
+            END IF;
+        END IF;
         RAISE NOTICE '`app_versions` artıq mövcuddur — köçürmə atlandı.';
-    ELSIF to_regclass('kompasos.app_releases') IS NOT NULL THEN
+    ELSIF to_regclass('app_releases') IS NOT NULL THEN
         ALTER TABLE app_releases RENAME TO app_versions;
         RAISE NOTICE '`app_releases` → `app_versions` adı dəyişdirildi.';
     ELSE

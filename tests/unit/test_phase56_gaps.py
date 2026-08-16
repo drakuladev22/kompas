@@ -471,7 +471,7 @@ def _resolve_conflicts_flag() -> PermissionFlag:
     """Konflikt həlli qapısı (SEC-018) — kataloqdakı HƏQİQİ atributlarla.
 
     `is_anti_fraud` sükutla `False` qalsaydı, test flag-in zəiflədilmiş
-    nüsxəsini yoxlayardı (bax `migrations/060`).
+    nüsxəsini yoxlayardı (bax `migrations/056`).
     """
     return PermissionFlag(
         code=RESOLVE_CONFLICT_FLAG,

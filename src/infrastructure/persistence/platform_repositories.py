@@ -62,7 +62,7 @@ class PostgresPluginRegistry(_BaseRepository):
     # plugin_surface.py`) hər iki qərarı ona görə verir. Ayrıca sorğu ilə
     # oxumaq siyahıdakı hər plugin üçün bir gediş-gəliş demək olardı.
     #
-    # `package_path` (migrations/059) DA OXUNUR: sandbox alt-prosesi məhz həmin
+    # `package_path` (migrations/055) DA OXUNUR: sandbox alt-prosesi məhz həmin
     # faylı icra edir və o, manifestdə YOXDUR (manifest imzanın girişidir —
     # host-un hesabladığı sahə ora düşsəydi imza yoxlaması sınardı).
     _SELECT = """
@@ -108,7 +108,7 @@ class PostgresPluginRegistry(_BaseRepository):
         istifadəçini paketi əl ilə silməyə məcbur edərdi. Status isə yenidən
         `PENDING_APPROVAL`-a qayıdır — yeni bayt axını yeni təsdiq deməkdir.
 
-        `package_path` (migrations/059) YENİLƏNİR, saxlanmır: eyni ad+versiya
+        `package_path` (migrations/055) YENİLƏNİR, saxlanmır: eyni ad+versiya
         BAŞQA qovluqdan yenidən quraşdırıla bilər və köhnə yolu saxlamaq
         host-u artıq mövcud olmayan fayla göndərərdi.
         """
@@ -263,7 +263,7 @@ class PostgresBackupCatalog(_BaseRepository):
     açsaydıq, "qeydi var, faylı yox" bərpa nöqtəsi yarana bilərdi.
     """
 
-    def list_available(self, tenant_id: TenantId, *, limit: int = 60) -> list[BackupRecord]:
+    def list_available(self, tenant_id: TenantId, *, limit: int) -> list[BackupRecord]:
         """Ən yenidən köhnəyə — ekran ilk sətri "Bu gün" kimi göstərir.
 
         Müddəti keçmiş sətirlər DƏ qaytarılır: `RestorePoint.is_expired`

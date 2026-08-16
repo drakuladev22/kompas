@@ -14,7 +14,7 @@ hadisə dövrəsində icra edilsəydi interfeys həmin müddət boyu donardı.
 
     1. `src/presentation/background_task.py` — fon-işçi naxışı (sandbox
        çağırışı Qt sap hovuzunda, nəticə siqnalla əsas sapa);
-    2. `plugins.package_path` (migrations/059) — sandbox-un tələb etdiyi
+    2. `plugins.package_path` (migrations/055) — sandbox-un tələb etdiyi
        paket yolu artıq quraşdırma anında yazılır.
 
 ──────────────────────────────────────────────────────────────────────────────

@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 
+from src.application.root_limits import limit_int
 from src.application.use_cases.leave_verification import (
     ModuleDisabledError,
     OperationNotPermittedError,
@@ -306,12 +307,17 @@ class FineAppealUseCase:
         audit: AuditTrail,
         clock: Clock,
         notifier: Notifier,
+        limits: SystemLimits | None = None,
     ) -> None:
         self._appeals = appeals
         self._fines = fines
         self._audit = audit
         self._clock = clock
         self._notifier = notifier
+        # `limits` İSTƏYƏ BAĞLIDIR — `DEFAULT_LIMITS` fallback-ı `limit_int()`
+        # içindədir (bax `root_limits.py`). Bağlantısız yollar (testlər,
+        # önizləmə) köçürmədən ƏVVƏLKİ davranışı hərfən saxlayır.
+        self._limits = limits
 
     # ------------------------------ göndərmə --------------------------------- #
 
@@ -433,8 +439,17 @@ class FineAppealUseCase:
         return len(self._appeals.list_undecided(tenant_id))
 
     def my_appeals(self, employee: Employee) -> list[FineAppeal]:
-        """İşçinin öz etiraz tarixçəsi — səlahiyyət tələb olunmur."""
-        return list(self._appeals.list_for_employee(employee.id))
+        """İşçinin öz etiraz tarixçəsi — səlahiyyət tələb olunmur.
+
+        SƏHİFƏ ÖLÇÜSÜ ROOT-DANDIR: əvvəl repozitoriya metodunun defolt
+        arqumenti (`limit: int = 50`) qüvvədə idi və bura ötürülmürdü — yəni
+        hədd VARDI, lakin nə ekranda görünürdü, nə də dəyişdirilə bilirdi
+        (DB-2 hardcode auditi). Dəyər dəyişmir (50), yalnız mənbəyi dəyişir.
+        """
+        page_size = limit_int(
+            self._limits, employee.tenant_id, SystemLimitKey.FINE_APPEAL_HISTORY_PAGE_SIZE
+        )
+        return list(self._appeals.list_for_employee(employee.id, limit=page_size))
 
     # -------------------------------- qərar ---------------------------------- #
 

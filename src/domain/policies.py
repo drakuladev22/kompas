@@ -519,6 +519,16 @@ class SystemLimitKey(str, Enum):
     ANNOUNCEMENT_LIST_PAGE_SIZE = "ANNOUNCEMENT_LIST_PAGE_SIZE"
     SUPPORT_THREAD_PAGE_SIZE = "SUPPORT_THREAD_PAGE_SIZE"
     SYNC_CONFLICT_PAGE_SIZE = "SYNC_CONFLICT_PAGE_SIZE"
+    # DB-2 hardcode auditinin tapdığı İKİ sabit (`workflow_repositories.py`).
+    #
+    # Onlar digər səhifə ölçülərindən FƏRQLİ formada gizlənmişdi: dəyər
+    # repozitoriya metodunun DEFOLT ARQUMENTİ idi (`limit: int = 50`) və
+    # çağıran tərəf onu ötürmürdü. Yəni ekranda "səhifə ölçüsü" adlı bir
+    # parametr görünmürdü, faktiki hədd isə vardı — işçi 50-dən çox sorğusu
+    # olduqda tarixçəsinin qalanını HEÇ BİR yolla görə bilmirdi və bunun
+    # limitdən qaynaqlandığını da bilmirdi.
+    SHIFT_SWAP_HISTORY_PAGE_SIZE = "SHIFT_SWAP_HISTORY_PAGE_SIZE"
+    FINE_APPEAL_HISTORY_PAGE_SIZE = "FINE_APPEAL_HISTORY_PAGE_SIZE"
     # İlk quraşdırma sihirbazının "ən azı bu qədər admin olsun" TÖVSİYƏSİ.
     # BLOKLAMIR — yalnız xəbərdarlıq göstərir (bax `first_run_setup`), ona görə
     # struktur zəmanət deyil və yeri `system_limits`-dədir.
@@ -845,7 +855,7 @@ class SystemLimitKey(str, Enum):
     # diaqnostikasıdır: aşılma System Health Monitor-a xəbərdarlıq yazır və
     # HEÇ VAXT keyfiyyət parametrlərini avtomatik zəiflətmir.
     FACE_VERIFICATION_MAX_SECONDS = "FACE_VERIFICATION_MAX_SECONDS"
-    # --- G-5/G-6 audit boşluqları (seed: migrations/058) --------------------- #
+    # --- G-5/G-6 audit boşluqları (seed: migrations/054) --------------------- #
     #
     # HƏR İKİSİ GÖRÜNÜŞ PARAMETRİDİR, struktur zəmanət DEYİL (CLAUDE.md §5):
     # nə anti-fraud vəzifə ayrılığına, nə hardlock iyerarxiyasına, nə də
@@ -1171,6 +1181,10 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.ANNOUNCEMENT_LIST_PAGE_SIZE: "50",
     SystemLimitKey.SUPPORT_THREAD_PAGE_SIZE: "20",
     SystemLimitKey.SYNC_CONFLICT_PAGE_SIZE: "100",
+    # Defolt dəyər KÖÇÜRMƏDƏN ƏVVƏLKİ sabitlə eynidir (50): köçürmə davranışı
+    # dəyişdirmir, yalnız dəyəri Root-un əli çatan yerə gətirir.
+    SystemLimitKey.SHIFT_SWAP_HISTORY_PAGE_SIZE: "50",
+    SystemLimitKey.FINE_APPEAL_HISTORY_PAGE_SIZE: "50",
     # `first_run_setup.py`: bölmə 2 tövsiyəsi — ən azı iki admin.
     SystemLimitKey.SETUP_RECOMMENDED_ADMIN_COUNT: "2",
     # `controllers/screen_data.py`: növbə matrisi 14 günlük pəncərə göstərir.

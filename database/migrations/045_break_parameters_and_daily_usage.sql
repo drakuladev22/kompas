@@ -102,7 +102,9 @@ ALTER TABLE leave_types
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'leave_types_break_kind_check'
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'leave_types_break_kind_check'
+           AND connamespace = current_schema()::regnamespace
     ) THEN
         ALTER TABLE leave_types
             ADD CONSTRAINT leave_types_break_kind_check

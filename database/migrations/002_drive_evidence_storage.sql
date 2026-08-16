@@ -29,7 +29,7 @@ SET search_path TO kompasos, public;
 -- ---------------------------------------------------------------------------
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'drive_connection_status') THEN
+    IF to_regtype('drive_connection_status') IS NULL THEN
         CREATE TYPE drive_connection_status AS ENUM (
             'ACTIVE',          -- yeni yükləmələr bura gedir (tenant başına TƏK)
             'ARCHIVED',        -- köhnə hesab: yeni yazı yox, OXUMA davam edir

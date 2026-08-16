@@ -207,7 +207,9 @@ BEGIN
         ALTER TABLE license_tenants RENAME COLUMN contact_phone TO company_contact_phone;
     END IF;
 
-    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_tenant_email') THEN
+    IF EXISTS (SELECT 1 FROM pg_constraint
+         WHERE conname = 'chk_tenant_email'
+           AND connamespace = current_schema()::regnamespace) THEN
         ALTER TABLE license_tenants RENAME CONSTRAINT chk_tenant_email
             TO chk_tenant_company_contact_email;
     END IF;

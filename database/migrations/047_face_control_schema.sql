@@ -190,7 +190,9 @@ ALTER TABLE employees
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'chk_employee_face_mismatch_attempts'
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'chk_employee_face_mismatch_attempts'
+           AND connamespace = current_schema()::regnamespace
     ) THEN
         ALTER TABLE employees
             ADD CONSTRAINT chk_employee_face_mismatch_attempts
@@ -208,7 +210,9 @@ $$;
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'chk_employee_face_enrollment_pair'
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'chk_employee_face_enrollment_pair'
+           AND connamespace = current_schema()::regnamespace
     ) THEN
         ALTER TABLE employees
             ADD CONSTRAINT chk_employee_face_enrollment_pair

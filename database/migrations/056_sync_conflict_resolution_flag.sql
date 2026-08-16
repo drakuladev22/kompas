@@ -120,8 +120,29 @@ BEGIN;
 -- ---------------------------------------------------------------------------
 -- `ON CONFLICT (code) DO NOTHING`: təkrar icrada Root-un redaktə etdiyi
 -- `name_az`/`description_az` üzərindən YAZILMIR (017/018/021/038 ilə eyni).
+-- ---------------------------------------------------------------------------
+-- `excludes_camera_role` SÜTUN SİYAHISINDADIR — VƏ BU, DÜZƏLİŞDİR
+-- ---------------------------------------------------------------------------
+-- ƏVVƏL sütun INSERT-də YOX idi, dəyər isə ardınca gələn `UPDATE ... SET
+-- excludes_camera_role = TRUE` ilə verilirdi (§23-dəki `can_publish_fines`
+-- naxışı). Həmin naxış `schema.sql`-də İŞLƏYİR, çünki orada seed miqrasiya
+-- 013-dən ƏVVƏL icra olunur. BURADA isə 013-ün `trg_flag_attributes_immutable`
+-- trigger-i ARTIQ mövcuddur və o, `excludes_camera_role`-un dəyişməsini
+-- QADAĞAN edir (bölmə 3: atributlar konfiqurasiya deyil, struktur zəmanətdir).
+--
+-- Nəticə: miqrasiya HƏR TƏMİZ QURAŞDIRMADA eyni yerdə çökürdü —
+--     «DƏYİŞMƏZ ATRİBUT: "can_resolve_sync_conflicts" ...»
+-- və fayl `BEGIN/COMMIT` içində olduğu üçün BÜTÜN 056 geri qayıdırdı. DB-1
+-- FAZA 4 (sıfırdan tətbiq testi) bunu aşkarladı; canlı bazada da flag YOX idi,
+-- yəni miqrasiya HEÇ VAXT uğurla tətbiq olunmamışdı.
+--
+-- Düzəliş: dəyər sətrin YARANDIĞI anda verilir — trigger yalnız `UPDATE`-ə
+-- baxır, `INSERT`-ə yox. `ON CONFLICT (code) DO NOTHING`: təkrar icrada
+-- Root-un redaktə etdiyi `name_az`/`description_az` üzərindən YAZILMIR
+-- (017/018/021/038 ilə eyni).
 INSERT INTO permission_flags
-    (code, category, name_az, description_az, hardlock_level, is_anti_fraud, is_camera_only)
+    (code, category, name_az, description_az, hardlock_level,
+     is_anti_fraud, is_camera_only, excludes_camera_role)
 VALUES
     ('can_resolve_sync_conflicts', 'ERP_INFRA',
         'Sinxronizasiya konfliktini həll et',
@@ -130,16 +151,32 @@ VALUES
         'davamiyyət) FAKTİKİ olaraq yerli versiya ilə əvəz edir — ona görə '
         'bu, BAXIŞ deyil, YAZI səlahiyyətidir. Anti-fraud: Mağaza Meneceri '
         'və Satıcı bu flag-i nə rol, nə də fərdi override ilə ala bilməz.',
-        0, TRUE, FALSE)
+        0, TRUE, FALSE, TRUE)
 ON CONFLICT (code) DO NOTHING;
 
--- `excludes_camera_role` sütunu yuxarıdakı INSERT-in sütun siyahısında YOXDUR
--- (schema.sql §22 seed-i də onu sadalamır) — §23-dəki `can_publish_fines`
--- naxışı ilə ayrıca `UPDATE` edilir. Bu, həm ilk icrada, həm də flag artıq
--- mövcud olduqda (DO NOTHING yolu) dəyəri təmin edir.
-UPDATE permission_flags
-   SET excludes_camera_role = TRUE
- WHERE code = 'can_resolve_sync_conflicts';
+-- Sətir ƏVVƏLDƏN mövcud olub və atributları səhvdirsə, onu `UPDATE` ilə
+-- düzəltmək MÜMKÜN DEYİL (elə həmin trigger). Sükutla davam etmək isə flag-i
+-- "anti-fraud" sanılan, əslində isə kamera roluna açıq vəziyyətdə qoyardı —
+-- ona görə açıq şəkildə dayanırıq və nə edilməli olduğunu yazırıq.
+DO $$
+DECLARE
+    v_wrong BOOLEAN;
+BEGIN
+    SELECT NOT (is_anti_fraud AND excludes_camera_role AND hardlock_level = 0)
+      INTO v_wrong
+      FROM permission_flags
+     WHERE code = 'can_resolve_sync_conflicts';
+
+    IF v_wrong THEN
+        RAISE EXCEPTION
+            'MİQRASİYA DAYANDI: "can_resolve_sync_conflicts" flag-i mövcuddur, '
+            'lakin təhlükəsizlik atributları gözlənilənlə uyğun deyil '
+            '(is_anti_fraud=TRUE, excludes_camera_role=TRUE, hardlock_level=0). '
+            'Atributlar trigger ilə qıfıllıdır — sətri yalnız Root nəzarətində, '
+            'əl ilə düzəltmək olar.';
+    END IF;
+END
+$$;
 
 -- ---------------------------------------------------------------------------
 -- 2. DEFOLT SAHİBLİK — ROOT, CEO, ADMIN, HR_ADMIN

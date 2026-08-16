@@ -928,9 +928,17 @@ class FineAppealRepository(Protocol):
         """
         ...
 
-    def list_for_employee(
-        self, employee_id: EmployeeId, *, limit: int = 50
-    ) -> list[FineAppeal]: ...
+    def list_for_employee(self, employee_id: EmployeeId, *, limit: int) -> list[FineAppeal]:
+        """İşçinin etiraz tarixçəsi — `limit` MƏCBURİ arqumentdir.
+
+        DEFOLT DƏYƏR QƏSDƏN YOXDUR. Əvvəl `limit: int = 50` yazılmışdı və
+        çağıran onu ötürmürdü: hədd faktiki qüvvədə idi, lakin nə Root
+        panelində görünürdü, nə də dəyişdirilə bilirdi. İndi mənbə
+        `SystemLimitKey.FINE_APPEAL_HISTORY_PAGE_SIZE`-dir və defoltun
+        olmaması növbəti çağıranın onu unutmasının qarşısını alır — tip
+        yoxlayıcısı dayandırır, sükutla keçmir.
+        """
+        ...
 
     def save(self, appeal: FineAppeal) -> None: ...
 
@@ -945,9 +953,12 @@ class ShiftSwapRepository(Protocol):
         self, tenant_id: TenantId, *, store_id: StoreId | None = None
     ) -> list[ShiftSwapRequest]: ...
 
-    def list_for_employee(
-        self, employee_id: EmployeeId, *, limit: int = 50
-    ) -> list[ShiftSwapRequest]: ...
+    def list_for_employee(self, employee_id: EmployeeId, *, limit: int) -> list[ShiftSwapRequest]:
+        """İşçinin sorğu tarixçəsi — `limit` MƏCBURİ (bax `FineAppealRepository`).
+
+        Mənbə: `SystemLimitKey.SHIFT_SWAP_HISTORY_PAGE_SIZE`.
+        """
+        ...
 
     def find_open_for_date(
         self, employee_id: EmployeeId, target_date: date

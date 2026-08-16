@@ -595,7 +595,7 @@ def test_a_backup_without_a_size_reads_as_zero_not_none() -> None:
     plan = [("FROM backup_records", [_backup_row(size_bytes=None)])]
     repo, _ = _build(PostgresBackupCatalog, plan)
 
-    records = repo.list_available(TENANT)
+    records = repo.list_available(TENANT, limit=60)
 
     assert records[0].size_bytes == 0
 
@@ -618,7 +618,7 @@ def test_expired_backups_are_still_listed() -> None:
 def test_an_empty_catalog_returns_an_empty_list() -> None:
     repo, _ = _build(PostgresBackupCatalog, [("FROM backup_records", [])])
 
-    assert repo.list_available(TENANT) == []
+    assert repo.list_available(TENANT, limit=60) == []
 
 
 def test_the_store_scope_of_a_repository_comes_from_the_tenant_context() -> None:
@@ -767,7 +767,7 @@ def test_missing_appeals_read_as_none_and_empty_lists() -> None:
     assert repo.get(uuid.uuid4()) is None
     assert repo.get_for_fine(uuid.uuid4()) is None
     assert repo.list_pending(TENANT) == []
-    assert repo.list_for_employee(ACTOR) == []
+    assert repo.list_for_employee(ACTOR, limit=50) == []
 
 
 def test_saving_an_appeal_sends_a_plain_decimal_not_a_money_object() -> None:

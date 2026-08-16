@@ -122,7 +122,7 @@ $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION seed_ui_surface_limits_for_new_tenant() IS
     'Yeni kirayəçiyə növbə süzgəci və panel şəbəkəsi parametrlərini əlavə edir '
-    '(migrations/058). `seed_tenant_defaults()` toxunulmadan qalır.';
+    '(migrations/054). `seed_tenant_defaults()` toxunulmadan qalır.';
 
 DROP TRIGGER IF EXISTS trg_seed_ui_surface_limits ON license_tenants;
 CREATE TRIGGER trg_seed_ui_surface_limits

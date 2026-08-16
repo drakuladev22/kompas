@@ -86,7 +86,7 @@ DUAL_CONTROL_THRESHOLD_MINUTES: Final = 30
 #: Mağaza süzgəci bu SAYDAN ÇOX təyinatı olan operatorda görünür (audit G-6).
 #:
 #: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits.CAMERA_QUEUE_STORE_FILTER_
-#: THRESHOLD` (seed: migrations/058) və dəyər konstruktora ötürülür
+#: THRESHOLD` (seed: migrations/054) və dəyər konstruktora ötürülür
 #: (`app.py::_register_screens`). `DUAL_CONTROL_THRESHOLD_MINUTES` ilə eyni
 #: naxış: ekran ROOT-u ÖZÜ oxumur, ona verilən ədədi işlədir.
 QUEUE_STORE_FILTER_THRESHOLD: Final = 3

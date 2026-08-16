@@ -214,6 +214,27 @@ Sinifdəki sabit YALNIZ **fallback** ola bilər (məs. `MIN_APPEAL_SLA_HOURS`,
 `MAX_UPLOAD_BYTES`, `DUAL_CONTROL_THRESHOLD_MINUTES`) və şərhində bunun
 fallback olduğu, həqiqi mənbənin isə `system_limits` olduğu YAZILMALIDIR.
 
+### ÜÇÜNCÜ hal: «Root parametri DEYİL» — qəbul edilmiş qərar
+
+Bəzi sabitlər nə fallback, nə də struktur zəmanətdir: onlar TƏRİFİN özüdür və
+Root-a verilsəydi mənasını itirərdi. DB-2 hardcode auditi onları bir-bir
+nəzərdən keçirdi; siyahı BAĞLIDIR — yeni sabit bura yalnız eyni müzakirədən
+sonra əlavə olunur:
+
+| Sabit | Yer | Niyə Root parametri deyil |
+|---|---|---|
+| `_IDENTIFY_MARGIN = 0.08` | `face_control.py` | Anti-spoofing ayırma payı — Root onu sıfıra endirsəydi 1:N girişi «ən yaxın üz»ə çevrilərdi |
+| `MISMATCH_LOOKBACK_DAYS = 7` | `face_control.py` | Sorğu pəncərəsi, siyasət deyil (lockout həddi ayrıca Root açarıdır) |
+| `LOW_CONFIDENCE_LOOKBACK_DAYS = 1` | `controllers/screen_data.py` | Ekranın «bu gün» tərifi |
+| `_WEEKLY_DEDUPE_GAP_DAYS = 6` | `executive_digest.py` | «Həftəlik» sözünün tərifi |
+| `_WINDOW_MARGIN_DAYS = 1` | `labor_compliance.py` | Sərhəd gününün ehtiyatı; əsas hədd `LABOR_MAX_CONSECUTIVE_WORK_DAYS`-dədir |
+| `PANEL_LIMIT = 50` | `notification_repositories.py` | 620px panel hündürlüyünün nəticəsi, biznes həddi deyil |
+| `_DAYS_PER_MONTH = 30` | `attrition_repository.py` | Domendəki eyni təxminin güzgüsü — ikisi birlikdə dəyişməlidir |
+| `RESET_MONTHS = (1, 7)` | `gamification.py` | Mühasibatlıq yarımillikləri — təqvim faktı |
+
+Bu sabitlər üçün şərh şablonu FƏRQLİDİR: «fallback» yazılmır, **niyə Root
+parametri olmadığı** yazılır.
+
 **Feature Toggle retroaktiv təsir etmir.** Söndürmə yalnız YENİ instansiyanı
 bloklayır; mövcud qeydlər axınını tamamlayır, silinmir və export-dan çıxmır.
 Ona görə yoxlama YARADAN metoddadır (`assign`, `request_reward`,
@@ -296,9 +317,28 @@ bağlamasında yaşayır və ekranla birlikdə ölür.
 
 * `database/schema.sql` — bazis sxem (tək başına tam quraşdırma).
 * `database/migrations/NNN_*.sql` — üstünə qatlanan dəyişikliklər. **Schema.sql
-  miqrasiya sütunlarını EHTİVA ETMİR** — hər ikisi ardıcıl tətbiq olunur.
+  miqrasiya SÜTUNLARINI ehtiva etmir** — hər ikisi ardıcıl tətbiq olunur.
 * Hər miqrasiya idempotentdir və sonunda şərhlə DOWN blokunu saxlayır.
 * Yeni sütun əlavə edərkən: miqrasiya faylı + `COMMENT ON COLUMN` + niyə-izahı.
+
+### SÜTUN yox, QAYDA dəyişirsə — hər iki yer yenilənir
+
+Sütun qatlanır, **qayda qatlanmır**. Miqrasiya `schema.sql`-də ARTIQ mövcud olan
+bir trigger funksiyasını, indeksi və ya constraint-i yenidən yazırsa, bazis
+sxemdəki nüsxə DƏ yenilənməlidir.
+
+Səbəb DB-1 auditinin tapdığı faktdır: `enforce_anti_fraud_segregation()` 013-də
+prioritet qaydası ilə gücləndirilmiş, 048-də həddi yenilənmiş, `schema.sql`-dəki
+nüsxə isə heç vaxt yenilənməmişdi. Nəticədə qapı quraşdırma YOLUNDAN asılı
+olurdu — tam zəncir tətbiq olunmuş baza güclü, `schema.sql` ilə təmiz
+quraşdırma isə ZƏİF qapı alırdı və "satıcı-pilləli" custom rol anti-fraud
+flag-ini DB səviyyəsində qəbul edərdi. Bu, §5-in «hər qayda İKİ yerdə»
+prinsipinin sükutla pozulmasıdır.
+
+`tests/unit/test_schema_migration_parity.py` hər iki tərifi maşınla müqayisə
+edir. Fərq QƏSDLİdirsə (məs. miqrasiyanın ÖZÜ əlavə etdiyi sütunla qurulan
+indeks) `INTENTIONAL_DIVERGENCE`-ə **səbəbi ilə** yazılır — fərq görünməz
+qalmır, qərara çevrilir.
 
 ---
 

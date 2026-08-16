@@ -78,7 +78,7 @@ class PostgresSyncConflictRepository(_BaseRepository):
         FROM sync_conflicts
     """
 
-    def list_open(self, tenant_id: TenantId, *, limit: int = 100) -> list[ConflictItem]:
+    def list_open(self, tenant_id: TenantId, *, limit: int) -> list[ConflictItem]:
         rows = self._fetch_all(
             f"""{self._SELECT}
             WHERE tenant_id = %s AND resolved_at IS NULL

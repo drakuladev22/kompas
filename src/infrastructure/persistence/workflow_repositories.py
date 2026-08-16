@@ -93,9 +93,7 @@ class PostgresShiftSwapRepository(_BaseRepository):
         )
         return [_row_to_swap(row) for row in rows]
 
-    def list_for_employee(
-        self, employee_id: EmployeeId, *, limit: int = 50
-    ) -> list[ShiftSwapRequest]:
+    def list_for_employee(self, employee_id: EmployeeId, *, limit: int) -> list[ShiftSwapRequest]:
         rows = self._fetch_all(
             f"""{self._SELECT}
             WHERE s.employee_id = %s AND s.tenant_id = %s
@@ -407,7 +405,7 @@ class PostgresFineAppealRepository(_BaseRepository):
         )
         return [_row_to_appeal(row) for row in rows]
 
-    def list_for_employee(self, employee_id: EmployeeId, *, limit: int = 50) -> list[FineAppeal]:
+    def list_for_employee(self, employee_id: EmployeeId, *, limit: int) -> list[FineAppeal]:
         rows = self._fetch_all(
             f"""{self._SELECT}
             WHERE employee_id = %s AND tenant_id = %s

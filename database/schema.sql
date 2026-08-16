@@ -47,17 +47,17 @@ SET search_path TO kompasos, public;
 DO $$
 BEGIN
     -- Offline-first sinxronizasiya (bölmə 5)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'sync_status') THEN
+    IF to_regtype('sync_status') IS NULL THEN
         CREATE TYPE sync_status AS ENUM ('PENDING', 'SYNCED', 'CONFLICT');
     END IF;
 
     -- Lisenziya / ödəniş statusu (bölmə 8)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'license_status') THEN
+    IF to_regtype('license_status') IS NULL THEN
         CREATE TYPE license_status AS ENUM ('AKTIV', 'ODENIS_GOZLENILIR', 'DEAKTIV');
     END IF;
 
     -- Morning Check-in statusu: ⚪ / 🟡 / 🟢 / rədd (bölmə 4)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'check_in_status') THEN
+    IF to_regtype('check_in_status') IS NULL THEN
         CREATE TYPE check_in_status AS ENUM (
             'NOT_STARTED',           -- ⚪ Günə Başlamayıb
             'PENDING_VERIFICATION',  -- 🟡 Giriş Təsdiqi Gözləyir
@@ -67,7 +67,7 @@ BEGIN
     END IF;
 
     -- 3-Step Leave Verification statusu (bölmə 4)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'leave_status') THEN
+    IF to_regtype('leave_status') IS NULL THEN
         CREATE TYPE leave_status AS ENUM (
             'OUTSIDE',                    -- 🔵 Xaricdə (STEP 1 tamamlandı)
             'PENDING_RETURN_VERIFICATION',-- 🟡 Gözləyir (STEP 2 tamamlandı)
@@ -78,34 +78,34 @@ BEGIN
     END IF;
 
     -- Cərimə mənbəyi (bölmə 4 — MANUAL CƏRİMƏ QEYDİYYATI)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'fine_source') THEN
+    IF to_regtype('fine_source') IS NULL THEN
         CREATE TYPE fine_source AS ENUM ('AUTO_DELAY', 'MANUAL_CAMERA');
     END IF;
 
     -- Cərimə statusu — orijinal qeyd HEÇ VAXT silinmir (bölmə 4)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'fine_status') THEN
+    IF to_regtype('fine_status') IS NULL THEN
         CREATE TYPE fine_status AS ENUM ('PENDING_REVIEW', 'PUBLISHED', 'REVERSED', 'REDUCED');
     END IF;
 
     -- Etiraz statusu (cərimə və xal etirazları üçün ortaq)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'appeal_status') THEN
+    IF to_regtype('appeal_status') IS NULL THEN
         CREATE TYPE appeal_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED', 'EXPIRED');
     END IF;
 
     -- Növbə dəyişmə sorğusu (bölmə 3)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'shift_swap_status') THEN
+    IF to_regtype('shift_swap_status') IS NULL THEN
         CREATE TYPE shift_swap_status AS ENUM ('PENDING_APPROVAL', 'APPROVED', 'REJECTED');
     END IF;
 
     -- Tapşırıq statusu (bölmə 6)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'task_status') THEN
+    IF to_regtype('task_status') IS NULL THEN
         CREATE TYPE task_status AS ENUM (
             'OPEN', 'EVIDENCE_SUBMITTED', 'APPROVED', 'REJECTED', 'OVERDUE', 'CANCELLED'
         );
     END IF;
 
     -- Manual override / dual-control (bölmə 3, 4)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'override_status') THEN
+    IF to_regtype('override_status') IS NULL THEN
         CREATE TYPE override_status AS ENUM (
             'AUTO_APPROVED',        -- 30 dəq.-dən az fərq
             'PENDING_DUAL_CONTROL', -- ikinci təsdiq gözlənilir
@@ -115,7 +115,7 @@ BEGIN
     END IF;
 
     -- Saga vəziyyəti (bölmə 1 — SAGA / COMPENSATING TRANSACTION QAYDASI)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'saga_status') THEN
+    IF to_regtype('saga_status') IS NULL THEN
         CREATE TYPE saga_status AS ENUM (
             'PENDING', 'RUNNING', 'COMPLETED', 'COMPENSATING',
             'COMPENSATED', 'PENDING_RECONCILIATION', 'FAILED'
@@ -123,39 +123,39 @@ BEGIN
     END IF;
 
     -- Fərdi icazə override effekti (Discord-style, bölmə 3)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'permission_effect') THEN
+    IF to_regtype('permission_effect') IS NULL THEN
         CREATE TYPE permission_effect AS ENUM ('GRANT', 'DENY');
     END IF;
 
     -- 1C composite matching etibarlılığı (bölmə 6)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'match_confidence') THEN
+    IF to_regtype('match_confidence') IS NULL THEN
         CREATE TYPE match_confidence AS ENUM (
             'EXACT_MATCH', 'LOW_CONFIDENCE_MATCH', 'MANUAL_MATCH', 'UNASSIGNED'
         );
     END IF;
 
     -- Xal hərəkəti statusu (bölmə 6 — xal etirazı)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'points_entry_status') THEN
+    IF to_regtype('points_entry_status') IS NULL THEN
         CREATE TYPE points_entry_status AS ENUM ('ACTIVE', 'REVERSED', 'CORRECTED');
     END IF;
 
     -- Tema seçimi (bölmə 9)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'theme_preference') THEN
+    IF to_regtype('theme_preference') IS NULL THEN
         CREATE TYPE theme_preference AS ENUM ('LIGHT', 'DARK', 'SYSTEM');
     END IF;
 
     -- Dəstək ticket statusu (bölmə 8)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ticket_status') THEN
+    IF to_regtype('ticket_status') IS NULL THEN
         CREATE TYPE ticket_status AS ENUM ('OPEN', 'IN_PROGRESS', 'WAITING_CUSTOMER', 'CLOSED');
     END IF;
 
     -- ERP server statusu (bölmə 7)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'erp_server_status') THEN
+    IF to_regtype('erp_server_status') IS NULL THEN
         CREATE TYPE erp_server_status AS ENUM ('ACTIVE', 'INACTIVE', 'ERROR');
     END IF;
 
     -- Plugin təsdiq statusu (bölmə 1 — SANDBOX QAYDASI)
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'plugin_status') THEN
+    IF to_regtype('plugin_status') IS NULL THEN
         CREATE TYPE plugin_status AS ENUM ('PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'DISABLED');
     END IF;
 END
@@ -445,7 +445,9 @@ ALTER TABLE employees
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'chk_employee_pepper_version'
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'chk_employee_pepper_version'
+           AND connamespace = current_schema()::regnamespace
     ) THEN
         ALTER TABLE employees ADD CONSTRAINT chk_employee_pepper_version
             CHECK (pepper_version >= 1);
@@ -1392,6 +1394,13 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS idx_notifications_unread
     ON notifications (recipient_id, created_at DESC) WHERE read_at IS NULL;
+-- BU İNDEKS MİQRASİYA 007-DƏ ƏVƏZLƏNİR — VƏ BU, QÜSUR DEYİL.
+-- 007 `email_attempts` + `email_next_attempt_at` sütunlarını ƏLAVƏ EDİR və
+-- indeksi həmin sütunlarla yenidən qurur (`DROP INDEX IF EXISTS` ilə).
+-- Buradakı tərifi 007-nin versiyası ilə əvəz etmək MÜMKÜN DEYİL: o sütunlar
+-- bu faylda mövcud deyil, yəni bazis sxem tək başına tətbiq oluna bilməzdi.
+-- Yəni fərq qatlanma nizamının nəticəsidir, unudulmuş geri-köçürmə deyil
+-- (müq. `enforce_anti_fraud_segregation()` — orada fərq HƏQİQİ qüsur idi).
 CREATE INDEX IF NOT EXISTS idx_notifications_email_pending
     ON notifications (created_at) WHERE is_critical AND NOT email_sent;
 
@@ -1542,67 +1551,85 @@ $$ LANGUAGE plpgsql;
 -- Feature Toggle ilə söndürülə BİLMƏZ. Tətbiq qatındakı Guard use case-lərinə
 -- (Faza 2) ƏLAVƏ olaraq, burada defense-in-depth kimi təkrarlanır.
 
-CREATE OR REPLACE FUNCTION enforce_anti_fraud_segregation() RETURNS TRIGGER AS $$
+-- ---------------------------------------------------------------------------
+-- BU GÖVDƏ MİQRASİYA 013 + 048 İLƏ EYNİ OLMALIDIR (DB-1 konsolidasiyası)
+-- ---------------------------------------------------------------------------
+-- Auditdə tapılan qüsur: `schema.sql`-dəki versiya 013-ün gətirdiyi PRİORİTET
+-- qaydasını heç vaxt almamışdı. Yəni tam miqrasiya zənciri tətbiq olunmuş baza
+-- düzgün davranırdı, `schema.sql` tək başına quraşdırılmış baza isə ZƏİF qapı
+-- alırdı: "satıcı-pilləli" CUSTOM rol (kod `SATICI` deyil, prioritet 4) bütün
+-- anti-fraud flag-lərini DB səviyyəsində qəbul edərdi. Domen qatı onu
+-- bloklayırdı — yəni qayda İKİ yerdə EYNİ deyildi (CLAUDE.md §5-in pozulması)
+-- və müdafiənin ikinci qatı sükutla yox idi.
+--
+-- İkinci fərq erkən çıxışda idi: köhnə gövdə YALNIZ `is_anti_fraud` bayrağına
+-- baxırdı, yəni `is_camera_only` və `excludes_camera_role` yoxlamaları
+-- anti-fraud OLMAYAN flag üçün heç vaxt işə düşmürdü.
+--
+-- Aşağıdakı gövdə miqrasiya 048-in son versiyasının HƏRFƏN eynisidir. Onu
+-- dəyişəndə 048-i də dəyişin — `tests/unit/test_schema_migration_parity.py`
+-- bu cütü avtomatik müqayisə edir.
+CREATE OR REPLACE FUNCTION enforce_anti_fraud_segregation()
+RETURNS TRIGGER AS $$
 DECLARE
-    v_is_anti_fraud  BOOLEAN;
-    v_is_camera_only BOOLEAN;
-    v_excl_camera    BOOLEAN;
-    v_position_code  TEXT;
-    v_is_camera_type BOOLEAN;
+    v_is_anti_fraud   BOOLEAN;
+    v_is_camera_only  BOOLEAN;
+    v_excl_camera     BOOLEAN;
+    v_position_code   TEXT;
+    v_priority        SMALLINT;
+    v_is_camera_type  BOOLEAN;
 BEGIN
     SELECT is_anti_fraud, is_camera_only, excludes_camera_role
       INTO v_is_anti_fraud, v_is_camera_only, v_excl_camera
-    FROM permission_flags WHERE code = NEW.flag_code;
+      FROM permission_flags
+     WHERE code = NEW.flag_code;
 
-    IF NOT COALESCE(v_is_anti_fraud, FALSE) THEN
+    IF NOT COALESCE(v_is_anti_fraud, FALSE)
+       AND NOT COALESCE(v_is_camera_only, FALSE)
+       AND NOT COALESCE(v_excl_camera, FALSE) THEN
         RETURN NEW;
     END IF;
 
     IF TG_TABLE_NAME = 'position_permissions' THEN
-        IF NOT NEW.granted THEN
-            RETURN NEW;
-        END IF;
-        SELECT code, is_camera_type INTO v_position_code, v_is_camera_type
-        FROM positions WHERE id = NEW.position_id;
-    ELSE  -- user_permission_overrides
-        IF NEW.effect <> 'GRANT' THEN
-            RETURN NEW;
-        END IF;
-        SELECT p.code, p.is_camera_type INTO v_position_code, v_is_camera_type
-        FROM employees e JOIN positions p ON p.id = e.position_id
-        WHERE e.id = NEW.user_id;
+        SELECT code, priority, is_camera_type
+          INTO v_position_code, v_priority, v_is_camera_type
+          FROM positions WHERE id = NEW.position_id;
+    ELSE
+        SELECT p.code, p.priority, p.is_camera_type
+          INTO v_position_code, v_priority, v_is_camera_type
+          FROM employees e JOIN positions p ON p.id = e.position_id
+         WHERE e.id = NEW.user_id;
     END IF;
 
-    IF v_position_code IN ('MAGAZA_MENECERI', 'SATICI') THEN
+    -- (a) Sistem rolları — adbaad qadağa (dəyişmir).
+    -- (b) Prioritet 4 (ən aşağı pillə, `RolePriority.STAFF`) — HƏR rol,
+    --     custom da daxil. Domen `_PRIORITY_TO_ROLE[STAFF] = SELLER` ilə
+    --     eyni nəticəni verir. 048-ə qədər burada 3 yazılırdı.
+    IF v_position_code IN ('MAGAZA_MENECERI', 'SATICI')
+       OR COALESCE(v_priority, 0) >= 4 THEN
         RAISE EXCEPTION
             'ANTI-FRAUD POZUNTUSU: "%" flag-i "%" rolundakı istifadəçiyə verilə bilməz '
-            '(bölmə 3, vəzifə ayrılığı hardlock-u)', NEW.flag_code, v_position_code;
+            '(bölmə 3, vəzifə ayrılığı hardlock-u; prioritet=%)',
+            NEW.flag_code, COALESCE(v_position_code, '?'), COALESCE(v_priority, -1);
     END IF;
 
-    IF COALESCE(v_excl_camera, FALSE)
-       AND (v_position_code = 'KAMERA_NEZARETCISI' OR COALESCE(v_is_camera_type, FALSE)) THEN
+    IF COALESCE(v_excl_camera, FALSE) AND COALESCE(v_is_camera_type, FALSE) THEN
         RAISE EXCEPTION
-            'VƏZİFƏ AYRILIĞI POZUNTUSU: "%" flag-i kamera-tipli rola verilə bilməz — '
-            'cərimə YARADAN ilə cərimə TƏSDİQ EDƏN eyni şəxs ola bilməz (bölmə 3)',
+            'VƏZİFƏ AYRILIĞI: "%" flag-i kamera-tipli rola verilə bilməz '
+            '(cəriməni yaradan onu təsdiq edə bilməz)', NEW.flag_code;
+    END IF;
+
+    IF COALESCE(v_is_camera_only, FALSE) AND NOT COALESCE(v_is_camera_type, FALSE) THEN
+        RAISE EXCEPTION
+            'ANTI-FRAUD POZUNTUSU: "%" flag-i yalnız kamera-tipli rollarda ola bilər',
             NEW.flag_code;
     END IF;
 
-    IF COALESCE(v_is_camera_only, FALSE)
-       AND v_position_code <> 'KAMERA_NEZARETCISI'
-       AND NOT COALESCE(v_is_camera_type, FALSE) THEN
-        RAISE EXCEPTION
-            'ANTI-FRAUD POZUNTUSU: "%" flag-i yalnız Kamera_Nəzarətçisi rolunda və ya '
-            'açıq şəkildə "kamera-tipli" işarələnmiş custom rollarda ola bilər (bölmə 3)',
-            NEW.flag_code;
-    END IF;
-
-    -- VƏZİFƏ AYRILIĞI: eyni rol həm override YARADA, həm də onu TƏSDİQLƏYƏ bilməz.
-    -- (Sətir səviyyəsində chk_override_self_approval, rol səviyyəsində bu yoxlama.)
+    -- SEC-001: kamera-tipli rol dual-control TƏSDİQİNİ daşıya bilməz.
     IF NEW.flag_code = 'can_approve_dual_control_override'
-       AND (v_position_code = 'KAMERA_NEZARETCISI' OR COALESCE(v_is_camera_type, FALSE)) THEN
+       AND COALESCE(v_is_camera_type, FALSE) THEN
         RAISE EXCEPTION
-            'VƏZİFƏ AYRILIĞI POZUNTUSU: kamera-tipli rol dual-control təsdiqini '
-            'daşıya bilməz — əks halda operator öz override-ını özü təsdiqləyərdi (bölmə 3)';
+            'SEC-001: dual-control təsdiqi kamera-tipli rola verilə bilməz';
     END IF;
 
     RETURN NEW;

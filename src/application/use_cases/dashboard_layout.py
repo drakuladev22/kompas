@@ -91,7 +91,7 @@ EDIT_WIDGETS_FLAG = "can_edit_dashboard_widgets"
 #: Açar ilə yerləşdirməni ayıran işarə (bax modul başlığı — `:` NİYƏ YOX).
 PLACEMENT_SEPARATOR: Final = "@"
 
-#: Sütun sayının SƏRT hüdudları — migrations/058-dəki `min_value`/`max_value`
+#: Sütun sayının SƏRT hüdudları — migrations/054-dəki `min_value`/`max_value`
 #: ilə EYNİ. İki mənbənin ayrılması ROOT ekranında "qəbul edilən", kodda isə
 #: kəsilən dəyər demək olardı (`INFRA_LIMIT_BOUNDS` ilə eyni əsaslandırma).
 MIN_GRID_COLUMNS: Final = 1
@@ -101,7 +101,7 @@ MAX_GRID_COLUMNS: Final = 4
 _PLACEMENT_PARTS: Final = 3
 
 #: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits.DASHBOARD_GRID_COLUMNS`
-#: (seed: migrations/058). Yalnız `limits` portu verilməyəndə (test, offline)
+#: (seed: migrations/054). Yalnız `limits` portu verilməyəndə (test, offline)
 #: və ya oxu uğursuz olanda işə düşür.
 FALLBACK_GRID_COLUMNS: Final[int] = int(DEFAULT_LIMITS[SystemLimitKey.DASHBOARD_GRID_COLUMNS])
 

@@ -79,7 +79,7 @@ class InstalledPlugin:
     #: etdiyi YALNIZ manifestdə yaşayır. Oxuna bilməyən/boş manifest `None`
     #: qalır və həmin plugin səth VERMİR (fail-closed).
     manifest: PluginManifest | None = None
-    #: Paketin fayl sistemindəki yolu (`plugins.package_path`, migrations/059).
+    #: Paketin fayl sistemindəki yolu (`plugins.package_path`, migrations/055).
     #: DEFOLT BOŞ VƏ BU, QƏSDƏNDİR — `manifest` ilə eyni əsaslandırma: sahə
     #: mövcud çağırış nöqtələrinin heç birini dəyişmir və yalnız plugin
     #: SƏHİFƏSİNİN icra yoluna lazımdır (`PluginSandbox` alt-prosesi məhz bu
@@ -185,7 +185,7 @@ class PluginManagementUseCase:
             # burada onu ümumiləşdirmək diaqnostikanı korlayardı.
             raise
 
-        # YOL DA YAZILIR (migrations/059): `plugin_path` ƏVVƏL yalnız imza
+        # YOL DA YAZILIR (migrations/055): `plugin_path` ƏVVƏL yalnız imza
         # yoxlamasına girirdi və heç yerə düşmürdü, yəni quraşdırmadan sonra
         # host paketin harada olduğunu bilmirdi və plugin KODU heç vaxt icra
         # oluna bilmirdi. Yoxlamadan SONRA yazılır: imza rədd edilibsə sətir

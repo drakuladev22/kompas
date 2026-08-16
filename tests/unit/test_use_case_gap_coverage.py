@@ -118,7 +118,7 @@ VIEW_REPORTS = PermissionFlag(code="can_view_employee_reports", category="HR")
 #:
 #: `is_anti_fraud=True` BURADA DA yazılır: `PermissionFlag(code=...)` sükutla
 #: `False` işlədərdi və `position.grant()` `Mağaza_Meneceri`-yə icazə verərdi —
-#: yəni test flag-in HƏQİQİ kataloq tərifindən (migrations/060) fərqli, daha
+#: yəni test flag-in HƏQİQİ kataloq tərifindən (migrations/056) fərqli, daha
 #: zəif bir nüsxəsini yoxlamış olardı.
 RESOLVE_CONFLICTS = PermissionFlag(
     code=RESOLVE_CONFLICT_FLAG,

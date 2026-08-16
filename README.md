@@ -98,6 +98,36 @@ Avtomatik dayanma server-siz işləyir: klient `expires_at`-i yerli saatla
 müqayisə edir → `LICENSE_INACTIVE`. Supabase tərəfdə cron/Edge Function
 tələb olunmur.
 
+### Vendor (mərkəzi) bazası — PARALEL, MÜŞTƏRİ ORA YAZMIR (DB-3)
+
+Yuxarıdakı axın **dəyişmir**. Ondan AYRI olaraq təchizatçının öz mərkəzi
+bazası var: `database/migrations/vendor/` (abunə reyestri, ödənişlər, çökmə
+hesabatları, dəstək müraciətləri, vendor audit izi).
+
+* Müştəri `.exe`-si bu bazaya **nə yazır, nə də cədvəllərini oxuyur.**
+  Yeganə mümkün toxunuş `vendor.check_license_status(tenant_id, license_key)`
+  RPC-sidir (bir sətir, iki sütun) və o, hazırda **çağırılmır**.
+* Bütün cədvəllərdə RLS + `FORCE` aktivdir və siyasət yalnız `kompasos_vendor`
+  rolunadır. `anon`/`authenticated` sxemə belə çıxa bilmir.
+* **`service_role` ilə qoşulmayın:** həmin rolda `BYPASSRLS` var və bütün
+  siyasətləri yan keçir. Konsol `kompasos_vendor` üzvü, `BYPASSRLS` olmayan
+  ayrıca rolla qoşulmalıdır.
+
+#### Vendor hesabının yaradılması
+
+```bash
+set KOMPASOS_VENDOR_DSN=postgresql://console_user:***@host:5432/vendor_db
+.venv/Scripts/python.exe scripts/create_vendor_account.py
+```
+
+Skript e-poçt + şifrə soruşur (Argon2id ilə heşlənir), TOTP sirri yaradır və
+`otpauth://` URI-ni göstərir. **Hesab yalnız siz autentifikatorun verdiyi kodu
+təsdiqlədikdən sonra yazılır** — səhv qurulmuş TOTP ilə yeganə hesabın
+kilidlənməsinin qarşısını alır. Sirr bir dəfə göstərilir.
+
+Skript `.exe`-yə **daxil edilmir** (`src/KompasOS.spec` ona istinad etmir;
+`tests/unit/test_vendor_bootstrap.py` bunu yoxlayır).
+
 Ödəniş alındıqdan sonra `[1 Ay Uzat]` dəyişikliyi **dərhal** Supabase-ə yazır.
 Bağlanmış quraşdırma onu 24 saat gözləmir: bloklanmış vəziyyətdə klientin
 yoxlama ritmi **15 dəqiqəyə** enir (Force Sync-in serversiz qarşılığı).
