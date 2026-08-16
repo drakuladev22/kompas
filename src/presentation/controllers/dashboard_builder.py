@@ -67,10 +67,16 @@ class DashboardBuilderController:
                 # `catalog_map()` `açar → (başlıq, izah)` verir — ekranın
                 # FAKTİKİ gözlədiyi forma (`set_widgets(catalog, ...)`) və
                 # maket yolunun (`preview_data.DASHBOARD_WIDGETS`) eynisi.
+                #
+                # `placements`/`columns` (audit G-5) EYNİ İMZANIN opsional
+                # hissəsidir və maket yolu da onları ötürür — iki yolun ayrı
+                # ad məkanı qurmasının qarşısı belə alınır (CLAUDE.md bölmə 6).
                 screen.set_widgets(
                     view.catalog_map(),
                     order=list(view.order),
                     visible=set(view.visible),
+                    placements=view.placement_map(),
+                    columns=view.columns,
                 )
         except KompasOSError as error:
             screen.show_error(title="Qurucu açıla bilmədi", message=error.user_message)
@@ -84,11 +90,19 @@ class DashboardBuilderController:
     # ------------------------------ yazı yolu -------------------------------- #
 
     def _on_layout_changed(self, screen: DashboardBuilderScreen, layout: Any) -> None:
-        keys = [str(key) for key in layout] if isinstance(layout, (list, tuple)) else []
+        """Ekranın yaydığı düzülüşü use case-ə ötürür.
+
+        ELEMENTLƏR HƏM SADƏ AÇAR, HƏM DƏ KODLANMIŞ YERLƏŞDİRMƏ ola bilər
+        (`"stat_tiles"` / `"stat_tiles@0,0,2"`) — `DashboardLayoutUseCase.save`
+        hər ikisini oxuyur. Ona görə burada AYRIŞDIRMA YOXDUR: kontroller
+        formatı bilməməlidir, əks halda format dəyişəndə üç yer (ekran,
+        kontroller, use case) sinxron dəyişməli olardı.
+        """
+        entries = [str(item) for item in layout] if isinstance(layout, (list, tuple)) else []
         self._write(
             screen,
             lambda session: session.dashboard_layout.save(
-                actor=self._actor, tenant_id=session.tenant_id, layout=keys
+                actor=self._actor, tenant_id=session.tenant_id, layout=entries
             ),
         )
 

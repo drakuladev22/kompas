@@ -391,6 +391,22 @@ class PostgresFineAppealRepository(_BaseRepository):
         )
         return [_row_to_appeal(row) for row in rows]
 
+    def list_undecided(self, tenant_id: TenantId) -> list[FineAppeal]:
+        """QƏRARSIZ etirazlar — `PENDING` + `EXPIRED` (M-6).
+
+        `idx_appeals_pending` yalnız `PENDING`-i əhatə edir, ona görə bu sorğu
+        `(tenant_id, status)` üzrə adi indeks yolu ilə gedir. Ayrıca qismən
+        indeks ƏLAVƏ EDİLMƏDİ: `EXPIRED` sətir SLA pozuntusudur, yəni sağlam
+        quraşdırmada onlarla deyil, tək-tək olur — onun üçün indeks yazmaq
+        problemi normallaşdırmaq olardı.
+        """
+        rows = self._fetch_all(
+            f"{self._SELECT} WHERE tenant_id = %s"
+            " AND status IN ('PENDING', 'EXPIRED') ORDER BY created_at",
+            (tenant_id,),
+        )
+        return [_row_to_appeal(row) for row in rows]
+
     def list_for_employee(self, employee_id: EmployeeId, *, limit: int = 50) -> list[FineAppeal]:
         rows = self._fetch_all(
             f"""{self._SELECT}

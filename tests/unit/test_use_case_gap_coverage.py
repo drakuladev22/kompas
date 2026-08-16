@@ -58,6 +58,7 @@ from src.application.use_cases.sales_review_queue import (
     SalesReviewQueueUseCase,
 )
 from src.application.use_cases.sync_conflicts import (
+    RESOLVE_CONFLICT_FLAG,
     ConflictItem,
     ConflictNotFoundError,
     ConflictResolutionError,
@@ -97,6 +98,7 @@ from tests.fixtures.fakes import (
     FakeAttendanceFacts,
     FakeClock,
     FakeFeatureToggles,
+    InMemoryFaceExemptions,
     InMemorySheets,
     RecordingAudit,
     RecordingNotifier,
@@ -112,6 +114,18 @@ NOW = datetime(2026, 8, 10, 18, 0, tzinfo=UTC)
 
 MANAGE_BACKUPS = PermissionFlag(code="can_manage_backups", category="SISTEM")
 VIEW_REPORTS = PermissionFlag(code="can_view_employee_reports", category="HR")
+#: Konflikt həlli qapısı (SEC-018) — ANTI-FRAUD işarəli YAZI flag-i.
+#:
+#: `is_anti_fraud=True` BURADA DA yazılır: `PermissionFlag(code=...)` sükutla
+#: `False` işlədərdi və `position.grant()` `Mağaza_Meneceri`-yə icazə verərdi —
+#: yəni test flag-in HƏQİQİ kataloq tərifindən (migrations/060) fərqli, daha
+#: zəif bir nüsxəsini yoxlamış olardı.
+RESOLVE_CONFLICTS = PermissionFlag(
+    code=RESOLVE_CONFLICT_FLAG,
+    category="ERP_INFRA",
+    is_anti_fraud=True,
+    excludes_camera_role=True,
+)
 FILL_ATTENDANCE = PermissionFlag(code="can_fill_daily_attendance", category="NOVBE")
 MANAGE_POINTS = PermissionFlag(code="can_manage_sales_points", category="SATIS_MUKAFAT")
 MANAGE_WORK_MODES = PermissionFlag(code="can_manage_work_modes", category="KATALOQ")
@@ -352,6 +366,7 @@ class _Conflicts:
     def __init__(self, items: list[ConflictItem]) -> None:
         self.items = items
         self.resolved: list[dict[str, Any]] = []
+        self.applied: list[dict[str, Any]] = []
 
     def list_open(self, tenant_id: TenantId, *, limit: int = 100) -> list[ConflictItem]:
         return list(self.items)
@@ -370,7 +385,7 @@ class _Conflicts:
         resolved_by: Any,
         resolved_at: datetime,
         note: str,
-    ) -> None:
+    ) -> bool:
         self.resolved.append(
             {
                 "conflict_id": conflict_id,
@@ -380,6 +395,16 @@ class _Conflicts:
                 "note": note,
             }
         )
+        # `True` = konflikt SAHİBLƏNİLDİ (`resolved_at IS NULL` şərti tutdu).
+        return True
+
+    def apply_local_version(
+        self, *, table_name: str, record_id: Any, local_version: dict[str, Any]
+    ) -> int:
+        self.applied.append(
+            {"table_name": table_name, "record_id": record_id, "local_version": local_version}
+        )
+        return 1
 
 
 def _conflict(table: str = "fines", **versions: dict[str, Any]) -> ConflictItem:
@@ -411,13 +436,13 @@ def test_conflict_badge_count_requires_the_flag() -> None:
     use_case, _, _ = _conflict_use_case([_conflict()])
     seller = make_employee(SystemRole.SELLER, flags=[])
 
-    with pytest.raises(ConflictResolutionError, match="can_view_employee_reports"):
+    with pytest.raises(ConflictResolutionError, match=RESOLVE_CONFLICT_FLAG):
         use_case.open_count(tenant_id=TENANT, actor=seller)
 
 
 def test_conflict_badge_count_is_read_from_the_repository() -> None:
     use_case, _, _ = _conflict_use_case([_conflict(), _conflict("tasks")])
-    hr = make_employee(SystemRole.HR_ADMIN, flags=[VIEW_REPORTS])
+    hr = make_employee(SystemRole.HR_ADMIN, flags=[RESOLVE_CONFLICTS])
 
     assert use_case.open_count(tenant_id=TENANT, actor=hr) == 2
 
@@ -426,7 +451,7 @@ def test_resolution_keeps_both_versions_in_the_audit_before_state() -> None:
     """Bölmə 5: hər iki versiya SAXLANILIR — audit onların şahididir."""
     item = _conflict()
     use_case, repository, audit = _conflict_use_case([item])
-    hr = make_employee(SystemRole.HR_ADMIN, flags=[VIEW_REPORTS])
+    hr = make_employee(SystemRole.HR_ADMIN, flags=[RESOLVE_CONFLICTS])
 
     resolved = use_case.resolve(
         tenant_id=TENANT,
@@ -445,15 +470,25 @@ def test_resolution_keeps_both_versions_in_the_audit_before_state() -> None:
     assert entry["before_state"] == {
         "local": item.local_version,
         "remote": item.remote_version,
+        # Konflikt anında hədəf sətirdə UZAQ versiya durur — `KEPT_REMOTE`-un
+        # boş əməliyyat olmasının səbəbi məhz budur.
+        "standing": "REMOTE",
     }
-    assert entry["after_state"] == {"resolution": "KEPT_REMOTE"}
+    assert entry["after_state"] == {
+        "resolution": "KEPT_REMOTE",
+        "applied_version": "REMOTE",
+        "target_table": "fines",
+        "target_rows_written": 0,
+        "manual_correction_required": False,
+    }
+    assert repository.applied == [], "`KEPT_REMOTE` hədəf sətrə TOXUNMUR"
 
 
 def test_resolution_note_is_whitespace_normalised_before_storing() -> None:
     """Qeyd audit sətrinə düşür — sətir sonu və ikiqat boşluq təmizlənir."""
     item = _conflict()
     use_case, repository, audit = _conflict_use_case([item])
-    hr = make_employee(SystemRole.HR_ADMIN, flags=[VIEW_REPORTS])
+    hr = make_employee(SystemRole.HR_ADMIN, flags=[RESOLVE_CONFLICTS])
 
     use_case.resolve(
         tenant_id=TENANT,
@@ -470,7 +505,7 @@ def test_resolution_note_is_whitespace_normalised_before_storing() -> None:
 def test_unknown_conflict_is_not_silently_ignored() -> None:
     """Yoxlama sırası: qeyd əvvəl, sonra mövcudluq — hər ikisi AÇIQ istisna."""
     use_case, repository, _ = _conflict_use_case([])
-    hr = make_employee(SystemRole.HR_ADMIN, flags=[VIEW_REPORTS])
+    hr = make_employee(SystemRole.HR_ADMIN, flags=[RESOLVE_CONFLICTS])
 
     with pytest.raises(ConflictNotFoundError, match="tapılmadı"):
         use_case.resolve(
@@ -1347,6 +1382,9 @@ def _root_use_case(
         limits=_Limits(),  # type: ignore[arg-type]
         toggles=toggles or _Toggles(),  # type: ignore[arg-type]
         flags=_Flags(flags or {}),  # type: ignore[arg-type]
+        # SEC-020 — bu faylın ssenarilərində aktiv üz-təsdiqi istisnası yoxdur,
+        # yəni kompensasiya kilidi işə düşmür və davranış DƏYİŞMİR.
+        face_exemptions=InMemoryFaceExemptions([]),  # type: ignore[arg-type]
         audit=audit,  # type: ignore[arg-type]
         clock=FakeClock(NOW),  # type: ignore[arg-type]
     )

@@ -83,6 +83,19 @@ if TYPE_CHECKING:
 #: `threshold_minutes` konstruktorda ötürülür.
 DUAL_CONTROL_THRESHOLD_MINUTES: Final = 30
 
+#: Mağaza süzgəci bu SAYDAN ÇOX təyinatı olan operatorda görünür (audit G-6).
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits.CAMERA_QUEUE_STORE_FILTER_
+#: THRESHOLD` (seed: migrations/058) və dəyər konstruktora ötürülür
+#: (`app.py::_register_screens`). `DUAL_CONTROL_THRESHOLD_MINUTES` ilə eyni
+#: naxış: ekran ROOT-u ÖZÜ oxumur, ona verilən ədədi işlədir.
+QUEUE_STORE_FILTER_THRESHOLD: Final = 3
+
+#: «Hamısı» seçiminin daxili açarı. Boş sətir SEÇİLMƏDİ: mağaza adı da boş ola
+#: bilər (məlumat qüsuru) və o zaman "hamısı" ilə "adsız mağaza" eyni dəyərə
+#: düşərdi. `*` isə heç bir mağaza adında olmayan işarədir.
+ALL_STORES: Final = "*"
+
 
 # --------------------------------------------------------------------------- #
 # 06 — Canlı Təsdiq Növbəsi
@@ -235,12 +248,33 @@ class OperatorQueueScreen(Screen):
     Signals:
         approve_requested / reject_requested / adjust_requested: `request_id`.
         filter_changed: Seçilmiş süzgəc ("all" / "check_in" / "return").
+        store_filter_changed: Seçilmiş mağaza (`ALL_STORES` = hamısı).
+
+    ──────────────────────────────────────────────────────────────────────────
+    MAĞAZA SÜZGƏCİ NƏ EDİR VƏ NƏ ETMİR (audit G-6)
+    ──────────────────────────────────────────────────────────────────────────
+    EDİR: operatorun ARTIQ gördüyü sətirləri bir filiala daraldır — üç-dörd
+    mağazanın sorğusu bir siyahıda qarışanda "hansı mağazanın növbəsi
+    uzanıb?" sualı görünməz qalır.
+
+    ETMİR: səlahiyyət GENİŞLƏNDİRMİR. Siyahıdakı mağazalar `assigned_stores`
+    dəstindən gəlir və o, `CameraAssignmentRepository.stores_for_operator`
+    nəticəsidir; «Hamısı» seçimi də MƏHZ həmin dəsti əhatə edir, "bütün
+    şəbəkə"ni yox. Təyinatı olmayan operator boş növbə görür (fail-safe,
+    bölmə 4) və süzgəc bu qərara heç nə əlavə etmir.
+
+    SEÇİM SESSİYA BOYU YADDA QALIR, DİSKDƏ YOX: ekran örtük tərəfindən
+    keşlənir (`AdminShell._screens`), yəni operator başqa ekrana keçib
+    qayıdanda seçimi yerindədir. `user_preferences`-ə YAZILMIR — mağaza
+    təyinatı dəyişə bilər və növbəti girişdə artıq mövcud olmayan filialın
+    süzgəci ilə açılan növbə "boş" görünərdi, səbəbi isə heç yerdə yazılmazdı.
     """
 
     approve_requested = Signal(str)
     reject_requested = Signal(str)
     adjust_requested = Signal(str)
     filter_changed = Signal(str)
+    store_filter_changed = Signal(str)
 
     _FILTERS: Final = (
         ("all", "Hamısı"),
@@ -253,12 +287,16 @@ class OperatorQueueScreen(Screen):
         theme: ThemeManager,
         *,
         assigned_stores: list[str],
+        store_filter_threshold: int = QUEUE_STORE_FILTER_THRESHOLD,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(theme, parent=parent)
         self._assigned_stores = assigned_stores
         self._active_filter = "all"
+        self._active_store = ALL_STORES
         self._rows: list[QueueRow] = []
+        #: Sonuncu doldurulmuş dəst — süzgəc dəyişəndə yenidən süzülür.
+        self._entries: list[QueueEntry] = []
 
         # --- süzgəc çipləri --- #
         self._filter_bar = QWidget()
@@ -272,6 +310,25 @@ class OperatorQueueScreen(Screen):
             self._filter_chips[key] = chip
             filter_layout.addWidget(chip)
         filter_layout.addStretch(1)
+
+        # --- mağaza seçicisi (audit G-6) --- #
+        #
+        # HƏDDƏN AZ TƏYİNATDA ÜMUMİYYƏTLƏ QURULMUR (`setVisible(False)` və ya
+        # `setEnabled(False)` DEYİL): iki-üç mağazalı operator üçün seçici
+        # heç nə etmir və yalnız üst paneli doldurardı. Layihənin ümumi
+        # qaydası mənasız/icazəsiz elementi RENDER ETMƏMƏKDİR.
+        self._store_box: QComboBox | None = None
+        if len(assigned_stores) > max(1, store_filter_threshold):
+            self._store_box = QComboBox()
+            self._store_box.addItem(f"Bütün mağazalarım ({len(assigned_stores)})", ALL_STORES)
+            for store in assigned_stores:
+                self._store_box.addItem(store, store)
+            self._store_box.setAccessibleName("Mağaza süzgəci — yalnız sizə təyin edilmişlər")
+            self._store_box.setToolTip("Yalnız sizə təyin edilmiş mağazalar")
+            self._store_box.currentIndexChanged.connect(self._on_store_selected)
+            filter_layout.addWidget(field_label("Mağaza"))
+            filter_layout.addWidget(self._store_box)
+
         self.add(self._filter_bar)
 
         # --- iVMS xatırladıcısı — bax modul başlığı --- #
@@ -350,7 +407,11 @@ class OperatorQueueScreen(Screen):
         Boş təyinat (operatora heç bir mağaza verilməyib) AYRI haldır və
         "növbə boşdur" ilə qarışdırılmamalıdır — birincidə problem
         konfiqurasiyadadır, ikincisi normal iş vəziyyətidir.
+
+        SƏTİRLƏR KEŞLƏNİR (audit G-6): mağaza süzgəci dəyişəndə eyni dəst
+        yenidən süzülür və baza sorğusu göndərilmir (bax `set_store_filter`).
         """
+        self._entries = list(entries)
         for row in self._rows:
             self._rows_layout.removeWidget(row)
             row.deleteLater()
@@ -392,6 +453,10 @@ class OperatorQueueScreen(Screen):
         self.show_content()
 
     def _matches(self, entry: QueueEntry) -> bool:
+        # MAĞAZA SÜZGƏCİ ƏVVƏL: tip süzgəci ilə VƏ ilə birləşir — operator
+        # "yalnız bu filialın giriş təsdiqləri" kəsişməsini istəyə bilər.
+        if not self._in_store_scope(entry):
+            return False
         if self._active_filter == "all":
             return True
         if self._active_filter == "check_in":
@@ -399,13 +464,26 @@ class OperatorQueueScreen(Screen):
         return entry.kind.startswith("Qayıdış")
 
     def _update_filter_counts(self, entries: list[QueueEntry]) -> None:
+        """Çip saylarını yeniləyir — SAYLAR MAĞAZA SÜZGƏCİNƏ TABEDİR.
+
+        Süzgəc «Bellona 28 May»-dədirsə, "Giriş Təsdiqi · 12" yazmaq yanlış
+        olardı: operator ekranda üç sətir görüb 12 rəqəmini oxuyar və hansının
+        doğru olduğunu bilməzdi.
+        """
+        scoped = [entry for entry in entries if self._in_store_scope(entry)]
         totals = {
-            "all": len(entries),
-            "check_in": sum(1 for e in entries if e.kind.startswith("Giriş")),
-            "return": sum(1 for e in entries if e.kind.startswith("Qayıdış")),
+            "all": len(scoped),
+            "check_in": sum(1 for e in scoped if e.kind.startswith("Giriş")),
+            "return": sum(1 for e in scoped if e.kind.startswith("Qayıdış")),
         }
         for key, label in self._FILTERS:
             self._filter_chips[key].setText(f"{label} · {totals[key]}")
+
+    def _in_store_scope(self, entry: QueueEntry) -> bool:
+        """Sətir seçilmiş mağazaya aiddirmi (`ALL_STORES` → hamısı)."""
+        if self._active_store == ALL_STORES:
+            return True
+        return entry.store_name == self._active_store
 
     def set_filter(self, key: str) -> None:
         """Süzgəci dəyişir; aktiv çip dolu fon alır."""
@@ -414,9 +492,42 @@ class OperatorQueueScreen(Screen):
             chip.set_tone("info" if chip_key == key else "neutral")
         self.filter_changed.emit(key)
 
+    def _on_store_selected(self) -> None:
+        if self._store_box is None:  # pragma: no cover - tip qoruyucusu
+            return
+        self.set_store_filter(str(self._store_box.currentData()))
+
+    def set_store_filter(self, store: str) -> None:
+        """Mağaza süzgəcini dəyişir.
+
+        TƏYİNATDAN KƏNAR AD RƏDD EDİLİR: süzgəc yalnız GÖRÜNÜŞÜ daraldır,
+        yəni siyahıda olmayan mağazanı seçmək cəhdi sükutla «hamısı»na
+        qayıtmalıdır — əks halda ekran heç vaxt dolmayan bir vəziyyətdə
+        qalardı və səbəbi görünməzdi.
+        """
+        if store != ALL_STORES and store not in self._assigned_stores:
+            store = ALL_STORES
+        self._active_store = store
+        # KEŞLƏNMİŞ SƏTİRLƏR YENİDƏN SÜZÜLÜR, BAZAYA GEDİLMİR: süzgəc
+        # GÖRÜNÜŞ əməliyyatıdır və məlumat artıq ekrandadır. Yeni sorğu
+        # göndərmək eyni nəticəni gecikməylə verər, üstəlik operator hər
+        # seçimdə növbənin "yenidən yüklənməsini" görərdi.
+        self.set_entries(list(self._entries))
+        self.store_filter_changed.emit(store)
+
     @property
     def active_filter(self) -> str:
         return self._active_filter
+
+    @property
+    def active_store(self) -> str:
+        """Seçilmiş mağaza (`ALL_STORES` = təyin edilmişlərin hamısı)."""
+        return self._active_store
+
+    @property
+    def store_filter_visible(self) -> bool:
+        """Mağaza seçicisi QURULUBMU (görünürlük deyil, MÖVCUDLUQ)."""
+        return self._store_box is not None
 
     @property
     def visible_rows(self) -> int:

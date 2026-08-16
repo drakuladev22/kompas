@@ -91,6 +91,17 @@ CONTROLLER_BOUND: Final[dict[str, str]] = {
     # `controllers/face_control.py` başlığı).
     "face_enrollment": "_attach_face_enrollment",
     "face_exemptions": "_attach_face_exemptions",
+    # G-1 Sinxronizasiya konfliktləri (bölmə 5) — HƏM oxuyur (`inbox`), HƏM
+    # yazır (`resolve`). Həll edilmiş konflikt `list_open`-dan çıxır, ona görə
+    # siyahı hər qərardan sonra yenidən oxunmalıdır; üstəlik eyni konflikti
+    # paralel işləyən ikinci HR bağlamış ola bilər (bax
+    # `controllers/sync_conflicts.py` başlığı).
+    "sync_conflicts": "_attach_sync_conflicts",
+    # Aylıq Cərimə İcmalı (miqrasiya 003) — HƏM oxuyur (dövrlər + nəşr
+    # gözləyən sətirlər), HƏM yazır (`publish_batch`). Nəşr olunmuş cərimə
+    # `PENDING_REVIEW`-dan çıxır, yəni siyahı hər göndərmədən sonra yenidən
+    # oxunmalıdır (bax `controllers/fine_review.py` başlığı).
+    "fine_review": "_attach_fine_review",
 }
 
 #: Həm `_binders()`-də, HƏM DƏ `_attach_*` ilə bağlanan açarlar.

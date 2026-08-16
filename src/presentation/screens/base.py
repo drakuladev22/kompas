@@ -18,6 +18,21 @@ bloklar "sayrışma" (flash) effekti yaradır və yükləmənin özündən daha 
 nəzərə çarpır.
 
 `show_loading()` bunu ÖZÜ tətbiq edir — çağıran tərəf taymer qurmur.
+
+──────────────────────────────────────────────────────────────────────────────
+BÖLMƏ XƏTASI: NİYƏ DÖRD VƏZİYYƏT KİFAYƏT ETMİRDİ
+──────────────────────────────────────────────────────────────────────────────
+`show_error()` BÜTÜN ekranı əvəz edir və bu, ekranın tək bir sorğusu olduqda
+doğrudur. İdarə Paneli isə YEDDİ müstəqil bölmədən ibarətdir; onlardan biri
+sınanda qalan altısını gizlətmək məlumat İTİRMƏKDİR, sükutla boş buraxmaq isə
+YALAN DANIŞMAQDIR — istifadəçi «0 cərimə» rəqəmini HƏQİQƏT kimi oxuyur.
+
+Ona görə beşinci, MƏZMUNLA BİRLİKDƏ yaşayan vəziyyət var:
+`set_section_error("Xülasə sayğacları")`. O, məzmunu gizlətmir, üstünə görünən
+bir sətir əlavə edir. Qüsurun tarixçəsi: `screen_data.py`-dakı sorğu
+`fine_types.name` sütununu oxuyurdu (`name_az` olmalı idi), `populate()`-dakı
+`except Exception` `UndefinedColumn`-u tuturdu və «Cərimələr» ekranı AYLARLA
+boş göründü — jurnalda səbəb var idi, ekranda isə heç bir fərq YOX idi.
 """
 
 from __future__ import annotations
@@ -25,7 +40,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QBoxLayout, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from src.presentation.theme.manager import enable_styled_background
 from src.presentation.widgets import metrics
@@ -37,6 +60,20 @@ if TYPE_CHECKING:
 
 #: Skeleton bu müddətdən əvvəl göstərilmir (maketdən).
 LOADING_DELAY_MS: Final = 400
+
+#: Bölmə xətası bannerinin nişan mətni — «boş»dan FƏRQLİ vizual (danger tonu).
+SECTION_ERROR_CHIP: Final = "Yüklənə bilmədi"
+
+#: Bannerin ikinci cümləsi: istifadəçinin ATA BİLƏCƏYİ addım.
+#:
+#: NİYƏ «Xəta baş verdi» YAZILMIR — o cümlə istifadəçiyə nə baş verdiyini də,
+#: nə edəcəyini də demir; onu yalnız köməksiz qoyur (Qrup G qaydası: "nə baş
+#: verdiyini bir cümlə ilə izah et, sonra bir aydın hərəkət təklif et").
+#:
+#: NİYƏ TEXNİKİ DETAL YOXDUR — sorğu mətni, sütun adı və izləmə `error.log`-da
+#: qalır. Onları ekrana çıxarmaq nə istifadəçinin problemini həll edir, nə də
+#: onun səlahiyyətindədir; üstəlik sxem detalı ekranda görünən məlumat olardı.
+SECTION_ERROR_HINT: Final = "Səhifəni yeniləyin, davam edərsə administratora bildirin."
 
 
 class Screen(QWidget):
@@ -89,6 +126,15 @@ class Screen(QWidget):
         #: Dar pəncərədə şaquli yığılacaq üfüqi sətirlər (bax `responsive_row`).
         self._responsive_rows: list[QBoxLayout] = []
         self._layout_mode = LayoutMode.WIDE
+
+        #: Yüklənə bilməyən bölmələrin ADLARI (bax `set_section_error`).
+        #: Siyahı SIRA saxlayır: istifadəçi eyni ekranı iki dəfə açanda
+        #: bölmələrin adı yer dəyişsəydi, "nə dəyişdi?" sualı yaranardı.
+        self._section_errors: list[str] = []
+        #: Banner LAZIM OLANA QƏDƏR QURULMUR — sağlam ekranda heç bir əlavə
+        #: widget yaranmır (eyni naxış: `HealthScreen.set_conflict_action`).
+        self._section_error_banner: QWidget | None = None
+        self._section_error_text: QLabel | None = None
 
     # ---------------------------- tərtibat rejimi ---------------------------- #
     # NİYƏ BURADA, HƏR EKRANDA DEYİL
@@ -213,6 +259,69 @@ class Screen(QWidget):
 
     def switcher(self) -> ContentSwitcher:
         return self._switcher
+
+    # --------------------------- bölmə xətası -------------------------------- #
+    # NİYƏ AYRICA MEXANİZM (bax modul başlığı)
+    # ─────────────────────────────────────────────────────────────────────────
+    # `show_error()` ekranı ƏVƏZ EDİR — qismən uğur halında (5 bölmədən 1-i
+    # sındı) bu, doğru olan 4 bölməni də gizlədərdi. Banner isə məzmunun
+    # ÜSTÜNDƏ yaşayır: düzgün rəqəmlər qalır, etibarsız bölmə isə AÇIQ
+    # şəkildə işarələnir.
+    #
+    # İMZA OPSİONALDIR VƏ HEÇ BİR MÖVCUD SETTER DƏYİŞMİR: kontroller bu metodu
+    # `getattr` ilə axtarır (bax `screen_data.report_section_error`), ona görə
+    # metodu daşımayan sahə obyekti (test saxtası) də sınmır.
+
+    def set_section_error(self, section_label: str) -> None:
+        """«{bölmə} yüklənə bilmədi» xəbərdarlığını ekranın başında göstərir.
+
+        Args:
+            section_label: İSTİFADƏÇİ dilində bölmə adı ("Xülasə sayğacları").
+                Texniki ad (`_dashboard_summary`) YAZILMIR — istifadəçi kodun
+                daxili adlarını görməməlidir.
+
+        Təkrar çağırış eyni adı İKİ dəfə əlavə etmir: bir bölmə bir
+        yenilənmədə bir dəfə sınır, lakin panel saatlarla açıq qala bilər və
+        siyahının şişməsi bannerini oxunmaz edərdi.
+        """
+        if not section_label:
+            return
+        if section_label not in self._section_errors:
+            self._section_errors.append(section_label)
+        self._refresh_section_error_banner()
+
+    def clear_section_errors(self) -> None:
+        """Yenidən yükləmədən ƏVVƏL çağırılır — köhnə xəbərdarlıq qalmasın.
+
+        Silinmiş xəbərdarlıq YALAN olardı: bölmə artıq düzgün yüklənibsə,
+        istifadəçi hələ də etibarsız rəqəm gördüyünü düşünərdi.
+        """
+        self._section_errors.clear()
+        if self._section_error_banner is not None:
+            self._section_error_banner.setVisible(False)
+
+    def section_errors(self) -> tuple[str, ...]:
+        """Hazırda xəta ilə işarələnmiş bölmələr — testlər və diaqnostika üçün."""
+        return tuple(self._section_errors)
+
+    def _refresh_section_error_banner(self) -> None:
+        if self._section_error_banner is None:
+            self._section_error_banner, self._section_error_text = _section_error_banner()
+            # Bannerin yeri ƏN ÜSTDƏDİR: xəbərdarlıq etibarsız rəqəmlərdən
+            # SONRA gəlsəydi, istifadəçi onu rəqəmləri oxuyandan sonra görərdi.
+            self._content_layout.insertWidget(0, self._section_error_banner)
+
+        if self._section_error_text is not None:
+            self._section_error_text.setText(_section_error_sentence(self._section_errors))
+        self._section_error_banner.setVisible(True)
+
+        # BANNER MƏZMUN QATINDA YAŞAYIR: ekran «boş vəziyyət» və ya «yüklənir»
+        # görüntüsündə qalıbsa xəbərdarlıq GÖRÜNMƏZ olardı — halbuki
+        # düzəltdiyimiz qüsur məhz budur (boş ekran xətanı gizlədir). «Xəta
+        # vəziyyəti» (`show_error`) İSƏ toxunulmur: o, artıq daha güclü
+        # bildirişdir və onu banner ilə əvəzləmək məlumat itkisi olardı.
+        if self._switcher.current_state() not in {"content", "error"}:
+            self.show_content()
 
 
 class ContentSwitcher(QWidget):
@@ -385,4 +494,62 @@ def section_header(title: str, subtitle: str = "") -> QWidget:
     return container
 
 
-__all__ = ["LOADING_DELAY_MS", "ContentSwitcher", "Screen", "section_header"]
+def _section_error_sentence(sections: list[str]) -> str:
+    """Banner mətni — bir bölmə üçün TƏK, çoxu üçün SİYAHI forması.
+
+    «Bu bölmələr yüklənə bilmədi: A, B» cümləsi bir bölmə üçün süni səslənir,
+    ona görə tək hal ayrıca yazılır. Bölmə ADLARI göstərilir, çünki istifadəçi
+    məhz hansı rəqəmə inanmayacağını bilməlidir — ümumi «məlumat yüklənmədi»
+    xəbərdarlığı bütün ekranı şübhəli edərdi, halbuki qalan bölmələr düzgündür.
+    """
+    if not sections:
+        return ""
+    if len(sections) == 1:
+        return f"«{sections[0]}» bölməsi yüklənə bilmədi. {SECTION_ERROR_HINT}"
+    listed = ", ".join(f"«{name}»" for name in sections)
+    return f"Bu bölmələr yüklənə bilmədi: {listed}. {SECTION_ERROR_HINT}"
+
+
+def _section_error_banner() -> tuple[QWidget, QLabel]:
+    """Xəbərdarlıq zolağı — MÖVCUD primitivlərdən yığılır, yeni widget YOX.
+
+    `Chip(tone="danger")` + `body_label` cütü onsuz da bütün ekranlarda
+    işlədilir və rəng cütləri `tokens.py`-da WCAG AA üçün kalibrlənib; xəta
+    üçün YENİ rəng götürmək kontrast qapısını (`scripts/check_contrast.py`)
+    yeni cütlə yükləyərdi və heç bir üstünlük verməzdi.
+
+    Returns:
+        (banner, mətn etiketi) — mətn hər yeni sınmış bölmədə yenilənir.
+    """
+    from src.presentation.widgets.primitives import (  # noqa: PLC0415
+        Card,
+        Chip,
+        body_label,
+        stretch,
+    )
+
+    card = Card(padding=14, spacing=10)
+    line = QWidget()
+    layout = QHBoxLayout(line)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(10)
+
+    chip = Chip(SECTION_ERROR_CHIP, "danger")
+    layout.addWidget(chip, 0, Qt.AlignmentFlag.AlignTop)
+
+    text = body_label("", size=13)
+    layout.addWidget(text, 1)
+    layout.addWidget(stretch())
+
+    card.add(line)
+    return card, text
+
+
+__all__ = [
+    "LOADING_DELAY_MS",
+    "SECTION_ERROR_CHIP",
+    "SECTION_ERROR_HINT",
+    "ContentSwitcher",
+    "Screen",
+    "section_header",
+]

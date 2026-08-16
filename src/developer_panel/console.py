@@ -35,6 +35,28 @@ if TYPE_CHECKING:
     from src.infrastructure.persistence.connection import Database
     from src.infrastructure.updates.publisher import PackageInspection, ReleasePublisher
 
+# --------------------------------------------------------------------------- #
+# ÇIXIŞ KODLARI
+# --------------------------------------------------------------------------- #
+#
+# `2` KODUNUN İKİ MƏNASI VAR İDİ və bu, skriptləşdirməni qeyri-mümkün edirdi:
+# həm «`--yes` gözlənilir, heç nə dəyişmədi», həm də `main()`-in ümumi
+# `KompasOSError` qolu («işə düşmə/baza xətası») eyni `2`-ni qaytarırdı. Avtomat
+# skript üçün bu fərq həlledicidir: birincidə əmri `--yes` ilə TƏKRAR etmək
+# düzgün davranışdır, ikincidə isə təkrar cəhd yalnız eyni nasazlığı təkrarlayar.
+#
+# TƏSDİQ-TƏLƏBİ AYRILDI, `2` YERİNDƏ QALDI — geriyə uyğunluq bu istiqamətdə
+# daha təhlükəsizdir: `2`-ni «xəta» kimi oxuyan mövcud skript indi də xətanı
+# görür, sadəcə təsdiq-tələbi artıq ona qarışmır. Əks seçim (təsdiqi `2`-də
+# saxlayıb işə düşmə xətasını köçürmək) mövcud skriptlərə səssizcə «uğur»
+# görüntüsü verə bilərdi.
+#
+# `3` TUTULUB: kiosk nəzarətçisinin yenidən-başlatma həddi (`main._run_watchdog`).
+# Ona görə növbəti sərbəst kod `4`-dür.
+EXIT_OK: Final[int] = 0
+EXIT_FAILED: Final[int] = 1
+EXIT_CONFIRMATION_REQUIRED: Final[int] = 4
+
 #: Uzatmadan sonra göstərilən "nə vaxt işə düşəcək" cümləsi — GUI və konsol
 #: üçün EYNİ mənbə. Rəqəm `BLOCKED_RECHECK_INTERVAL_SECONDS`-dən gəlir ki,
 #: mətn ilə klientin faktiki davranışı bir-birindən ayrılmasın.
@@ -314,7 +336,10 @@ def _tenant_view_or_extend(
 
     if not confirmed:
         # Təsdiq bayrağı olmadan HEÇ NƏ dəyişmir — mətn göstərilir və çıxılır.
-        return 2, f"{confirmation_text([target])}\n(Təsdiq üçün `--yes` əlavə edin.)"
+        return (
+            EXIT_CONFIRMATION_REQUIRED,
+            f"{confirmation_text([target])}\n(Təsdiq üçün `--yes` əlavə edin.)",
+        )
 
     result = directory.extend_one_month(extend, now=moment)
     suffix = " Müştəri yenidən aktivləşdirildi." if result.reactivated else ""
@@ -369,7 +394,7 @@ def _force_version(
     version = version.strip()
     action = f"«{version}» versiyasına məcburi keçid" if version else "məcburiyyətin ləğvi"
     if not confirmed:
-        return 2, (
+        return EXIT_CONFIRMATION_REQUIRED, (
             f"«{target.tenant_name}» üçün {action} tətbiq ediləcək. "
             "(Təsdiq üçün `--yes` əlavə edin.)"
         )
@@ -440,7 +465,7 @@ def _recover_access(
     assert target_tenant is not None  # `_recovery_problem` yoxlayıb
     remaining = directory.active_admin_count(tenant_id)
     if not confirmed:
-        return 2, (
+        return EXIT_CONFIRMATION_REQUIRED, (
             f"«{target_tenant.tenant_name}» üçün TƏCİLİ GİRİŞ BƏRPASI.\n"
             f"Hədəf hesab: {username} · qalan aktiv admin: {remaining}\n"
             f"İstinad: {reference.strip()}\n"
@@ -483,6 +508,11 @@ def _recover_access(
         )
         uow.commit()
 
+    # SIRA MƏCBURİDİR: şifrə YALNIZ commit-dən SONRA çap olunur. `recover()`
+    # heşi, audit sətrini və bildirişi EYNİ tranzaksiyaya yazır (CLAUDE.md §5:
+    # audit yazısı istisna udmur) — hər hansı biri uğursuz olarsa `uow` bu
+    # bloku rollback ilə tərk edir və bu sətrə heç vaxt çatılmır. Əks sıra
+    # (əvvəl göstər, sonra yaz) administratora İŞLƏMƏYƏN bir şifrə verərdi.
     return 0, (
         f"«{target_tenant.tenant_name}» — «{username}» üçün müvəqqəti şifrə:\n"
         f"    {credential.plaintext}\n"
@@ -521,7 +551,7 @@ def _publish(
         return 1, f"Fayl yoxlanmadı: {exc.user_message}"
 
     if not confirmed:
-        return 2, (
+        return EXIT_CONFIRMATION_REQUIRED, (
             publish_confirmation_text(version, inspection, is_mandatory=is_mandatory)
             + "\n(Təsdiq üçün `--yes` əlavə edin.)"
         )
@@ -565,6 +595,9 @@ def _clip(text: str, width: int) -> str:
 
 
 __all__ = [
+    "EXIT_CONFIRMATION_REQUIRED",
+    "EXIT_FAILED",
+    "EXIT_OK",
     "SYNC_NOTE_AZ",
     "confirmation_text",
     "publish_confirmation_text",

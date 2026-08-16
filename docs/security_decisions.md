@@ -614,6 +614,95 @@ idxal dairə yaradardı. Sürüşməni
 
 ---
 
+## SEC-020 — Üz-təsdiqi istisnasının kompensasiyası şərti KİLİDLƏ qorunur
+
+**Vəziyyət:** Qəbul edildi (2026-08-15) — anti-fraud auditi tapıntısı
+
+**Kontekst — nə boşluq idi.** `facecontrol.md` bənd 14 üz təsdiqindən
+PIN-only istisnasını (tibbi/fiziki səbəb) YALNIZ bir şərtlə verir:
+
+> «MƏCBURİ KOMPENSASİYA EDİCİ NƏZARƏT: İstisnalı işçinin HƏR giriş/qayıdış
+> təsdiqi avtomatik olaraq mövcud DUAL-CONTROL axınına düşür — "bir az
+> diqqətli ol" kimi qeyri-müəyyən tövsiyə DEYİL, MƏCBURİ ikinci-təsdiq.»
+
+Yəni istisnanın YEGANƏ əvəzləyicisi `DUAL_CONTROL` modulunun axınıdır.
+Lakin həmin modul `feature_toggles`-də adi sətir idi (`is_structural = FALSE`,
+`schema.sql` §24 seed-i), yəni Root onu **yazılı təsdiq olmadan, bir kliklə**
+söndürə bilirdi. Kod tərəfində isə:
+
+* `leave_verification.apply_override` toggle-a BAXIRDI;
+* `face_control` istisna yolu (`_dual_control_required`) toggle-a **heç vaxt
+  baxmırdı**.
+
+Nəticə tərif olunmamış davranış idi və hər iki ehtimal pis idi:
+
+1. qapı yenə `DUAL_CONTROL_REQUIRED` qaytarır → təsdiqi verəcək axın
+   söndürülüb, deməli istisnalı işçi **heç vaxt günə başlaya bilmir** və heç
+   bir mesaj səbəbi izah etmir;
+2. kompensasiya sükutla itir → istisnalı işçinin PIN-i ilə **istənilən şəxs**
+   təkbaşına təsdiq alır — bənd 14-ün bağlamaq istədiyi məhz həmin aldatma
+   yolu bir toggle ilə yenidən açılır.
+
+Üstəlik bu, CLAUDE.md §5-in prinsipini pozurdu: **struktur zəmanət sadə
+toggle ilə söndürülə bilməz.**
+
+**Qərar — ŞƏRTİ KİLİD (dar yol), `is_structural` DEYİL.** İnvariant belə
+ifadə olunur: «(kirayəçidə aktiv üz-təsdiqi istisnası var) VƏ (`DUAL_CONTROL`
+sönükdür)» cütü heç vaxt mövcud olmamalıdır. Kilid İKİ tərəflidir, çünki
+invarianta iki tərəfdən yaxınlaşmaq olar:
+
+| Yol | Qapı |
+|---|---|
+| modulu söndür (istisna var) | `RootControlUseCase._require_no_dependent_guarantee` → `CompensatingControlLockedError` |
+| istisna ver/uzat (modul sönük) | `FaceControlExemptionUseCase._require_compensating_control` → `FaceControlError` |
+| birbaşa SQL (ekranı yan keç) | `enforce_face_exemption_compensation()` + `enforce_exemption_requires_compensation()` (migrations/051) |
+| artıq mövcud vəziyyət (köhnə konfiqurasiya) | `FaceVerificationUseCase._exempt_employee_gate` → fail-closed, manual təsdiqə |
+
+Yalnız birinci qapını yazsaydıq, sıranı dəyişdirmək («əvvəlcə modulu söndür,
+sonra istisna ver») qorumanı tamamilə keçərdi.
+
+**Niyə `is_structural = TRUE` KİFAYƏT ETMİRDİ.** İkinci variant modulu
+struktur-kritik elan etmək idi (mövcud `MIN_CONFIRMATION_LENGTH` axını —
+yazılı təsdiq). Rədd edildi, üç səbəbdən:
+
+* o, söndürməni **dayandırmır**, yalnız 6 simvolluq mətn tələb edir. Təsdiq
+  yazan Root istisnalı işçini yenə kompensasiyasız qoyardı — sənədləşmə
+  əlavə olunar, zəmanət isə bərpa olunmazdı. Bənd 14 «MƏCBURİ» deyir,
+  «söndürüləndə qeyd et» yox;
+* zəmanət **ŞƏRTLİDİR**: aktiv istisnası olmayan kirayəçidə `DUAL_CONTROL`
+  həqiqətən adi bir qatdır (manual vaxt düzəlişi həddi). Statik bayraq şərti
+  qaydanı ifadə edə bilmir və onu bütün kirayəçilərə yayardı;
+* `is_structural` hazırda `CAMERA_VERIFICATION`-ın mənasını daşıyır («axının
+  struktur əsası»); şərti qaydalarla doldurmaq həmin bayrağın mənasını
+  seyrəldər və növbəti oxucu üçün «struktur» sözünü ölçüsüz edərdi.
+
+**Kilid əbədi deyil.** Root əvvəlcə istisnaları «Üz Təsdiqi İstisnaları»
+ekranından ləğv edir, sonra modulu söndürür — açar Root-un öz əlindədir.
+`revoke` / `expire_due` yolları QƏSDƏN toxunulmazdır: onlar boşluğu BAĞLAYIR
+və bloklansaydılar ölü-kilid yaranardı.
+
+**Runtime davranışı (fail-closed, lakin çıxışı olan).** Ekranı yan keçən yolla
+yaranmış vəziyyətdə `_exempt_employee_gate` `DUAL_CONTROL_REQUIRED` ƏVƏZİNƏ
+`MANUAL_APPROVAL_REQUIRED` qaytarır. Səbəb: manual təsdiq kanalı
+(`VERIFICATION_TIMEOUT`, bənd 5) `DUAL_CONTROL` toggle-ından **asılı deyil**,
+yəni işçi bağlı qapı qarşısında qalmır — təsdiqi HR_Admin/CEO verir. Vəziyyət
+sükutla yaşamır: ayrıca audit əməliyyatı
+(`FACE_EXEMPT_COMPENSATION_UNAVAILABLE`), `security.log`-da
+`FACE_EXEMPTION_COMPENSATION_MISSING` və kritik bildiriş yazılır. İşçinin
+gördüyü mesaj səbəbi VƏ növbəti addımı deyir; «Sistem xətası» yazılmır.
+
+**Tətbiq:** `domain/policies.py` (`FACE_EXEMPTION_COMPENSATING_MODULE`),
+`application/use_cases/root_control.py`
+(`CompensatingControlLockedError`, `_require_no_dependent_guarantee`),
+`application/use_cases/face_control.py` (`_exempt_employee_gate`,
+`_compensation_unavailable`, `_require_compensating_control`),
+`presentation/composition.py` (bağlantı),
+`database/migrations/051_face_exemption_compensation_lock.sql`,
+`database/tests/test_guards.sql` (TEST 33/34),
+`tests/unit/test_face_control.py`, `tests/unit/test_phase5_use_cases.py`.
+
+---
+
 ## Açıq qalan (Faza 3-də bağlanır)
 
 | # | Məsələ | Faza |

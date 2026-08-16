@@ -190,18 +190,29 @@ def leave_request_from_row(row: Row, override_row: Row | None = None) -> LeaveRe
         )
 
     if override_row is not None:
+        # `REJECTED` sətri (M-5): insan rəddi VƏ YA timeout ləğvi. Vaxt möhürü
+        # kimi `created_at` işlədilir — sətir append-only yazılır, yəni onun
+        # yaradılma anı elə qərarın verildiyi andır. Ayrıca `rejected_at`
+        # sütunu əlavə etmək RƏDD EDİLDİ: eyni məlumatın ikinci nüsxəsi
+        # olardı və miqrasiya tələb edərdi.
+        rejected = override_row["status"] == "REJECTED"
         request.override = ManualOverride(
             operator_id=EmployeeId(override_row["operator_id"]),
             system_time=override_row["system_time"],
             overridden_time=override_row["overridden_time"],
             reason=override_row["reason"],
             delta_minutes=override_row["delta_minutes"],
-            requires_dual_control=override_row["status"] == "PENDING_DUAL_CONTROL"
+            requires_dual_control=override_row["status"] in ("PENDING_DUAL_CONTROL", "REJECTED")
             or override_row.get("approved_by") is not None,
             approved_by=EmployeeId(override_row["approved_by"])
             if override_row.get("approved_by")
             else None,
             approved_at=override_row.get("approved_at"),
+            rejected_by=EmployeeId(override_row["approved_by"])
+            if rejected and override_row.get("approved_by")
+            else None,
+            rejected_at=override_row.get("created_at") if rejected else None,
+            rejection_reason=override_row.get("rejection_reason") if rejected else None,
         )
 
     # Bərpa edilmiş obyekt YENİ hadisə yaratmamalıdır.
@@ -332,6 +343,12 @@ def fine_from_row(row: Row) -> Fine:
     fine.reversed_at = row.get("reversed_at")
     fine.reversal_reason = row.get("reversal_reason")
     fine.exported_period = row.get("exported_period")
+    # M-6: TÖRƏMƏ sütun (`fines`-də saxlanmır) — sorğu onu `fine_appeals`
+    # üzərindən `EXISTS(...)` ilə hesablayır. Sütun gəlmirsə (məs. yalnız
+    # `fines`-i seçən köhnə/xarici sorğu) `False` qalır; həmin yolda export
+    # qərarı verilmir, ona görə fail-open riski yaranmır — export namizədləri
+    # HƏMİŞƏ `PostgresFineRepository`-nin `_SELECT`-indən gəlir.
+    fine.has_open_appeal = bool(row.get("has_open_appeal", False))
     fine.discard_events()
     return fine
 

@@ -98,7 +98,12 @@ from enum import Enum
 from typing import TYPE_CHECKING, Final
 
 from src.application.use_cases.authentication import AccountLockedError
-from src.domain.policies import DEFAULT_LIMITS, FeatureModule, SystemLimitKey
+from src.domain.policies import (
+    DEFAULT_LIMITS,
+    FACE_EXEMPTION_COMPENSATING_MODULE,
+    FeatureModule,
+    SystemLimitKey,
+)
 from src.domain.value_objects.exception_signals import (
     FACE_MISMATCH_SOURCE,
     ExceptionFinding,
@@ -176,6 +181,14 @@ ESCALATION_CATEGORY: Final = "VERIFICATION_TIMEOUT"
 #: MÖVCUD dual-control kanalı (`leave_verification.apply_override` eyni sətri
 #: yazır) — istisnalı işçinin MƏCBURİ ikinci təsdiqi (bənd 14).
 DUAL_CONTROL_CATEGORY: Final = "DUAL_CONTROL_PENDING"
+
+#: SEC-020 — kompensasiya edici nəzarətin İTDİYİ hal üçün audit əməliyyatı.
+#:
+#: NİYƏ AYRI AD: `FACE_EXEMPT_DUAL_CONTROL` sətri «kompensasiya İŞLƏDİ» deməkdir.
+#: Kompensasiya ümumiyyətlə mövcud olmadıqda eyni adı yazsaydıq, audit jurnalı
+#: iki tamamilə fərqli vəziyyəti eyni sözlə göstərərdi — yəni sonrakı araşdırma
+#: «bu işçinin ikinci təsdiqi kim verdi?» sualına heç vaxt cavab tapa bilməzdi.
+COMPENSATION_UNAVAILABLE_ACTION: Final = "FACE_EXEMPT_COMPENSATION_UNAVAILABLE"
 
 #: Üz uyğunsuzluğunun TƏCİLİ kanalı (bənd 3: İLK DƏFƏDƏN dərhal bildiriş).
 #: İstisna Motoru bunu ƏVƏZ ETMİR (bənd 16) — motorun siyahısı "sonra
@@ -756,9 +769,10 @@ class FaceVerificationUseCase:
             )
 
         # 2. İSTİSNA (bənd 14) — PIN-only, LAKİN MƏCBURİ dual-control ilə.
+        #    Kompensasiyanın MÖVCUDLUĞU da burada yoxlanılır (SEC-020).
         exemption = self._exemptions.active_for(employee.id, now=started_at)
         if exemption is not None:
-            return self._dual_control_required(
+            return self._exempt_employee_gate(
                 tenant_id=tenant_id,
                 employee=employee,
                 trigger_context=trigger_context,
@@ -1191,6 +1205,126 @@ class FaceVerificationUseCase:
                 best_id = other.employee_id
         return best_id
 
+    def _exempt_employee_gate(
+        self,
+        *,
+        tenant_id: TenantId,
+        employee: Employee,
+        trigger_context: FaceTriggerContext,
+        exemption: FaceExemption,
+        started_at: datetime,
+    ) -> FaceGateDecision:
+        """İstisnalı işçinin qapısı — SEC-020.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ BURADA TOGGLE OXUNUR
+        ──────────────────────────────────────────────────────────────────────
+        Bənd 14 istisnanı YALNIZ bir şərtlə icazə verir: PIN-only-nin açdığı
+        boşluq MƏCBURİ ikinci-təsdiqlə əvəzlənir. Həmin ikinci təsdiq
+        `FACE_EXEMPTION_COMPENSATING_MODULE` (`DUAL_CONTROL`) modulunun
+        axınıdır. Modul söndürülübsə, kompensasiya FAKTİKİ OLARAQ YOXDUR —
+        yəni istisna öz şərtini itirir.
+
+        Anti-fraud auditinə qədər bu hal TƏRİF OLUNMAMIŞ idi: bu metod
+        toggle-a heç vaxt baxmırdı və hər halda `DUAL_CONTROL_REQUIRED`
+        qaytarırdı. Nəticə ölü-kilid olardı — təsdiqi verəcək axın söndürülüb,
+        deməli istisnalı işçi HEÇ VAXT günə başlaya bilməzdi və heç bir mesaj
+        səbəbi izah etmirdi.
+
+        ⚠️ SÜKUTLA KEÇİRMƏK (fail-open) NİYƏ RƏDD EDİLDİ: o zaman modulu
+        söndürmək istisnalı işçinin PIN-ini TAM-SƏLAHİYYƏTLİ açara çevirərdi
+        — yəni bənd 14-ün bağlamaq istədiyi aldatma yolu bir toggle ilə
+        yenidən açılardı.
+
+        SEÇİLƏN İSTİQAMƏT — FAIL-CLOSED, LAKİN ÇIXIŞI OLAN: əməliyyat
+        kompensasiyasız DAVAM ETMİR, əvəzində MÖVCUD manual təsdiq kanalına
+        (`_escalate`, bənd 5) düşür. Həmin kanal `DUAL_CONTROL` toggle-ından
+        ASILI DEYİL, yəni işçi qapalı qapı qarşısında qalmır: təsdiqi
+        HR_Admin/CEO verir. Vəziyyətin ÖZÜ isə sükutla yaşamır — audit sətri,
+        `security.log` yazısı və kritik bildiriş göndərilir.
+
+        Bu vəziyyətə ekran yolu ilə DÜŞMƏK MÜMKÜN DEYİL: `RootControlUseCase.
+        set_module_enabled` aktiv istisna varkən söndürməni rədd edir və
+        `FaceControlExemptionUseCase.grant` modul sönükdürsə istisna vermir.
+        Bura yalnız birbaşa SQL / köhnə konfiqurasiya ilə gəlinə bilər — məhz
+        ona görə qayda İKİ yerdədir (CLAUDE.md §5) və üçüncü qat kimi bu
+        runtime yoxlaması qalır.
+        """
+        if not self._toggles.is_enabled(tenant_id, FACE_EXEMPTION_COMPENSATING_MODULE.value):
+            return self._compensation_unavailable(
+                tenant_id=tenant_id,
+                employee=employee,
+                trigger_context=trigger_context,
+                exemption=exemption,
+                started_at=started_at,
+            )
+        return self._dual_control_required(
+            tenant_id=tenant_id,
+            employee=employee,
+            trigger_context=trigger_context,
+            exemption=exemption,
+            started_at=started_at,
+        )
+
+    def _compensation_unavailable(
+        self,
+        *,
+        tenant_id: TenantId,
+        employee: Employee,
+        trigger_context: FaceTriggerContext,
+        exemption: FaceExemption,
+        started_at: datetime,
+    ) -> FaceGateDecision:
+        """Kompensasiya edici nəzarət söndürülüb — MANUAL təsdiqə (SEC-020).
+
+        AUDİT SƏTRİ ƏLAVƏ YAZILIR VƏ BU, TƏKRAR DEYİL: `_escalate` "üz təsdiqi
+        aparıla bilmədi" faktını yazır (avadanlıq/qeydiyyat hadisəsi), bura isə
+        KONFİQURASİYA pozuntusunu yazır ("istisna qüvvədədir, kompensasiyası
+        yoxdur"). İkisini birləşdirsəydik, struktur zəmanətin pozulduğu an
+        adi bir kamera nasazlığı kimi görünərdi.
+        """
+        _security_log.critical(
+            "FACE_EXEMPTION_COMPENSATION_MISSING",
+            extra={
+                "employee_id": str(employee.id),
+                "exemption_id": str(exemption.exemption_id),
+                "module": FACE_EXEMPTION_COMPENSATING_MODULE.value,
+                "trigger_context": trigger_context.value,
+            },
+        )
+        self._audit.record(
+            tenant_id=tenant_id,
+            actor_id=None,  # sistem müşahidəsi — insan əməliyyatı deyil
+            action=COMPENSATION_UNAVAILABLE_ACTION,
+            entity_type="face_control_exemptions",
+            entity_id=exemption.exemption_id,
+            after_state={
+                "employee_id": str(employee.id),
+                "trigger_context": trigger_context.value,
+                "module": FACE_EXEMPTION_COMPENSATING_MODULE.value,
+                "module_enabled": False,
+                "fallback": FaceGateOutcome.MANUAL_APPROVAL_REQUIRED.value,
+            },
+            reason=(
+                "Face Control istisnası qüvvədədir, lakin onun kompensasiya edici "
+                "nəzarəti (dual-control) söndürülüb — təsdiq manual axına yönləndirildi"
+            ),
+        )
+        return self._escalate(
+            tenant_id=tenant_id,
+            employee=employee,
+            trigger_context=trigger_context,
+            started_at=started_at,
+            health_category=None,
+            reason_az="Üz təsdiqi istisnasının kompensasiya edici nəzarəti söndürülüb",
+            notice_az=(
+                "Bu işçi üz təsdiqi istisnasındadır, lakin istisnanın kompensasiyası "
+                "olan cüt-nəzarət modulu söndürülüb. Təsdiq HR_Admin və ya CEO "
+                "tərəfindən manual verilməlidir; daimi həll üçün Root cüt-nəzarət "
+                "modulunu yenidən aktivləşdirməli və ya istisnanı ləğv etməlidir."
+            ),
+        )
+
     def _dual_control_required(
         self,
         *,
@@ -1473,6 +1607,17 @@ class FaceControlExemptionUseCase:
     (`HardlockLevel.ROOT_CEO`) ilə elan olunub: mövcud hardlock mexanizmi
     (DB trigger-i + `PermissionFlag.assert_grantable_to`) onu AVTOMATİK olaraq
     yalnız Root/CEO rollarında buraxır — burada YENİ guard yazılmır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `FeatureToggles` LAZIMDIR (SEC-020)
+    ──────────────────────────────────────────────────────────────────────────
+    İstisna yalnız kompensasiya edici nəzarətlə birlikdə müdafiə oluna bilər
+    (bənd 14). Kompensasiya söndürülübsə, YENİ istisna vermək «boşluğu açıram,
+    əvəzini isə heç nə ödəmir» deməkdir. Ona görə `grant`/`extend` modulun
+    vəziyyətini yoxlayır. Bu, `RootControlUseCase.set_module_enabled`-dakı
+    qapının SİMMETRİK yarısıdır: biri modulu istisnaya görə kilidləyir, digəri
+    istisnanı modula görə. YALNIZ biri yazılsaydı, sıranı dəyişdirmək
+    (əvvəlcə modulu söndür, sonra istisna ver) qapını yan keçərdi.
     """
 
     def __init__(
@@ -1480,12 +1625,14 @@ class FaceControlExemptionUseCase:
         *,
         exemptions: FaceExemptionRepository,
         limits: SystemLimits,
+        toggles: FeatureToggles,
         audit: AuditTrail,
         clock: Clock,
         notifier: Notifier,
     ) -> None:
         self._exemptions = exemptions
         self._limits = limits
+        self._toggles = toggles
         self._audit = audit
         self._clock = clock
         self._notifier = notifier
@@ -1503,6 +1650,7 @@ class FaceControlExemptionUseCase:
         now = self._clock.now()
         self._require_permission(actor)
         cleaned = self._require_reason(reason)
+        self._require_compensating_control(tenant_id, operation="verilə")
         self._require_within_ceiling(tenant_id, granted_at=now, expires_at=expires_at)
 
         existing = self._exemptions.active_for(employee_id, now=now)
@@ -1558,6 +1706,12 @@ class FaceControlExemptionUseCase:
         yəni bənd 14-ün "müvəqqətidir, daimi deyil" qaydası mənasız olardı.
         """
         self._require_permission(actor)
+        # UZATMA DA «YARADAN» ƏMƏLİYYATDIR (SEC-020): retroaktiv-təsirsizlik
+        # qaydası (CLAUDE.md §5) mövcud qeydin öz axınını tamamlamasını qoruyur,
+        # uzatma isə axını TAMAMLAMIR — kompensasiyasız pəncərəni UZADIR. Ona
+        # görə yoxlama burada da var; `revoke`/`expire_due` isə TOXUNULMAZDIR,
+        # çünki onlar boşluğu BAĞLAYIR və bloklansaydılar ölü-kilid yaranardı.
+        self._require_compensating_control(tenant_id, operation="uzadıla")
         exemption = self._require_exemption(tenant_id, exemption_id)
         if not exemption.status.is_open:
             raise FaceControlError(
@@ -1708,6 +1862,36 @@ class FaceControlExemptionUseCase:
                 context={"actor_id": str(actor.id), "flag": MANAGE_EXEMPTIONS_FLAG},
             )
 
+    def _require_compensating_control(self, tenant_id: TenantId, *, operation: str) -> None:
+        """Kompensasiya edici nəzarət AÇIQ olmalıdır (SEC-020).
+
+        SÜKUTLA "heç nə etmə" DEYİL — açıq istisna atılır (CLAUDE.md §6):
+        Root/CEO düyməni basıb və nəticə gözləyir. Mesaj həm SƏBƏBİ, həm də
+        NƏ ETMƏLİ olduğunu deyir, çünki "əməliyyat mümkün deyil" cavabı
+        istifadəçini eyni düyməni yenidən basmağa göndərərdi.
+        """
+        if self._toggles.is_enabled(tenant_id, FACE_EXEMPTION_COMPENSATING_MODULE.value):
+            return
+        _security_log.warning(
+            "FACE_EXEMPTION_BLOCKED_WITHOUT_COMPENSATION",
+            extra={
+                "tenant_id": str(tenant_id),
+                "module": FACE_EXEMPTION_COMPENSATING_MODULE.value,
+                "operation": operation,
+            },
+        )
+        raise FaceControlError(
+            f"«{FACE_EXEMPTION_COMPENSATING_MODULE.value}» modulu söndürülüb — "
+            f"Face Control istisnası {operation} bilməz (bənd 14: istisnanın yeganə "
+            f"kompensasiya edici nəzarəti həmin moduldur)",
+            user_message=(
+                "Cüt-nəzarət modulu söndürülüb. Üz təsdiqi istisnası yalnız məcburi "
+                "ikinci təsdiqlə birlikdə verilə bilər — əvvəlcə ROOT İdarə Mərkəzindən "
+                "«Cüt-nəzarətli əlavə təsdiq qatı» modulunu aktivləşdirin."
+            ),
+            context={"module": FACE_EXEMPTION_COMPENSATING_MODULE.value},
+        )
+
     @staticmethod
     def _require_reason(reason: str) -> str:
         cleaned = reason.strip()
@@ -1801,6 +1985,266 @@ class FaceControlExemptionUseCase:
 
     def _limit_int(self, tenant_id: TenantId, key: SystemLimitKey) -> int:
         return self._limits.get_int(tenant_id, key.value, int(DEFAULT_LIMITS[key]))
+
+
+# --------------------------------------------------------------------------- #
+# 4b. Üz kilidinin AÇILMASI (bənd 4-ün ödənilməmiş tərəfi)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class FaceLockReleaseResult:
+    """Kilid açılışının nəticəsi — ekran mətni buradan qurulur.
+
+    `re_enrollment_recommended` AYRI SAHƏDİR, mətnin içində GİZLƏNMİR: Root/CEO
+    ekranı ondan asılı olaraq «[Yenidən Qeydiyyat]» düyməsini göstərir və
+    mətndən açar söz axtarmaq iki qatı bir-birinə bağlayardı.
+    """
+
+    employee_id: EmployeeId
+    was_locked: bool
+    cleared_attempts: int
+    re_enrollment_recommended: bool
+    message_az: str
+
+
+class FaceLockReleaseUseCase:
+    """Ardıcıl uyğunsuzluqdan doğan üz kilidini VAXTINDAN ƏVVƏL açır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ LAZIMDIR — AVTOMATİK BİTMƏ TƏK BAŞINA CAVAB DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Kilid `PIN_LOCKOUT_MINUTES` keçdikdə ÖZÜ bitir (`FaceProfile.is_locked`
+    vaxt müqayisəsidir) və uğurlu doğrulama sayğacı sıfırlayır (`_success`).
+    Yəni ADİ hal onsuz da bağlıdır və bu use case ADİ yol DEYİL.
+
+    Bağlanmayan hal budur: kilidli işçi `verify()`-dan `AccountLockedError`
+    alır, yəni müddət bitənə qədər UĞURLU doğrulama da edə bilmir — sayğacı
+    sıfırlamağın yeganə yolu GÖZLƏMƏKDİR. Root `PIN_LOCKOUT_MINUTES`-i
+    böyütmüşsə (parametr PIN ilə ORTAQDIR — bənd 4 ayrı müddət açarını
+    qadağan edir), gözləmə işçinin bütün növbəsini yeyə bilər və nəticə süni
+    gecikmə/qayıb olar. Ona görə AÇIQ, izlənilən bir açar lazımdır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `can_manage_face_exemptions`, NİYƏ HR SƏVİYYƏSİ DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    YENİ FLAG YARADILMADI: CLAUDE.md §5 cədvəli yeni icazə flag-inin yerini
+    `permission_flags`-də (Root, GUI-dan) göstərir — kodda flag icad etmək
+    həmin qərarı yan keçərdi.
+
+    Mövcud kataloqdan seçim İKİ namizəd arasında idi:
+
+      * `can_manage_employees` (hardlock 0) — praktik olardı (HR_Admin-də
+        var), LAKİN RƏDD EDİLDİ: hardlock səviyyəsi 0 və `is_anti_fraud`
+        FALSE olduğu üçün onu fərdi override ilə `Mağaza_Meneceri`-yə vermək
+        STRUKTUR OLARAQ mümkündür. Öz mağazasının işçisinin üz kilidini açan
+        mağaza meneceri isə anti-fraud vəzifə ayrılığının mənasını yox edərdi
+        (CLAUDE.md §5) — qoruma "defolt verilmir" səviyyəsinə enərdi.
+      * `can_manage_face_exemptions` (hardlock 2 = ROOT_CEO, migrations/047)
+        — SEÇİLDİ. Səbəb: (a) hardlock strukturdur, yəni flag
+        `Mağaza_Meneceri`/`Satıcı`-ya HEÇ BİR override ilə düşə bilməz;
+        (b) semantik ailə eynidir — hər iki əməliyyat KONKRET işçi üçün üz
+        qapısını yumşaldır; (c) miqrasiya/sxem dəyişikliyi tələb etmir.
+
+    ƏMƏLİYYAT SÜRTÜNMƏSİ QƏBUL EDİLİR VƏ QƏSDLİDİR: gündəlik hal avtomatik
+    bitmə ilə həll olunur, bu yol isə istisnadır və istisna nə qədər dar
+    olsa, təkrarlanması bir o qədər görünəndir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    AÇILIŞ TARİXÇƏNİ SİLMİR
+    ──────────────────────────────────────────────────────────────────────────
+    `face_verification_log` sətirlərinə TOXUNULMUR — yalnız `employees` üzərindəki
+    SAYĞAC və KİLİD sıfırlanır. Səbəb: təkrarlanan açılış özü anomaliya
+    siqnalıdır və `FaceMismatchExceptionRule` həmin jurnaldan qidalanır.
+    Sayğacla birlikdə jurnalı da təmizləsəydik, "bu işçinin üzü ayda beş dəfə
+    tanınmır" faktı hər açılışdan sonra sıfırdan başlayardı.
+    """
+
+    def __init__(
+        self,
+        *,
+        profiles: FaceEmbeddingRepository,
+        limits: SystemLimits,
+        audit: AuditTrail,
+        clock: Clock,
+        notifier: Notifier,
+    ) -> None:
+        self._profiles = profiles
+        self._limits = limits
+        self._audit = audit
+        self._clock = clock
+        self._notifier = notifier
+
+    def release(
+        self,
+        *,
+        tenant_id: TenantId,
+        actor: Employee,
+        subject_id: EmployeeId,
+        reason: str,
+    ) -> FaceLockReleaseResult:
+        """Sayğacı sıfırlayır və kilidi götürür — SƏBƏB MƏCBURİDİR.
+
+        SƏBƏBİN MİNİMUM UZUNLUĞU YOXDUR (yalnız "boş olmasın"): 10 simvol
+        həddi `face_control_exemptions.reason` sütununun `CHECK` güzgüsüdür
+        (bax `MIN_EXEMPTION_REASON_LENGTH`), kilid açılışının isə öz sütunu
+        yoxdur — sxem məhdudiyyətini olmayan cədvələ tətbiq etmək onu biznes
+        qaydası kimi göstərmək olardı. Mövcud analoq `FaceReEnrollmentUseCase.
+        re_enroll` və `FaceExemption.revoked`-dır: hər ikisi məhz "boş ola
+        bilməz" yoxlaması edir.
+        """
+        self._require_permission(actor)
+        cleaned = _require_non_empty_reason(reason)
+        if actor.id == subject_id:
+            # VƏZİFƏ AYRILIĞI — `FaceEnrollmentUseCase.assert_may_enroll` ilə
+            # EYNİ qayda və eyni səbəb: üz qapısına toxunan əməliyyat İKİNCİ
+            # insan tələb edir. Flag sahibi (Root/CEO) öz kilidini özü açsaydı,
+            # kilid onun üçün faktiki olaraq mövcud olmazdı.
+            raise FaceControlPermissionError(
+                "Öz üz kilidinizi özünüz aça bilməzsiniz — ikinci şəxs tələb olunur",
+                user_message="Öz üz kilidinizi özünüz aça bilməzsiniz.",
+                context={"actor_id": str(actor.id)},
+            )
+
+        now = self._clock.now()
+        profile = self._profiles.get_profile(subject_id)
+        if profile is None:
+            raise FaceControlError(
+                "İşçinin üz profili tapılmadı",
+                user_message="Bu işçi tapılmadı.",
+                context={"employee_id": str(subject_id)},
+            )
+
+        was_locked = profile.is_locked(now=now)
+        if not was_locked and profile.mismatch_attempts == 0:
+            # SÜKUTLA "heç nə etmə" QADAĞANDIR (CLAUDE.md §6): Root düyməni
+            # basıb və nəticə gözləyir. Sükutla uğur qaytarsaydıq, ekranda
+            # «açıldı» yazılar, faktiki problem isə (məs. PIN kilidi, ki
+            # AYRI sütundur — `employees.pin_locked_until`) həll olunmamış
+            # qalardı və növbəti cəhd yenə uğursuz olardı.
+            raise FaceControlError(
+                "Bu işçidə açılacaq üz kilidi və ya uyğunsuzluq sayğacı yoxdur",
+                user_message=(
+                    "Bu işçinin üz kilidi yoxdur. Giriş yenə mümkün deyilsə, səbəb "
+                    "PIN kilidi ola bilər — o, ayrıca mexanizmdir."
+                ),
+                context={"employee_id": str(subject_id)},
+            )
+
+        cleared_attempts = profile.mismatch_attempts
+        # MÖVCUD YAZI METODU — yeni repo metodu YAZILMIR. `_success` uğurlu
+        # doğrulamada məhz bu cütü yazır (0 / None), yəni "kilid açıldı"
+        # vəziyyəti sistemdə ARTIQ təyin olunub və ikinci tərifi yaratmırıq.
+        self._profiles.save_security(subject_id, mismatch_attempts=0, locked_until=None)
+
+        reminder_months = self._limit_int(
+            tenant_id, SystemLimitKey.FACE_REENROLLMENT_REMINDER_MONTHS
+        )
+        re_enrollment_recommended = profile.is_stale(now=now, reminder_months=reminder_months)
+
+        _security_log.warning(
+            "FACE_LOCK_RELEASED",
+            extra={
+                "actor_id": str(actor.id),
+                # KİMİN KİLİDİ: sətir PIN SAHİBİNƏ aiddir. Kilidi doğuran üz
+                # isə tanınmamış üzdür və o, başqa adam ola bilər — məhz buna
+                # görə uyğunsuzluq baş verib. İki fərqli şəxsin eyni açarla
+                # yazılması araşdırmanı yanlış izə salardı.
+                "locked_pin_owner_id": str(subject_id),
+                "cleared_attempts": cleared_attempts,
+                "was_locked": was_locked,
+                "re_enrollment_recommended": re_enrollment_recommended,
+            },
+        )
+        self._audit.record(
+            tenant_id=tenant_id,
+            actor_id=actor.id,
+            action="FACE_LOCK_RELEASED",
+            entity_type="employees",
+            entity_id=subject_id,
+            before_state={
+                "face_mismatch_attempts": cleared_attempts,
+                "face_locked_until": (
+                    profile.locked_until.isoformat() if profile.locked_until else None
+                ),
+            },
+            after_state={
+                "face_mismatch_attempts": 0,
+                "face_locked_until": None,
+                "re_enrollment_recommended": re_enrollment_recommended,
+                # Audit oxucusuna AÇIQ deyilir ki, sətir PIN sahibinin qeydinə
+                # aiddir — jurnalda "kim kilidlənmişdi?" sualı iki cavablıdır.
+                "subject_role": "PIN_OWNER",
+            },
+            reason=cleaned,
+        )
+        message = (
+            "Üz kilidi açıldı və uyğunsuzluq sayğacı sıfırlandı."
+            if was_locked
+            else "Uyğunsuzluq sayğacı sıfırlandı (aktiv kilid yox idi)."
+        )
+        if re_enrollment_recommended:
+            # KİLİD SƏBƏBİ QEYDİYYAT PROBLEMİ OLA BİLƏR: köhnəlmiş istinad
+            # vektoru (saqqal, eynək, çəki — bənd 13) hər doğrulamada
+            # uyğunsuzluq doğurur və kilidi TƏKRAR-TƏKRAR qurur. Belə halda
+            # açılış yalnız simptomu götürür, ona görə istifadəçi MÖVCUD
+            # yenidən-qeydiyyat axınına yönləndirilir (`FaceReEnrollmentUseCase`)
+            # — burada ikinci bir "düzəlt" mexanizmi yazılmır.
+            message += (
+                " Diqqət: bu işçinin üz qeydiyyatı köhnəlib — kilid təkrarlanarsa "
+                "«Yenidən Qeydiyyat» aparın, təkrar açılış problemi həll etmir."
+            )
+        self._notifier.notify(
+            tenant_id=tenant_id,
+            # ŞƏXSİ SƏTİR (`recipient_id` dolu) — auditoriya süzgəcindən
+            # asılı deyil (bax `value_objects/notifications.py` başlığı).
+            # İşçi öz hesabına toxunulduğunu bilməlidir: kilid onun adına
+            # qurulmuşdu və onun adına götürülür.
+            recipient_id=subject_id,
+            category="FACE_LOCK_RELEASED",
+            title_az="Üz kilidiniz açıldı",
+            body_az=(
+                f"Üz uyğunsuzluğuna görə qurulmuş kilid {actor.full_name} tərəfindən "
+                f"açıldı. Səbəb: {cleaned}"
+            ),
+            is_critical=True,
+        )
+        return FaceLockReleaseResult(
+            employee_id=subject_id,
+            was_locked=was_locked,
+            cleared_attempts=cleared_attempts,
+            re_enrollment_recommended=re_enrollment_recommended,
+            message_az=message,
+        )
+
+    # ------------------------------ köməkçi --------------------------------- #
+
+    def _require_permission(self, actor: Employee) -> None:
+        if not actor.has_permission(MANAGE_EXEMPTIONS_FLAG, now=self._clock.now()):
+            _security_log.warning(
+                "FACE_LOCK_RELEASE_PERMISSION_DENIED",
+                extra={"actor_id": str(actor.id), "flag": MANAGE_EXEMPTIONS_FLAG},
+            )
+            raise FaceControlPermissionError(
+                f"'{MANAGE_EXEMPTIONS_FLAG}' səlahiyyəti olmadan üz kilidi açıla bilməz "
+                f"(adi `{ENROLLMENT_FLAG}` KİFAYƏT ETMİR — bax sinif başlığı)",
+                user_message="Üz kilidini açmaq səlahiyyətiniz yoxdur.",
+                context={"actor_id": str(actor.id), "flag": MANAGE_EXEMPTIONS_FLAG},
+            )
+
+    def _limit_int(self, tenant_id: TenantId, key: SystemLimitKey) -> int:
+        return self._limits.get_int(tenant_id, key.value, int(DEFAULT_LIMITS[key]))
+
+
+def _require_non_empty_reason(reason: str) -> str:
+    """Boş səbəb qadağandır — sənədləşməmiş açılış auditdə müdafiə olunmur."""
+    cleaned = " ".join(reason.split())
+    if not cleaned:
+        raise FaceControlError(
+            "Üz kilidinin açılma səbəbi boş ola bilməz",
+            user_message="Kilidi açmaq üçün səbəb yazılmalıdır.",
+        )
+    return cleaned
 
 
 # --------------------------------------------------------------------------- #
@@ -2025,6 +2469,7 @@ def _evaluate_frames(
 
 __all__ = [
     "CAMERA_HEALTH_CATEGORY",
+    "COMPENSATION_UNAVAILABLE_ACTION",
     "DUAL_CONTROL_CATEGORY",
     "ENROLLMENT_FLAG",
     "ESCALATION_CATEGORY",
@@ -2041,6 +2486,8 @@ __all__ = [
     "FaceExemptionView",
     "FaceGateDecision",
     "FaceGateOutcome",
+    "FaceLockReleaseResult",
+    "FaceLockReleaseUseCase",
     "FaceMismatchExceptionRule",
     "FaceReEnrollmentUseCase",
     "FaceVerificationLogRetentionUseCase",

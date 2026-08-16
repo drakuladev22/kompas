@@ -24,6 +24,9 @@ from src.application.use_cases.license_status import (
     blocked_screen_text,
 )
 from src.developer_panel.console import (
+    EXIT_CONFIRMATION_REQUIRED,
+    EXIT_FAILED,
+    EXIT_OK,
     confirmation_text,
     render_audit_trail,
     render_table,
@@ -858,9 +861,23 @@ class TestDeveloperConsole:
 
         code, output = run_console(directory, extend=str(TENANT), now=NOW)  # type: ignore[arg-type]
 
-        assert code == 2
+        assert code == EXIT_CONFIRMATION_REQUIRED
         assert directory.extended == []
         assert "--yes" in output
+
+    def test_tesdiq_kodu_ise_dusme_xetasindan_ferqlenir(self) -> None:
+        """`2` ARTIQ İKİ MƏNALI DEYİL.
+
+        Əvvəl «`--yes` gözlənilir» və «işə düşmə/baza xətası» eyni `2`-ni
+        qaytarırdı; skript birincidə əmri təsdiqlə təkrar etməli, ikincidə isə
+        ümumiyyətlə təkrar etməməlidir — yəni fərq davranış qərarıdır.
+        `0` və `1` isə DƏYİŞMİR (geriyə uyğunluq).
+        """
+        from src.main import EXIT_STARTUP_ERROR, EXIT_WATCHDOG_RESTART_LIMIT
+
+        assert EXIT_CONFIRMATION_REQUIRED != EXIT_STARTUP_ERROR
+        assert EXIT_CONFIRMATION_REQUIRED != EXIT_WATCHDOG_RESTART_LIMIT
+        assert (EXIT_OK, EXIT_FAILED, EXIT_STARTUP_ERROR) == (0, 1, 2)
 
     def test_tesdiqle_uzatma_icra_olunur(self) -> None:
         directory = FakeDirectory([make_row()])

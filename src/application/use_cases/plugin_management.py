@@ -72,6 +72,21 @@ class InstalledPlugin:
     publisher: str
     status: PluginStatus
     signature_verified: bool
+    #: Sətrin `manifest` sütunu (audit G-3). DEFOLT `None` VƏ BU, QƏSDƏNDİR:
+    #: sahə mövcud çağırış nöqtələrinin heç birini dəyişmir (`as_row`, ekran,
+    #: testlər) və yalnız İNTERFEYS SƏTHİNƏ (`presentation/plugin_surface.py`)
+    #: lazımdır — plugin-in hansı qabiliyyəti və hansı icazə flag-lərini elan
+    #: etdiyi YALNIZ manifestdə yaşayır. Oxuna bilməyən/boş manifest `None`
+    #: qalır və həmin plugin səth VERMİR (fail-closed).
+    manifest: PluginManifest | None = None
+    #: Paketin fayl sistemindəki yolu (`plugins.package_path`, migrations/059).
+    #: DEFOLT BOŞ VƏ BU, QƏSDƏNDİR — `manifest` ilə eyni əsaslandırma: sahə
+    #: mövcud çağırış nöqtələrinin heç birini dəyişmir və yalnız plugin
+    #: SƏHİFƏSİNİN icra yoluna lazımdır (`PluginSandbox` alt-prosesi məhz bu
+    #: faylı işə salır). Boş sətir "yol qeydə alınmayıb" deməkdir və
+    #: FAIL-CLOSED oxunur: kod icra OLUNMUR, istifadəçi səbəbi görür (bax
+    #: `presentation/controllers/plugin_page.py`).
+    package_path: str = ""
 
     @property
     def is_enabled(self) -> bool:
@@ -107,6 +122,7 @@ class PluginRegistry(Protocol):
         manifest: PluginManifest,
         digest: str,
         installed_by: object,
+        package_path: str = "",
     ) -> str: ...
 
     def set_status(self, plugin_id: str, status: PluginStatus, *, changed_by: object) -> None: ...
@@ -169,11 +185,17 @@ class PluginManagementUseCase:
             # burada onu ümumiləşdirmək diaqnostikanı korlayardı.
             raise
 
+        # YOL DA YAZILIR (migrations/059): `plugin_path` ƏVVƏL yalnız imza
+        # yoxlamasına girirdi və heç yerə düşmürdü, yəni quraşdırmadan sonra
+        # host paketin harada olduğunu bilmirdi və plugin KODU heç vaxt icra
+        # oluna bilmirdi. Yoxlamadan SONRA yazılır: imza rədd edilibsə sətir
+        # ümumiyyətlə yaranmır, yəni etibarsız paketin yolu bazaya düşmür.
         plugin_id = self._registry.install(
             tenant_id,
             manifest=manifest,
             digest=digest,
             installed_by=actor.id,
+            package_path=str(plugin_path),
         )
         self._audit.record(
             tenant_id=tenant_id,
@@ -200,6 +222,7 @@ class PluginManagementUseCase:
             publisher=manifest.publisher,
             status=PluginStatus.PENDING_APPROVAL,
             signature_verified=True,
+            package_path=str(plugin_path),
         )
 
     # -------------------------------- qərarlar -------------------------------- #
@@ -236,6 +259,10 @@ class PluginManagementUseCase:
             publisher=plugin.publisher,
             status=status,
             signature_verified=plugin.signature_verified,
+            # Yol OXUNAN sətirdən daşınır: `set_status` onu bazada dəyişmir,
+            # ona görə qaytarılan obyekt də onu İTİRMƏMƏLİDİR — əks halda
+            # aktivləşdirmədən sonra qayıdan nüsxə "yolu yoxdur" deyərdi.
+            package_path=plugin.package_path,
         )
 
     def remove(self, *, tenant_id: TenantId, actor: Employee, plugin_id: str) -> None:

@@ -50,6 +50,20 @@ class DriveConnectionStatus(str, Enum):
     ACTIVE = "ACTIVE"
     ARCHIVED = "ARCHIVED"
     QUOTA_EXCEEDED = "QUOTA_EXCEEDED"
+    #: İstifadəçi Google hesabının təhlükəsizlik səhifəsindən razılığı GERİ ALDI.
+    #:
+    #: NİYƏ AYRICA VƏZİYYƏT — `ARCHIVED` KİFAYƏT ETMİRDİ: arxivləmə ADMİNİN
+    #: qərarıdır (yeni hesab qoşuldu, köhnəsi oxunmağa davam edir) və oradakı
+    #: şəkillər HƏLƏ DƏ açılır. Razılıq ləğvi isə XARİCİ hadisədir və nəticəsi
+    #: fərqlidir: token artıq işləmir, yəni həmin hesabdakı şəkillər NƏ yazıla,
+    #: NƏ də oxuna bilir. İkisini eyni vəziyyətdə birləşdirsəydik, ekran
+    #: «Arxivlənib» yazar və administrator bunu normal hal sanardı.
+    #:
+    #: Ekran mətni (`controllers/drive_connection.STATUS_TEXT`) bu vəziyyət üçün
+    #: ƏVVƏLCƏDƏN yazılmışdı, lakin enum-da qarşılığı YOX İDİ və heç bir kod
+    #: ora keçirmirdi — yəni istifadəçi razılığı geri alanda ekran hələ də
+    #: «Aktiv» göstərirdi və həqiqət yalnız növbəti yükləmə çökəndə üzə çıxırdı.
+    REVOKED = "REVOKED"
 
 
 class NoActiveDriveConnectionError(StorageError):
@@ -159,7 +173,8 @@ class DriveConnectionRepository:
                     """
                     UPDATE drive_connections
                        SET status = 'ARCHIVED', archived_at = %s
-                     WHERE tenant_id = %s AND status IN ('ACTIVE', 'QUOTA_EXCEEDED')
+                     WHERE tenant_id = %s
+                       AND status IN ('ACTIVE', 'QUOTA_EXCEEDED', 'REVOKED')
                     """,
                     (moment, self._tenant_id),
                 )
@@ -244,6 +259,45 @@ class DriveConnectionRepository:
                     ),
                 )
             uow.commit()
+
+    def mark_revoked(self, connection_id: UUID, *, now: datetime | None = None) -> bool:
+        """Razılıq geri alınıb — bağlantını `REVOKED` edir. Qaytarır: dəyişdimi.
+
+        YALNIZ `ACTIVE`/`QUOTA_EXCEEDED` sətrə toxunur (`WHERE` şərti):
+        `ARCHIVED` bağlantının token-i onsuz da işlədilmir və onu `REVOKED`-a
+        keçirsəydik, KÖHNƏ şəkillərin oxunmasının niyə dayandığı sualı ortaya
+        çıxardı. İDEMPOTENTDİR — ikinci çağırış heç bir sətri dəyişmir və
+        `False` qaytarır, yəni gündəlik iş təkrar-təkrar bildiriş göndərmir.
+
+        `last_error` də yazılır: administrator ekranda «İcazə ləğv edilib»
+        görəndə növbəti sualı «nə vaxt və niyə?» olur.
+        """
+        moment = now or datetime.now(UTC)
+        with self._database.unit_of_work(self._tenant_id) as uow:
+            with uow.connection.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE drive_connections
+                       SET status = 'REVOKED',
+                           last_error = %s,
+                           last_error_at = %s
+                     WHERE id = %s AND status IN ('ACTIVE', 'QUOTA_EXCEEDED')
+                    """,
+                    ("Google razılığı geri alınıb (invalid_grant)", moment, connection_id),
+                )
+                changed = cur.rowcount
+            uow.commit()
+
+        if changed:
+            _security_log.warning(
+                "DRIVE_CONSENT_REVOKED",
+                extra={
+                    "tenant_id": str(self._tenant_id),
+                    "connection_id": str(connection_id),
+                    "impact": "yeni şəkillər lokal növbədə gözləyir; hesab yenidən qoşulmalıdır",
+                },
+            )
+        return bool(changed)
 
     def mark_quota_warning_sent(self, connection_id: UUID, *, now: datetime | None = None) -> None:
         moment = now or datetime.now(UTC)

@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 
+from src.application.use_cases.user_management import CredentialWriter
 from src.domain.entities.appeal import AppealStatus, FineAppeal
 from src.domain.entities.attendance_sheet import (
     AutoAttendanceStatus,
@@ -63,6 +64,7 @@ from src.infrastructure.persistence.report_repositories import (
     PostgresReportFactProvider,
     _as_decimal,
 )
+from src.infrastructure.persistence.repositories import PostgresEmployeeRepository
 from src.infrastructure.persistence.support_repositories import (
     PostgresSupportTicketRepository,
 )
@@ -1286,3 +1288,108 @@ def test_an_unknown_severity_in_the_catalog_falls_back() -> None:
 
     assert source.default_severity is ExceptionSeverity.MEDIUM
     assert source.is_active is False
+
+
+# --------------------------------------------------------------------------- #
+# `CredentialWriter` — protokolun TƏTBİQİ ümumiyyətlə yox idi
+#
+# `composition.py` `credentials=uow.employees` ötürür, yəni protokolu məhz
+# `PostgresEmployeeRepository` ödəməlidir. Metodlar isə YAZILMAMIŞDI:
+# `uow.employees` `Any` qaytardığı üçün nə mypy, nə də hər hansı test bunu
+# görmürdü və `[Şifrəni Yenilə]` düyməsi istehsalatda `AttributeError` ilə
+# çökürdü. Aşağıdakı testlər "metod var" ilə kifayətlənmir — SAXLANMIŞ heşin
+# verilən xam sirri DOĞRULADIĞINI yoxlayır.
+# --------------------------------------------------------------------------- #
+
+#: Protokolun tələb etdiyi metodlar — SİYAHI ƏL İLƏ YAZILMIR, protokolun
+#: özündən çıxarılır ki, ora yeni metod əlavə olunanda test onu tutsun.
+_CREDENTIAL_WRITER_METHODS = sorted(
+    name
+    for name, value in vars(CredentialWriter).items()
+    if callable(value) and not name.startswith("_")
+)
+
+
+@pytest.fixture
+def _pepper(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SEC-005 pepper-i — heşləmə onsuz qurula bilməz."""
+    monkeypatch.setenv("KOMPASOS_HASH_PEPPER", "a" * 64)
+
+
+def _credential_params(conn: _FakeConnection) -> tuple[Any, ...]:
+    """`update_credentials()` UPDATE-inin parametrləri: (pin, password, pepper, …)."""
+    for sql, params in conn.executed:
+        if "COALESCE(%s, password_hash)" in sql:
+            return params
+    raise AssertionError("Sirr UPDATE-i ümumiyyətlə icra olunmadı")
+
+
+def test_the_employee_repository_satisfies_the_credential_writer_protocol() -> None:
+    """Kompozisiya kökü onu bu protokol kimi ötürür — metodlar MÖVCUD olmalıdır."""
+    repo, _ = _build(PostgresEmployeeRepository)
+
+    missing = [
+        name for name in _CREDENTIAL_WRITER_METHODS if not callable(getattr(repo, name, None))
+    ]
+
+    assert _CREDENTIAL_WRITER_METHODS, "Protokoldan metod siyahısı çıxarılmadı — qapı kordur"
+    assert missing == [], f"`CredentialWriter` metodları yoxdur: {missing}"
+
+
+@pytest.mark.usefixtures("_pepper")
+def test_set_password_stores_a_hash_that_verifies_the_raw_password() -> None:
+    """Saxlanan heş verilən şifrəni doğrulamalıdır — «yazıldı» kifayət deyil."""
+    from src.infrastructure.security.hashing import HashingService
+
+    repo, conn = _build(PostgresEmployeeRepository)
+
+    repo.set_password(ACTOR, raw_password="Güclü-Şifrə-2026!", must_change=True)
+
+    params = _credential_params(conn)
+    assert params[0] is None, "PIN heşinə TOXUNULMAMALIDIR (`COALESCE` davranışı)"
+    assert HashingService().verify_password(params[1], "Güclü-Şifrə-2026!") is True
+    # `pepper_version` də yazılır: yazılmasaydı yeni heş köhnə versiya ilə
+    # yoxlanar və doğru şifrə də rədd edilərdi (SEC-005).
+    assert params[2] == HashingService().current_pepper_version
+
+
+@pytest.mark.usefixtures("_pepper")
+def test_set_password_also_writes_the_must_change_flag() -> None:
+    """Admin təyin etdiyi şifrə ilk girişdə MƏCBURİ dəyişdirilməlidir (bölmə 2)."""
+    repo, conn = _build(PostgresEmployeeRepository)
+
+    repo.set_password(ACTOR, raw_password="Güclü-Şifrə-2026!", must_change=True)
+
+    sql, params = conn.executed[-1]
+    assert "must_change_password" in sql
+    assert params[0] is True
+    assert "tenant_id = %s" in sql, "Kirayəçi şərti RLS-ə ƏLAVƏ ikinci qatdır"
+
+
+@pytest.mark.usefixtures("_pepper")
+def test_set_pin_binds_the_hash_to_the_employee_id() -> None:
+    """PIN heşi `employee_id`-yə bağlıdır (SEC-005) — başqa işçidə uyğun gəlməməlidir."""
+    from src.infrastructure.security.hashing import HashingService
+
+    repo, conn = _build(PostgresEmployeeRepository)
+    other = EmployeeId(uuid.uuid4())
+
+    repo.set_pin(ACTOR, raw_pin="4821")
+
+    params = _credential_params(conn)
+    assert params[1] is None, "Şifrə heşinə TOXUNULMAMALIDIR"
+    hashing = HashingService()
+    assert hashing.verify_pin(params[0], "4821", employee_id=str(ACTOR)) is True
+    assert hashing.verify_pin(params[0], "4821", employee_id=str(other)) is False
+
+
+def test_clear_pin_lockout_resets_both_counter_and_deadline() -> None:
+    """Yeni PIN tək başına kifayət etmir — bloklanmış işçi yenə gözləməli olardı."""
+    repo, conn = _build(PostgresEmployeeRepository)
+
+    repo.clear_pin_lockout(ACTOR)
+
+    sql, params = conn.executed[-1]
+    assert "pin_failed_attempts = 0" in sql
+    assert "pin_locked_until = NULL" in sql
+    assert params == (ACTOR, TENANT)

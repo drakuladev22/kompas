@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from src import __version__
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
+from src.presentation.plugin_surface import register_plugin_pages
 from src.presentation.shell.admin_shell import AdminShell
 from src.presentation.shell.kiosk import KioskWindow
 from src.presentation.shell.menu import build_default_registry
@@ -50,6 +51,7 @@ if TYPE_CHECKING:
     from src.presentation.controllers.kiosk import KioskController, KioskOutcome
     from src.presentation.controllers.sales_review import SalesReviewController
     from src.presentation.controllers.screen_data import ScreenDataBinder
+    from src.presentation.plugin_surface import PluginPage
     from src.presentation.screens.group_a_kiosk import EmployeeHomeScreen
     from src.presentation.widgets.worker_status import WorkerStatus
 
@@ -168,6 +170,8 @@ class KompasApplication:
         #: Root parametrlərindən gəlir (biri şəbəkəyə, digəri gecə işlərinə
         #: kökləndiyi üçün eyni intervalı paylaşa bilməzlər).
         self._scheduler_timer: QTimer | None = None
+        #: Plugin-lərin verdiyi səhifələr (audit G-3) — girişdə hesablanır.
+        self._plugin_pages: tuple[PluginPage, ...] = ()
 
     # ------------------------------- pəncərə --------------------------------- #
 
@@ -360,6 +364,18 @@ class KompasApplication:
             self._sales_review = SalesReviewController(self._context, employee)
             self._start_upload_timer()
             self._start_scheduler_timer()
+
+        # PLUGIN SƏTHİ (audit G-3) — reyestr HƏR GİRİŞDƏ TƏZƏDƏN qurulur.
+        #
+        # Səbəb: plugin dəsti iki giriş arasında dəyişə bilər (Root birini
+        # təsdiqləyir/söndürür). Eyni reyestrə təkrar yazsaydıq, ikinci giriş
+        # "açar təkrarlanır" xətası ilə qarşılaşar və maddə sükutla itərdi.
+        # `build_default_registry()`-nin öz sənədləşməsi də məhz bu səbəbdən
+        # hər çağırışda təzə obyekt qaytarır.
+        self._plugin_pages = self._collect_plugin_pages()
+        self._registry = build_default_registry()
+        register_plugin_pages(self._registry, self._plugin_pages)
+
         shell = AdminShell(
             theme=self._theme,
             registry=self._registry,
@@ -405,6 +421,113 @@ class KompasApplication:
         except Exception:
             _log.exception("FEATURE_TOGGLES_LOAD_FAILED")
             return None
+
+    # --------------------------- plugin səthi (G-3) --------------------------- #
+
+    def _collect_plugin_pages(self) -> tuple[PluginPage, ...]:
+        """Təsdiqlənmiş plugin-lərin menyu səhifələri.
+
+        MAKET VƏ CANLI YOL EYNİ FUNKSİYADAN KEÇİR (`collect_surface`) — yəni
+        beş təhlükəsizlik qapısı (imza, təsdiq, qabiliyyət, icazə flag-i, ad
+        məkanı) hər iki rejimdə eynidir. Maket öz "hər şey görünür" yolunu
+        qursaydı, qapılardan birinin sınması yalnız istehsalatda üzə çıxardı.
+
+        Oxu uğursuzluğu BOŞ NƏTİCƏ verir, istisna YOX: plugin cədvəlinin
+        əlçatmazlığı girişi dayandırmamalıdır (fail-closed istiqamət onsuz da
+        qorunur — səth boşdursa plugin heç nə əlavə etmir).
+        """
+        from src.presentation.plugin_surface import (  # noqa: PLC0415
+            PluginRegistrySurface,
+            collect_surface,
+        )
+
+        if self._preview:
+            from src.presentation import preview_data  # noqa: PLC0415
+
+            return collect_surface(preview_data.PLUGIN_SURFACE).pages
+        if self._context is None:
+            return ()
+        try:
+            with self._context.session() as session:
+                surface = PluginRegistrySurface(
+                    session.uow.repository("plugins"), self._context.tenant_id
+                ).surface()
+        except Exception:
+            _log.exception("PLUGIN_PAGES_LOAD_FAILED")
+            return ()
+        return surface.pages
+
+    def _plugin_page_factory(self, page: PluginPage) -> Callable[[], QWidget]:
+        """Plugin səhifəsinin fabrikası.
+
+        `make(...)` BÜKÜCÜSÜ İŞLƏDİLMİR: `preview_screens.populate` və
+        `ScreenDataBinder.populate` sabit ekran açarları ilə işləyir və plugin
+        açarını tanımadığı üçün hər səhifədə `SCREEN_BINDER_MISSING`
+        xəbərdarlığı yazardı — halbuki burada əskik bağlama YOXDUR, məzmunu
+        səthin özü verir.
+
+        MƏZMUN ARTIQ PLUGIN-DƏN GƏLİR (audit G-3-ün icra qatı). Əvvəl səhifə
+        yalnız manifestdə ELAN olunmuş metadata göstərirdi, çünki `PluginSandbox.
+        invoke` `PLUGIN_SANDBOX_TIMEOUT_SECONDS`-ə qədər bloklayır və Qt hadisə
+        dövrəsində interfeysi dondururdu. İndi çağırış `BackgroundTask` ilə
+        FONDA icra olunur (bax `controllers/plugin_page.py`): səhifə DƏRHAL
+        açılır, məzmun isə gələndə yerini tutur.
+
+        FORMA YENƏ HOST-UNDUR: plugin widget ağacı qurmur, yalnız MƏTN verir
+        və o mətn zəngin mətn kimi render OLUNMUR (bax `PluginPageScreen`
+        başlığı və `plugin_page.py`-dakı "ETİBARSIZ GİRİŞ" bölməsi).
+
+        MAKET REJİMİ İCRA ETMİR: orada nə baza sətri, nə də paket faylı var —
+        səhifə metadata + açıq bir izah sətri göstərir. Sətrin ETİKETİ hər iki
+        yolda eynidir (`plugin_page.CONTENT_LABEL`), yəni maket öz ad məkanını
+        qurmur (CLAUDE.md bölmə 6).
+        """
+
+        def build() -> QWidget:
+            from src.presentation.controllers.plugin_page import (  # noqa: PLC0415
+                CONTENT_LABEL,
+                PREVIEW_TEXT,
+                attach_plugin_page,
+                metadata_rows,
+            )
+            from src.presentation.screens.group_i import PluginPageScreen  # noqa: PLC0415
+
+            screen = PluginPageScreen(
+                self._theme,
+                plugin_name=page.plugin_name,
+                publisher=page.publisher,
+            )
+            if self._preview or self._context is None:
+                screen.set_rows([*metadata_rows(page), (CONTENT_LABEL, PREVIEW_TEXT)])
+                return screen
+
+            attach_plugin_page(screen, page=page, context=self._context)
+            return screen
+
+        return build
+
+    def _queue_store_filter_threshold(self) -> int:
+        """Növbədəki mağaza süzgəcinin görünmə həddi (audit G-6).
+
+        ROOT-dan oxunur (`CAMERA_QUEUE_STORE_FILTER_THRESHOLD`); oxu mümkün
+        deyilsə modul fallback-ı işləyir — `_upload_poll_interval_ms` ilə eyni
+        əsaslandırma: verilməli cavab "növbə açılsınmı" deyil, "seçici
+        neçədən sonra görünsün" idi.
+        """
+        from src.presentation.screens.group_b import (  # noqa: PLC0415
+            QUEUE_STORE_FILTER_THRESHOLD,
+        )
+
+        if self._context is None:
+            return QUEUE_STORE_FILTER_THRESHOLD
+        try:
+            value = self._context.infrastructure_limits().int_of(
+                SystemLimitKey.CAMERA_QUEUE_STORE_FILTER_THRESHOLD
+            )
+        except Exception:
+            _log.exception("QUEUE_STORE_FILTER_THRESHOLD_READ_FAILED")
+            return QUEUE_STORE_FILTER_THRESHOLD
+        return max(1, value)
 
     def _start_upload_timer(self) -> None:
         """Sübut növbəsini dövri boşaldır (Faza 3.9).
@@ -542,6 +665,30 @@ class KompasApplication:
             return
         self._fine_entry.attach(screen)
 
+    def _attach_fine_review(self, screen: QWidget) -> None:
+        """«Aylıq Cərimə İcmalı»nı `MonthlyFineReviewUseCase`-ə bağlayır.
+
+        Ekran menyuda `can_publish_fines` ilə qapılıdır, lakin FAKTİKİ qapı
+        use case-dədir (`_assert_may_publish`) — menyunun görünməsi əməliyyat
+        icazəsi DEYİL (bax `menu.py` başlığı).
+
+        Kontrollerə istinad SAXLANMIR: o, siqnallara bağladığı `lambda`-ların
+        bağlamasında yaşayır və ekranla birlikdə ölür (eyni naxış
+        `_attach_annual_leave`-dədir).
+        """
+        from src.presentation.controllers.fine_review import (  # noqa: PLC0415
+            MonthlyFineReviewController,
+        )
+        from src.presentation.screens.fine_review import (  # noqa: PLC0415
+            MonthlyFineReviewScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, MonthlyFineReviewScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        MonthlyFineReviewController(self._context, self._current_employee).attach(screen)
+
     def _attach_camera_queue(self, screen: QWidget) -> None:
         """`[Vaxtı Əllə Təyin Et]` — dual-control həddi ROOT limitindən."""
         from src.presentation.controllers.camera_queue import (  # noqa: PLC0415
@@ -661,8 +808,14 @@ class KompasApplication:
         from src.presentation.screens.field_reports import (  # noqa: PLC0415
             FieldReportScreen,
         )
+        from src.presentation.screens.fine_review import (  # noqa: PLC0415
+            MonthlyFineReviewScreen,
+        )
         from src.presentation.screens.performance_review import (  # noqa: PLC0415
             PerformanceReviewScreen,
+        )
+        from src.presentation.screens.sync_conflicts import (  # noqa: PLC0415
+            SyncConflictScreen,
         )
 
         handlers: tuple[tuple[type[QWidget], Callable[[QWidget], None]], ...] = (
@@ -676,6 +829,10 @@ class KompasApplication:
             # manual vaxt düzəlişi) — hər ikisi ROOT limitlərini işlədir.
             (group_b.FineEntryScreen, self._attach_fine_entry),
             (group_b.OperatorQueueScreen, self._attach_camera_queue),
+            # Aylıq Cərimə İcmalı (miqrasiya 003) — HƏM oxuyur, HƏM yazır və
+            # nəşrdən sonra siyahını yenidən oxuyur (nəşr olunan cərimə
+            # `PENDING_REVIEW`-dan çıxır). Bax `controllers/fine_review.py`.
+            (MonthlyFineReviewScreen, self._attach_fine_review),
             (group_h.CatalogScreen, lambda widget: self._attach_catalog_admin(key, widget)),
             (group_h.HelpCenterScreen, self._attach_help_center),
             # kompas1.md Faza 8 — export təcrübəsi. Ekranın DÖVR/LOCK məlumatı
@@ -730,6 +887,10 @@ class KompasApplication:
             # Auditi» ilə «İnsident Bildirişi»ni ayırd edə bilmir — üç kataloq
             # ekranındakı (`_attach_catalog_admin`) EYNİ vəziyyət.
             (FieldReportScreen, lambda widget: self._attach_field_reports(key, widget)),
+            # G-1 (bölmə 5) — offline konfliktlərin manual həlli. HƏM oxuyur,
+            # HƏM yazır və hər qərardan sonra siyahını yenidən oxuyur (bax
+            # `controllers/sync_conflicts.py` başlığı).
+            (SyncConflictScreen, self._attach_sync_conflicts),
             (group_g.ProfileScreen, self._attach_profile),
             # Faza 3 yekunu: ERP, ehtiyat nüsxə, baza keçidi və diaqnostika.
             (group_d.ErpServersScreen, self._attach_erp_servers),
@@ -934,6 +1095,26 @@ class KompasApplication:
         if not isinstance(screen, AttritionRiskScreen):  # pragma: no cover - tip qoruyucusu
             return
         AttritionRiskController(self._context, self._current_employee).attach(screen)
+
+    def _attach_sync_conflicts(self, screen: QWidget) -> None:
+        """«Sinxronizasiya Konfliktləri» ekranını use case-ə bağlayır (G-1).
+
+        Ekran menyuda `can_view_employee_reports` ilə qapılıdır, lakin FAKTİKİ
+        qapı use case-dədir (`SyncConflictUseCase._require`) — menyunun
+        görünməsi əməliyyat icazəsi DEYİL (bax `menu.py` başlığı).
+        """
+        from src.presentation.controllers.sync_conflicts import (  # noqa: PLC0415
+            SyncConflictController,
+        )
+        from src.presentation.screens.sync_conflicts import (  # noqa: PLC0415
+            SyncConflictScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, SyncConflictScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        SyncConflictController(self._context, self._current_employee).attach(screen)
 
     def _attach_field_reports(self, key: str, screen: QWidget) -> None:
         """Sahə hesabatı formasını `FieldReportUseCase`-ə bağlayır (#26+#27).
@@ -1191,12 +1372,25 @@ class KompasApplication:
         """
         from src.presentation.screens.group_d import HealthScreen  # noqa: PLC0415
 
-        if self._preview or self._binder is None:
-            return
         if not isinstance(screen, HealthScreen):  # pragma: no cover - tip qoruyucusu
+            return
+
+        # G-1: «N sinxronizasiya konflikti həll gözləyir» xəbərdarlığı artıq
+        # KOR DALAN deyil. Keçid HƏR İKİ rejimdə bağlanır (maketdə də ekran
+        # açılmalıdır) və `AdminShell.show_screen` icazəni ÖZÜ yoxlayır —
+        # yəni birbaşa keçid (deep link) qapısı da yerindədir.
+        screen.conflicts_requested.connect(self._on_conflicts_requested)
+
+        if self._preview or self._binder is None:
             return
         binder = self._binder
         screen.recheck_requested.connect(lambda: binder.populate("health", screen))
+
+    def _on_conflicts_requested(self) -> None:
+        """Sağlamlıq kartındakı keçid — MÖVCUD naviqasiya API-si ilə."""
+        if self._shell is None:  # pragma: no cover - örtüklə bərabər qurulur
+            return
+        self._shell.show_screen("sync_conflicts")
 
     def _attach_help_center(self, screen: QWidget) -> None:
         """«Dəstəyə yaz» düyməsini MÖVCUD üzən dəstək panelinə bağlayır.
@@ -1285,8 +1479,14 @@ class KompasApplication:
         from src.presentation.screens.field_reports import (  # noqa: PLC0415
             FieldReportScreen,
         )
+        from src.presentation.screens.fine_review import (  # noqa: PLC0415
+            MonthlyFineReviewScreen,
+        )
         from src.presentation.screens.performance_review import (  # noqa: PLC0415
             PerformanceReviewScreen,
+        )
+        from src.presentation.screens.sync_conflicts import (  # noqa: PLC0415
+            SyncConflictScreen,
         )
 
         theme = self._theme
@@ -1318,13 +1518,18 @@ class KompasApplication:
         #: ÖZ filialları ilə məhduddur, satış uyğunlaşması isə şirkət
         #: miqyasındadır (bax `SalesReviewController.employee_names`).
         sales_names: list[str] = []
+        #: Mağaza süzgəcinin görünmə həddi (audit G-6) — ROOT parametridir.
+        queue_store_threshold = self._queue_store_filter_threshold()
         if self._preview:
             from src.presentation import preview_data  # noqa: PLC0415
 
             names = list(preview_data.EMPLOYEE_NAMES)
             stores = list(preview_data.STORES)
             fine_types = list(preview_data.FINE_TYPES)
-            queue_stores = list(preview_data.STORES[:2])
+            # MAKETDƏ DÖRD MAĞAZA (əvvəl iki idi): süzgəc yalnız hədddən ÇOX
+            # təyinatda qurulur, yəni iki mağaza ilə maket onu heç vaxt
+            # göstərməzdi və dizayn nəzərdən keçirilərkən görünməz qalardı.
+            queue_stores = list(preview_data.STORES[:4])
             sales_names = names
         else:
             if self._fine_entry is not None:
@@ -1337,13 +1542,21 @@ class KompasApplication:
 
         factories: dict[str, Callable[[], QWidget]] = {
             "dashboard": lambda: group_c.DashboardScreen(theme),
-            "live_queue": lambda: group_b.OperatorQueueScreen(theme, assigned_stores=queue_stores),
+            "live_queue": lambda: group_b.OperatorQueueScreen(
+                theme,
+                assigned_stores=queue_stores,
+                store_filter_threshold=queue_store_threshold,
+            ),
             "daily_roster": lambda: group_c.DailyRosterScreen(theme),
             "shift_planning": lambda: group_c.ShiftPlanningScreen(theme),
             "shift_swaps": lambda: group_c.ShiftSwapScreen(theme),
             "fines": lambda: group_b.FineEntryScreen(
                 theme, fine_types=fine_types, stores=stores, employees=names
             ),
+            # Aylıq Cərimə İcmalı (miqrasiya 003) — `FineStatus.PUBLISHED`-ə
+            # YEGANƏ yol. Ekran öz kontrollerinə bağlıdır (bax
+            # `_attach_write_controller` cədvəli).
+            "fine_review": lambda: MonthlyFineReviewScreen(theme),
             "fine_appeals": lambda: group_f.FineAppealInboxScreen(theme),
             "tasks": lambda: group_f.TasksScreen(theme),
             "sales_points": lambda: group_f.SalesPointsScreen(theme),
@@ -1380,6 +1593,8 @@ class KompasApplication:
             "announcements": lambda: AnnouncementsScreen(theme),
             "performance_reviews": lambda: PerformanceReviewScreen(theme),
             "attrition_risk": lambda: AttritionRiskScreen(theme),
+            # G-1 (bölmə 5) — «Sistem Sağlamlığı» xəbərdarlığının GEDƏCƏYİ yer.
+            "sync_conflicts": lambda: SyncConflictScreen(theme),
             "annual_leave": lambda: AnnualLeaveInboxScreen(theme),
             # Face Control (facecontrol.md Faza 4) — hər ikisi ÖZ kontrollerinə
             # bağlıdır (bax `_attach_write_controller` cədvəli).
@@ -1401,6 +1616,7 @@ class KompasApplication:
             "live_queue": "Canlı · 2 san əvvəl yeniləndi",
             "daily_roster": "Bellona 28 May · 12 Avqust 2026",
             "fines": "Avqust 2026 · Bellona 28 May",
+            "fine_review": "Ayın əvvəli · göndərmə geri qaytarıla bilmir",
             "users": "235 nəfər · 21 filial",
             "bulk_operations": "CSV işçi idxalı · mağaza şablonu",
             "reports": "Avqust 2026 · iki ayrı fayl",
@@ -1415,6 +1631,7 @@ class KompasApplication:
             "announcements": "Bütün mağazalar · bir-tərəfli yayım",
             "performance_reviews": "Dövri qiymətləndirmə · KPI + qeyd",
             "attrition_risk": "Gecəlik hesablanır · yalnız məsləhət xarakterlidir",
+            "sync_conflicts": "Offline rejimin izi · hər iki versiya saxlanılır",
             "annual_leave": "İllik haqq · gündaxili icazədən AYRI mexanizm",
             "face_enrollment": "Nəzarətli proses · foto saxlanmır, yalnız riyazi təmsil",
             "face_exemptions": "PIN-only istisnası · məcburi ikinci təsdiqlə əvəzlənir",
@@ -1422,6 +1639,20 @@ class KompasApplication:
 
         for key, factory in factories.items():
             shell.register_screen(key, make(key, factory), subtitle=subtitles.get(key, ""))
+
+        # PLUGIN SƏHİFƏLƏRİ SONDA (audit G-3): sabit cədvəl ƏVVƏL qeydiyyatdan
+        # keçir, yəni plugin heç bir mövcud açarı üstələyə bilmir —
+        # `AdminShell.register_screen` sadəcə lüğətə yazır və sonuncu qalib
+        # gələrdi. Ad məkanı (`plugin:`) onsuz da toqquşmanı qeyri-mümkün
+        # edir; sıra İKİNCİ qatdır (bax `plugin_surface.py` qapı 4).
+        for page in self._plugin_pages:
+            if page.key in factories:  # pragma: no cover - ad məkanı bunu qapayır
+                continue
+            shell.register_screen(
+                page.key,
+                self._plugin_page_factory(page),
+                subtitle=f"Plugin · {page.publisher}",
+            )
 
     # ------------------------------ üst qatlar -------------------------------- #
 

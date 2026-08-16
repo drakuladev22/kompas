@@ -470,13 +470,47 @@ def test_export_filter_is_built_from_the_domain_source() -> None:
     # Determinizm: dəst sırasızdır, sorğu mətni isə sabit olmalıdır.
     assert _EXPORTABLE_STATUS_LITERALS == "'PUBLISHED', 'REDUCED'"
 
-    # Üç şərtin hamısı sorğudadır (`Fine.is_exportable` ilə birebir).
+    # DÖRD şərtin hamısı sorğudadır (`Fine.is_exportable` ilə birebir).
     assert "status IN ('PUBLISHED', 'REDUCED')" in _EXPORTABLE_FINES_WHERE
     assert "published_at IS NOT NULL" in _EXPORTABLE_FINES_WHERE
     assert "appeal_window_closes_at <= %s" in _EXPORTABLE_FINES_WHERE
     assert "exported_period IS NULL" in _EXPORTABLE_FINES_WHERE
     # Köhnə, sızmağa imkan verən şərt geri qayıtmamalıdır.
     assert "REVERSED" not in _EXPORTABLE_FINES_WHERE
+
+
+def test_an_undecided_appeal_blocks_the_export_in_domain_sql_and_view() -> None:
+    """M-6 dördüncü şərti ÜÇ qatda da eynidir: domen, repository, görünüş.
+
+    Qayda yalnız domendə olsaydı, ekranı yan keçən export skripti mübahisəli
+    cəriməni yenə tutardı; yalnız SQL-də olsaydı, `Fine.is_exportable()`-ə
+    güvənən hesabat qatı onu hesablamaya daxil edərdi (CLAUDE.md §5).
+    """
+    from pathlib import Path
+
+    from src.infrastructure.persistence.repositories import (
+        _EXPORTABLE_FINES_WHERE,
+        _UNDECIDED_APPEAL_EXISTS,
+    )
+
+    # 1. Repository sorğusu — qərarsız etirazı olan sətir SÜZÜLÜR.
+    assert "NOT " in _EXPORTABLE_FINES_WHERE
+    assert "fine_appeals" in _EXPORTABLE_FINES_WHERE
+    for status in ("'PENDING'", "'EXPIRED'"):
+        assert status in _UNDECIDED_APPEAL_EXISTS, (
+            f"{status} etirazı QƏRARSIZDIR — export kilidi onu əhatə etməlidir"
+        )
+
+    # 2. DB görünüşü — miqrasiya 052 eyni şərti `v_exportable_fines`-ə yazır.
+    migration = (
+        Path(__file__).resolve().parents[2]
+        / "database"
+        / "migrations"
+        / "052_dual_control_timeout_and_disputed_fine_export_lock.sql"
+    ).read_text(encoding="utf-8")
+    assert "CREATE OR REPLACE VIEW v_exportable_fines" in migration
+    assert "fa.status IN ('PENDING', 'EXPIRED')" in migration
+    assert "NOT EXISTS" in migration
 
 
 def test_appeal_window_trigger_counts_from_publication() -> None:

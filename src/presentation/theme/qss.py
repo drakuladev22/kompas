@@ -187,6 +187,31 @@ QFrame[variant="modal"] {
     border-radius: {{--radius-modal}};
 }
 
+/* SEÇİLMİŞ KART (1C Bağlantı Sihirbazının növ-kartları, 1c.md UX tələbi 1).
+
+   NİYƏ HƏM SƏRHƏD, HƏM FON, HƏM DƏ (kodda) İŞARƏ:
+   Spesifikasiya "seçilmiş kart Amber/vurğu rəngi ilə çərçivələnir" deyir, lakin
+   RƏNG TƏK SİQNAL OLA BİLMƏZ (WCAG 1.4.1) — deuteranopiya ilə amber sərhəd boz
+   sərhəddən seçilmir. Ona görə üç əlamət birlikdə işləyir: sərhəd RƏNGİ dəyişir,
+   sərhəd ENİ 1px-dən fokus halqası eninə qalxır və kartın içindəki işarə
+   ("✓ Seçildi" nişanı) yalnız seçilmiş kartda görünür (bax `group_d.py`).
+
+   Fon `--color-accent-subtle`-dir: üzərindəki mətn cütləri `check_contrast.py`-a
+   ƏLAVƏ EDİLİB (əsas mətn 15.25:1 / 14.03:1, solğun mətn 5.12:1 / 6.04:1). */
+QFrame[variant="card"][selected="true"] {
+    background-color: {{--color-accent-subtle}};
+    border: {{--focus-ring-width}} solid {{--color-accent}};
+}
+
+/* ƏLÇATMAZ KART — COM növü Windows-dan kənarda (1c.md UX tələbi 1).
+   Kart GİZLƏDİLMİR: yoxluq istifadəçini "niyə yalnız iki seçim var?" sualı ilə
+   tək qoyardı. Fon çökür və sərhəd solur; SƏBƏB isə mətnlə yazılır — deaktiv
+   görünüş tək başına "niyə?" sualına cavab vermir. */
+QFrame[variant="card"][unavailable="true"] {
+    background-color: {{--color-bg-sunken}};
+    border: {{--border-width}} solid {{--color-border-subtle}};
+}
+
 /* QEYD: Əvvəllər burada "kartdakı bütün QLabel-lər şəffaf olsun" qaydası var
    idi — ümumi `QWidget { background-color: … }` qaydasını neytrallaşdırmaq
    üçün. Həmin ümumi qayda ARADAN QALDIRILDIQDAN sonra (bax yuxarıdakı izah)

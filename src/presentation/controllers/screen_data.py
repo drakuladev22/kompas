@@ -21,6 +21,27 @@ sorğusundakı problem (məs. `store_id` təyin edilməyib) BÜTÜN örtüyü
 Səbəb `error.log`-a düşür və boş ekran özü də siqnaldır.
 
 ──────────────────────────────────────────────────────────────────────────────
+BOŞ EKRAN ARTIQ «MƏLUMAT YOXDUR» DEMİR
+──────────────────────────────────────────────────────────────────────────────
+Yuxarıdakı fail-soft davranış SAXLANILIR — bir bölmənin sınması örtüyü
+çökdürmür. Lakin əvvəl istisna YALNIZ `error.log`-a düşürdü və istifadəçi
+üçün «yüklənə bilmədi» ilə «məlumat yoxdur» EYNİ görünürdü: hər ikisi boş
+ekran idi. Real qüsur məhz bu boşluqda aylarla yaşadı — sorğu
+`fine_types.name` sütununu oxuyurdu (`name_az` olmalı idi), `UndefinedColumn`
+udulurdu, «Cərimələr» ekranı isə həmişə boş idi və heç kim şikayət etmədi.
+
+İndi hər tutulmuş istisna jurnala ƏLAVƏ OLARAQ ekranda görünən iz qoyur:
+`report_section_error()` ekranın `set_section_error()` metodunu çağırır
+(`screens/base.py`) və istifadəçi hansı bölməyə inanmayacağını bilir. Metod
+`getattr` ilə axtarılır — onu daşımayan ekran (və ya `None`) sadəcə köhnə
+davranışı saxlayır, yəni heç bir mövcud imza pozulmur.
+
+QİSMƏN UĞUR ƏN TƏHLÜKƏLİ HALDIR: İdarə Panelinin yeddi bölməsindən biri
+sınarsa qalan altısı DÜZGÜN qalır, sınan isə AÇIQ işarələnir. Sükutla boş
+qalan sayğac istifadəçiyə «0 cərimə»ni HƏQİQƏT kimi göstərir və bu, yanlış
+qərara aparır.
+
+──────────────────────────────────────────────────────────────────────────────
 BAĞLAMASI OLMAYAN AÇAR DA İZ QOYUR
 ──────────────────────────────────────────────────────────────────────────────
 `app.py` `_binders()`-dəkindən ÇOX ekran açarı qeydiyyatdan keçirir. Əvvəl
@@ -50,6 +71,55 @@ if TYPE_CHECKING:
     from src.presentation.composition import ApplicationContext, Session
 
 _error_log = get_logger(__name__, channel=LogChannel.ERROR)
+
+# --------------------------------------------------------------------------- #
+# Bölmə adları — İSTİFADƏÇİ dilində
+# --------------------------------------------------------------------------- #
+# NİYƏ SABİT, NİYƏ ÇAĞIRIŞ YERİNDƏ SƏTİR DEYİL: eyni ad həm bannerdə, həm
+# jurnal sətrində görünür. Dəstək zəngində istifadəçi «Xülasə sayğacları
+# yüklənmədi» deyir və admin `error.log`-da MƏHZ həmin adı axtarır — iki yerdə
+# iki fərqli ad bu zənciri qırardı. Texniki ad (`_dashboard_summary`) ekrana
+# ÇIXMIR: istifadəçi kodun daxili adlarını görməməlidir.
+
+SECTION_SCREEN: Final = "Ekran məlumatları"
+SECTION_DASHBOARD_SUMMARY: Final = "Xülasə sayğacları"
+SECTION_DASHBOARD_FINES: Final = "Filial üzrə cərimələr"
+SECTION_DASHBOARD_LEAVE: Final = "İcazə ölçəni"
+SECTION_DASHBOARD_LEADERS: Final = "Xal liderləri"
+SECTION_DASHBOARD_HEALTH: Final = "Server sağlamlığı"
+SECTION_DASHBOARD_BENCHMARK: Final = "Mağaza reytinqi"
+SECTION_DASHBOARD_BREAKS: Final = "Fasilə həddini aşanlar"
+SECTION_DAILY_ROSTER: Final = "Gündəlik tabel"
+SECTION_HEALTH_OFFLINE: Final = "Offline bufer sayğacı"
+SECTION_HEALTH_CONFLICTS: Final = "Sinxronizasiya konflikti sayğacı"
+SECTION_HEALTH_ALERTS: Final = "Kritik bildirişlər"
+SECTION_QUEUE_FACE_BADGES: Final = "Üz-təsdiq nişanları"
+
+
+def report_section_error(screen: Any, section_label: str) -> None:
+    """Sınmış bölməni EKRANDA görünən edir — jurnal yazısına ƏLAVƏ olaraq.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `getattr`, NİYƏ BİRBAŞA ÇAĞIRIŞ DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Doldurucular `screen: Any` alır: maket yolu (`preview_screens`), canlı yol
+    və testlərdəki duck-typing saxtaları eyni funksiyalara girir. Birbaşa
+    `screen.set_section_error(...)` çağırışı metodu daşımayan hər obyektdə
+    `AttributeError` atardı — yəni XƏTANI GÖRÜNƏN ETMƏK CƏHDİ ikinci bir xəta
+    yaradardı. `Screen` bazasındakı metod varsa işləyir, yoxdursa davranış
+    əvvəlki kimi qalır (yalnız jurnal).
+
+    Bannerin özü də sınarsa (Qt obyekti artıq silinib və s.) istisna BURADA
+    dayanır: xəbərdarlıq mexanizmi əsas axını çökdürə bilməz.
+    """
+    reporter = getattr(screen, "set_section_error", None)
+    if reporter is None:
+        return
+    try:
+        reporter(section_label)
+    except Exception:
+        _error_log.exception("SECTION_ERROR_BANNER_FAILED", extra={"section": section_label})
+
 
 #: Növbə/təqvim görünüşlərində göstərilən dövr.
 #:
@@ -153,12 +223,48 @@ class ScreenDataBinder:
                 },
             )
             return
+        # KÖHNƏ XƏBƏRDARLIQ ƏVVƏLCƏ SİLİNİR: panel saatlarla açıq qalır və
+        # eyni ekran dəfələrlə doldurula bilər. Keçən dəfə sınmış, indi
+        # düzgün yüklənən bölmə üçün banner qalsaydı, o, YALAN danışardı.
+        clear = getattr(screen, "clear_section_errors", None)
+        if clear is not None:
+            clear()
+
         try:
             with self._context.session(user_id=self._actor.id) as session:
                 binder(session, screen)
         except Exception:
             # Bax modul başlığı: bir ekranın problemi örtüyü çökdürmür.
+            # DAVRANIŞ EYNİDİR (istisna udulur), lakin artıq İSTİFADƏÇİ də
+            # görür: sorğu düşübsə ekran «məlumat yoxdur» kimi oxunmamalıdır.
             _error_log.exception("SCREEN_BIND_FAILED", extra={"screen": key})
+            report_section_error(screen, SECTION_SCREEN)
+
+    def _fill_section(
+        self, screen: Any, *, label: str, event: str, fill: Callable[[], None]
+    ) -> bool:
+        """Bir bölməni doldurur — sınarsa QALAN bölmələr işləməyə davam edir.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ HƏR BÖLMƏ AYRICA TUTULUR
+        ──────────────────────────────────────────────────────────────────────
+        `populate()`-dakı tək `try` bloku ilə İdarə Panelinin ilk sınan bölməsi
+        QALAN ALTISINI da dayandırırdı: sorğular ardıcıl işləyir, ilk istisna
+        funksiyadan çıxır. Nəticədə bir sütunun adı səhv olanda istifadəçi
+        yeddi boş bölmə görürdü və heç biri səbəb göstərmirdi.
+
+        Returns:
+            Bölmə doldurulubsa `True`. Çağıran tərəf bunu ARDICIL bölmələr
+            üçün istifadə edə bilər (məs. reytinq cədvəli sınıbsa onun
+            drill-down hissəsi də mənasızdır).
+        """
+        try:
+            fill()
+        except Exception:
+            _error_log.exception(event, extra={"section": label})
+            report_section_error(screen, label)
+            return False
+        return True
 
     def _binders(self) -> dict[str, Callable[[Session, Any], None]]:
         return {
@@ -178,6 +284,20 @@ class ScreenDataBinder:
             "health": self._health,
         }
 
+    def _may_resolve_conflicts(self) -> bool:
+        """Aktorun «Sinxronizasiya Konfliktləri» ekranına icazəsi varmı.
+
+        "GÖRMƏK = SƏLAHİYYƏTİN OLMASI" (bölmə 3): sağlamlıq kartındakı keçid
+        yalnız flag sahibində QURULUR (bax `HealthScreen.set_conflict_action`).
+        Flag adı use case-dən GÖTÜRÜLÜR, burada təkrar YAZILMIR — ikisi
+        ayrılsaydı, keçid görünər, ekran isə "səlahiyyətiniz yoxdur" deyərdi.
+        """
+        from src.application.use_cases.sync_conflicts import (  # noqa: PLC0415
+            RESOLVE_CONFLICT_FLAG,
+        )
+
+        return bool(self._actor.has_permission(RESOLVE_CONFLICT_FLAG, now=datetime.now(UTC)))
+
     # ------------------------------ Qrup C ----------------------------------- #
 
     def _dashboard(self, session: Session, screen: Any) -> None:
@@ -196,25 +316,77 @@ class ScreenDataBinder:
         `PENDING_VERIFICATION` + `PENDING_RETURN_VERIFICATION` = operatorun
         birləşmiş növbəsi (`_live_queue` ilə eyni iki mənbə), `OPEN` +
         `EVIDENCE_SUBMITTED` = açıq tapşırıq (`_tasks` ilə eyni dəst).
+
+        ──────────────────────────────────────────────────────────────────────
+        BÖLMƏLƏR MÜSTƏQİL NƏTİCƏ VERİR
+        ──────────────────────────────────────────────────────────────────────
+        Hər bölmə `_fill_section` ilə AYRICA qorunur. Əvvəl ilk istisna
+        funksiyadan çıxırdı və qalan bölmələr HEÇ VAXT doldurulmurdu — yəni
+        bir sorğunun qüsuru bütün paneli səbəbsiz boşaldırdı. İndi sınan bölmə
+        bannerdə adı ilə görünür, qalanları isə düzgün rəqəm göstərir.
         """
         today = datetime.now(UTC).date()
         month_start = today.replace(day=1)
         next_month = _next_month(month_start)
         previous_month = _previous_month(month_start)
 
-        totals = _fine_month_totals(
-            session,
-            month_start=month_start,
-            next_month=next_month,
-            previous_month=previous_month,
+        def fill_summary() -> None:
+            # Aylıq cəm rəqəm KARTININ bir hissəsidir — onunla EYNİ bölmədə
+            # qalır ki, sınması yalnız həmin kartı işarələsin.
+            totals = _fine_month_totals(
+                session,
+                month_start=month_start,
+                next_month=next_month,
+                previous_month=previous_month,
+            )
+            self._dashboard_summary(session, screen, today=today, fine_totals=totals)
+
+        self._fill_section(
+            screen,
+            label=SECTION_DASHBOARD_SUMMARY,
+            event="DASHBOARD_SUMMARY_FAILED",
+            fill=fill_summary,
         )
-        self._dashboard_summary(session, screen, today=today, fine_totals=totals)
-        self._dashboard_fines(session, screen, month_start=month_start, next_month=next_month)
-        self._dashboard_leave(session, screen, month_start=month_start, next_month=next_month)
-        self._dashboard_leaders(session, screen, today=today)
-        self._dashboard_health(session, screen)
-        self._dashboard_benchmark(session, screen)
-        self._dashboard_break_overuse(session, screen, today=today)
+        self._fill_section(
+            screen,
+            label=SECTION_DASHBOARD_FINES,
+            event="DASHBOARD_FINES_FAILED",
+            fill=lambda: self._dashboard_fines(
+                session, screen, month_start=month_start, next_month=next_month
+            ),
+        )
+        self._fill_section(
+            screen,
+            label=SECTION_DASHBOARD_LEAVE,
+            event="DASHBOARD_LEAVE_FAILED",
+            fill=lambda: self._dashboard_leave(
+                session, screen, month_start=month_start, next_month=next_month
+            ),
+        )
+        self._fill_section(
+            screen,
+            label=SECTION_DASHBOARD_LEADERS,
+            event="DASHBOARD_LEADERS_FAILED",
+            fill=lambda: self._dashboard_leaders(session, screen, today=today),
+        )
+        self._fill_section(
+            screen,
+            label=SECTION_DASHBOARD_HEALTH,
+            event="DASHBOARD_HEALTH_FAILED",
+            fill=lambda: self._dashboard_health(session, screen),
+        )
+        self._fill_section(
+            screen,
+            label=SECTION_DASHBOARD_BENCHMARK,
+            event="DASHBOARD_BENCHMARK_FAILED",
+            fill=lambda: self._dashboard_benchmark(session, screen),
+        )
+        self._fill_section(
+            screen,
+            label=SECTION_DASHBOARD_BREAKS,
+            event="DASHBOARD_BREAK_OVERUSE_FAILED",
+            fill=lambda: self._dashboard_break_overuse(session, screen, today=today),
+        )
 
     def _dashboard_summary(
         self, session: Session, screen: Any, *, today: date, fine_totals: tuple[str, str]
@@ -503,7 +675,12 @@ class ScreenDataBinder:
         try:
             metric = BenchmarkMetric(metric_key)
         except ValueError:
+            # İSTİFADƏÇİ DÜYMƏNİ BASIB VƏ NƏTİCƏ GÖZLƏYİR: naməlum açar
+            # sükutla keçilsəydi, cədvəl KÖHNƏ metrikin rəqəmlərini yeni
+            # metrikin adı altında göstərməyə davam edərdi — səssiz boşluqdan
+            # da pis hal.
             _error_log.warning("BENCHMARK_UNKNOWN_METRIC", extra={"metric_key": metric_key})
+            report_section_error(screen, SECTION_DASHBOARD_BENCHMARK)
             return
 
         try:
@@ -511,6 +688,7 @@ class ScreenDataBinder:
                 self._populate_benchmark_sections(session, screen, metric=metric)
         except Exception:
             _error_log.exception("BENCHMARK_REFRESH_FAILED", extra={"metric_key": metric_key})
+            report_section_error(screen, SECTION_DASHBOARD_BENCHMARK)
 
     def _populate_benchmark_sections(
         self, session: Session, screen: Any, *, metric: BenchmarkMetric
@@ -615,9 +793,14 @@ class ScreenDataBinder:
                     for line in view.sheet.lines
                 ]
         except Exception:
+            # DRILL-DOWN SÜKUTLA GERİ QAYITMIR: istifadəçi reytinqdə bir
+            # mağazaya kliklədi və ekran açıldı. Sətirlər yazılmasa, o,
+            # ƏVVƏLKİ mağazanın (və ya boş) siyahısını YENİ mağazanın
+            # məlumatı kimi oxuyardı — yanlış filial haqqında qərar verərdi.
             _error_log.exception(
                 "BENCHMARK_DRILL_DOWN_ROSTER_FAILED", extra={"store_id": str(store_id)}
             )
+            report_section_error(screen, SECTION_DAILY_ROSTER)
             return
 
         screen.set_rows(rows)
@@ -651,7 +834,7 @@ class ScreenDataBinder:
         # AŞAĞI-ETİBARLI ÜZ TƏSDİQİ (facecontrol.md bənd 12) — nişan üçün
         # lazım olan dəst BİR sorğu ilə oxunur; sətir-sətir sorğu 40 sətirlik
         # növbədə 40 gediş-gəliş demək olardı.
-        low_confidence = _low_confidence_faces(session, stores)
+        low_confidence = _low_confidence_faces(session, stores, screen)
 
         # `(gözləmə dəqiqəsi, sətir)` cütü ilə yığılır: `QueueEntry` gözləməni
         # MƏTN kimi saxlayır ("18 dəq") və mətnə görə sıralamaq "9 dəq"-i
@@ -865,7 +1048,13 @@ class ScreenDataBinder:
         rows = session.uow.connection.execute(
             """
             SELECT f.amount, f.fine_date, f.status,
-                   COALESCE(ft.name, '—') AS type_name,
+                   -- SÜTUN ADI `name_az`-dır, `name` DEYİL (`schema.sql` §
+                   -- fine_types). Səhv ad `UndefinedColumn` atırdı, istisna
+                   -- isə `populate()`-da udulurdu — nəticədə «Cərimələr»
+                   -- ekranı HƏMİŞƏ boş qalırdı və səbəb yalnız `error.log`-da
+                   -- görünürdü. Kataloq repo-su (`catalog_repositories.py`)
+                   -- və `_fine_type_name` onsuz da `name_az` oxuyur.
+                   COALESCE(ft.name_az, '—') AS type_name,
                    e.first_name, e.last_name
               FROM fines f
               LEFT JOIN fine_types ft ON ft.id = f.fine_type_id
@@ -1054,6 +1243,10 @@ class ScreenDataBinder:
         try:
             enabled = frozenset(session.toggles.enabled_modules(session.tenant_id))
         except Exception:
+            # BANNER QOYULMUR VƏ BU, QƏSDƏNDİR: fail-open istifadəçiyə DAHA AZ
+            # deyil, DAHA ÇOX mövzu göstərir — yəni burada nə boş ekran, nə də
+            # yalan rəqəm var. «Yüklənə bilmədi» xəbərdarlığı yardım mətnini
+            # oxuyan adamı əsassız narahat edərdi; səbəb `error.log`-dadır.
             _error_log.exception("HELP_TOGGLES_LOAD_FAILED")
             screen.set_visible_topics(None)
             return
@@ -1086,10 +1279,28 @@ class ScreenDataBinder:
         olmalıdır. NTP sürüşməsi də ölçülməyibsə (`_NullNtp`) kart
         ÜMUMİYYƏTLƏ qurulmur — `0.0 san` "saat dəqiqdir" kimi oxunardı.
         """
+        # Sayğac BİR dəfə oxunur və ÜÇ yerə gedir: rəqəm kartına, xəbərdarlıq
+        # mətninə və «… konflikti həll et» keçidinə. Ayrı-ayrı `SELECT
+        # count(*)` eyni rəqəmi verərdi, lakin oxunuşlar arasında paralel həll
+        # baş versə kart, mətn və keçid bir-birinə ZİDD danışardı. Oxunuş ƏN
+        # ƏVVƏLƏ çəkilib ki, hər üç istifadəçi eyni dəyəri alsın.
+        #
+        # `None` = OXUNA BİLMƏDİ (sıfır DEYİL) — bax `_open_conflicts_or_none`.
+        conflicts = _open_conflicts_or_none(session, screen)
+
         screen.set_last_check(f"Son yoxlama: {_hhmm(datetime.now(UTC))}")
-        screen.set_metrics(_health_metrics(session, self._context))
+        screen.set_metrics(
+            _health_metrics(session, self._context, open_conflicts=conflicts, screen=screen)
+        )
         screen.set_latencies(_health_latencies(session))
-        screen.set_alerts(_health_alerts(session, self._actor))
+
+        screen.set_alerts(
+            _health_alerts(session, self._actor, open_conflicts=conflicts or 0, screen=screen)
+        )
+        # OXUNA BİLMƏYƏN SAYĞAC KEÇİD QURMUR: «0 konflikti həll et» keçidi
+        # istifadəçini boş ekrana aparardı və sayğacın etibarlı olduğunu
+        # təsdiqləyərdi. Xəbərdarlıq bannerdədir.
+        screen.set_conflict_action(conflicts if conflicts and self._may_resolve_conflicts() else 0)
 
     def _audit(self, session: Session, screen: Any) -> None:
         page = session.audit_query.search(tenant_id=session.tenant_id, actor=self._actor)
@@ -1424,11 +1635,42 @@ DB_PING_DANGER_MS: Final = 250
 NTP_DRIFT_FALLBACK_SECONDS: Final = 60
 
 
-def _health_metrics(session: Session, context: Any) -> list[tuple[str, str, str, str]]:
+#: Oxuna bilməyən sayğacın DƏYƏRİ — «0» YAZILMIR.
+#:
+#: Bu, bütün modulun ən bahalı ayrımıdır: `0` istifadəçi üçün «problem yoxdur»
+#: deməkdir və yaşıl ton onu TƏSDİQLƏYİR, halbuki əsl vəziyyət «oxuya
+#: bilmədim»dir. Tire heç bir şey iddia etmir və kartın izah sətri səbəbi
+#: yazır.
+UNREADABLE_VALUE: Final = "—"
+
+#: Oxuna bilməyən kartın izah sətri və tonu.
+#:
+#: TON `warning`-dir, `danger` DEYİL: mənbənin oxunmaması hələ nasazlıq DEMƏK
+#: DEYİL (məsələn miqrasiya tətbiq edilməyib), lakin göstəricini yaşıl
+#: saxlamaq da yalan olardı. Hər iki ton `tokens.py`-da AA üçün kalibrlənib.
+UNREADABLE_CAPTION: Final = "Oxuna bilmədi — səbəb jurnala yazıldı"
+UNREADABLE_TONE: Final = "warning"
+
+
+def _health_metrics(
+    session: Session,
+    context: Any,
+    *,
+    open_conflicts: int | None,
+    screen: Any = None,
+) -> list[tuple[str, str, str, str]]:
     """Rəqəm kartları — `(ad, dəyər, izah, ton)`.
 
     Siyahı DİNAMİKDİR: ölçülə bilməyən göstərici sadəcə əlavə olunmur (bax
     `_health` docstring-i). Ona görə ekranda 2 kart da görünə bilər, 4 da.
+
+    Args:
+        open_conflicts: Konflikt sayğacı — `None` = OXUNA BİLMƏDİ. Parametr
+            MƏCBURİDİR (defolt yoxdur) və bu, qəsdəndir: dəyər `_health`-dəki
+            TƏK oxunuşdan gəlməlidir, əks halda kart ilə xəbərdarlıq mətni
+            fərqli rəqəm göstərə bilər.
+        screen: Sınmış bölmənin bannerdə görünməsi üçün (bax
+            `report_section_error`). `None` → yalnız jurnal.
     """
     metrics: list[tuple[str, str, str, str]] = []
     metrics.append(_db_ping_metric(session))
@@ -1451,27 +1693,32 @@ def _health_metrics(session: Session, context: Any) -> list[tuple[str, str, str,
             )
         )
 
-    pending = _offline_pending(session, context)
-    if pending is not None:
-        metrics.append(
-            (
-                "Sinxronlaşmamış yazı",
-                str(pending),
-                "Offline bufer növbəsi",
-                "success" if pending == 0 else "warning",
-            )
-        )
-
-    conflicts = _open_conflicts(session)
-    metrics.append(
-        (
-            "Sync konflikti",
-            str(conflicts),
-            "Həll gözləyən sətir",
-            "success" if conflicts == 0 else "warning",
-        )
-    )
+    pending = _offline_pending(session, context, screen)
+    metrics.append(_counter_card("Sinxronlaşmamış yazı", pending, caption="Offline bufer növbəsi"))
+    metrics.append(_counter_card("Sync konflikti", open_conflicts, caption="Həll gözləyən sətir"))
     return metrics
+
+
+def _counter_card(name: str, value: int | None, *, caption: str) -> tuple[str, str, str, str]:
+    """Sayğac kartı — `None` GİZLƏDİLMİR, «—» ilə AÇIQ göstərilir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ KART ARTIQ ATLANMIR
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl oxuna bilməyən göstərici siyahıya ƏLAVƏ OLUNMURDU — «0 yazmaqdansa
+    heç nə yazma» qaydası ilə. Nəticə isə eyni sükut idi: kart sadəcə YOX
+    olurdu və istifadəçi bunun səbəbini ekranda görə bilmirdi (ekranda dörd
+    əvəzinə üç kart olduğunu kim sayır?). İndi kart qalır, dəyəri isə heç nə
+    iddia etməyən tiredir.
+
+    «Ölçülə bilməyən göstərici göstərilmir» qaydası POZULMUR: o qayda MƏNBƏSİ
+    OLMAYAN göstəriciyə aiddir (server diski, `_NullNtp`) — həmin kartlar
+    ümumiyyətlə qurulmur. Bu isə mənbəsi OLAN, lakin bu dəfə oxunmayan
+    göstəricidir; ikisi fərqli hallardır.
+    """
+    if value is None:
+        return (name, UNREADABLE_VALUE, UNREADABLE_CAPTION, UNREADABLE_TONE)
+    return (name, str(value), caption, "success" if value == 0 else "warning")
 
 
 def _db_ping_metric(session: Session) -> tuple[str, str, str, str]:
@@ -1497,33 +1744,56 @@ def _db_ping_metric(session: Session) -> tuple[str, str, str, str]:
     return ("Baza (DB Ping)", f"{elapsed_ms} ms", f"Norma: < {DB_PING_WARNING_MS} ms", tone)
 
 
-def _offline_pending(session: Session, context: Any) -> int | None:
+def _offline_pending(session: Session, context: Any, screen: Any = None) -> int | None:
     """Offline buferdəki gözləyən yazı sayı — bufer açıla bilmirsə `None`.
 
-    `None` halında kart GÖSTƏRİLMİR: `0` yazmaq "hər şey sinxrondur" demək
-    olardı, halbuki əsl vəziyyət "oxuya bilmədim"dir (bax `_LazyBufferDrain`).
+    `0` HEÇ VAXT qaytarılmır: o, "hər şey sinxrondur" demək olardı, halbuki
+    əsl vəziyyət "oxuya bilmədim"dir (bax `_LazyBufferDrain`). `None` isə
+    kartda «—» kimi göstərilir (bax `_counter_card`) və bölmə bannerdə
+    işarələnir — əvvəl kart sadəcə YOX olurdu və istifadəçi fərqi görmürdü.
     """
     try:
         return int(context.offline_drain().pending_count(session.tenant_id))
     except Exception:
         _error_log.warning("HEALTH_OFFLINE_BUFFER_UNREADABLE")
+        report_section_error(screen, SECTION_HEALTH_OFFLINE)
         return None
 
 
-def _open_conflicts(session: Session) -> int:
-    """Həll gözləyən sinxronizasiya konfliktləri (`sync_conflicts`).
+def _open_conflicts_or_none(session: Session, screen: Any = None) -> int | None:
+    """Həll gözləyən sinxronizasiya konfliktləri — oxuna bilməsə `None`.
 
     Use case-in `open_count()` metodu `can_view_employee_reports` tələb edir;
     burada REPO birbaşa oxunur, çünki ekran onsuz da `can_view_system_health`
     flag-i ilə açılır (bax `menu.py`) və sağlamlıq sayğacı üçün İKİNCİ,
     əlaqəsiz bir flag tələb etmək istifadəçini izahsız boş kartla qoyardı.
     Sayğac heç bir konflikt MƏZMUNUNU açmır — yalnız ədəddir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `0` DEYİL, `None`
+    ──────────────────────────────────────────────────────────────────────────
+    Sorğu düşəndə funksiya `0` qaytarırdı və kart YAŞIL «0» göstərirdi: yəni
+    nasazlıq ekranda «hər şey qaydasındadır» kimi görünürdü. Bu, bütün
+    modulun ən bahalı sükutu idi — sinxronizasiya konflikti həll edilmədikcə
+    iki yerdə fərqli dəyişdirilmiş qeyd yaşayır və heç kim ona baxmır.
     """
     try:
         return int(session.uow.repository("sync_conflicts").open_count(session.tenant_id))
     except Exception:
         _error_log.exception("HEALTH_CONFLICT_COUNT_FAILED")
-        return 0
+        report_section_error(screen, SECTION_HEALTH_CONFLICTS)
+        return None
+
+
+def _open_conflicts(session: Session) -> int:
+    """`_open_conflicts_or_none`-un GERİYƏ-UYĞUN forması — oxunmasa `0`.
+
+    `_health_alerts` sayğacı ötürülmədikdə özü oxuyur və orada `None` üçün yer
+    yoxdur: xəbərdarlıq sətri ya var, ya yox. Sıfır burada "xəbərdarlıq
+    əlavə etmə" deməkdir — vəziyyəti İDDİA etmir, çünki həqiqi göstərici
+    kartdadır («—») və bölmə bannerdə işarələnib.
+    """
+    return _open_conflicts_or_none(session) or 0
 
 
 def _health_latencies(session: Session) -> list[tuple[str, str, str]]:
@@ -1555,12 +1825,22 @@ def _health_latencies(session: Session) -> list[tuple[str, str, str]]:
     ]
 
 
-def _health_alerts(session: Session, actor: Any) -> list[tuple[str, str, str]]:
+def _health_alerts(
+    session: Session, actor: Any, *, open_conflicts: int | None = None, screen: Any = None
+) -> list[tuple[str, str, str]]:
     """Aktiv xəbərdarlıqlar — `(mətn, vaxt, ton)`.
 
     Üç REAL mənbə birləşdirilir: problemli 1C serverləri (diaqnoz mətni
     domendədir — `ServerHealthRow.diagnosis`), oxunmamış KRİTİK bildirişlər
     və açıq sinxronizasiya konfliktləri. Yeni xəbərdarlıq NÖVÜ icad edilmir.
+
+    Args:
+        open_conflicts: Sayğac ARTIQ oxunubsa ötürülür — belə halda ikinci
+            `SELECT count(*)` edilmir və xəbərdarlıq mətni ilə kartın altındakı
+            keçid EYNİ rəqəmi göstərir (bax `ScreenDataBinder._health`).
+            `None` → funksiya özü oxuyur (mövcud çağırış yerləri üçün).
+        screen: Sınmış bölmə bannerdə görünsün deyə (bax
+            `report_section_error`). `None` → yalnız jurnal.
     """
     alerts: list[tuple[str, str, str]] = []
     now = datetime.now(UTC)
@@ -1584,7 +1864,7 @@ def _health_alerts(session: Session, actor: Any) -> list[tuple[str, str, str]]:
             )
         )
 
-    for notification in _critical_notifications(session, actor):
+    for notification in _critical_notifications(session, actor, screen):
         alerts.append(
             (
                 notification.title_az,
@@ -1593,7 +1873,7 @@ def _health_alerts(session: Session, actor: Any) -> list[tuple[str, str, str]]:
             )
         )
 
-    conflicts = _open_conflicts(session)
+    conflicts = _open_conflicts(session) if open_conflicts is None else open_conflicts
     if conflicts:
         alerts.append(
             (
@@ -1627,7 +1907,7 @@ def _erp_diagnosis(row: Any) -> str:
     ).diagnosis
 
 
-def _critical_notifications(session: Session, actor: Any) -> list[Any]:
+def _critical_notifications(session: Session, actor: Any, screen: Any = None) -> list[Any]:
     """Oxunmamış KRİTİK bildirişlər — sistem hadisələrinin izi (bölmə 7).
 
     Auditoriya süzgəci zəng panelindəki ilə EYNİ funksiyadan gəlir: İdarə
@@ -1643,7 +1923,11 @@ def _critical_notifications(session: Session, actor: Any) -> list[Any]:
             actor.id, hidden_categories=hidden_categories_for(actor)
         )
     except Exception:
+        # BOŞ SİYAHI «kritik bildiriş yoxdur» kimi oxunur — halbuki oxunmayan
+        # mənbədə məhz KRİTİK sətirlər gözləyə bilər. Ekran «Aktiv xəbərdarlıq
+        # yoxdur» yazacaq, banner isə bu iddianın natamam olduğunu deyəcək.
         _error_log.exception("HEALTH_NOTIFICATIONS_FAILED")
+        report_section_error(screen, SECTION_HEALTH_ALERTS)
         return []
     return [row for row in rows if row.is_critical and row.is_unread][:5]
 
@@ -1727,7 +2011,9 @@ def _minutes_since(moment: datetime | None) -> int:
     return max(0, int((datetime.now(UTC) - moment).total_seconds() // 60))
 
 
-def _low_confidence_faces(session: Session, stores: list[Any]) -> set[tuple[str, str]]:
+def _low_confidence_faces(
+    session: Session, stores: list[Any], screen: Any = None
+) -> set[tuple[str, str]]:
     """AŞAĞI-ETİBARLI üz təsdiqi olan (işçi, addım) cütləri (facecontrol.md bənd 12).
 
     ──────────────────────────────────────────────────────────────────────────
@@ -1779,7 +2065,11 @@ def _low_confidence_faces(session: Session, stores: list[Any]) -> set[tuple[str,
             ),
         ).fetchall()
     except Exception:
+        # NİŞANSIZ NÖVBƏ «hamısı etibarlıdır» kimi oxunur — operator zəif
+        # tanınmış təsdiqi fərqləndirə bilmir. Növbənin ÖZÜ işləməyə davam
+        # edir (fail-soft), lakin nişanların əskik olduğu AÇIQ deyilir.
         _error_log.exception("FACE_LOW_CONFIDENCE_LOOKUP_FAILED")
+        report_section_error(screen, SECTION_QUEUE_FACE_BADGES)
         return set()
     return {
         (str(row["employee_id"]), str(row["trigger_context"]))

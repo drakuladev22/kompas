@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from typing import Final
 
+from src.application.use_cases.sync_conflicts import RESOLVE_CONFLICT_FLAG
 from src.domain.policies import FeatureModule
 from src.presentation.navigation import MenuEntry, NavigationRegistry
 
@@ -141,6 +142,30 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         feature_module=MODULE_FINES,
         order=60,
         icon="fine",
+    ),
+    MenuEntry(
+        key="fine_review",
+        title_az="Aylıq Cərimə İcmalı",
+        # `can_publish_fines` — cəriməni YARADAN flag DEYİL.
+        #
+        # NİYƏ «Cərimələr»DƏN (60) DƏRHAL SONRA: axın ardıcıldır — kamera
+        # operatoru cəriməni yazır (60), icmal sahibi onu ayın əvvəlində
+        # bütün filiallara açır (65), etiraz növbəsi isə açılmış cərimənin
+        # NƏTİCƏSİDİR (70). Üçü menyunun ayrı yerlərində dursaydı, cərimənin
+        # ömür dövrü naviqasiyada görünməzdi.
+        #
+        # ANTI-FRAUD (CLAUDE.md §5, miqrasiya 003): flag `is_anti_fraud` VƏ
+        # `excludes_camera_role` daşıyır — yəni `can_issue_fines` sahibi
+        # kamera-tipli rol bu maddəni HEÇ VAXT görə bilməz, çünki flag ona
+        # fərdi override ilə də verilə bilmir. Yaradan ilə təsdiq edən eyni
+        # şəxs olsaydı, dual-control fəlsəfəsi mənasını itirərdi.
+        #
+        # Feature Toggle `MODULE_FINES`-dir: cərimə modulu söndürülübsə nə
+        # yeni cərimə yaranır, nə də göndəriləcək bir şey qalır.
+        required_flag="can_publish_fines",
+        feature_module=MODULE_FINES,
+        order=65,
+        icon="send",
     ),
     MenuEntry(
         key="fine_appeals",
@@ -362,6 +387,36 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         required_flag="can_view_system_health",
         order=150,
         icon="activity",
+    ),
+    MenuEntry(
+        key="sync_conflicts",
+        title_az="Sinxronizasiya Konfliktləri",
+        # Bölmə 5 — offline rejimdə yaranan konfliktin MANUAL həlli.
+        #
+        # NİYƏ «Sistem Sağlamlığı»NDAN (150) DƏRHAL SONRA: xəbərdarlığın ÖZÜ
+        # orada görünür («N sinxronizasiya konflikti həll gözləyir» —
+        # `screen_data._health_alerts`) və istifadəçinin növbəti addımı məhz
+        # bu ekrandır. İki maddə menyunun iki ucunda dursaydı, sistem problemi
+        # elan edib həllini gizlətmiş olardı.
+        #
+        # FLAG SABİTDƏN İDXAL OLUNUR, ƏLLƏ YAZILMIR: əvvəl burada
+        # `"can_view_employee_reports"` HƏRFİ sətri dayanırdı və qapı ilə
+        # eyniliyi yalnız `test_sync_conflicts_screen.py`-dəki bir iddia
+        # saxlayırdı — yəni testin ÖZÜ dəyişikliyi tutan yeganə qat idi. İndi
+        # `SyncConflictUseCase`-in qapısı (`RESOLVE_CONFLICT_FLAG`) dəyişəndə
+        # menyu maddəsi ONU AVTOMATİK izləyir; test isə qoruyucu olaraq qalır.
+        #
+        # QAPI ARTIQ BAXIŞ FLAG-İ DEYİL (SEC-018): ekran seçilmiş versiyanı
+        # hədəf cərimə/icazə sətrinə FAKTİKİ yazır, `can_view_employee_reports`
+        # isə `Mağaza_Meneceri`-də DEFOLT var idi. Səbəb və anti-fraud
+        # əsaslandırması `use_cases/sync_conflicts.py` başlığındadır.
+        #
+        # FEATURE TOGGLE YOXDUR: offline sinxronizasiya iş-prosesi modulu
+        # deyil, infrastruktur qatıdır (bax bu faylın başlığındakı qayda) —
+        # `health`, `backups` və `audit` ilə eyni kateqoriya.
+        required_flag=RESOLVE_CONFLICT_FLAG,
+        order=152,
+        icon="refresh",
     ),
     MenuEntry(
         key="audit",

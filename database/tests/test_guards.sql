@@ -938,9 +938,108 @@ BEGIN
     v_passed := v_passed + 1;
     RAISE NOTICE 'TEST 32 ✓ CEO → Root bloklandı, CEO → Admin işləyir';
 
+    -- =====================================================================
+    -- TEST 33: AKTİV ÜZ-İSTİSNASI VARKƏN `DUAL_CONTROL` SÖNDÜRÜLƏ BİLMƏZ
+    -- =====================================================================
+    -- SEC-020 / miqrasiya 051. `facecontrol.md` bənd 14 PIN-only istisnasının
+    -- YEGANƏ əvəzləyicisi kimi dual-control axınını göstərir. Həmin modul adi
+    -- toggle olsaydı, bir `UPDATE` istisnalı işçini kompensasiyasız qoyardı.
+    --
+    -- Domen qarşılığı `RootControlUseCase._require_no_dependent_guarantee`;
+    -- bu blok qaydanın DB yarısını yoxlayır (ekranı yan keçən skript).
+    INSERT INTO face_control_exemptions
+           (tenant_id, employee_id, granted_by, reason, expires_at)
+    VALUES (v_tenant, v_seller, v_root,
+            'Tibbi arayış — üz nahiyəsində sarğı var', now() + INTERVAL '30 days');
+
+    v_failed := FALSE;
+    v_message := '';
+    BEGIN
+        UPDATE feature_toggles SET is_enabled = FALSE
+         WHERE tenant_id = v_tenant AND module_key = 'DUAL_CONTROL';
+    EXCEPTION WHEN OTHERS THEN
+        v_failed := TRUE;
+        v_message := SQLERRM;
+    END;
+    IF NOT v_failed THEN
+        RAISE EXCEPTION
+            'TEST 33 UĞURSUZ: aktiv üz-istisnası varkən DUAL_CONTROL söndürüldü!';
+    END IF;
+    IF v_message NOT LIKE '%KOMPENSASİYA KİLİDİ%' THEN
+        RAISE EXCEPTION
+            'TEST 33 UĞURSUZ: yazı bloklandı, lakin kompensasiya kilidinə GÖRƏ YOX (%)',
+            v_message;
+    END IF;
+
+    -- MÜSBƏT HAL: BAŞQA modul sərbəst söndürülür (kilid ümumi deyil, dardır).
+    UPDATE feature_toggles SET is_enabled = FALSE
+     WHERE tenant_id = v_tenant AND module_key = 'SHIFT_SWAP';
+
+    -- KİLİD ƏBƏDİ DEYİL: istisna ləğv olunandan sonra söndürmə İŞLƏYİR.
+    -- Bu yoxlama olmasa, guard "hər şeyi bloklayan" versiyaya sürüşə bilər və
+    -- Root öz sistemindən kilidlənərdi.
+    UPDATE face_control_exemptions
+       SET status = 'REVOKED', revoked_by = v_root, revoked_at = now(),
+           revoke_reason = 'Guard testi — kilidin açıla bildiyi yoxlanılır'
+     WHERE tenant_id = v_tenant AND employee_id = v_seller;
+
+    UPDATE feature_toggles SET is_enabled = FALSE
+     WHERE tenant_id = v_tenant AND module_key = 'DUAL_CONTROL';
+
+    IF (SELECT is_enabled FROM feature_toggles
+         WHERE tenant_id = v_tenant AND module_key = 'DUAL_CONTROL') THEN
+        RAISE EXCEPTION
+            'TEST 33 UĞURSUZ: istisna ləğv edildikdən sonra da söndürmə keçmədi — '
+            'kilid əbədi olub';
+    END IF;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 33 ✓ aktiv istisna DUAL_CONTROL-u kilidləyir, ləğvdən sonra açılır';
+
+    -- =====================================================================
+    -- TEST 34: `DUAL_CONTROL` SÖNÜKDÜRSƏ YENİ AKTİV İSTİSNA YAZILA BİLMƏZ
+    -- =====================================================================
+    -- İnvariantın SİMMETRİK yarısı. TEST 33-dən sonra modul söndürülü
+    -- vəziyyətdədir — yəni bu blok məhz «sıranı dəyişdirmək» hücumunu yoxlayır:
+    -- əvvəlcə modulu söndür, sonra istisna ver.
+    v_failed := FALSE;
+    v_message := '';
+    BEGIN
+        INSERT INTO face_control_exemptions
+               (tenant_id, employee_id, granted_by, reason, expires_at)
+        VALUES (v_tenant, v_manager, v_root,
+                'Tibbi arayış — üz nahiyəsində sarğı var', now() + INTERVAL '10 days');
+    EXCEPTION WHEN OTHERS THEN
+        v_failed := TRUE;
+        v_message := SQLERRM;
+    END;
+    IF NOT v_failed THEN
+        RAISE EXCEPTION
+            'TEST 34 UĞURSUZ: kompensasiya söndürülü ikən yeni aktiv istisna yazıldı!';
+    END IF;
+    IF v_message NOT LIKE '%KOMPENSASİYA KİLİDİ%' THEN
+        RAISE EXCEPTION
+            'TEST 34 UĞURSUZ: yazı bloklandı, lakin kompensasiya kilidinə GÖRƏ YOX (%)',
+            v_message;
+    END IF;
+
+    -- YOL AÇIQ QALIR: modul yenidən aktivləşdirildikdə istisna normal verilir.
+    -- Bu yoxlama olmadan guard "istisna mexanizmini tamamilə söndürən" bir
+    -- versiyaya sürüşə bilərdi və tibbi/fiziki səbəbli işçi heç vaxt istisna
+    -- ala bilməzdi — qoruma öz məqsədini əvəz edərdi.
+    UPDATE feature_toggles SET is_enabled = TRUE
+     WHERE tenant_id = v_tenant AND module_key = 'DUAL_CONTROL';
+
+    INSERT INTO face_control_exemptions
+           (tenant_id, employee_id, granted_by, reason, expires_at)
+    VALUES (v_tenant, v_manager, v_root,
+            'Tibbi arayış — üz nahiyəsində sarğı var', now() + INTERVAL '10 days');
+
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 34 ✓ sönük kompensasiya yeni istisnanı bloklayır, açıq modul buraxır';
+
     RAISE NOTICE '';
     RAISE NOTICE '===========================================';
-    RAISE NOTICE 'BÜTÜN GUARD TESTLƏRİ UĞURLU: %/32', v_passed;
+    RAISE NOTICE 'BÜTÜN GUARD TESTLƏRİ UĞURLU: %/34', v_passed;
     RAISE NOTICE '===========================================';
 
     -- Test məlumatlarının təmizlənməsi
@@ -951,8 +1050,14 @@ BEGIN
     -- DEYİL), yəni tək bir `DELETE license_tenants` iki kaskadın hansının
     -- əvvəl işləməsindən asılı olardı. Açıq sıra bu sualı tamamilə aradan
     -- qaldırır — test təmizliyi DB daxili sıraya güvənməməlidir.
+    --
+    -- `face_control_exemptions` DƏ AÇIQ SİLİNİR (TEST 33/34): `granted_by`
+    -- üzərindəki FK `ON DELETE NO ACTION`-dır və DEFERRABLE DEYİL (miqrasiya
+    -- 047), yəni tenant kaskadı `employees` sətrini əvvəl silsəydi silmə
+    -- FK pozuntusu ilə çökərdi. Açıq sıra bu sualı aradan qaldırır.
     DELETE FROM fines WHERE tenant_id = v_tenant;
     DELETE FROM leave_requests WHERE tenant_id = v_tenant;
+    DELETE FROM face_control_exemptions WHERE tenant_id = v_tenant;
     DELETE FROM license_tenants WHERE tenant_id = v_tenant;
 END
 $$;

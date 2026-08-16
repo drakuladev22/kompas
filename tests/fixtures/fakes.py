@@ -175,6 +175,21 @@ class InMemoryLeaveRequests:
             if r.tenant_id == tenant_id and r.status.value == "PENDING_RETURN_VERIFICATION"
         ]
 
+    def list_pending_dual_control(self, tenant_id: TenantId) -> list[LeaveRequest]:
+        """İkinci təsdiq gözləyən vaxt düzəlişləri (M-5).
+
+        Real repo "SON override sətri `PENDING_DUAL_CONTROL`-dur" şərtini
+        SQL-də qurur; yaddaşda isə entity-nin özündə bir override obyekti var,
+        ona görə eyni sual birbaşa `is_pending_approval`-dan oxunur.
+        """
+        return [
+            request
+            for request in self.items.values()
+            if request.tenant_id == tenant_id
+            and request.override is not None
+            and request.override.is_pending_approval
+        ]
+
     def monthly_used_minutes(self, employee_id: EmployeeId, *, year: int, month: int) -> int:
         """Aylıq icazə cəmi — YALNIZ təsdiqlənmiş sorğular (bölmə 3 limiti).
 
@@ -305,6 +320,9 @@ class InMemoryAttendance:
 class InMemoryEmployees:
     def __init__(self, employees: list[Employee] | None = None) -> None:
         self.items: dict[EmployeeId, Employee] = {e.id: e for e in employees or []}
+        #: `{employee_id: {"password_hash"/"pin_hash"/"pepper_version": ...}}`
+        #: — heşlər entity-də DEYİL, ayrı saxlanılır (istehsalat modeli ilə eyni).
+        self.credentials: dict[EmployeeId, dict[str, Any]] = {}
 
     def get(self, employee_id: EmployeeId) -> Employee | None:
         return self.items.get(employee_id)
@@ -324,6 +342,30 @@ class InMemoryEmployees:
 
     def save(self, employee: Employee) -> None:
         self.items[employee.id] = employee
+
+    def update_credentials(
+        self,
+        employee_id: EmployeeId,
+        *,
+        pin_hash: str | None = None,
+        password_hash: str | None = None,
+        pepper_version: int | None = None,
+    ) -> None:
+        """Sirr heşlərini AYRICA saxlayır — `PostgresEmployeeRepository` kimi.
+
+        `None` verilən sahə TOXUNULMUR (`COALESCE` davranışının sahtəsi): əks
+        halda "PIN yazdım, şifrəni sıfırladım" səhvi testdə görünməz qalardı.
+        Saxlanan heş testlərdə FAKTİKİ olaraq `HashingService.verify_*` ilə
+        yoxlanılır — "çağırıldımı" deyil, "uyğun gəlirmi" sualı vacibdir.
+        """
+        current = self.credentials.get(employee_id, {})
+        if pin_hash is not None:
+            current["pin_hash"] = pin_hash
+        if password_hash is not None:
+            current["password_hash"] = password_hash
+        if pepper_version is not None:
+            current["pepper_version"] = pepper_version
+        self.credentials[employee_id] = current
 
     def count_active_with_flag(self, tenant_id: TenantId, flag_code: str) -> int:
         from datetime import UTC
@@ -572,6 +614,15 @@ class InMemoryAppeals:
 
     def list_pending(self, tenant_id: TenantId) -> list[Any]:
         return [item for item in self.items.values() if item.status.value == "PENDING"]
+
+    def list_undecided(self, tenant_id: TenantId) -> list[Any]:
+        """`PENDING` + `EXPIRED` (M-6) — real repo ilə eyni süzgəc.
+
+        Şərt `is_decided` üzərindən yazılıb, status siyahısı üzərindən YOX:
+        enum-a yeni "qərarsız" vəziyyət əlavə olunsa, sahtə repo real repo-dan
+        sükutla fərqlənməsin.
+        """
+        return [item for item in self.items.values() if not item.status.is_decided]
 
     def list_for_employee(self, employee_id: EmployeeId, *, limit: int = 50) -> list[Any]:
         return [item for item in self.items.values() if item.employee_id == employee_id][:limit]

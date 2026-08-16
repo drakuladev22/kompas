@@ -22,7 +22,7 @@ from psycopg import errors as pg_errors
 from src.application.use_cases.leave_verification import OperationNotPermittedError
 from src.domain.entities.attendance_record import AttendanceRecord, CheckInStatus
 from src.domain.entities.employee import Employee
-from src.domain.entities.fine import EXPORTABLE_STATUSES, Fine
+from src.domain.entities.fine import EXPORTABLE_STATUSES, Fine, FineStatus
 from src.domain.entities.leave_request import LeaveRequest, LeaveStatus
 from src.domain.entities.position import Position
 from src.domain.value_objects.credentials import Username
@@ -363,6 +363,99 @@ class PostgresEmployeeRepository(_BaseRepository):
             (pin_hash, password_hash, pepper_version, employee_id, self._tenant),
         )
 
+    # ------------------------ CredentialWriter portu ------------------------- #
+    #
+    # `user_management.CredentialWriter` üç metod tələb edir və kompozisiya kökü
+    # ONU MƏHZ BU SİNFƏ BAĞLAYIR (`composition.py`: `credentials=uow.employees`).
+    # Metodlar isə YOX İDİ — `uow.employees` `Any` qaytardığı üçün nə mypy, nə
+    # də hər hansı test bunu tuta bilmirdi; `[Şifrəni Yenilə]` düyməsi istehsalat
+    # yolunda `AttributeError` ilə çökürdü. Aşağıdakı üç metod həmin protokolu
+    # ödəyir və YENİ yazma yolu icad ETMİR: hər üçü mövcud `update_credentials()`
+    # / `save()` SQL-inə yönləndirir.
+
+    def set_password(
+        self, employee_id: EmployeeId, *, raw_password: str, must_change: bool
+    ) -> None:
+        """Xam şifrəni heşləyib yazır (`CredentialWriter`).
+
+        HEŞLƏMƏ BURADA OLUR, USE CASE-də YOX: use case xam şifrəni alır və
+        `Employee` entity-si heşi SAXLAMIR (bax `CredentialWriter` başlığı) —
+        yəni heş ilə sətir arasında yeganə keçid nöqtəsi budur.
+
+        `must_change` sütununu `save()` yazır (entity sahəsidir), lakin bu axın
+        `save()` çağırılmadan da düzgün nəticə verməlidir — ona görə bayraq
+        BURADA da açıq şəkildə yazılır. İki yazı bir-birini ÜST-ÜSTƏ təsdiqləyir,
+        ziddiyyət yaratmır: hər ikisi eyni dəyəri qoyur.
+        """
+        hashing = self._hashing()
+        self.update_credentials(
+            employee_id,
+            password_hash=hashing.hash_password(raw_password),
+            pepper_version=hashing.current_pepper_version,
+        )
+        self._execute(
+            "UPDATE employees SET must_change_password = %s WHERE id = %s AND tenant_id = %s",
+            (must_change, employee_id, self._tenant),
+        )
+
+    def set_pin(self, employee_id: EmployeeId, *, raw_pin: str) -> None:
+        """Xam PIN-i heşləyib yazır (`CredentialWriter`).
+
+        PIN `employee_id`-yə bağlı heşlənir (SEC-005), ona görə heş sətirdən
+        AYRI hesablana bilməz — identifikator burada onsuz da əldədir.
+        """
+        hashing = self._hashing()
+        self.update_credentials(
+            employee_id,
+            pin_hash=hashing.hash_pin(raw_pin, employee_id=str(employee_id)),
+            pepper_version=hashing.current_pepper_version,
+        )
+
+    def clear_pin_lockout(self, employee_id: EmployeeId) -> None:
+        """Lockout sayğacını sıfırlayır (`CredentialWriter`).
+
+        YENİ PIN TƏK BAŞINA KİFAYƏT ETMİR: 5 səhv cəhddən sonra bloklanmış işçi
+        yeni PIN-lə də 15 dəqiqə gözləməli olardı — yəni sıfırlama görünüşdə
+        işləyər, praktikada işləməzdi (bax `UserManagementUseCase.reset_pin`).
+        """
+        self._execute(
+            """
+            UPDATE employees
+               SET pin_failed_attempts = 0, pin_locked_until = NULL
+             WHERE id = %s AND tenant_id = %s
+            """,
+            (employee_id, self._tenant),
+        )
+
+    def _hashing(self) -> Any:
+        """Argon2id servisi — ROOT şifrə siyasəti (`PASSWORD_MIN_LENGTH`) ilə.
+
+        HƏR ÇAĞIRIŞDA YENİDƏN QURULUR və bu qəsdəndir: `InfrastructureLimits`
+        vəziyyət saxlamır, lakin servisin özü uzun ömürlü olsaydı Root-un
+        siyasət dəyişikliyi yalnız prosesin yenidən başladılmasından sonra
+        qüvvəyə minərdi. Qurulma qiyməti Argon2 heşinin özündən qat-qat
+        ucuzdur, yəni qənaət etməyə dəyməz.
+
+        Limit pəncərəsi EYNİ BAĞLANTIDAN qurulur (`self._conn`): sirr yazısı
+        ilə siyasət oxusu bir tranzaksiyada qalır, əks halda ikinci bağlantı
+        RLS konteksti olmadan boş nəticə qaytarardı (SEC-008).
+
+        İdxallar YEREL: `config_repositories` bu modulun `_BaseRepository`-sini
+        idxal edir — modul səviyyəsində yazılsaydı dövrə yaranardı.
+        """
+        from src.infrastructure.config.limits import InfrastructureLimits  # noqa: PLC0415
+        from src.infrastructure.persistence.config_repositories import (  # noqa: PLC0415
+            PostgresSystemLimits,
+        )
+        from src.infrastructure.security.hashing import HashingService  # noqa: PLC0415
+
+        return HashingService(
+            limits=InfrastructureLimits(
+                limits=PostgresSystemLimits(self._conn, self._context),
+                tenant_id=self._tenant,
+            )
+        )
+
     def rename_username(self, employee_id: EmployeeId, username: Username) -> None:
         """Giriş identifikatorunu dəyişir — AYRICA əməliyyat.
 
@@ -476,6 +569,23 @@ class PostgresEmployeeRepository(_BaseRepository):
 # --------------------------------------------------------------------------- #
 
 
+#: İkinci təsdiq gözləyən vaxt düzəlişlərinin süzgəci (M-5).
+#:
+#: MODUL SƏVİYYƏSİNDƏ SABİTDİR — `_EXPORTABLE_FINES_WHERE` ilə eyni naxış:
+#: mətndə istifadəçi girişi YOXDUR, yeganə dəyişən (`tenant_id`) `%s` ilə
+#: parametrləşdirilib. `S608` direktivi FRAQMENTDƏ deyil, birləşmə sətrindədir
+#: — ruff yalnız orada tam sorğu görür (RUF100 istifadəsiz direktivi rədd edir).
+_PENDING_DUAL_CONTROL_WHERE: Final = """
+    WHERE tenant_id = %s
+      AND (SELECT o.status
+             FROM manual_time_overrides o
+            WHERE o.leave_request_id = leave_requests.id
+            ORDER BY o.created_at DESC
+            LIMIT 1) = 'PENDING_DUAL_CONTROL'
+    ORDER BY requested_time
+"""
+
+
 class PostgresLeaveRequestRepository(_BaseRepository):
     _SELECT = """
         SELECT id, tenant_id, employee_id, store_id, leave_type_id,
@@ -569,6 +679,26 @@ class PostgresLeaveRequestRepository(_BaseRepository):
                 timeout_minutes,
             ),
         )
+        return [self._hydrate(row) for row in rows]
+
+    def list_pending_dual_control(self, tenant_id: TenantId) -> list[LeaveRequest]:
+        """İkinci təsdiq gözləyən vaxt düzəlişləri (M-5).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ "SON SƏTİR" ALT-SORĞUSU, SADƏ `IN (...)` YOX
+        ──────────────────────────────────────────────────────────────────────
+        `manual_time_overrides` APPEND-ONLY-dir: təsdiq gələndə köhnə
+        `PENDING_DUAL_CONTROL` sətri SİLİNMİR, üstünə `APPROVED` sətri
+        yazılır (bax `_save_override`). Sadə `WHERE status = 'PENDING_DUAL_
+        CONTROL'` süzgəci ona görə ARTIQ TƏSDİQLƏNMİŞ sorğuları da qaytarardı
+        və planlaşdırılmış iş onları "müddəti bitdi" deyə ləğv etməyə
+        çalışardı.
+
+        Ona görə şərt `_hydrate`-in oxuduğu SƏTRƏ tətbiq olunur — yəni
+        `ORDER BY created_at DESC LIMIT 1`. İki yer eyni sətri görməlidir,
+        əks halda repo bir vəziyyət, entity başqa vəziyyət oxuyardı.
+        """
+        rows = self._fetch_all(self._SELECT + _PENDING_DUAL_CONTROL_WHERE, (tenant_id,))
         return [self._hydrate(row) for row in rows]
 
     def monthly_used_minutes(self, employee_id: EmployeeId, *, year: int, month: int) -> int:
@@ -669,18 +799,32 @@ class PostgresLeaveRequestRepository(_BaseRepository):
     def _save_override(self, request: LeaveRequest) -> None:
         override = request.override
         assert override is not None
-        status = (
-            "PENDING_DUAL_CONTROL"
-            if override.is_pending_approval
-            else ("APPROVED" if override.approved_by else "AUTO_APPROVED")
-        )
+        # `REJECTED` HƏM insan rəddini, HƏM timeout ləğvini bildirir (M-5) —
+        # ikisini `rejection_reason` mətni və `approved_by`-ın boşluğu ayırır.
+        # `override_status` enum-una beşinci dəyər əlavə etmək RƏDD EDİLDİ:
+        # `ALTER TYPE ... ADD VALUE` miqrasiyanı tranzaksiyadan kənara
+        # çıxarardı, halbuki fərq onsuz da sətirdə görünür.
+        if override.is_rejected:
+            status = "REJECTED"
+        elif override.is_pending_approval:
+            status = "PENDING_DUAL_CONTROL"
+        else:
+            status = "APPROVED" if override.approved_by else "AUTO_APPROVED"
+        # `approved_by` sütunu "İKİNCİ ŞƏXSİN kimliyi" mənasını daşıyır: təsdiq
+        # sətrində təsdiqləyən, rədd sətrində rədd edən. `REJECTED` + `NULL`
+        # isə "qərarı insan vermədi" (timeout) deməkdir — `chk_override_dual_
+        # control` yalnız `APPROVED` üçün doluluq tələb edir, ona görə bu
+        # istifadə mövcud məhdudiyyətlərə toxunmur. Ayrıca `rejected_by`
+        # sütunu əlavə etmək RƏDD EDİLDİ: eyni suala ikinci sütun,
+        # miqrasiya və iki mənbə riski.
+        decided_by = override.rejected_by if override.is_rejected else override.approved_by
         self._execute(
             """
             INSERT INTO manual_time_overrides
                 (tenant_id, leave_request_id, operator_id, employee_id,
                  system_time, overridden_time, delta_minutes, reason,
-                 status, approved_by, approved_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 status, approved_by, approved_at, rejection_reason)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 request.tenant_id,
@@ -692,8 +836,9 @@ class PostgresLeaveRequestRepository(_BaseRepository):
                 override.delta_minutes,
                 override.reason,
                 status,
-                override.approved_by,
+                decided_by,
                 override.approved_at,
+                override.rejection_reason,
             ),
         )
 
@@ -701,7 +846,8 @@ class PostgresLeaveRequestRepository(_BaseRepository):
         override_row = self._fetch_one(
             """
             SELECT operator_id, system_time, overridden_time, reason,
-                   delta_minutes, status, approved_by, approved_at
+                   delta_minutes, status, approved_by, approved_at,
+                   rejection_reason, created_at
             FROM manual_time_overrides
             WHERE leave_request_id = %s
             ORDER BY created_at DESC LIMIT 1
@@ -847,6 +993,32 @@ _EXPORTABLE_STATUS_LITERALS: Final = ", ".join(
 #: `S608` susdurma direktivi YOXDUR, çünki ruff bu fraqmenti işarələmir
 #: (fraqmentdə `SELECT`/`FROM` yoxdur) — RUF100 istifadəsiz direktivi rədd edir.
 #: Digər `%s` parametrləri (tenant və vaxt) əvvəlki kimi parametrləşdirilib.
+#: `Fine.has_open_appeal`-in SQL mənbəyi — TÖRƏMƏ SÜTUN, saxlanılan sahə YOX
+#: (bax `Fine.__init__` şərhi: iki mənbə saxlamaq sürüşmə riski yaradardı).
+#:
+#: `PENDING` VƏ `EXPIRED` birlikdə: birincisi "hələ baxılmayıb", ikincisi
+#: "72 saat keçdi, yenə baxılmayıb". Hər ikisi QƏRARSIZDIR, yəni cərimə
+#: mübahisəlidir (M-6). `APPROVED`/`REJECTED` isə qərardır və kilidi açır.
+_UNDECIDED_APPEAL_EXISTS: Final = (
+    " EXISTS (SELECT 1 FROM fine_appeals fa"
+    "         WHERE fa.fine_id = fines.id"
+    "           AND fa.status IN ('PENDING', 'EXPIRED'))"
+)
+
+#: `PENDING_REVIEW` statusunun SQL literalı — Aylıq Cərimə İcmalı sorğuları.
+#:
+#: `%s` PARAMETRİ DEYİL VƏ SƏBƏBİ `_EXPORTABLE_STATUS_LITERALS` ilə EYNİDİR:
+#: `idx_fines_pending_review` QİSMƏN indeksdir
+#: (`WHERE status = 'PENDING_REVIEW'`, miqrasiya 003) və planlaşdırıcı qismən
+#: indeksi yalnız sorğu şərtinin onun predikatını SÜBUT ETDİYİ halda seçir.
+#: Parametrləşdirilmiş `status = $1` bunu sübut etmir — icmal sorğusu 21
+#: filialın bütün cərimələri üzərində tam skana düşərdi.
+#:
+#: Dəyər `FineStatus` enum-undan GÖTÜRÜLÜR, əl ilə yazılmır: status adı
+#: dəyişsə sorğu sükutla boş nəticə qaytarardı (məhz `list_exportable`-ın
+#: miqrasiya 003-dən sonra düşdüyü vəziyyət).
+_PENDING_REVIEW_LITERAL: Final = f"'{FineStatus.PENDING_REVIEW.value}'"
+
 _EXPORTABLE_FINES_WHERE: Final = (
     " WHERE tenant_id = %s"
     f" AND status IN ({_EXPORTABLE_STATUS_LITERALS})"
@@ -854,6 +1026,11 @@ _EXPORTABLE_FINES_WHERE: Final = (
     " AND appeal_window_closes_at IS NOT NULL"
     " AND appeal_window_closes_at <= %s"
     " AND exported_period IS NULL"
+    # DÖRDÜNCÜ ŞƏRT (M-6) — `Fine.is_exportable` ilə birebir. Domendə
+    # `has_open_appeal`, burada `NOT EXISTS`: eyni qayda iki qatda, CLAUDE.md
+    # §5 tələbi. Yalnız birində olsaydı, ekranı yan keçən export skripti
+    # mübahisəli cəriməni yenə tutardı.
+    f" AND NOT {_UNDECIDED_APPEAL_EXISTS}"
     " ORDER BY fine_date"
 )
 
@@ -865,14 +1042,15 @@ class PostgresFineRepository(_BaseRepository):
     # yaddaşa `published_at = None` ilə qayıdırdı — yəni 72 saatlıq pəncərənin
     # açılış anı hər oxunuşda İTİRDİ və `is_appeal_window_open()` həmişə `True`
     # deyirdi (export əbədi bloklanardı, bölmə 6).
-    _SELECT = """
+    _SELECT = f"""
         SELECT id, tenant_id, employee_id, store_id, source, fine_type_id,
                leave_request_id, amount, fine_date, issued_by, photo_evidence_url,
                status, published_at, reviewed_by, review_decision_reason,
                reversed_by, reversed_at, reversal_reason,
-               appeal_window_closes_at, exported_period, created_at AS issued_at
+               appeal_window_closes_at, exported_period, created_at AS issued_at,
+               {_UNDECIDED_APPEAL_EXISTS} AS has_open_appeal
         FROM fines
-    """
+    """  # noqa: S608 — fraqment SABİT sətirdir, istifadəçi girişi yoxdur
 
     def get(self, fine_id: FineId) -> Fine | None:
         row = self._fetch_one(
@@ -948,6 +1126,71 @@ class PostgresFineRepository(_BaseRepository):
             (tenant_id, start, end),
         )
         return [fine_from_row(row) for row in rows]
+
+    # ------------------------- Aylıq Cərimə İcmalı --------------------------- #
+    #
+    # NİYƏ AYRICA METOD — `list_in_range` KİFAYƏT ETMİRDİ
+    # ────────────────────────────────────────────────────────────────────────
+    # `list_in_range`-də status süzgəci QƏSDƏN yoxdur (bax onun docstring-i):
+    # export namizədləri üç kateqoriyaya bölünə bilsin deyə qərarı domen
+    # verir. İcmal ekranında isə status SEÇİM MEYARIDIR — `PENDING_REVIEW`
+    # olmayan sətir üzərində verilə biləcək qərar yoxdur (`publish_batch` onu
+    # onsuz da süzür) və 21 filialın bir aylıq BÜTÜN cərimələrini yaddaşa
+    # gətirib orada atmaq həmin ekranı ən çox sətri olan aylarda yavaşladardı.
+
+    def list_pending_review(self, tenant_id: TenantId, *, year: int, month: int) -> list[Fine]:
+        """Bir ayın nəşr gözləyən cərimələri — Aylıq Cərimə İcmalının siyahısı.
+
+        `fine_date` üzrə süzülür, yazılma anı (`created_at`) üzrə YOX —
+        `list_in_range` ilə eyni əsaslandırma: gecikmiş yazılan cərimə
+        hadisənin baş verdiyi dövrün icmalında görünməlidir. Əks halda o, heç
+        bir icmala düşməz və `PENDING_REVIEW` olaraq əbədi qalardı, yəni
+        işçiyə nə görünər, nə də export-a düşərdi.
+
+        ARALIQ ŞƏRTİ (`>= start AND < next_month`) `EXTRACT(...)`-dan
+        SEÇİLİB: sonuncu sütun üzərində funksiya çağırışıdır və
+        `idx_fines_pending_review` indeksini yararsız edərdi.
+
+        Sıra `store_id`-dəndir, çünki ekran filiallara görə qruplaşdırır —
+        sıralamanı SQL-də etmək qrupları tək keçidlə qurmağa imkan verir.
+        """
+        start = date(year, month, 1)
+        # Növbəti ayın birinci günü — dekabrda il artır. `timedelta(days=31)`
+        # işlətmək fevralda növbəti ayı ATLAYARDI.
+        end = date(year + (month // 12), (month % 12) + 1, 1)
+        rows = self._fetch_all(
+            self._SELECT
+            + f"""
+            WHERE tenant_id = %s
+              AND status = {_PENDING_REVIEW_LITERAL}
+              AND fine_date >= %s AND fine_date < %s
+            ORDER BY store_id, fine_date
+            """,
+            (tenant_id, start, end),
+        )
+        return [fine_from_row(row) for row in rows]
+
+    def pending_review_periods(self, tenant_id: TenantId) -> list[str]:
+        """Nəşr gözləyən cəriməsi olan aylar (`YYYY-MM`), ARTAN sıra ilə.
+
+        Ekranın dövr seçimi bunu işlədir və defolt olaraq ƏN KÖHNƏ dövrü
+        açır: nəşr gecikdikdə işçinin etiraz pəncərəsi də gecikir, ona görə
+        gözləyən ən qədim ay birinci görünməlidir.
+
+        `to_char` NƏTİCƏDƏDİR, süzgəcdə YOX — süzgəc yalnız statusdadır və
+        qismən indeksdən istifadə edir. Sıralama `YYYY-MM` mətninin özündən
+        gedir: bu format leksikoqrafik olaraq xronoloji sıra ilə eynidir.
+        """
+        rows = self._fetch_all(
+            f"""
+            SELECT DISTINCT to_char(fine_date, 'YYYY-MM') AS period
+              FROM fines
+             WHERE tenant_id = %s AND status = {_PENDING_REVIEW_LITERAL}
+             ORDER BY period
+            """,  # noqa: S608 — status literalı enum-dan gəlir, bax `_PENDING_REVIEW_LITERAL`
+            (tenant_id,),
+        )
+        return [str(row["period"]) for row in rows]
 
     # -------------------------- Drive sübut sütunları ------------------------ #
     #

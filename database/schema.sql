@@ -2051,6 +2051,12 @@ COMMENT ON VIEW v_camera_verification_queue IS
 -- RETROAKTİV bağlanardı. Domen isə dəyəri `publish()` anında dondurur
 -- (`Fine.publish`) və `Fine.is_appeal_window_open` məhz həmin sütunu oxuyur —
 -- indi domen, repository və görünüş üçü də eyni şərti tətbiq edir.
+-- DÖRDÜNCÜ ŞƏRT (M-6, miqrasiya 052): qərarı VERİLMƏMİŞ etirazı olan cərimə
+-- hesabata düşmür. Əvvəl pəncərənin bağlanması export kilidini AÇIRDI — yəni
+-- işçi 71-ci saatda etiraz göndərsə və HR baxmasa, 72-ci saatda pul kəsilir,
+-- etiraza isə heç vaxt qərar verilmirdi. HR-ın baxmaması işçinin günahı deyil.
+-- `PENDING` ("hələ baxılmayıb") və `EXPIRED` ("72 saat keçdi, YENƏ baxılmayıb")
+-- birlikdə süzülür: hər ikisi qərarsızdır (bax `Fine.is_exportable`).
 CREATE OR REPLACE VIEW v_exportable_fines AS
 SELECT f.*
 FROM fines f
@@ -2060,7 +2066,13 @@ WHERE f.status IN ('PUBLISHED', 'REDUCED')
   AND f.published_at IS NOT NULL
   AND f.appeal_window_closes_at IS NOT NULL
   AND f.appeal_window_closes_at <= now()
-  AND f.exported_period IS NULL;
+  AND f.exported_period IS NULL
+  AND NOT EXISTS (
+      SELECT 1
+        FROM fine_appeals fa
+       WHERE fa.fine_id = f.id
+         AND fa.status IN ('PENDING', 'EXPIRED')
+  );
 
 
 -- ---------------------------------------------------------------------------
@@ -2167,7 +2179,13 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- (d) Etiraz pəncərəsinin bağlanması (72 saat) — export kilidini açır
+-- (d) Cavabsız qalmış etirazın SLA-pozuntusu kimi işarələnməsi (72 saat)
+--
+-- ŞƏRH DÜZƏLİŞİ (M-6): əvvəl burada "export kilidini açır" yazılırdı və
+-- davranış da belə idi. `EXPIRED` artıq kilidi AÇMIR — `v_exportable_fines`
+-- qərarsız etirazı olan cəriməni buraxmır və `FineAppeal` həmin vəziyyətdən
+-- də qərar qəbul edir. Status yalnız "HR cavab vermədi" halını "işçi etiraz
+-- etmədi" halından ayıran izdir.
 CREATE OR REPLACE FUNCTION cron_close_expired_appeals() RETURNS INTEGER AS $$
 DECLARE
     v_count INTEGER;

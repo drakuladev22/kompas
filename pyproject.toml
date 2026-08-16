@@ -185,12 +185,19 @@ module = ["supabase.*", "argon2.*"]
 ignore_missing_imports = true
 
 # `pywin32` və `qframelesswindow` tip stub-u (və ya `py.typed`) daşımır.
-# Onlar YALNIZ `presentation/shell/native_chrome.py`-da, Win32 pəncərə
-# mesajlarını emal edən dar qatda işlənir və oradakı bütün istifadə açıq
-# `Any` ilə çərçivəyə salınıb (`_Win32Api`). Stub yazmaq real tip
-# təhlükəsizliyi vermir: `HWND` onsuz da `int`-dir.
+# Onlar İKİ dar qatda işlənir: `presentation/shell/native_chrome.py` (Win32
+# pəncərə mesajları) və `infrastructure/erp/com_connector.py` (1C COM/OLE).
+# Hər ikisində bütün istifadə açıq `Any` ilə çərçivəyə salınıb (`_Win32Api`,
+# `dispatcher`). Stub yazmaq real tip təhlükəsizliyi vermir: `HWND` onsuz da
+# `int`-dir, `V83.COMConnector` isə tamamilə dinamik `IDispatch` obyektidir.
 [[tool.mypy.overrides]]
-module = ["qframelesswindow.*", "win32api", "win32con", "win32gui"]
+module = [
+    "qframelesswindow.*",
+    "win32api",
+    "win32com.*",
+    "win32con",
+    "win32gui",
+]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

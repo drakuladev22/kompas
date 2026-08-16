@@ -8,37 +8,68 @@ Maket: "KompasOS - Qrup D.dc.html", ekranlar 15–20.
     18  Audit Jurnalı
     19  Ayarlar
     20  ROOT İdarə Mərkəzi
+
+──────────────────────────────────────────────────────────────────────────────
+NİYƏ SİHİRBAZ DOMEN ENUM-UNU BİRBAŞA İDXAL EDİR (1c.md GUI fazası)
+──────────────────────────────────────────────────────────────────────────────
+`ServerConnectionWizard` `ConnectorType`/`ConnectorConfig` idxal edir — bu,
+`group_c`/`group_f`/`group_i`-də artıq işlənən naxışdır. Səbəb: kartların
+BÜTÜN mətnləri (`label_az`, `card_description_az`, `address_label_az`,
+`latency_meaning_az`) domendə saxlanılır və eyni mətn HƏM sihirbazda, HƏM
+siyahı nişanında, HƏM də sağlamlıq diaqnozunda görünür. Ekran öz nüsxəsini
+yazsaydı, üç yerdə üç fərqli ifadə yaranardı və istifadəçi "bunlar eyni
+şeydirmi?" sualı ilə qalardı (bax `ConnectorType` docstring-i).
+
+`ErpServersScreen`-in ÖZÜ isə domendən ASILI DEYİL: siyahı sətirləri sadə
+sözlüklərdir və mətnləri kontroller (canlı) yaxud `preview_data` (maket)
+verir — hər ikisi EYNİ açarları işlədir (CLAUDE.md bölmə 6).
 """
 
 from __future__ import annotations
 
 from itertools import pairwise
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, Signal
+from PySide6.QtGui import QTransform
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from src.domain.value_objects.erp import (
+    MIN_SYNC_INTERVAL_SECONDS,
+    ConnectorConfig,
+    ConnectorType,
+    ErpPlatformError,
+)
 from src.presentation.screens.base import Screen
-from src.presentation.widgets import metrics
+from src.presentation.theme.manager import refresh_widget_style
+from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.charts import Meter
 from src.presentation.widgets.data_table import Column, DataTable
 from src.presentation.widgets.forms import FormField
+from src.presentation.widgets.help_hint import HelpButton
 from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
     Chip,
     ChipTone,
+    ClickableCard,
     Divider,
+    LinkLabel,
     StatusDot,
     body_label,
     mono_label,
@@ -47,6 +78,7 @@ from src.presentation.widgets.primitives import (
     stretch,
     title_label,
 )
+from src.presentation.widgets.safe_text import plain_tooltip
 from src.presentation.widgets.toggle import ToggleSwitch
 
 if TYPE_CHECKING:
@@ -83,6 +115,41 @@ def _metric_card(
 # --------------------------------------------------------------------------- #
 
 
+#: ERP panelinin kontekstual köməyi (audit G-4).
+#:
+#: Mətn EKRANIN YANINDA yaşayır, mərkəzi kömək kataloqunda deyil — səbəbi
+#: `widgets/help_hint.HelpButton` başlığındadır: «Sinxron» sütununun növ-növ
+#: dəyişən mənası və «Hamısını Yoxla» düyməsinin FAKTİKİ etdiyi iş bu faylda
+#: izah olunur, izahın ikinci nüsxəsi ayrı kataloqda saxlansaydı sükutla
+#: arxada qalardı.
+ERP_HELP_TITLE: Final = "ERP Serverləri"
+
+ERP_HELP_INTRO: Final = (
+    "Bu ekranda 1C serverləri, hansı mağazanın hansı serverə bağlandığı və "
+    "son sinxronizasiyanın nəticəsi göstərilir. Siyahının özü heç nə "
+    "dəyişmir — yazı yalnız sihirbaz vasitəsilə aparılır."
+)
+
+ERP_HELP_STEPS: Final[tuple[str, ...]] = (
+    "Cədvəldəki sətrə klikləyin — həmin serverin sihirbazı REDAKTƏ rejimində "
+    "açılır. Növ, ünvan, baza və dövr formaya yüklənir; şifrə sahəsi isə "
+    "təhlükəsizlik üçün boş gəlir və yenidən yazılmalıdır.",
+    "«Sinxron» sütunu hər növdə BAŞQA şeyi ölçür: HTTP-də şəbəkə cavabını, "
+    "COM-da obyektin qurulmasını, fayl mübadiləsində qovluğun oxunmasını. "
+    "Cədvəlin altındakı izah hansı rəqəmin nə demək olduğunu yazır — "
+    "rəqəmləri müxtəlif növlər arasında tutuşdurmaq yanıldıcıdır.",
+    "«Hamısını Yoxla» serverlərə yeni sorğu GÖNDƏRMİR — sinxronizasiya "
+    "xidmətinin real nəticələrini yenidən oxuyur. Yəni bu düymə heç nəyi "
+    "dəyişmir və istənilən vaxt təhlükəsiz basıla bilər.",
+    "«Yeni Server» sihirbazı açır: növ seçilir, ünvan və giriş məlumatları "
+    "yazılır, bağlantı yadda saxlanmazdan ƏVVƏL sınaqdan keçirilir — testdən "
+    "keçməyən konfiqurasiya yazılmır.",
+    "«Mağaza — Server xəritələmə» hansı filialın hansı serverdən oxuyacağını "
+    "göstərir. Xəritələnməmiş mağazanın məlumatı 1C-yə ÜMUMİYYƏTLƏ getmir, "
+    "ona görə siyahıdakı boşluq diqqətdən qaçmamalıdır.",
+)
+
+
 class ErpServersScreen(Screen):
     """1C serverləri, mağaza xəritələməsi və son sinxronizasiya.
 
@@ -101,6 +168,27 @@ class ErpServersScreen(Screen):
         "Bağlantı yoxdur": "danger",
     }
 
+    #: Bağlantı növü nişanının tonu (1c.md UX tələbi 4).
+    #:
+    #: ──────────────────────────────────────────────────────────────────────
+    #: NİYƏ MÖVCUD TONLAR, NİYƏ YENİ RƏNGLƏR DEYİL
+    #: ──────────────────────────────────────────────────────────────────────
+    #: Üç yeni rəng üç yeni cüt deməkdir və hər biri HƏR İKİ temada AA-dan
+    #: keçməlidir. Mövcud nişan tonları (`tokens.py`) məhz bunun üçün artıq
+    #: kalibrlənib — yeni ton əlavə etmək eyni işi ikinci dəfə görmək və
+    #: sürüşmə riski yaratmaq olardı.
+    #:
+    #: TON SEÇİMİ TƏSADÜFİ DEYİL: fayl mübadiləsi real-vaxt DEYİL
+    #: (`ConnectorType.is_real_time`) və nişanın "xəbərdarlıq" tonu məhz bu
+    #: qeyd-şərti daşıyır. Rəng TƏK əlamət deyil — nişanın İÇİNDƏ növün adı
+    #: yazılır (`label_az`), yəni rəngi ayırd etməyən istifadəçi mətni oxuyur.
+    #: Açar naməlum gəlirsə nişan GİZLƏNMİR, neytral tonda göstərilir.
+    _TYPE_TONES: Final[dict[str, ChipTone]] = {
+        "HTTP/OData": "info",
+        "COM": "neutral",
+        "Fayl": "warning",
+    }
+
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(theme, parent=parent)
 
@@ -111,6 +199,17 @@ class ErpServersScreen(Screen):
         self._summary = muted_label("")
         toolbar_layout.addWidget(self._summary)
         toolbar_layout.addWidget(stretch())
+
+        # Kontekstual kömək (audit G-4) — «Sinxron» sütununun mənası cədvəlin
+        # altında bir sətirdə yazılır, «Hamısını Yoxla»-nın nə etdiyi isə
+        # heç yerdə görünmürdü; hər ikisi burada tam izah olunur.
+        self._help = HelpButton(
+            theme,
+            title=ERP_HELP_TITLE,
+            intro=ERP_HELP_INTRO,
+            steps=ERP_HELP_STEPS,
+        )
+        toolbar_layout.addWidget(self._help)
 
         test_all = secondary_button("Hamısını Yoxla")
         test_all.clicked.connect(self.test_all_requested)
@@ -127,16 +226,27 @@ class ErpServersScreen(Screen):
 
         self._table = DataTable(
             [
-                Column("Server", 200),
-                Column("Ünvan", 200, mono=True),
-                Column("Mağaza", 140),
-                Column("Sinxron", 120, mono=True),
+                Column("Server", 180),
+                Column("Növ", 110),
+                Column("Ünvan", 190, mono=True),
+                Column("Mağaza", 130),
+                Column("Sinxron", 110, mono=True),
                 Column("Vəziyyət"),
             ],
             theme,
         )
         self._table.row_selected.connect(self._on_row)
         self.add(self._table)
+
+        # «Sinxron» sütununun rəqəmi hər növdə BAŞQA şeyi ölçür (şəbəkə cavabı /
+        # COM obyektinin qurulması / qovluğun oxunması). Rəqəmi izahsız
+        # buraxsaydıq, fayl serverindəki "45 ms" şəbəkə gecikməsi kimi oxunardı
+        # — yəni cədvəl YANILDIRARDI. Açıqlama cədvəlin altında bir dəfə, sətir
+        # tooltip-ində isə hər sətir üçün ayrıca verilir.
+        self._latency_legend = muted_label("")
+        self._latency_legend.setWordWrap(True)
+        self._latency_legend.setVisible(False)
+        self.add(self._latency_legend)
 
         bottom = QWidget()
         bottom_layout = QHBoxLayout(bottom)
@@ -166,23 +276,66 @@ class ErpServersScreen(Screen):
 
         self._server_names: list[str] = []
 
+    def help_button(self) -> HelpButton:
+        """Kontekstual kömək düyməsi — kontroller/testlər üçün."""
+        return self._help
+
     def set_servers(self, servers: list[dict[str, str]], *, mapped_stores: int) -> None:
+        """Server siyahısı.
+
+        Sətir açarları (maket və canlı yolda EYNİDİR): `name`, `type`,
+        `address`, `stores`, `latency`, `latency_meaning`, `status`.
+        `type`/`latency_meaning` boş gələ bilər — o zaman nişan və izah
+        sadəcə göstərilmir, sətir isə itmir.
+        """
         self._summary.setText(f"{len(servers)} server · {mapped_stores} mağaza xəritələnib")
         self._table.clear()
         self._server_names = [server["name"] for server in servers]
 
         for server in servers:
             status = server.get("status", "Aktiv")
+            kind = server.get("type", "")
+            latency = mono_label(server.get("latency", "—"))
+            meaning = server.get("latency_meaning", "")
+            if meaning:
+                latency.setToolTip(plain_tooltip(meaning))
             self._table.add_row(
                 [
                     mono_label(server["name"]),
+                    Chip(kind, self._TYPE_TONES.get(kind, "neutral")) if kind else plain_label(""),
                     mono_label(server.get("address", ""), muted=True),
                     server.get("stores", ""),
-                    mono_label(server.get("latency", "—")),
+                    latency,
                     Chip(status, self._STATUS_TONES.get(status, "neutral")),
                 ]
             )
+        self._set_latency_legend(servers)
         self.show_content()
+
+    def _set_latency_legend(self, servers: list[dict[str, str]]) -> None:
+        """«Sinxron» sütununun mənasını növ-növ izah edir.
+
+        Mətn DOMENDƏN gəlir (`ConnectorType.latency_meaning_az`) və sətirlərlə
+        birlikdə ötürülür — ekran öz nüsxəsini qursaydı, domendəki izah
+        dəyişəndə cədvəldəki açıqlama arxada qalardı. Yalnız siyahıda FAKTİKİ
+        mövcud olan növlər sadalanır: istifadəçinin işlətmədiyi bir növün
+        izahı yalnız səs-küy olardı.
+        """
+        seen: dict[str, str] = {}
+        for server in servers:
+            kind, meaning = server.get("type", ""), server.get("latency_meaning", "")
+            if kind and meaning and kind not in seen:
+                seen[kind] = meaning
+        if not seen:
+            self._latency_legend.setVisible(False)
+            self._latency_legend.setText("")
+            return
+        # Mətn ÇEVRİLMİR (nə kiçik, nə böyük hərfə): domendən gələn izahda
+        # akronim var («COM obyektinin qurulma müddəti») və `lower()` onu
+        # «com» kimi göstərərdi — yəni domen mətnini korlayardı.
+        parts = "; ".join(f"{kind} — {meaning}" for kind, meaning in seen.items())
+        self._latency_legend.setText(f"«Sinxron» sütunu: {parts}.")
+        self._latency_legend.setVisible(True)
 
     def _on_row(self, index: int) -> None:
         if 0 <= index < len(self._server_names):
@@ -219,8 +372,170 @@ class ErpServersScreen(Screen):
             self._sync_rows.addWidget(row)
 
 
+#: Növ kartının ikonu (1c.md UX tələbi 1: "hər biri öz minimal line-ikonu ilə").
+_CONNECTOR_ICONS: Final[dict[ConnectorType, str]] = {
+    ConnectorType.HTTP: "cloud",
+    ConnectorType.COM: "desktop",
+    ConnectorType.FILE_EXCHANGE: "folder_file",
+}
+
+#: Sahələrin yumşaq keçidi (1c.md UX tələbi 2). 160 ms — tema keçidinin
+#: 260 ms-indən qısadır, çünki burada dəyişən şey bütün pəncərə deyil, bir
+#: blokdur; daha uzunu formanı "ləng" göstərərdi.
+_FIELD_FADE_MS: Final = 160
+
+
+class _ConnectorCard(ClickableCard):
+    """Bağlantı növü seçimi — ikon + ad + izah (1c.md UX tələbi 1).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ DROPDOWN DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Spesifikasiya bunu açıq tələb edir: seçimi edən adam çox vaxt qeyri-texniki
+    olur (CEO) və "HTTP/OData ▾" sətri ona heç nə demir. Kart forması üç seçimi
+    EYNİ ANDA, izahı ilə birlikdə göstərir — müqayisə üçün heç nə açmaq lazım
+    gəlmir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    ƏLÇATMAZ KART GİZLƏDİLMİR
+    ──────────────────────────────────────────────────────────────────────────
+    COM yalnız Windows-da işləyir. Kartı gizlətsəydik, istifadəçi "niyə iki
+    seçim var, sənəddə isə üç yazılıb?" sualı ilə tək qalardı. Ona görə kart
+    QALIR, klik qəbul etmir və SƏBƏB mətnlə yazılır. Bu, "görmək = səlahiyyətin
+    olması" qaydası ilə ziddiyyət təşkil ETMİR: orada söhbət İCAZƏDƏN gedir
+    (icazəsiz maddə ümumiyyətlə qurulmur), burada isə platformanın texniki
+    məhdudiyyətindən — həmin məhdudiyyət izah olunmalıdır.
+    """
+
+    def __init__(
+        self,
+        connector_type: ConnectorType,
+        theme: ThemeManager,
+        *,
+        available: bool = True,
+        unavailable_reason: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(connector_type.value, padding=16, spacing=8, parent=parent)
+        self.connector_type = connector_type
+        self._available = available
+        self._theme = theme
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+
+        head = QWidget()
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(0, 0, 0, 0)
+        head_layout.setSpacing(10)
+
+        glyph = plain_label()
+        glyph.setPixmap(
+            icons.render(
+                _CONNECTOR_ICONS[connector_type],
+                theme.color("--color-text-primary" if available else "--color-text-muted"),
+                size=20,
+                stroke_width=1.3,
+            )
+        )
+        head_layout.addWidget(glyph)
+        head_layout.addWidget(title_label(connector_type.label_az, size=15))
+        head_layout.addWidget(stretch())
+        self.add(head)
+
+        description = muted_label(connector_type.card_description_az)
+        description.setWordWrap(True)
+        self.add(description)
+
+        # SEÇİMİN İKİNCİ SİQNALI (rəng-korluğu üçün). Amber çərçivə tək
+        # əlamət olsaydı, deuteranopiya ilə seçilmiş kart seçilməmişdən
+        # fərqlənməzdi — burada isə İŞARƏ + MƏTN də görünür.
+        self._mark = QWidget()
+        mark_layout = QHBoxLayout(self._mark)
+        mark_layout.setContentsMargins(0, 0, 0, 0)
+        mark_layout.setSpacing(6)
+        check = plain_label()
+        check.setPixmap(
+            icons.render("check", theme.color("--color-accent"), size=14, stroke_width=1.8)
+        )
+        mark_layout.addWidget(check)
+        mark_layout.addWidget(muted_label("Seçildi"))
+        mark_layout.addStretch(1)
+        self._mark.setVisible(False)
+        self.add(self._mark)
+
+        if not available:
+            self.setProperty("unavailable", "true")
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            # Klaviatura ilə də seçilə bilməməlidir — fokus alan, lakin heç
+            # nə etməyən element ekran oxuyucusunda "ölü" düymə kimi qalır.
+            self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            reason = muted_label(unavailable_reason)
+            reason.setWordWrap(True)
+            self.add(reason)
+            self.setToolTip(plain_tooltip(unavailable_reason))
+
+    @property
+    def is_available(self) -> bool:
+        return self._available
+
+    def set_selected(self, selected: bool) -> None:
+        """Seçilmiş görünüşü tətbiq edir (çərçivə + fon + işarə)."""
+        self.setProperty("selected", "true" if selected else "false")
+        self._mark.setVisible(selected)
+        refresh_widget_style(self)
+
+    def _activate(self) -> None:
+        # Əlçatmaz kart siqnal YAYMIR: klik "heç nə baş vermədi" kimi
+        # görünərdi, halbuki səbəb kartın öz mətnindədir.
+        if self._available:
+            super()._activate()
+
+
+class _TestSpinner(QLabel):
+    """Fırlanan «yenilə» ikonu — bağlantı testi gedərkən (1c.md UX tələbi 3).
+
+    NİYƏ PİKSMAP FIRLADILIR, NİYƏ HAZIR WIDGET YOXDUR: Qt-də qeyri-müəyyən
+    gedişat göstəricisi `QProgressBar`-dır və o, formada bir zolaq yeri tutur;
+    burada isə lazım olan şey düymənin YANINDA, mətnlə eyni sətirdə duran
+    kiçik bir hərəkətdir. Bir `QTimer` + bir `QTransform` bunun ən ucuz yoludur
+    və dayandırıldıqda heç bir resurs saxlamır.
+
+    Taymer `stop()` ilə HƏR HALDA dayandırılır (uğur, uğursuzluq, pəncərənin
+    bağlanması) — dayandırılmayan taymer modal bağlandıqdan sonra da hər 90
+    ms-də bir kadr çəkməyə davam edərdi.
+    """
+
+    def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
+        super().__init__("", parent)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self._frame = icons.render("refresh", theme.color("--color-text-muted"), size=14)
+        self._angle = 0
+        self.setFixedSize(20, 20)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setPixmap(self._frame)
+        self.setVisible(False)
+        self._timer = QTimer(self)
+        self._timer.setInterval(90)
+        self._timer.timeout.connect(self._advance)
+
+    def start(self) -> None:
+        self.setVisible(True)
+        self._timer.start()
+
+    def stop(self) -> None:
+        self._timer.stop()
+        self.setVisible(False)
+
+    def _advance(self) -> None:
+        self._angle = (self._angle + 30) % 360
+        self.setPixmap(
+            self._frame.transformed(
+                QTransform().rotate(self._angle), Qt.TransformationMode.SmoothTransformation
+            )
+        )
+
+
 class ServerConnectionWizard(QDialog):
-    """ "Yeni Server" sihirbazı — bağlantı testi ilə.
+    """ "Yeni Server" sihirbazı — bağlantı növü seçimi + bağlantı testi.
 
     Signals:
         test_requested: Doldurulmuş sahələr.
@@ -229,17 +544,48 @@ class ServerConnectionWizard(QDialog):
     Test NƏTİCƏSİ olmadan yadda saxlamağa icazə verilir, lakin xəbərdarlıq
     göstərilir — offline quraşdırmada (server hələ qoşulmayıb) admin serveri
     əvvəlcədən əlavə edə bilməlidir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ HƏR NÖVÜN ÖZ SAHƏ PANELİ VAR (1c.md UX tələbi 2)
+    ──────────────────────────────────────────────────────────────────────────
+    "Bir tipdən digərinə keçilib geri qayıdılsa, əvvəl yazılmış dəyərlər
+    YADDAŞDA qalır." Tək bir «Ünvan» sahəsini üç növ arasında paylaşsaydıq,
+    HTTP üçün yazılmış `10.20.1.16:1541` fayl növünə keçəndə qovluq yolu kimi
+    görünərdi — yəni dəyər "qalmazdı", ÇEVRİLƏRDİ. Ona görə hər növün öz
+    paneli, öz sahələri var: yaddaş widget-lərin özündədir və heç bir əlavə
+    sinxronizasiya tələb etmir.
+
+    Növə XAS parametrlər (`connector_config`) isə `ConnectorConfig`-də
+    saxlanılır və `with_values(...)` ilə üzərinə yazılır — beləliklə redaktədə
+    yüklənmiş, lakin formada göstərilməyən qabaqcıl açarlar (məs. COM sorğu
+    sahələrinin adları) İTMİR.
     """
 
     test_requested = Signal(dict)
     saved = Signal(dict)
 
-    def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        theme: ThemeManager,
+        *,
+        parent: QWidget | None = None,
+        system_name: str | None = None,
+    ) -> None:
+        """Sihirbazı qurur.
+
+        Args:
+            theme: Rəng tokenlərinin mənbəyi (ekran rəng HARDCODE ETMİR).
+            parent: Modalın valideyni.
+            system_name: `platform.system()` əvəzedicisi — COM kartının
+                əlçatanlığını testdə qlobal yamaqsız yoxlamaq üçün
+                (`OneCComConnector`-un `system_name` parametri ilə eyni naxış).
+        """
         super().__init__(parent)
         self._theme = theme
+        self._system_name = system_name
         self.setWindowTitle("Yeni 1C Serveri")
         self.setModal(True)
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -247,31 +593,114 @@ class ServerConnectionWizard(QDialog):
         card = Card(padding=26, spacing=18)
         layout.addWidget(card)
 
-        card.add(title_label("Yeni 1C Serveri", size=20))
-        card.add(muted_label("Bağlantı məlumatlarını daxil edin və yoxlayın."))
+        self._heading = title_label("Yeni 1C Serveri", size=20)
+        card.add(self._heading)
+        card.add(
+            muted_label(
+                "Əvvəlcə bağlantı növünü seçin, sonra həmin növün tələb etdiyi "
+                "məlumatları doldurub yoxlayın."
+            )
+        )
         card.add(Divider())
 
-        self._name = FormField("Server adı", placeholder="1C-BAKI-03")
-        self._host = FormField("Ünvan", placeholder="10.20.1.16:1541")
-        self._database = FormField("Baza", placeholder="kompas_prod")
-        self._username = FormField("İstifadəçi", placeholder="kompas_sync")
-        self._password = FormField("Şifrə", password=True)
-        for field in (self._name, self._host, self._database, self._username, self._password):
-            card.add(field)
+        # --- 1-ci addım: növ kartları ---------------------------------------- #
+        self._cards: dict[ConnectorType, _ConnectorCard] = {}
+        card.add(self._build_type_cards())
 
+        # Redaktədə növ dəyişdirildikdə görünən xəbərdarlıq (aşağıda izah).
+        # SOLĞUN DEYİL, XƏBƏRDARLIQ TONUNDA: mətn nəticəsi geri qaytarıla
+        # bilməyən bir dəyişikliyi elan edir — solğun rəng onu "əlavə qeyd"
+        # kimi göstərib gözdən qaçırardı.
+        self._type_notice = body_label("", size=13)
+        self._type_notice.setProperty("variant", "warning")
+        self._type_notice.setVisible(False)
+        card.add(self._type_notice)
+
+        # --- ortaq sahələr ---------------------------------------------------- #
+        self._name = FormField("Server adı", placeholder="1C-BAKI-03")
+        card.add(self._name)
+
+        # --- 2-ci addım: növə xas sahələr (yumşaq keçidlə) -------------------- #
+        self._stack = QStackedWidget()
+        self._panels: dict[ConnectorType, QWidget] = {}
+        self._address: dict[ConnectorType, FormField] = {}
+        self._config_inputs: dict[ConnectorType, dict[str, FormField]] = {}
+        self._config_memory: dict[ConnectorType, ConnectorConfig] = {
+            connector_type: ConnectorConfig() for connector_type in ConnectorType
+        }
+        self._build_http_panel()
+        self._build_com_panel()
+        self._build_file_panel()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(self._stack)
+        scroll.setMinimumHeight(240)
+        card.add(scroll)
+
+        # Sahələrin görünüşü ANİ dəyişmir — bax `_show_panel`.
+        self._fade_effect = QGraphicsOpacityEffect(self._stack)
+        self._fade_effect.setOpacity(1.0)
+        self._stack.setGraphicsEffect(self._fade_effect)
+        self._fade = QPropertyAnimation(self._fade_effect, b"opacity", self)
+        self._fade.setDuration(_FIELD_FADE_MS)
+        self._fade.setEasingCurve(QEasingCurve.Type.InOutCubic)
+
+        # --- sinxronizasiya dövrü (növdən ASILI OLMAYAN ortaq parametr) ------ #
+        #
+        # `0` = "tipin defoltu": `ErpServerDraft.sync_interval_seconds=None`
+        # verildikdə domen həmin defoltu tətbiq edir (fayl mübadiləsi üçün ROOT
+        # limitindən). Boş buraxıla bilən `QSpinBox` yoxdur, ona görə xüsusi
+        # dəyər mətni işlədilir — istifadəçi "nə yazmalıyam?" sualı ilə
+        # qalmasın deyə.
+        self._interval = QSpinBox()
+        self._interval.setProperty("variant", "form")
+        self._interval.setRange(0, 86400)
+        self._interval.setSingleStep(30)
+        self._interval.setSuffix(" san")
+        self._interval.setSpecialValueText("Bağlantı növünün defoltu")
+        card.add(
+            FormField(
+                "Sinxronizasiya dövrü",
+                widget=self._interval,
+                hint=(
+                    f"Ən azı {MIN_SYNC_INTERVAL_SECONDS} saniyə. "
+                    "Boş buraxsanız növün öz defolt dövrü tətbiq olunur."
+                ),
+            )
+        )
+
+        # --- test nəticəsi ---------------------------------------------------- #
+        self._result_row = QWidget()
+        result_layout = QHBoxLayout(self._result_row)
+        result_layout.setContentsMargins(0, 0, 0, 0)
+        result_layout.setSpacing(8)
+        self._spinner = _TestSpinner(theme)
+        result_layout.addWidget(self._spinner)
+        self._result_icon = plain_label()
+        self._result_icon.setVisible(False)
+        result_layout.addWidget(self._result_icon)
         self._result = plain_label()
-        self._result.setVisible(False)
         self._result.setWordWrap(True)
-        card.add(self._result)
+        result_layout.addWidget(self._result, 1)
+        self._result_row.setVisible(False)
+        card.add(self._result_row)
+
+        # Texniki səbəb AYRI sətirdədir — bax `set_test_result`.
+        self._result_detail = mono_label("", muted=True)
+        self._result_detail.setWordWrap(True)
+        self._result_detail.setVisible(False)
+        card.add(self._result_detail)
 
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.setSpacing(12)
 
-        test = secondary_button("Bağlantını Yoxla")
-        test.clicked.connect(lambda: self.test_requested.emit(self.collected()))
-        buttons_layout.addWidget(test)
+        self._test_button = secondary_button("Bağlantını Yoxla")
+        self._test_button.clicked.connect(lambda: self.test_requested.emit(self.collected()))
+        buttons_layout.addWidget(self._test_button)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")
@@ -289,38 +718,431 @@ class ServerConnectionWizard(QDialog):
         # gözlənilmədən şəbəkə sorğusu başladardı.
         save.setDefault(True)
         save.setAutoDefault(True)
-        for button in (test, cancel):
+        for button in (self._test_button, cancel):
             button.setAutoDefault(False)
 
-        # Fokus sırası vizual sıra ilə: beş sahə → yoxla → imtina → saxla.
-        fields = (self._name, self._host, self._database, self._username, self._password)
-        for previous, following in pairwise(fields):
-            QWidget.setTabOrder(previous.input_widget(), following.input_widget())
-        QWidget.setTabOrder(self._password.input_widget(), test)
-        QWidget.setTabOrder(test, cancel)
-        QWidget.setTabOrder(cancel, save)
+        # Fokus sırası vizual sıra ilə: kartlar → ad → aktiv panelin sahələri →
+        # dövr → yoxla → imtina → saxla.
+        self._tail_buttons = (self._test_button, cancel, save)
+        self._selected_type = ConnectorType.HTTP
+        self._loaded_type: ConnectorType | None = None
+        self._apply_selection(ConnectorType.HTTP, animate=False)
 
         self._name.focus_input()
 
-    def collected(self) -> dict[str, str]:
+    # ------------------------------ quruluş ---------------------------------- #
+
+    def _build_type_cards(self) -> QWidget:
+        """Üç növ yan-yana. Windows olmayan mühitdə COM izahla əlçatmazdır.
+
+        `platform.system()` işlədilir, `sys.platform` YOX — səbəb
+        `com_connector.py` başlığındadır: mypy konfiqurasiyası `platform =
+        "win32"` ilə işləyir və `sys.platform` yoxlaması qeyri-Windows budağı
+        "çatılmaz kod" kimi göstərərdi.
+        """
+        import platform  # noqa: PLC0415
+
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(12)
+
+        windows = (self._system_name or platform.system()) == "Windows"
+        for connector_type in ConnectorType:
+            available = windows or not connector_type.requires_windows
+            card = _ConnectorCard(
+                connector_type,
+                self._theme,
+                available=available,
+                # Səbəb mətni DOMENDƏNDİR (`ErpPlatformError.user_message`) —
+                # eyni cümlə konnektorun özü işə düşməyəndə də göstərilir.
+                unavailable_reason=ErpPlatformError.user_message,
+            )
+            card.clicked.connect(self._on_card_clicked)
+            self._cards[connector_type] = card
+            row_layout.addWidget(card, 1)
+        return row
+
+    def _build_http_panel(self) -> None:
+        """HTTP/OData — sahələr Faza 4.2-dəki forma ilə EYNİDİR.
+
+        `self._host` / `self._database` / `self._username` / `self._password`
+        adları QƏSDƏN saxlanılıb: mövcud sihirbazın forması dəyişmir, yalnız
+        onun ətrafına növ seçimi əlavə olunur (1c.md QIRMIZI XƏTT).
+        """
+        panel, layout = self._new_panel()
+        self._host = FormField(ConnectorType.HTTP.address_label_az, placeholder="10.20.1.16:1541")
+        self._database = FormField("Baza (infobase)", placeholder="kompas_prod")
+        self._username = FormField("İstifadəçi", placeholder="kompas_sync")
+        self._password = FormField("Şifrə", password=True)
+        for field in (self._host, self._database, self._username, self._password):
+            layout.addWidget(field)
+        layout.addStretch(1)
+        self._address[ConnectorType.HTTP] = self._host
+        self._register_panel(ConnectorType.HTTP, panel)
+
+    def _build_com_panel(self) -> None:
+        """COM — server/qovluq, baza (Ref), istifadəçi, şifrə + sorğu parametrləri.
+
+        Sorğu SAHƏ ADLARI (`id_field`, `date_field`, …) formada YOXDUR: onların
+        dil-əsaslı defoltları standart 1C konfiqurasiyalarını onsuz da tutur və
+        yeddi əlavə sahə bu ekranı qeyri-texniki istifadəçi üçün oxunmaz edərdi.
+        Redaktədə yüklənmiş belə açarlar İTMİR — `ConnectorConfig.with_values`
+        yalnız formadakı açarları üzərinə yazır (bax sinif başlığı).
+        """
+        panel, layout = self._new_panel()
+        address = FormField(
+            ConnectorType.COM.address_label_az, placeholder="1C-SERVER və ya C:\\Bazalar\\Ticaret"
+        )
+        self._com_infobase = FormField("Baza adı (Ref)", placeholder="ticaret")
+        self._com_username = FormField("İstifadəçi", placeholder="kompas_sync")
+        self._com_password = FormField("Şifrə", password=True)
+        for field in (address, self._com_infobase, self._com_username, self._com_password):
+            layout.addWidget(field)
+
+        file_mode = QComboBox()
+        file_mode.setProperty("variant", "form")
+        file_mode.addItems(["Klient-server (Srvr=)", "Fayl bazası (File=)"])
+        language = QComboBox()
+        language.setProperty("variant", "form")
+        language.addItems(["RU", "EN"])
+        query_source = FormField("Sənəd növü", placeholder="Документ.РеализацияТоваровУслуг")
+        layout.addWidget(FormField("Baza rejimi", widget=file_mode))
+        layout.addWidget(
+            FormField(
+                "Sorğu dili",
+                widget=language,
+                hint="1C sorğusunun dili — baza konfiqurasiyası ilə eyni olmalıdır.",
+            )
+        )
+        layout.addWidget(query_source)
+        layout.addStretch(1)
+
+        self._address[ConnectorType.COM] = address
+        self._com_file_mode = file_mode
+        self._com_language = language
+        self._config_inputs[ConnectorType.COM] = {"query_source": query_source}
+        self._register_panel(ConnectorType.COM, panel)
+
+    def _build_file_panel(self) -> None:
+        """Fayl mübadiləsi — qovluq, format və gözlənilən sütun adları.
+
+        Sütun adları BURADA olmalıdır: konnektorun ən çox rast gəlinən xətası
+        "faylda gözlənilən sütun(lar) yoxdur" mesajıdır və o, düzəlişin məhz
+        sihirbazda edilməsini deyir. Sahələri gizlətsəydik, istifadəçi mesajı
+        oxuyub heç nə edə bilməzdi.
+        """
+        panel, layout = self._new_panel()
+        address = FormField(
+            ConnectorType.FILE_EXCHANGE.address_label_az,
+            placeholder="\\\\anbar\\1c_exchange",
+        )
+        layout.addWidget(address)
+
+        file_format = QComboBox()
+        file_format.setProperty("variant", "form")
+        file_format.addItems(["CSV", "XML"])
+        layout.addWidget(FormField("Fayl formatı", widget=file_format))
+
+        text_fields: dict[str, FormField] = {
+            "file_pattern": FormField("Fayl şablonu", placeholder="*.csv"),
+            "encoding": FormField("Kodlaşdırma", placeholder="utf-8-sig"),
+            "delimiter": FormField("Ayırıcı (CSV)", placeholder=";"),
+            "record_tag": FormField("Sənəd elementi (XML)", placeholder="Документ"),
+            "date_format": FormField("Tarix şablonu", placeholder="%d.%m.%Y %H:%M:%S"),
+            "document_id_column": FormField("Sənəd ID sütunu", placeholder="Номер"),
+            "date_column": FormField("Tarix sütunu", placeholder="Дата"),
+            "seller_column": FormField("Satıcı sütunu", placeholder="Продавец"),
+            "store_column": FormField("Mağaza sütunu", placeholder="Склад"),
+            "amount_column": FormField("Məbləğ sütunu", placeholder="Сумма"),
+            "seller_name_column": FormField(
+                "Satıcı adı sütunu", placeholder="ПродавецНаименование"
+            ),
+        }
+        for field in text_fields.values():
+            layout.addWidget(field)
+        layout.addStretch(1)
+
+        self._address[ConnectorType.FILE_EXCHANGE] = address
+        self._file_format = file_format
+        self._config_inputs[ConnectorType.FILE_EXCHANGE] = text_fields
+        self._register_panel(ConnectorType.FILE_EXCHANGE, panel)
+
+    @staticmethod
+    def _new_panel() -> tuple[QWidget, QVBoxLayout]:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+        return panel, layout
+
+    def _register_panel(self, connector_type: ConnectorType, panel: QWidget) -> None:
+        self._panels[connector_type] = panel
+        self._stack.addWidget(panel)
+
+    # ------------------------------ seçim ------------------------------------ #
+
+    def _on_card_clicked(self, key: str) -> None:
+        self._apply_selection(ConnectorType.parse(key), animate=True)
+
+    def _apply_selection(self, connector_type: ConnectorType, *, animate: bool) -> None:
+        """Kart seçimi → sahələr, fokus sırası və (redaktədə) xəbərdarlıq."""
+        previous = self._selected_type
+        if previous is not connector_type:
+            # DƏYƏR YADDAŞI: paneldən çıxarkən növün konfiqurasiyası saxlanılır
+            # (bax sinif başlığı). Sahələrin özü panellə birlikdə yaşayır.
+            self._config_memory[previous] = self._config_memory[previous].with_values(
+                **self._read_config_values(previous)
+            )
+        self._selected_type = connector_type
+        for card_type, card in self._cards.items():
+            card.set_selected(card_type is connector_type)
+        self._show_panel(connector_type, animate=animate)
+        self._update_type_notice()
+        self._apply_tab_order(connector_type)
+
+    def _show_panel(self, connector_type: ConnectorType, *, animate: bool) -> None:
+        """Panelin dəyişməsi — sərt sıçrayış YOX (1c.md UX tələbi 2).
+
+        Animasiya ƏVVƏLCƏ dayandırılır: istifadəçi kartlar arasında sürətlə
+        gəzərsə, iki keçid üst-üstə düşüb paneli yarı-şəffaf qoyardı.
+        """
+        self._fade.stop()
+        self._stack.setCurrentWidget(self._panels[connector_type])
+        if not animate:
+            self._fade_effect.setOpacity(1.0)
+            return
+        self._fade.setStartValue(0.0)
+        self._fade.setEndValue(1.0)
+        self._fade.start()
+
+    def _update_type_notice(self) -> None:
+        """Redaktədə növ dəyişdirildikdə görünən xəbərdarlıq.
+
+        Köhnə növün konfiqurasiyası SİLİNMİR — sətir yenidən yazılanda əvvəlki
+        konfiqurasiya `erp_server_config_backups`-a düşür (bax
+        `ErpServerRepository.update`). Lakin o, artıq İŞLƏMİR və istifadəçi
+        bunu yadda saxlamazdan ƏVVƏL bilməlidir.
+        """
+        loaded = self._loaded_type
+        if loaded is None or loaded is self._selected_type:
+            self._type_notice.setVisible(False)
+            self._type_notice.setText("")
+            return
+        self._type_notice.setText(
+            f"Bağlantı növü «{loaded.label_az}» → «{self._selected_type.label_az}» "
+            "dəyişdirilir. Köhnə növün parametrləri ehtiyat nüsxədə qalır, "
+            "lakin bu serverdə artıq işləməyəcək."
+        )
+        self._type_notice.setVisible(True)
+
+    def _apply_tab_order(self, connector_type: ConnectorType) -> None:
+        """Fokus sırası GÖRÜNƏN sıra ilə üst-üstə düşməlidir.
+
+        Panel dəyişəndə sıra da dəyişir: gizli panelin sahələri Tab-la
+        keçilməməlidir, əks halda fokus ekranda görünməyən bir sahədə "itərdi".
+        """
+        widgets: list[QWidget] = [card for card in self._cards.values() if card.is_available]
+        widgets.append(self._name.input_widget())
+        widgets.extend(field.input_widget() for field in self._panel_fields(connector_type))
+        widgets.append(self._interval)
+        widgets.extend(self._tail_buttons)
+        for previous, following in pairwise(widgets):
+            QWidget.setTabOrder(previous, following)
+
+    def _panel_fields(self, connector_type: ConnectorType) -> list[FormField]:
+        fields = [self._address[connector_type]]
+        if connector_type is ConnectorType.HTTP:
+            fields += [self._database, self._username, self._password]
+        elif connector_type is ConnectorType.COM:
+            fields += [self._com_infobase, self._com_username, self._com_password]
+        fields += list(self._config_inputs.get(connector_type, {}).values())
+        return fields
+
+    # ------------------------------ dəyərlər --------------------------------- #
+
+    def selected_type(self) -> str:
+        """Seçilmiş bağlantı növünün açarı (`ConnectorType.value`)."""
+        return self._selected_type.value
+
+    def _read_config_values(self, connector_type: ConnectorType) -> dict[str, Any]:
+        """Formadakı növə xas parametrlər — `connector_config` sözlüyü.
+
+        Boş sahə də ötürülür: istifadəçinin TƏMİZLƏDİYİ dəyər saxlanmalı olsa,
+        `with_values` onu üzərinə yazmalıdır. Boş sətir konnektor tərəfində
+        onsuz da "defoltu işlət" deməkdir (`ConnectorConfig.text`).
+        """
+        values: dict[str, Any] = {
+            key: field.text().strip()
+            for key, field in self._config_inputs.get(connector_type, {}).items()
+        }
+        if connector_type is ConnectorType.COM:
+            values["file_mode"] = self._com_file_mode.currentIndex() == 1
+            values["query_language"] = self._com_language.currentText()
+        elif connector_type is ConnectorType.FILE_EXCHANGE:
+            values["file_format"] = self._file_format.currentText()
+        return values
+
+    def collected(self) -> dict[str, Any]:
+        """Formanın hazırkı vəziyyəti — `load()`-un tərsi.
+
+        `host`/`database`/`username`/`password` açarları Faza 4.2-dən BƏRİ
+        eynidir; `connector_type`, `sync_interval` və `config` ƏLAVƏ olunub,
+        yəni köhnə HTTP yolu dəyişmədən işləyir.
+        """
+        connector_type = self._selected_type
+        infobase, username, password = "", "", ""
+        if connector_type is ConnectorType.HTTP:
+            infobase = self._database.text()
+            username, password = self._username.text(), self._password.text()
+        elif connector_type is ConnectorType.COM:
+            infobase = self._com_infobase.text()
+            username, password = self._com_username.text(), self._com_password.text()
+
+        config = self._config_memory[connector_type].with_values(
+            **self._read_config_values(connector_type)
+        )
+        interval = self._interval.value()
         return {
             "name": self._name.text(),
-            "host": self._host.text(),
-            "database": self._database.text(),
-            "username": self._username.text(),
-            "password": self._password.text(),
+            "connector_type": connector_type.value,
+            "host": self._address[connector_type].text(),
+            "database": infobase,
+            "username": username,
+            "password": password,
+            "sync_interval": str(interval) if interval else "",
+            "config": config.as_dict(),
         }
 
-    def set_test_result(self, *, ok: bool, message: str) -> None:
+    def load(self, payload: dict[str, Any]) -> None:
+        """Mövcud serveri formaya yükləyir (redaktə axını).
+
+        ŞİFRƏ QƏSDƏN GƏLMİR: o, `erp_servers`-də şifrələnib və oxu-modelində
+        ümumiyyətlə yoxdur (SEC-013, bax `controllers/erp_servers.py` başlığı).
+        Sözlükdə `password` olsa belə istifadə edilmir — sahə boş açılır və
+        istifadəçi onu yenidən yazır.
+        """
+        connector_type = ConnectorType.parse(str(payload.get("connector_type", "")))
+        self._loaded_type = connector_type
+        self.setWindowTitle("1C Serverinin Redaktəsi")
+        self._heading.setText("1C Serverinin Redaktəsi")
+
+        self._name.set_text(str(payload.get("name", "")))
+        self._address[connector_type].set_text(str(payload.get("host", "")))
+        infobase = str(payload.get("database", ""))
+        username = str(payload.get("username", ""))
+        if connector_type is ConnectorType.HTTP:
+            self._database.set_text(infobase)
+            self._username.set_text(username)
+        elif connector_type is ConnectorType.COM:
+            self._com_infobase.set_text(infobase)
+            self._com_username.set_text(username)
+
+        raw_interval = str(payload.get("sync_interval", "")).strip()
+        self._interval.setValue(int(raw_interval) if raw_interval.isdigit() else 0)
+
+        config = ConnectorConfig.from_dict(payload.get("config") or {})
+        self._config_memory[connector_type] = config
+        self._write_config_values(connector_type, config)
+        self._apply_selection(connector_type, animate=False)
+
+    def _write_config_values(self, connector_type: ConnectorType, config: ConnectorConfig) -> None:
+        """Saxlanmış konfiqurasiyanı formadakı sahələrə yazır."""
+        for key, field in self._config_inputs.get(connector_type, {}).items():
+            field.set_text(config.text(key))
+        if connector_type is ConnectorType.COM:
+            self._com_file_mode.setCurrentIndex(1 if config.flag("file_mode") else 0)
+            self._com_language.setCurrentText(config.text("query_language", "RU").upper())
+        elif connector_type is ConnectorType.FILE_EXCHANGE:
+            self._file_format.setCurrentText(config.text("file_format", "CSV").upper())
+
+    # ------------------------------ test nəticəsi ---------------------------- #
+
+    def set_busy(self, busy: bool) -> None:
+        """Test gedərkən: düymə deaktiv + FIRLANAN spinner + «Yoxlanılır…».
+
+        ──────────────────────────────────────────────────────────────────────
+        `processEvents` YAMAĞI ÇIXARILDI — ARTIQ LAZIM DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəl burada açıq `QApplication.processEvents(ExcludeUserInputEvents)`
+        çağırılırdı, çünki bağlantı testi SİNXRON idi: metod qayıtdıqdan
+        dərhal sonra hadisə dövrü bloklanırdı və Qt "deaktiv düymə +
+        Yoxlanılır…" halını ÇƏKMƏYƏ macal tapmırdı; spinner isə ümumiyyətlə
+        fırlanmırdı (taymer bloklanmış dövrdə işə düşmür).
+
+        Test indi fon işçisinə keçib (`presentation/background_task.py`), yəni
+        hadisə dövrü test müddətində SƏRBƏSTDİR: pəncərə özü boyanır, spinner
+        FAKTİKİ fırlanır (1c.md UX tələbi 3) və istifadəçi sihirbazı bağlaya,
+        sahələri dəyişə bilir. `processEvents` isə indi zərərlidir: o, hadisə
+        emalını emalın İÇİNDƏN başladır (yenidən-giriş) və bu yolla siqnal
+        emalının ortasında ikinci bir slot işə düşə bilər.
+
+        İkiqat işə salma qorumasının mənbəyi də dəyişib: əvvəl
+        `ExcludeUserInputEvents` bayrağı idi, indi isə DEAKTİV düymə +
+        kontrollerin `BackgroundTask.is_running` yoxlamasıdır.
+        """
+        self._test_button.setEnabled(not busy)
+        self._test_button.setText("Yoxlanılır…" if busy else "Bağlantını Yoxla")
+        self._result_icon.setVisible(False)
+        self._result_detail.setVisible(False)
+        if not busy:
+            self._spinner.stop()
+            return
+
+        self._result.setText("Yoxlanılır…")
+        self._result.setStyleSheet(f"color: {self._theme.color('--color-text-muted')};")
+        self._result_row.setVisible(True)
+        self._spinner.start()
+
+    def set_test_result(self, *, ok: bool, message: str, detail: str = "") -> None:
+        """Nəticə: yaşıl check + mətn, yaxud qırmızı X + KONKRET səbəb.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `detail` ARTIQ EKRANDA GÖSTƏRİLİR
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəl texniki səbəb yalnız `app.log`-a yazılırdı. Üç konnektorlu
+        dünyada bu, yetərli deyil: fayl mübadiləsində `detail` faylda TAPILAN
+        sütunların siyahısıdır, naməlum COM xətasında isə xam `HRESULT` —
+        yəni nasazlığı axtaran adamın yeganə ipucu. Onları gizlətmək
+        "generic xəta" yasağını (1c.md UX tələbi 3) faktiki olaraq pozardı.
+
+        SIZMA RİSKİ: mətn yalnız `can_manage_erp_servers` daşıyan istifadəçiyə
+        və məhz onun ÖZÜNÜN yazdığı parametrlərə aiddir — şifrə isə `detail`-ə
+        heç vaxt düşmür (konnektorlar onu istisna mətninə qoymur).
+        """
+        self._spinner.stop()
+        self._test_button.setEnabled(True)
+        self._test_button.setText("Bağlantını Yoxla")
+
         token = "--color-success" if ok else "--color-danger"
+        self._result_icon.setPixmap(
+            icons.render(
+                "check_circle" if ok else "close",
+                self._theme.color(token),
+                size=16,
+                stroke_width=1.8,
+            )
+        )
+        self._result_icon.setVisible(True)
+        # Mətn OLDUĞU KİMİ göstərilir — ümumiləşdirilmir, kəsilmir.
         self._result.setText(message)
         self._result.setStyleSheet(f"color: {self._theme.color(token)};")
-        self._result.setVisible(True)
+        self._result_row.setVisible(True)
+
+        self._result_detail.setText(detail)
+        self._result_detail.setVisible(bool(detail))
+
+    # ------------------------------ yadda saxlama ---------------------------- #
 
     def _on_save(self) -> None:
         self._name.clear_error()
         if not self._name.text().strip():
             self._name.set_error("Server adı məcburidir")
+            return
+        address = self._address[self._selected_type]
+        address.clear_error()
+        if not address.text().strip():
+            address.set_error(f"{self._selected_type.address_label_az} məcburidir")
             return
         self.saved.emit(self.collected())
         self.accept()
@@ -551,12 +1373,18 @@ class HealthScreen(Screen):
 
     Signals:
         recheck_requested: "Yenidən Yoxla".
+        conflicts_requested: Xəbərdarlıq kartındakı «… konflikti həll et»
+            keçidi — «Sinxronizasiya Konfliktləri» ekranını açır (bax
+            `set_conflict_action`).
     """
 
     recheck_requested = Signal()
+    conflicts_requested = Signal()
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(theme, parent=parent)
+        #: Keçid LAZIM OLANA QƏDƏR QURULMUR — bax `set_conflict_action`.
+        self._conflict_link: LinkLabel | None = None
 
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
@@ -651,6 +1479,46 @@ class HealthScreen(Screen):
             layout.addWidget(body_label(text, size=13), 1)
             layout.addWidget(mono_label(time_text, muted=True))
             self._alerts_rows.addWidget(row)
+
+    def set_conflict_action(self, count: int) -> None:
+        """Konflikt xəbərdarlığının GEDƏCƏYİ yeri kartın altına əlavə edir.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ AYRICA SETTER, NİYƏ `set_alerts` İÇİNDƏ DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        `set_alerts` sətri `(mətn, vaxt, ton)` üçlüyü kimi alır və orada
+        "bu sətir kliklənəndir" məlumatı üçün yer yoxdur. İmzanı dəyişmək
+        maket və canlı yolun HƏR İKİSİNİ (`preview_screens._health`,
+        `screen_data._health`) və mövcud testləri qırardı — halbuki əlavə
+        edilən şey bir keçiddir.
+
+        ──────────────────────────────────────────────────────────────────────
+        WIDGET İCAZƏSİZ İSTİFADƏÇİDƏ QURULMUR
+        ──────────────────────────────────────────────────────────────────────
+        «GÖRMƏK = SƏLAHİYYƏTİN OLMASI» (bölmə 3): keçid `sync_conflicts`
+        ekranına aparır və o, `can_view_employee_reports` tələb edir. Çağıran
+        tərəf (`screen_data._health`) həmin flag-i yoxlayır və flag yoxdursa
+        bu metodu ÇAĞIRMIR — nəticədə `LinkLabel` ümumiyyətlə YARADILMIR,
+        `setEnabled(False)` ilə boz qalmır.
+
+        `count == 0` halında mövcud keçid SİLİNİR: sonuncu konflikt həll
+        olunanda xəbərdarlıq da, keçid də eyni anda yox olmalıdır.
+        """
+        if count <= 0:
+            if self._conflict_link is not None:
+                self._conflict_link.deleteLater()
+                self._conflict_link = None
+            return
+
+        if self._conflict_link is None:
+            link = LinkLabel("")
+            link.clicked.connect(self.conflicts_requested)
+            self._alerts.add(link)
+            self._conflict_link = link
+
+        text = f"{count} sinxronizasiya konfliktini həll et"
+        self._conflict_link.setText(text)
+        self._conflict_link.setAccessibleName(text)
 
 
 # --------------------------------------------------------------------------- #
@@ -1039,6 +1907,40 @@ class SettingsScreen(Screen):
 # --------------------------------------------------------------------------- #
 
 
+#: Drive bağlantısı ekranının kontekstual köməyi (audit G-4).
+#:
+#: Mətn EKRANIN YANINDA yaşayır, mərkəzi kömək kataloqunda deyil — səbəbi
+#: `widgets/help_hint.HelpButton` başlığındadır: hesabın dəyişdirilməsi
+#: keçmiş SÜBUTLARIN harada qaldığına təsir edir və bu xəbərdarlıq sinif
+#: başlığı ilə bir yerdə redaktə olunmalıdır.
+DRIVE_HELP_TITLE: Final = "Drive Bağlantısı"
+
+DRIVE_HELP_INTRO: Final = (
+    "Cərimə sübut şəkilləri Google Drive hesabında saxlanılır. Bu ekran "
+    "hansı hesabın işlədildiyini göstərir və onu dəyişməyə imkan verir. "
+    "Diqqət: hesabı dəyişmək keçmiş sübutların yerini dəyişmir."
+)
+
+DRIVE_HELP_STEPS: Final[tuple[str, ...]] = (
+    "«Google Hesabı Qoş» sistem brauzerində razılıq səhifəsi açır. Brauzer "
+    "açılmasa (kiosk və ya terminal quraşdırması), ekranda görünən ünvanı "
+    "seçib başqa cihazda açmaq kifayətdir — bağlantı yenə tamamlanır.",
+    "Razılıq verilənə qədər ekran gözləyir. «Ləğv Et» axını dayandırır və "
+    "heç bir hesab yazılmır; yarımçıq qalmış razılıq sistemdə iz buraxmır.",
+    "Hesab qoşulduqdan sonra düymə «Hesabı Dəyiş»ə çevrilir. Yeni hesab "
+    "köhnəsini ARXİVLƏYİR: keçmiş cərimə şəkilləri köhnə hesabda qalır və "
+    "oradan göstərilməyə davam edir. Köhnə hesabı Google tərəfdən silmək "
+    "həmin sübutları GERİ QAYTARILMAZ şəkildə itirər.",
+    "Kvota sətri hesabda qalan yeri göstərir. Yer bitəndə şəkil yüklənmir — "
+    "cərimə yenə də normal yaranır, şəkil isə lokal növbədə gözləyir və yer "
+    "açılan kimi göndərilir. Yəni xəbərdarlıq gecikdirilə bilər, amma "
+    "nəzərdən qaçırılmamalıdır.",
+    "«Bağlantı tarixçəsi» hansı hesabın nə vaxt işlədildiyini saxlayır və "
+    "sətirləri silinmir: mübahisəli cərimənin şəklinin hansı hesabda "
+    "olduğunu yalnız bu jurnal göstərir.",
+)
+
+
 class DriveConnectionScreen(Screen):
     """Cərimə sübut şəkilləri üçün Google Drive hesabı (miqrasiya 002).
 
@@ -1100,6 +2002,18 @@ class DriveConnectionScreen(Screen):
         actions_layout.setContentsMargins(0, 0, 0, 0)
         actions_layout.setSpacing(10)
         actions_layout.addWidget(stretch())
+
+        # Kontekstual kömək (audit G-4) — kartdakı qeyd yalnız arxivlənməni
+        # yazır; razılıq axınının brauzersiz tamamlanması və kvota bitəndə nə
+        # baş verdiyi burada izah olunur.
+        self._help = HelpButton(
+            theme,
+            title=DRIVE_HELP_TITLE,
+            intro=DRIVE_HELP_INTRO,
+            steps=DRIVE_HELP_STEPS,
+        )
+        actions_layout.addWidget(self._help)
+
         self._cancel = secondary_button("Ləğv Et")
         self._cancel.clicked.connect(self.cancel_requested)
         self._cancel.setVisible(False)
@@ -1135,6 +2049,10 @@ class DriveConnectionScreen(Screen):
         self._history.add(holder)
         self.add(self._history)
         self.body().addStretch(1)
+
+    def help_button(self) -> HelpButton:
+        """Kontekstual kömək düyməsi — kontroller/testlər üçün."""
+        return self._help
 
     # ------------------------------- doldurma -------------------------------- #
 
@@ -1180,6 +2098,46 @@ class DriveConnectionScreen(Screen):
         self._auth_url.clear()
         self._connect.setEnabled(True)
         self._cancel.setVisible(False)
+
+
+#: ROOT İdarə Mərkəzinin kontekstual köməyi (audit G-4).
+#:
+#: Mətn EKRANIN YANINDA yaşayır, mərkəzi kömək kataloqunda deyil — səbəbi
+#: `widgets/help_hint.HelpButton` başlığındadır: bu ekranın hər bölməsi ayrı
+#: bir YAZI hədəfinə gedir (limit sətri ↔ modul açarı ↔ mağaza əhatəsi ↔
+#: flag registri) və hansının «Tətbiq Et» gözlədiyi yalnız burada, kodun
+#: yanında dəqiq saxlanıla bilər.
+ROOT_HELP_TITLE: Final = "ROOT İdarə Mərkəzi"
+
+ROOT_HELP_INTRO: Final = (
+    "Bu ekran sistemin limitlərini, modul açarlarını və icazə registrini "
+    "idarə edir. Dəyişikliklər bütün mağazalara aiddir və hər biri audit "
+    "jurnalına yazılır."
+)
+
+ROOT_HELP_STEPS: Final[tuple[str, ...]] = (
+    "«Dinamik limitlər» — taymautlar, hədlər və dərəcələr. Dəyər «Tətbiq Et» "
+    "basılana qədər yazılmır; yazıldıqdan sonra isə YALNIZ yeni əməliyyatlara "
+    "tətbiq olunur — keçmiş qeydlər yenidən hesablanmır.",
+    "«Fasilə Parametrləri» nahar və çay fasiləsinin müddətini və gündəlik say "
+    "həddini saxlayır. Müddət yalnız işçi ekranındakı göstəricidir: gecikmə "
+    "və cərimə düsturuna TƏSİR ETMİR, hədd aşılanda əməliyyat bloklanmır, "
+    "yalnız xəbərdarlıq göstərilir.",
+    "«Face Control» bölməsində açılan mağaza üz təsdiqini DƏRHAL alır — bu "
+    "bölmə «Tətbiq Et» gözləmir. Heç bir mağaza seçilməyibsə modul qlobal "
+    "açara tabe olur, yəni boş siyahı «söndürülüb» demək deyil.",
+    "«Modul açarları» — söndürmə YALNIZ yeni qeydlərin yaranmasını dayandırır; "
+    "mövcud qeydlər axınını tamamlayır, silinmir və hesabatlardan çıxmır. "
+    "Struktur-kritik modulda səbəb yazmaq məcburidir və mətn audit jurnalına "
+    "olduğu kimi düşür.",
+    "«İcazə registri» yeni icazə flag-i yaradır; ad «can_» ilə başlamalıdır, "
+    "kateqoriya isə onun İcazə Matrisində hansı qrupda görünəcəyini təyin "
+    "edir. Bu ekranda flag-i silmək yolu YOXDUR — səhv yazılmış ad matrisdə "
+    "qalır.",
+    "«Tətbiq Et» limitləri və modul açarlarını bir anda göndərir. Bölmələrin "
+    "öz «Yadda Saxla» düyməsi eyni yazı yolundan keçir, sadəcə yalnız həmin "
+    "bölmənin sahələrini daşıyır — nəticə fərqli olmur.",
+)
 
 
 class RootControlScreen(Screen):
@@ -1236,6 +2194,18 @@ class RootControlScreen(Screen):
         banner_layout.addWidget(Chip("ROOT rejimi", "danger"))
         banner_layout.addWidget(body_label("Bütün əməliyyatlar audit jurnalına yazılır.", size=13))
         banner_layout.addWidget(stretch())
+
+        # Kontekstual kömək (audit G-4) — ekranın bölmələri FƏRQLİ yazı
+        # hədəflərinə gedir (limit sətri, modul açarı, mağaza əhatəsi, flag
+        # registri) və hansının «Tətbiq Et» gözlədiyi ekranda görünmürdü.
+        self._help = HelpButton(
+            theme,
+            title=ROOT_HELP_TITLE,
+            intro=ROOT_HELP_INTRO,
+            steps=ROOT_HELP_STEPS,
+        )
+        banner_layout.addWidget(self._help)
+
         apply_button = action_button("Tətbiq Et")
         apply_button.clicked.connect(lambda: self.applied.emit(self.collected()))
         banner_layout.addWidget(apply_button)
@@ -1268,6 +2238,10 @@ class RootControlScreen(Screen):
 
         self.add(self._build_registry())
         self.body().addStretch(1)
+
+    def help_button(self) -> HelpButton:
+        """Kontekstual kömək düyməsi — kontroller/testlər üçün."""
+        return self._help
 
     def _build_break_card(self) -> Card:
         """«Fasilə Parametrləri» — Nahar/Çay (nahar.md GUI, bənd 1).

@@ -448,6 +448,21 @@ class CredentialResetUseCase:
     Daha yüksək və ya bərabər səlahiyyətli admin müvəqqəti sirr təyin edir,
     istifadəçi ilk girişdə onu MƏCBURİ dəyişir. Eyni model həm şifrə, həm PIN
     üçün istifadə olunur.
+
+    ──────────────────────────────────────────────────────────────────────────
+    BU SİNİF İSTEHSALAT YOLUNA QOŞULU DEYİL — ÖLÜ KOD DEYİL, ALTERNATİV YOLDUR
+    ──────────────────────────────────────────────────────────────────────────
+    `src/` boyu onu quran heç bir yer YOXDUR: GUI-dəki `[Şifrəni Yenilə]`
+    düyməsi `UserManagementUseCase.reset_password`-a gedir, çünki oradakı axın
+    admin tərəfindən YAZILAN şifrəni qəbul edir. Burada isə şifrəni SİSTEM
+    generasiya edir (`generate_temporary_password`) — bu, sonradan lazım olan
+    ayrıca ssenaridir (toplu sıfırlama, kiosk PIN-lərinin kütləvi yenilənməsi)
+    və `bulk_operations.py` başlığı ona istinad edir. Ona görə SİLİNMİR.
+
+    Lakin qoşulmaması onun daxilindəki qüsuru bağışlamır: hər iki metod heşi
+    ARTIQ `update_credentials()` ilə yazır (`recover()` ilə eyni səbəb). Əks
+    halda gələcəkdə bu sinfi qoşan adam eyni "şifrə göstərildi, yazılmadı"
+    tələsinə düşərdi.
     """
 
     def __init__(
@@ -473,6 +488,13 @@ class CredentialResetUseCase:
         hashed = self._hashing.hash_password(temporary)
         subject.must_change_password = True
         self._employees.save(subject)
+        # `save()` sirrlərə toxunmur — heş AYRICA yazılmalıdır (bax sinif
+        # başlığı və `EmployeeRepository.update_credentials`).
+        self._employees.update_credentials(
+            subject.id,
+            password_hash=hashed,
+            pepper_version=self._hashing.current_pepper_version,
+        )
 
         self._audit_reset(actor, subject, action="PASSWORD_RESET")
         return TemporaryCredential(
@@ -489,6 +511,13 @@ class CredentialResetUseCase:
         hashed = self._hashing.hash_pin(temporary, employee_id=str(subject.id))
         subject.register_successful_pin_attempt()  # lockout sıfırlanır
         self._employees.save(subject)
+        # PIN heşi `employee_id`-yə bağlıdır (SEC-005), ona görə `pepper_version`
+        # onunla birlikdə yazılır — köhnə versiya qalsaydı yoxlama uyğun gəlməzdi.
+        self._employees.update_credentials(
+            subject.id,
+            pin_hash=hashed,
+            pepper_version=self._hashing.current_pepper_version,
+        )
 
         self._audit_reset(actor, subject, action="PIN_RESET")
         return TemporaryCredential(
@@ -654,6 +683,18 @@ class EmergencyAccessRecoveryUseCase:
         target.must_change_password = True
         target.is_active = True
         self._employees.save(target)
+        # HEŞ FAKTİKİ OLARAQ BURADA YAZILIR — `save()` sirrlərə TOXUNMUR
+        # (bax `EmployeeRepository.save()` docstring-i). Bu sətir olmadan
+        # prosedur hesabı aktivləşdirir, "şifrəni dəyiş" bayrağını qoyur və
+        # ekranda bir şifrə göstərirdi, lakin `employees.password_hash`
+        # DƏYİŞMİRDİ — yəni fövqəladə bərpa məhz lazım olduğu anda giriş
+        # vermirdi. `pepper_version` də yazılır, əks halda yeni heş köhnə
+        # pepper versiyası ilə yoxlanardı (SEC-005) və uyğunluq baş tutmazdı.
+        self._employees.update_credentials(
+            target.id,
+            password_hash=hashed,
+            pepper_version=self._hashing.current_pepper_version,
+        )
 
         _security_log.critical(
             "EMERGENCY_ACCESS_RECOVERY",

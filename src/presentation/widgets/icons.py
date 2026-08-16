@@ -94,6 +94,24 @@ _BODIES: Final[dict[str, str]] = {
         '<path d="M13.4 2.6 2.6 13.4"/>'
     ),
     "power": '<circle cx="8" cy="8" r="5.8"/><path d="M8 2.2v5"/>',
+    # ── 1C bağlantı növlərinin kart ikonları (1c.md UX tələbi 1) ─────────────
+    # Üç ikon BİR-BİRİNDƏN SİLUETİ ilə seçilir, rəngi ilə YOX: kartın seçilmiş
+    # olduğunu rəng bildirir, növü isə forma. Rəng-korluğu olan istifadəçi üçün
+    # eyni tonda üç eyni forma seçimi mənasız edərdi.
+    # Bulud — şəbəkə üzərindən gələn HTTP/OData.
+    "cloud": (
+        '<path d="M4.6 12.4A3 3 0 0 1 4.9 6.5a4 4 0 0 1 7.5-.6 2.9 2.9 0 0 1-.6 5.7z"/>'
+        '<path d="M4.6 12.4h7.2"/>'
+    ),
+    # Masaüstü kompüter — COM yalnız Windows maşınında, lokal quraşdırma ilə.
+    "desktop": (
+        '<rect x="2" y="2.8" width="12" height="8" rx="1.1"/><path d="M6 13.2h4M8 10.8v2.4"/>'
+    ),
+    # Qovluqdan çıxan sənəd — fayl mübadiləsi (gecəlik ixrac).
+    "folder_file": (
+        '<path d="M1.8 12.8V4.4h3.4l1 1.4h3.2"/>'
+        '<path d="M7.2 6.6h4.2l2.8 2.6v4.4H7.2z"/><path d="M11.4 6.6v2.6h2.8"/>'
+    ),
     # ----------------------------- hərəkətlər ------------------------------ #
     "plus": '<path d="M8 3v10M3 8h10"/>',
     "check": '<path d="M3 8.4 6.3 11.7 13 5"/>',

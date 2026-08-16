@@ -46,6 +46,10 @@ MIN_DOC_TYPE_LENGTH: Final = 2
 #: "sənəd niyə söndürülüb?" sualı "ok" kimi bir sözlə cavablanmamalıdır.
 MIN_DEACTIVATION_REASON_LENGTH: Final = 5
 
+#: `is_blocking` sahəsinin İNSAN üçün etiketi `domain/document_rules.py`-dadır
+#: (`ATTENTION_FLAG_LABEL_AZ`) — sahə burada yaşasa da, onun NƏ ETDİYİNİ həmin
+#: qayda modulu təyin edir və etiket davranışın adı olmalıdır, sütunun yox.
+
 
 class EmployeeDocument(AggregateRoot):
     """Bir işçinin bir sənəd/müqavilə sətri — işçi başına ÇOX sətir ola bilər."""

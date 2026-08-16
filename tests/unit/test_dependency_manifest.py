@@ -53,6 +53,10 @@ IMPORT_TO_DISTRIBUTION: Final[dict[str, str]] = {
     # manifest testi mövcud olmayan `win32gui` paketini tələb edərdi.
     "qframelesswindow": "pysidesix-frameless-window",
     "win32api": "pywin32",
+    # `win32com` — 1C COM/OLE konnektoru (`erp/com_connector.py`). Eyni
+    # `pywin32` paylanmasından gəlir; idxal FUNKSİYA DAXİLİNDƏDİR, çünki modul
+    # Windows-dan kənarda da idxal olunur (bax həmin faylın başlığı).
+    "win32com": "pywin32",
     "win32con": "pywin32",
     "win32gui": "pywin32",
 }

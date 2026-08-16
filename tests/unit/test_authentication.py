@@ -756,6 +756,139 @@ def test_recovery_succeeds_and_is_audited(
 
 
 # --------------------------------------------------------------------------- #
+# REQRESSİYA: müvəqqəti şifrənin heşi FAKTİKİ olaraq SAXLANILIR
+#
+# Əvvəl `recover()` heşi hesablayıb `TemporaryCredential`-da qaytarırdı, lakin
+# HEÇ KİM onu bazaya yazmırdı (`save()` sirrlərə toxunmur). Nəticə: hesab
+# aktivləşir, admin ekranda şifrə görür, müştəri isə DAXİL OLA BİLMİR — və bu,
+# yalnız hər şey artıq bağlı olanda çağırılan mexanizmdir.
+#
+# Aşağıdakı testlər "metod çağırıldımı" DEYİL, "saxlanmış heş verilən açıq
+# şifrəni DOĞRULAYIRMI" sualını yoxlayır — qüsur məhz ikinci sualda idi.
+# --------------------------------------------------------------------------- #
+
+
+def test_recovery_saxlanmis_hes_muveqqeti_sifreni_dogrulayir(
+    hashing: HashingService,
+    clock: FakeClock,
+    audit: RecordingAudit,
+    notifier: RecordingNotifier,
+) -> None:
+    """Bərpadan sonra SAXLANMIŞ heş açıq şifrə ilə üst-üstə düşməlidir."""
+    target = make_employee(SystemRole.ROOT)
+    target.is_active = False
+    employees = InMemoryEmployees([target])
+    uc = recovery_uc(employees, hashing, clock, audit, notifier)
+
+    credential = uc.recover(
+        tenant_id=TENANT,
+        target=target,
+        developer_reference="TICKET-1234",
+        active_admin_count=0,
+        tenant_contact=COMPANY_CONTACT,
+        verified_contact=COMPANY_CONTACT.email,
+    )
+
+    stored = employees.credentials[target.id]
+    assert stored["password_hash"], "Heş bazaya YAZILMALIDIR — `save()` ona toxunmur"
+    assert (
+        hashing.verify_password(
+            stored["password_hash"],
+            credential.plaintext,
+            pepper_version=stored["pepper_version"],
+        )
+        is True
+    ), "Ekranda göstərilən şifrə ilə saxlanmış heş uyğun gəlmirsə giriş mümkün deyil"
+    # PIN heşinə TOXUNULMAMALIDIR: şifrə bərpası PIN-i sıfırlamır.
+    assert "pin_hash" not in stored
+
+
+def test_recovery_pepper_versiyasi_da_yazilir(
+    hashing: HashingService,
+    clock: FakeClock,
+    audit: RecordingAudit,
+    notifier: RecordingNotifier,
+) -> None:
+    """SEC-005: heş yeni pepper ilə yaradılırsa versiya da yenilənməlidir.
+
+    Yazılmasaydı, `AdminLoginUseCase.login` sətirdəki KÖHNƏ versiya ilə
+    yoxlayar və doğru şifrə də rədd edilərdi.
+    """
+    target = make_employee(SystemRole.ROOT)
+    employees = InMemoryEmployees([target])
+    uc = recovery_uc(employees, hashing, clock, audit, notifier)
+
+    credential = uc.recover(
+        tenant_id=TENANT,
+        target=target,
+        developer_reference="TICKET-1234",
+        active_admin_count=0,
+        tenant_contact=COMPANY_CONTACT,
+        verified_contact=COMPANY_CONTACT.email,
+    )
+
+    assert employees.credentials[target.id]["pepper_version"] == credential.pepper_version
+    assert credential.pepper_version == hashing.current_pepper_version
+
+
+def test_reset_password_saxlanmis_hes_dogrulayir(
+    hashing: HashingService,
+    clock: FakeClock,
+    audit: RecordingAudit,
+    notifier: RecordingNotifier,
+) -> None:
+    """`CredentialResetUseCase.reset_password` də heşi YAZMALIDIR.
+
+    Bu use case istehsalat yoluna qoşulu deyil (bax sinif başlığı), lakin eyni
+    tələ orada da vardı — qoşulduğu gün sükutla işləməyən şifrə verərdi.
+    """
+    actor = make_employee(SystemRole.ROOT, flags=[RESET_PASSWORD_FLAG])
+    subject = make_employee(SystemRole.HR_ADMIN)
+    employees = InMemoryEmployees([actor, subject])
+    uc = reset_uc(employees, hashing, clock, audit, notifier)
+
+    credential = uc.reset_password(actor=actor, subject=subject)
+
+    stored = employees.credentials[subject.id]
+    assert (
+        hashing.verify_password(
+            stored["password_hash"],
+            credential.plaintext,
+            pepper_version=stored["pepper_version"],
+        )
+        is True
+    )
+
+
+def test_reset_pin_saxlanmis_hes_dogrulayir(
+    hashing: HashingService,
+    clock: FakeClock,
+    audit: RecordingAudit,
+    notifier: RecordingNotifier,
+) -> None:
+    """PIN heşi `employee_id`-yə bağlıdır (SEC-005) — saxlanan dəyər onunla yoxlanır."""
+    actor = make_employee(SystemRole.ROOT, flags=[RESET_PIN_FLAG])
+    subject = make_employee(SystemRole.HR_ADMIN)
+    employees = InMemoryEmployees([actor, subject])
+    uc = reset_uc(employees, hashing, clock, audit, notifier)
+
+    credential = uc.reset_pin(actor=actor, subject=subject)
+
+    stored = employees.credentials[subject.id]
+    assert (
+        hashing.verify_pin(
+            stored["pin_hash"],
+            credential.plaintext,
+            employee_id=str(subject.id),
+            pepper_version=stored["pepper_version"],
+        )
+        is True
+    )
+    # Şifrə heşinə TOXUNULMAMALIDIR — `COALESCE` davranışı (bax repo docstring-i).
+    assert "password_hash" not in stored
+
+
+# --------------------------------------------------------------------------- #
 # SEC-016: bərpa şirkət əlaqəsinə əsaslanır, fərdi e-poçta YOX
 # --------------------------------------------------------------------------- #
 

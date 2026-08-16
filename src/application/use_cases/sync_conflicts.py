@@ -8,24 +8,95 @@ yazır. Bu modul həmin sətirlərin insan tərəfindən həll edilməsini idar�
 onsuz cədvəl sonsuza qədər böyüyər və "manual həll" heç vaxt baş verməzdi.
 
 ──────────────────────────────────────────────────────────────────────────────
-ÜÇ HƏLL VARİANTI, HEÇ BİRİ SİLMİR
+KONFLİKT ANINDA HƏDƏF SƏTİRDƏ HANSI VERSİYA DURUR (bütün qərarların əsası)
 ──────────────────────────────────────────────────────────────────────────────
-    KEPT_LOCAL   — mağazadakı (offline) versiya doğrudur
-    KEPT_REMOTE  — buluddakı versiya doğrudur
-    MERGED       — HR hər ikisindən götürüb yeni dəyər qurdu
+`OfflineSyncService._apply()` divergensiya görəndə audit-kritik cədvəl üçün
+`_record_conflict(...)` çağırıb DƏRHAL `return "CONFLICT"` edir — `_upsert()`
+XƏTTİ İCRA OLUNMUR. Yəni yerli (offline) yazı hədəf cədvələ HEÇ VAXT
+düşmür və sətirdə **UZAQ (bulud) versiya** durur; bunu
+`tests/e2e/test_qt_scaffolding.py`-dəki "Audit-kritik cədvəl konfliktdə
+ÜZƏRİNƏ yazılmamalıdır" iddiası da qoruyur.
 
-Hər üç halda `local_version` və `remote_version` sütunları TOXUNULMAZ qalır.
-Bölmə 5 audit-kritik cədvəllər üçün last-write-wins-i qadağan edir; həll
-qərarı da həmin audit izinin bir hissəsidir və geri baxıla bilməlidir.
+Bu FAKT üç həll variantının mənasını təyin edir:
+
+    KEPT_LOCAL   — hədəfdə uzaq versiya durur → YERLİ versiya FAKTİKİ olaraq
+                   yazılmalıdır. Yazılmasa qərar sənəddə qalar, məlumat isə
+                   dəyişməzdi (məhz düzəldilən qüsur budur).
+    KEPT_REMOTE  — hədəfdə onsuz da uzaq versiya durur → BOŞ ƏMƏLİYYAT.
+                   Bu, "unudulmuş kod" deyil, DOĞRU nəticədir və audit izində
+                   `target_rows_written = 0` kimi AÇIQ görünür.
+    MERGED       — sistem sahə-sahə birləşdirmə APARMIR (bax aşağı).
+
+Hər üç halda `sync_conflicts.local_version`/`remote_version` sütunları
+TOXUNULMAZ qalır. Bölmə 5 audit-kritik cədvəllər üçün last-write-wins-i
+qadağan edir; həll qərarı da həmin audit izinin bir hissəsidir.
 
 ──────────────────────────────────────────────────────────────────────────────
-NİYƏ `can_approve_leave_appeal` DEYİL, `can_view_employee_reports`
+ATOMİKLİK — SAGA DEYİL, TƏK TRANZAKSİYA
 ──────────────────────────────────────────────────────────────────────────────
-Konflikt cədvəlləri (leave_requests, fines, audit_logs) HR-ın gündəlik iş
-sahəsidir və bölmə 5 həlli açıq şəkildə `HR_Admin`-ə verir. Kataloqda "sync
-konflikti" üçün ayrıca flag YOXDUR; ən yaxın mövcud qapı HR-ın işçi
-qeydlərinə baxış hüququdur. Yeni flag yaratmaq `can_manage_permissions`
-tələb edərdi (yalnız Root) və kataloqu bir ekran üçün şişirdərdi.
+Konfliktin bağlanması və hədəf sətrin yazılması EYNİ repository-nin, deməli
+eyni `PostgresUnitOfWork` bağlantısının üzərindən gedir — ikisi bir SQL
+tranzaksiyasındadır və `session.commit()` ikisini birlikdə təsdiqləyir.
+`LeaveVerificationUseCase.verify_return` naxışı (Saga + kompensasiya) BURADA
+RƏDD EDİLDİ: Saga MÜXTƏLİF resurslara (status + cərimə + audit, hər biri ayrı
+aqreqat) toxunan və qismən uğursuzluğu geri qaytarıla bilməyən əməliyyat
+üçündür. Burada isə hər iki yazı TEK bazadadır və `ROLLBACK` tam kompensasiya
+verir — Saga əlavə vəziyyət maşını gətirib heç nə qazandırmazdı
+(`morning_check_in.py` başlığı ilə eyni mühakimə).
+
+SIRA QƏSDƏNDİR: ƏVVƏL konflikt bağlanır (`resolve()` `resolved_at IS NULL`
+şərti ilə "sahiblənir"), SONRA hədəf sətir yazılır. Əks sıra yarış halında
+məlumatı korlayardı: iki HR eyni anda qərar versə, ikincinin hədəf yazısı
+tətbiq olunar, konflikt sətri isə birincinin qərarını saxlayardı — yəni audit
+"KEPT_REMOTE" deyərkən cədvəldə yerli versiya dayanardı. İndi sahiblənə
+bilməyən ikinci çağırış hədəfə TOXUNMADAN `ConflictNotFoundError` alır.
+
+──────────────────────────────────────────────────────────────────────────────
+`MERGED` — VARİANT (a): "ƏL İLƏ DÜZƏLDİLƏCƏK" KİMİ RƏSMİLƏŞDİRİLİB
+──────────────────────────────────────────────────────────────────────────────
+Nə use case, nə repository, nə də ekran sahə-sahə seçim qəbul edir
+(`controllers/sync_conflicts.py` bunu istifadəçiyə AÇIQ yazır). İki yol var
+idi: (a) `MERGED`-i "heç nə yazılmır, düzəliş əl ilə aparılacaq" kimi
+rəsmiləşdirmək, (b) sahə seçicisini həqiqətən qurmaq.
+
+(a) SEÇİLDİ. Spesifikasiya bölmə 5 sahə-birləşdirmə TƏLƏB ETMİR — yalnız
+"manual həll" deyir; (b) isə `resolve()` imzasını, repository-ni və ekranı
+dəyişib YENİ səhv mənbəyi yaradardı: yarımçıq seçilmiş sahə dəsti həm yerli,
+həm uzaq versiyadan fərqli, HEÇ VAXT MÖVCUD OLMAMIŞ üçüncü sətir qurardı və
+onun düzgünlüyünü heç nə yoxlaya bilməzdi.
+
+DÜRÜSTLÜK ONDADIR Kİ, `MERGED` ARTIQ SÜKUTLA "HƏLL OLUNDU" DEMİR: audit izi
+`applied_version = "REMOTE"` (yəni cədvəldə hələ də bulud versiyası durur) və
+`manual_correction_required = True` yazır, əməliyyat kanalına isə xəbərdarlıq
+düşür. Beləliklə açıq qalan iş GÖRÜNÜR — əvvəl görünmürdü.
+
+──────────────────────────────────────────────────────────────────────────────
+NİYƏ AYRICA `can_resolve_sync_conflicts` FLAG-İ (SEC-018)
+──────────────────────────────────────────────────────────────────────────────
+Qapı əvvəl `can_view_employee_reports` idi. O flag BAXIŞ hüququdur və
+`schema.sql` §23-də `Mağaza_Meneceri`-yə DEFOLT VERİLİR. Əməliyyat heç nə
+yazmadığı müddətdə bu zərərsiz idi; yuxarıdakı düzəlişdən sonra isə hər
+mağaza meneceri ÖZ filialının cərimə/icazə sətrini "konflikt həlli" adı
+altında yerli versiya ilə əvəz edə bilərdi — yəni bütün anti-fraud qatını
+(kamera təsdiqi, dual-control, aylıq icmal) bir düymə ilə yan keçərdi.
+
+Ona görə yeni flag ANTI-FRAUD işarəlidir (`is_anti_fraud = TRUE`): qayda İKİ
+yerdədir — domendə `PermissionFlag.assert_grantable_to()`
+(`ANTI_FRAUD_FORBIDDEN_ROLES`), bazada isə `enforce_anti_fraud_segregation()`
+(`schema.sql` §18) — və hər ikisi HƏM rol-defoltunu, HƏM fərdi override-ı
+bloklayır. Trigger-in ÖZÜ dəyişmir: o, `permission_flags` sətrini oxuyaraq
+işləyir, yeni sətir kifayətdir (miqrasiya 060, `038` ilə eyni naxış).
+
+Hardlock səviyyəsi `NONE` (0) SEÇİLDİ, daha yüksəyi YOX: bölmə 5 həlli AÇIQ
+şəkildə `HR_Admin`-ə verir, `HR_Admin` isə `OPERATIONAL` (3) pilləsindədir və
+istənilən 1/2/3 səviyyəsi (`ROOT_ONLY`/`ROOT_CEO`/`DELEGABLE`) onu STRUKTUR
+olaraq kənarlaşdırıb spesifikasiyanı pozardı.
+
+OXU DA EYNİ FLAG ARXASINDADIR: bu ekranın yeganə məqsədi həlldir və yalnız
+baxan istifadəçi hər düymədə "səlahiyyətiniz yoxdur" alardı. Müstəqil nəzarət
+itmir — qərarların tarixçəsi `can_view_audit_logs` ilə oxunur
+(`exception_engine.py::_require_view` ilə eyni mühakimə: "OXU VƏ QƏRAR EYNİ
+FLAG-DƏDİR").
 """
 
 from __future__ import annotations
@@ -41,15 +112,31 @@ from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from src.domain.entities.employee import Employee
     from src.domain.interfaces.ports import AuditTrail, Clock, SystemLimits
     from src.domain.value_objects.identifiers import EmployeeId, TenantId
 
 _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
 
-RESOLVE_CONFLICT_FLAG = "can_view_employee_reports"
+#: Konflikt həlli qapısı — YAZI hüququdur (bax modul başlığı, SEC-018).
+#:
+#: Kataloq sətri `migrations/060`-dadır: `is_anti_fraud = TRUE`,
+#: `excludes_camera_role = TRUE`, `hardlock_level = 0`.
+RESOLVE_CONFLICT_FLAG = "can_resolve_sync_conflicts"
 
 MIN_NOTE_LENGTH = 5
+
+#: `UPDATE`-i DB trigger-i ilə bloklanan cədvəllər (SEC-007, `schema.sql` §26).
+#:
+#: `audit_logs` append-only-dir, ona görə `KEPT_LOCAL` orada TƏTBİQ EDİLƏ
+#: BİLMƏZ. Praktikada belə konflikt yaranmır — `sync.VERSION_COLUMN` bu cədvəl
+#: üçün `None`-dur və `_is_diverged()` həmişə `False` qaytarır. Yoxlama YENƏ DƏ
+#: var, çünki köhnə/əl ilə salınmış sətir mövcud ola bilər və o halda tətbiq
+#: trigger-in xam PostgreSQL xətası ilə çökərdi; indi HR Azərbaycan dilində
+#: aydın izah alır və konflikt AÇIQ qalır (sükutla uduzmaq QADAĞANDIR).
+APPEND_ONLY_TABLES = frozenset({"audit_logs"})
 
 #: İnbox-un bir oxunuşda gətirdiyi konflikt sayı.
 #:
@@ -70,6 +157,17 @@ class ConflictNotFoundError(ConflictResolutionError):
     user_message = "Konflikt qeydi tapılmadı."
 
 
+class ConflictTargetWriteError(ConflictResolutionError):
+    """Seçilmiş versiya HƏDƏF sətrə yazıla bilmədi.
+
+    Ayrıca sinifdir, çünki nəticəsi digərlərindən KEYFİYYƏTCƏ fərqlidir:
+    tranzaksiya geri qayıdır və konflikt AÇIQ qalır. İstifadəçi mesajı bunu
+    açıq deyir ki, HR "həll etdim" zənn edib siyahını tərk etməsin.
+    """
+
+    user_message = "Seçilmiş versiya qeydə yazıla bilmədi — konflikt açıq qaldı."
+
+
 class Resolution(str, Enum):
     """`sync_conflicts.resolution` — DB `CHECK` ilə EYNİ dəyərlər."""
 
@@ -80,6 +178,27 @@ class Resolution(str, Enum):
     @property
     def label_az(self) -> str:
         return _RESOLUTION_LABELS[self]
+
+    @property
+    def requires_target_write(self) -> bool:
+        """Hədəf sətrə FAKTİKİ yazı lazımdırmı.
+
+        YALNIZ `KEPT_LOCAL` — çünki konflikt anında hədəfdə UZAQ versiya durur
+        (bax modul başlığı). Qayda burada, `Resolution`-un özündə yaşayır ki,
+        use case ilə repository eyni cavabı iki yerdə hesablamasın.
+        """
+        return self is Resolution.KEPT_LOCAL
+
+    @property
+    def standing_version(self) -> str:
+        """Həlldən SONRA hədəf sətirdə DURAN versiya — audit izinin əsası.
+
+        `MERGED` üçün `REMOTE`-dur, `MERGED` DEYİL: variant (a)-da heç nə
+        yazılmır, yəni cədvəldə hələ də bulud versiyası dayanır. "MERGED"
+        yazsaydıq audit birləşdirilmiş sətrin mövcud olduğunu iddia edərdi —
+        məhz düzəldilən yalanın təkrarı olardı.
+        """
+        return "LOCAL" if self is Resolution.KEPT_LOCAL else "REMOTE"
 
 
 _RESOLUTION_LABELS: dict[Resolution, str] = {
@@ -141,7 +260,31 @@ class SyncConflictRepository(Protocol):
         resolved_by: EmployeeId,
         resolved_at: datetime,
         note: str,
-    ) -> None: ...
+    ) -> bool:
+        """Konflikti bağlayır və SAHİBLƏNİB-SAHİBLƏNMƏDİYİNİ qaytarır.
+
+        `True` = bu çağırış konflikti bağladı; `False` = artıq bağlı idi
+        (başqa HR qabaqladı). Qaytarılan dəyər OLMADAN yarış halı sükutla
+        udulurdu: ikinci çağırış heç nə dəyişmirdi, lakin auditə öz qərarını
+        yazırdı — bax modul başlığındakı "SIRA QƏSDƏNDİR" bölməsi.
+        """
+        ...
+
+    def apply_local_version(
+        self,
+        *,
+        table_name: str,
+        record_id: object,
+        local_version: Mapping[str, Any],
+    ) -> int:
+        """Yerli (offline) versiyanı HƏDƏF sətrə yazır, yazılan sətir sayını qaytarır.
+
+        `0` = hədəf sətir tapılmadı və ya yazılası sütun qalmadı; çağıran bunu
+        XƏTA sayır və tranzaksiyanı geri qaytarır (yarımçıq hal — konflikt
+        bağlı, məlumat köhnə — indiki vəziyyətdən pisdir, çünki artıq
+        görünmür).
+        """
+        ...
 
 
 class SyncConflictUseCase:
@@ -186,7 +329,18 @@ class SyncConflictUseCase:
         resolution: Resolution,
         note: str,
     ) -> ConflictItem:
-        """Konflikti bağlayır — hər iki versiya cədvəldə QALIR."""
+        """Konflikti bağlayır VƏ seçilmiş versiyanı hədəf sətrə TƏTBİQ EDİR.
+
+        `sync_conflicts.local_version`/`remote_version` sütunları toxunulmaz
+        qalır (bölmə 5) — dəyişən yalnız HƏDƏF cədvəldəki sətirdir və yalnız
+        `KEPT_LOCAL` halında.
+
+        Raises:
+            ConflictResolutionError: səlahiyyət yoxdursa, qeyd qısadırsa və ya
+                append-only cədvələ `KEPT_LOCAL` tətbiq edilmək istənirsə.
+            ConflictNotFoundError: konflikt yoxdursa və ya artıq bağlanıbsa.
+            ConflictTargetWriteError: hədəf sətir yazıla bilmədisə.
+        """
         self._require(actor)
         cleaned = " ".join(note.split())
         if len(cleaned) < MIN_NOTE_LENGTH:
@@ -202,22 +356,90 @@ class SyncConflictUseCase:
                 "Konflikt qeydi tapılmadı", context={"conflict_id": str(conflict_id)}
             )
 
+        # APPEND-ONLY YOXLAMASI HƏR ŞEYDƏN ƏVVƏLDİR: konflikti bağlayıb sonra
+        # yazının mümkünsüz olduğunu görmək tranzaksiyanı boş yerə geri
+        # qaytarardı və HR səbəbi yalnız ümumi xətadan oxuyardı.
+        if resolution.requires_target_write and item.table_name in APPEND_ONLY_TABLES:
+            raise ConflictResolutionError(
+                f"'{item.table_name}' append-only cədvəldir — «{resolution.label_az}» "
+                f"tətbiq edilə bilməz",
+                user_message=(
+                    "Audit jurnalı dəyişdirilə bilməz: bu konflikt üçün yalnız "
+                    "«Buluddakı versiya saxlanıldı» və ya «Hər iki versiyadan "
+                    "birləşdirildi» seçilə bilər."
+                ),
+                context={"table": item.table_name, "resolution": resolution.value},
+            )
+
         now = self._clock.now()
-        self._repository.resolve(
+
+        # 1. SAHİBLƏNMƏ — `resolved_at IS NULL` şərti ilə. Hədəf yazısından
+        #    ƏVVƏL olması qəsdəndir (bax modul başlığı: yarış halında ikinci
+        #    HR məlumata TOXUNMADAN geri qaytarılır).
+        claimed = self._repository.resolve(
             conflict_id,
             resolution=resolution,
             resolved_by=actor.id,
             resolved_at=now,
             note=cleaned,
         )
+        if not claimed:
+            raise ConflictNotFoundError(
+                "Konflikt artıq bağlanıb — qərarı başqa istifadəçi yazıb",
+                context={"conflict_id": str(conflict_id)},
+            )
+
+        # 2. TƏTBİQ — yalnız `KEPT_LOCAL`. Eyni tranzaksiyadadır: burada
+        #    atılan istisna 1-ci addımı da geri qaytarır.
+        written = 0
+        if resolution.requires_target_write:
+            written = self._repository.apply_local_version(
+                table_name=item.table_name,
+                record_id=item.record_id,
+                local_version=item.local_version,
+            )
+            if written == 0:
+                raise ConflictTargetWriteError(
+                    "Yerli versiya hədəf sətrə yazılmadı — sətir tapılmadı və ya "
+                    "yazılası sütun qalmadı",
+                    context={"table": item.table_name, "record_id": str(item.record_id)},
+                )
+
+        if resolution is Resolution.MERGED:
+            # Variant (a): birləşdirmə ƏL İLƏ aparılacaq. Xəbərdarlıq audit
+            # kanalınadır ki, açıq qalan iş yalnız `sync_conflicts` sətrində
+            # gizlənməsin — konflikt siyahıdan ÇIXIR, düzəliş isə hələ qalır.
+            _audit_log.warning(
+                "SYNC_CONFLICT_MANUAL_MERGE_PENDING",
+                extra={
+                    "table": item.table_name,
+                    "record_id": str(item.record_id),
+                    "actor_id": str(actor.id),
+                    "action": "Birləşdirilmiş dəyər müvafiq ekranda əl ilə qurulmalıdır",
+                },
+            )
+
         self._audit.record(
             tenant_id=tenant_id,
             actor_id=actor.id,
             action="SYNC_CONFLICT_RESOLVED",
             entity_type=item.table_name,
             entity_id=item.record_id,
-            before_state={"local": item.local_version, "remote": item.remote_version},
-            after_state={"resolution": resolution.value},
+            before_state={
+                "local": item.local_version,
+                "remote": item.remote_version,
+                # Konflikt anında hədəfdə DURAN versiya — bax modul başlığı.
+                # Onsuz `after_state` hansı istiqamətə dəyişiklik olduğunu
+                # göstərməzdi.
+                "standing": "REMOTE",
+            },
+            after_state={
+                "resolution": resolution.value,
+                "applied_version": resolution.standing_version,
+                "target_table": item.table_name,
+                "target_rows_written": written,
+                "manual_correction_required": resolution is Resolution.MERGED,
+            },
             reason=cleaned,
         )
         return item
@@ -236,12 +458,15 @@ class SyncConflictUseCase:
 
 
 __all__ = [
+    "APPEND_ONLY_TABLES",
     "AUDIT_CRITICAL_TABLES",
     "DEFAULT_INBOX_PAGE_SIZE",
+    "MIN_NOTE_LENGTH",
     "RESOLVE_CONFLICT_FLAG",
     "ConflictItem",
     "ConflictNotFoundError",
     "ConflictResolutionError",
+    "ConflictTargetWriteError",
     "Resolution",
     "SyncConflictRepository",
     "SyncConflictUseCase",

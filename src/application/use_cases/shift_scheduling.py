@@ -62,6 +62,36 @@ və məlumat yığımı `application/use_cases/labor_compliance.py`-da. Bu fayla
 əlavə olunan yeganə şey `LaborComplianceAdvisor`-un İSTƏYƏ BAĞLI asılılığı və
 onun nəticəsini mövcud siyahıya çevirən bir köməkçidir — mövcud təyinetmə
 məntiqinin heç bir sətri dəyişmir.
+
+──────────────────────────────────────────────────────────────────────────────
+TƏSDİQLƏNMİŞ İLLİK MƏZUNİYYƏT — NİYƏ XƏBƏRDARLIQ, NİYƏ BLOKLAMA DEYİL
+──────────────────────────────────────────────────────────────────────────────
+`entities/annual_leave.py` başlığı qərarı açıq yazır: "Shift Matrix YALNIZ
+OXUNUR — təsdiqlənmiş məzuniyyət növbə cədvəlini dəyişmir". Yəni matris
+məzuniyyətdən XƏBƏRSİZ qalırdı və planlayıcı həmin günə iş günü təyin edə
+bilirdi. Nəticə real zərərdir: işçi (haqlı olaraq) gəlmir, `detect_absences`
+isə planlaşdırılmış iş gününü görüb "İcazəsiz Qayıb" yazır.
+
+Boşluq bölmə 3-ün MÖVCUD tələbinin tam icrası ilə bağlanır — "dəyişiklik
+anında sistem həmin gün üçün aktiv/gözləyən leave sorğularını avtomatik
+yenidən qiymətləndirir və lazım olduqda xəbərdarlıq göstərir". Burada
+qiymətləndirilən sorğu SİNFİ genişlənir (gündaxili icazə + illik məzuniyyət),
+mexanizm isə eynidir: `ScheduleConflict`.
+
+BLOKLAMA QƏSDƏN SEÇİLMƏDİ. Üç səbəb:
+  1. Bu use case-də BÜTÜN qaydalar (icazə konflikti, #14 əmək qanunu, #17
+     sənəd) məlumatlandırıcıdır — biri bloklasaydı, `ScheduleConflict`-in
+     "BLOKLAYICI DEYİL" müqaviləsi ekranda yalan olardı.
+  2. Fövqəladə hal real haldır: xəstələnmiş növbə üçün məzuniyyətdəki işçi
+     ÖZ razılığı ilə çağırıla bilər. Sistem bunu fiziki qadağan etsəydi,
+     planlayıcı təyinatı kağızda edərdi və matris HƏQİQƏTDƏN AYRILARDI —
+     `domain/document_rules.py` başlığındakı eyni əsaslandırma.
+  3. Xəbərdarlıq `after_state["conflicts"]`-ə düşür, yəni "xəbərdar edildi,
+     buna baxmayaraq təyin etdi" faktı sübutlu qalır.
+
+ƏKS İSTİQAMƏT BU FAYLDA DEYİL: "əvvəlcə növbə planlandı, SONRA məzuniyyət
+təsdiqləndi" halında xəbərdar ediləcək şəxs ekran qarşısında deyil, ona görə
+o, bildirişlə həll olunur — bax `annual_leave.py::_warn_planned_shifts`.
 """
 
 from __future__ import annotations
@@ -91,6 +121,7 @@ if TYPE_CHECKING:
     from src.domain.document_rules import DocumentRuleFinding
     from src.domain.entities.employee import Employee
     from src.domain.interfaces.ports import (
+        AnnualLeaveRequestRepository,
         AuditTrail,
         Clock,
         FeatureToggles,
@@ -113,6 +144,13 @@ _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
 
 MANAGE_SHIFTS_FLAG = "can_manage_shifts"
 APPROVE_SWAP_FLAG = "can_approve_shift_swap"
+
+#: `ScheduleConflict.kind` — təsdiqlənmiş illik məzuniyyət günü İŞ günü kimi
+#: təyin edildi. `LaborRuleKind`/`DocumentRuleKind` ilə eyni üslub (SABİT sətir,
+#: ekran süzgəci və audit `after_state["conflicts"]` bu dəyəri saxlayır), lakin
+#: AYRI enum yaradılmır: burada YEGANƏ dəyər var və bir üzvlü enum oxunuşu
+#: asanlaşdırmır, yalnız idxal zənciri uzadardı.
+ANNUAL_LEAVE_CONFLICT_KIND = "APPROVED_ANNUAL_LEAVE_OVERLAP"
 
 #: Sorğu neçə gün irəli üçün göndərilə bilər — keçmişə sorğu mənasızdır.
 #:
@@ -180,6 +218,7 @@ class ShiftPlanningUseCase:
         notifier: Notifier,
         labor: LaborComplianceAdvisor | None = None,
         documents: DocumentComplianceAdvisor | None = None,
+        annual_leave: AnnualLeaveRequestRepository | None = None,
     ) -> None:
         """
         Args:
@@ -191,6 +230,16 @@ class ShiftPlanningUseCase:
                 admin-in işini dayandırmamalıdır).
             documents: #17 sənəd bloklama məsləhətçisi (Faza 7). EYNİ İSTƏYƏ
                 BAĞLI naxış — `labor`-la eyni səbəb.
+            annual_leave: #28 illik məzuniyyət sorğuları — YALNIZ OXUNUR
+                (`find_overlapping_approved`). EYNİ İSTƏYƏ BAĞLI naxış.
+                MƏSLƏHƏTÇİ SİNFİ (`LaborComplianceAdvisor` kimi) YARADILMADI
+                VƏ BU, QƏSDLİDİR: məsləhətçi sinifləri qaydanın ÖZÜ qeyri-triv
+                olduqda (saat hesablaması, bitmə tarixi süzgəci) mövcuddur.
+                Burada qayda tək sualdan ibarətdir — "bu günü əhatə edən
+                TƏSDİQLƏNMİŞ məzuniyyət varmı?" — və cavabı repository-nin
+                mövcud metodu birbaşa verir. Ayrıca sinif yalnız bir ötürücü
+                qat olardı; `_reassess_open_work` da eyni səbəbdən
+                `LeaveRequestRepository`-ni BİRBAŞA işlədir.
         """
         self._shifts = shifts
         self._leave_requests = leave_requests
@@ -199,6 +248,7 @@ class ShiftPlanningUseCase:
         self._notifier = notifier
         self._labor = labor
         self._documents = documents
+        self._annual_leave = annual_leave
 
     # ------------------------------- baxış ----------------------------------- #
 
@@ -414,6 +464,16 @@ class ShiftPlanningUseCase:
                 tenant_id=tenant_id, employee_id=employee_id, shift_date=shift_date
             )
         )
+        # #28: təsdiqlənmiş illik məzuniyyət günü — EYNİ kanal, EYNİ yer
+        # (auditdən ƏVVƏL). Bax modul başlığı: "TƏSDİQLƏNMİŞ İLLİK MƏZUNİYYƏT".
+        conflicts.extend(
+            self._annual_leave_conflicts(
+                tenant_id=tenant_id,
+                employee_id=employee_id,
+                shift_date=shift_date,
+                is_off_day=is_off_day,
+            )
+        )
 
         self._audit.record(
             tenant_id=tenant_id,
@@ -542,6 +602,72 @@ class ShiftPlanningUseCase:
                 message_az=finding.message_az,
             )
             for finding in findings
+        ]
+
+    def _annual_leave_conflicts(
+        self,
+        *,
+        tenant_id: TenantId,
+        employee_id: EmployeeId,
+        shift_date: date,
+        is_off_day: bool,
+    ) -> list[ScheduleConflict]:
+        """#28 — təsdiqlənmiş illik məzuniyyət günü İŞ günü kimi təyin edildi.
+
+        YALNIZ İŞ GÜNÜ XƏBƏRDARLIQ DOĞURUR (`is_off_day=True` halında siyahı
+        boşdur). Səbəb: məzuniyyət gününü matrisdə istirahət kimi işarələmək
+        planlayıcının DOĞRU reaksiyasıdır — orada xəbərdarlıq göstərmək
+        adamı düzgün əməliyyata görə "cəzalandırardı" və xəbərdarlıq kanalını
+        səs-küyə çevirərdi. Zərər YALNIZ iş günü təyinatındadır: matris o günü
+        gözləyir, işçi qanuni olaraq gəlmir, `detect_absences` isə
+        `is_off_day` sorğusundan `False` alıb "İcazəsiz Qayıb" yazır.
+
+        BİLDİRİŞ GÖNDƏRİLMİR: `_labor_conflicts`/`_document_conflicts` ilə
+        EYNİ səbəb — bu, məhz həmin an ekran qarşısında dayanan planlayıcı
+        üçündür. İşçinin ÖZÜNƏ də göndərilmir: təyinat onun məzuniyyətini
+        NƏ LƏĞV EDİR, NƏ QISALDIR (`annual_leave_requests` sətrinə
+        toxunulmur), yəni ona çatdırılacaq bir qərar yoxdur — çağırış qərarı
+        verilərsə, o, insan tərəfindən ayrıca danışılır.
+
+        REPOSITORY QOŞULMAYIBSA BOŞ SİYAHI: `labor`/`documents` ilə eyni
+        fail-open (bax konstruktor şərhi).
+        """
+        if self._annual_leave is None or is_off_day:
+            return []
+
+        # Tək günlük aralıq: `find_overlapping_approved` `daterange(...,'[]')`
+        # kəsişməsi ilə işləyir, yəni `start == end == shift_date` sorğusu
+        # "bu günü əhatə edən təsdiqlənmiş məzuniyyət" deməkdir. Ayrıca
+        # "gün üçün" metod ƏLAVƏ EDİLMƏDİ — port-a ikinci, demək olar eyni
+        # sorğu qoymaq iki fərqli kəsişmə tərifinin yaranma riskidir.
+        approved = self._annual_leave.find_overlapping_approved(
+            employee_id, start=shift_date, end=shift_date
+        )
+        if approved is None:
+            return []
+
+        _audit_log.warning(
+            "SHIFT_ASSIGNED_DURING_ANNUAL_LEAVE",
+            extra={
+                "tenant_id": str(tenant_id),
+                "employee_id": str(employee_id),
+                "shift_date": shift_date.isoformat(),
+                "request_id": str(approved.id),
+            },
+        )
+        return [
+            ScheduleConflict(
+                employee_id=employee_id,
+                shift_date=shift_date,
+                kind=ANNUAL_LEAVE_CONFLICT_KIND,
+                message_az=(
+                    "Bu işçinin həmin gün TƏSDİQLƏNMİŞ illik məzuniyyəti var "
+                    f"({approved.start_date.isoformat()} – {approved.end_date.isoformat()}). "
+                    "Təyinat bloklanmadı — qərar sizindir; lakin işçi gəlməzsə "
+                    "həmin gün «İcazəsiz Qayıb» kimi yazılacaq. Ya günü istirahət "
+                    "kimi işarələyin, ya da məzuniyyəti ləğv edin."
+                ),
+            )
         ]
 
     def _require_manage(self, actor: Employee) -> None:
@@ -853,6 +979,7 @@ class ShiftSwapUseCase:
 
 
 __all__ = [
+    "ANNUAL_LEAVE_CONFLICT_KIND",
     "APPROVE_SWAP_FLAG",
     "MANAGE_SHIFTS_FLAG",
     "MAX_SWAP_LEAD_DAYS",

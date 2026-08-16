@@ -379,6 +379,12 @@ class FineAppealUseCase:
             created_at=now,
         )
         self._save(appeal)
+        # MÜBAHİSƏ KİLİDİ (M-6): bu andan cərimə qərar verilənə qədər
+        # export-a düşmür. Yazı ETİRAZDAN SONRADIR — etiraz sətri
+        # yaranmadan cəriməni bloklamaq, uğursuz `save()` halında onu
+        # səbəbsiz kilidli qoyardı.
+        fine.mark_appeal_opened()
+        self._fines.save(fine)
         self._audit.record(
             tenant_id=tenant_id,
             actor_id=employee.id,
@@ -403,9 +409,28 @@ class FineAppealUseCase:
     # -------------------------------- inbox ---------------------------------- #
 
     def inbox(self, *, tenant_id: TenantId, actor: Employee) -> list[FineAppeal]:
-        """HR_Admin-in etiraz növbəsi."""
+        """HR_Admin-in etiraz növbəsi — QƏRARSIZ hər şey (M-6).
+
+        `list_pending` DEYİL, `list_undecided`: 72 saat keçmiş, lakin cavabsız
+        qalmış (`EXPIRED`) etirazlar da buradadır. Onlar siyahıdan düşsəydi,
+        cərimə export-dan əbədi kənarda qalar və heç kim səbəbini görməzdi
+        (bax `ports.py::FineAppealRepository.list_undecided`).
+        """
         self._require_approver(actor)
-        return list(self._appeals.list_pending(tenant_id))
+        return list(self._appeals.list_undecided(tenant_id))
+
+    def undecided_count(self, tenant_id: TenantId) -> int:
+        """Aylıq icmal ekranının xəbərdarlıq rəqəmi — «N etiraz hələ baxılmayıb».
+
+        M-6, bənd 4: boşluq məhz GÖRÜNMƏZLİKDƏN doğmuşdu — cavabsız etiraz heç
+        bir ekranda rəqəm kimi görünmürdü, ona görə də heç kim onu qapatmağa
+        məcbur deyildi. İndi hər aylıq icmalda bu say göstərilir.
+
+        NİYƏ SƏLAHİYYƏT TƏLƏB ETMİR: qaytarılan dəyər tək bir SAYĞACDIR, heç
+        bir işçi/cərimə detalı daşımır — onu `can_publish_fines` qapısının
+        arxasındakı icmal ekranı göstərir.
+        """
+        return len(self._appeals.list_undecided(tenant_id))
 
     def my_appeals(self, employee: Employee) -> list[FineAppeal]:
         """İşçinin öz etiraz tarixçəsi — səlahiyyət tələb olunmur."""
@@ -446,6 +471,7 @@ class FineAppealUseCase:
             appeal_id=appeal.id,
             new_amount=new_amount,
         )
+        fine.mark_appeal_decided()
         self._save(appeal)
         self._fines.save(fine)
 
@@ -460,9 +486,30 @@ class FineAppealUseCase:
                 "fine_status": fine.status.value,
                 "original_amount": str(fine.original_amount.amount),
                 "new_amount": str(fine.amount.amount),
+                # M-6: cərimə ARTIQ export olunubsa (pul kəsilib) bu sətir
+                # maaş düzəlişinin yeganə rəsmi izidir.
+                "exported_period": fine.exported_period,
+                "requires_payroll_correction": fine.requires_payroll_correction,
             },
             reason=appeal.decision_note,
         )
+        if fine.requires_payroll_correction:
+            # KRİTİK BİLDİRİŞ: hesabat faylı artıq HR-a təhvil verilib və
+            # sistem onu geri çağıra bilmir. Ləğvin sükutla qalması işçidən
+            # kəsilmiş pulun qaytarılmaması demək olardı.
+            self._notifier.notify(
+                tenant_id=tenant_id,
+                recipient_id=None,  # `can_export_reports` sahibləri
+                category="FINE_REVERSED_AFTER_EXPORT",
+                title_az="Export olunmuş cərimə ləğv edildi — maaş düzəlişi lazımdır",
+                body_az=(
+                    f"{fine.exported_period} dövründə hesabata düşmüş "
+                    f"{fine.original_amount} məbləğində cərimə etiraz nəticəsində "
+                    f"{fine.amount} səviyyəsinə endirildi. Fərq həmin dövrün "
+                    f"hesabatında artıq göndərilib — düzəliş əl ilə aparılmalıdır."
+                ),
+                is_critical=True,
+            )
         self._notifier.notify(
             tenant_id=tenant_id,
             recipient_id=appeal.employee_id,
@@ -497,7 +544,12 @@ class FineAppealUseCase:
         self._assert_not_issuer(actor, fine)
 
         appeal.reject(decided_by=actor.id, decided_at=now, note=note)
+        # MÜBAHİSƏ BAĞLANDI (M-6): cərimə qüvvədə qalır və export kilidi
+        # açılır. Cərimənin ÖZÜ dəyişmir — `Fine.reverse()` çağırılmır — ona
+        # görə burada yalnız mübahisə bayrağı yazılır.
+        fine.mark_appeal_decided()
         self._save(appeal)
+        self._fines.save(fine)
 
         self._audit.record(
             tenant_id=tenant_id,
@@ -521,11 +573,25 @@ class FineAppealUseCase:
     # ------------------------------ planlanmış ------------------------------- #
 
     def expire_stale(self, tenant_id: TenantId) -> int:
-        """Cavabsız qalmış etirazları bağlayır (planlaşdırılmış iş).
+        """Cavabsız qalmış etirazları SLA-pozuntusu kimi işarələyir (planlaşdırılmış iş).
 
         DB tərəfindəki `cron_close_expired_appeals` ilə eyni qaydadır —
         burada tətbiq qatında da mövcuddur ki, `pg_cron` olmayan quraşdırmada
         (bax `docs/scheduler_setup.md`, Variant B) eyni nəticə alınsın.
+
+        ──────────────────────────────────────────────────────────────────────
+        `EXPIRED` ARTIQ "İŞ BİTDİ" DEMƏK DEYİL (M-6)
+        ──────────────────────────────────────────────────────────────────────
+        Status dəyişikliyi SAXLANILIR (hesabatda "HR cavab vermədi" halını
+        ayırd etməyin yeganə yolu odur), lakin onun iki nəticəsi ARADAN
+        QALDIRILIB:
+
+            * etiraz hələ də qərar ala bilir (`appeal.py::_require_decidable`);
+            * cərimə export-a DÜŞMÜR (`Fine.is_exportable` dördüncü şərti).
+
+        Bundan başqa hər dövrədə HR-a BİLDİRİŞ gedir. Əvvəl bu addım tamamilə
+        səssiz idi: sətir statusunu dəyişirdi, heç kimə heç nə demirdi və
+        işçinin cəriməsi növbəti export-da tutulurdu.
         """
         now = self._clock.now()
         closed = 0
@@ -543,8 +609,28 @@ class FineAppealUseCase:
                 action="FINE_APPEAL_EXPIRED",
                 entity_type="fine_appeals",
                 entity_id=appeal.id,
-                after_state={"status": AppealStatus.EXPIRED.value},
-                reason="Etiraz pəncərəsi cavabsız bağlandı",
+                after_state={
+                    "status": AppealStatus.EXPIRED.value,
+                    # Qərar HƏLƏ gözlənilir — sətir "bağlandı" kimi
+                    # oxunmamalıdır (bax metod başlığı).
+                    "is_decided": False,
+                    "fine_id": str(appeal.fine_id),
+                },
+                reason="Etiraz pəncərəsi cavabsız bağlandı — qərar hələ gözlənilir",
+            )
+
+        if closed:
+            self._notifier.notify(
+                tenant_id=tenant_id,
+                recipient_id=None,  # `can_approve_leave_appeal` sahibləri
+                category="FINE_APPEAL_SLA_BREACH",
+                title_az="Cavabsız cərimə etirazları var",
+                body_az=(
+                    f"{closed} etirazın 72 saatlıq pəncərəsi qərar verilmədən bağlandı. "
+                    f"Həmin cərimələr qərar verilənə qədər Premiya&Cərimə hesabatına "
+                    f"DÜŞMÜR — etirazlara baxılması gözlənilir."
+                ),
+                is_critical=True,
             )
         return closed
 

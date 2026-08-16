@@ -447,6 +447,28 @@ class EmployeeRepository(Protocol):
 
     def save(self, employee: Employee) -> None: ...
 
+    def update_credentials(
+        self,
+        employee_id: EmployeeId,
+        *,
+        pin_hash: str | None = None,
+        password_hash: str | None = None,
+        pepper_version: int | None = None,
+    ) -> None:
+        """Sirr hash-larını AYRICA yazır — `None` verilən sahə TOXUNULMUR.
+
+        NİYƏ `save()`-dən AYRIDIR: hash `Employee` entity-sində saxlanılmır
+        (təsadüfən log-a və ya DTO-ya düşməsin deyə), ona görə `save()`
+        `password_hash`/`pin_hash` sütunlarına ümumiyyətlə toxunmur. Nəticədə
+        yalnız `save()` çağıran bir axın müvəqqəti şifrəni HESABLAYIB
+        GÖSTƏRƏ, lakin YAZMAYA bilər — məhz bu boşluq
+        `EmergencyAccessRecoveryUseCase.recover()`-da vardı: admin ekranda
+        işləməyən bir şifrə görürdü.
+        NİYƏ PORTDADIR: yazma yolu tətbiq qatından çağırılmalıdır, əks halda
+        use case sirri yazmaq üçün infrastruktur sinfini tanımalı olardı.
+        """
+        ...
+
     def count_active_with_flag(self, tenant_id: TenantId, flag_code: str) -> int:
         """Dual-Control Deadlock Guard üçün (bölmə 3)."""
         ...
@@ -489,6 +511,22 @@ class LeaveRequestRepository(Protocol):
     def list_due_for_timeout(
         self, tenant_id: TenantId, *, now: datetime, timeout_minutes: int
     ) -> list[LeaveRequest]: ...
+
+    def list_pending_dual_control(self, tenant_id: TenantId) -> list[LeaveRequest]:
+        """İkinci təsdiq gözləyən manual vaxt düzəlişləri (M-5).
+
+        NİYƏ AYRICA SORĞU: `list_due_for_timeout` yalnız TƏSDİQ gözləyən
+        icazələri gətirir (status 🟡). Düzəliş sorğusu isə icazə artıq
+        təsdiqləndikdən sonra da gözləyə bilər — iki fərqli SLA, iki fərqli
+        süzgəc. Birini digərinin üstünə yığmaq "hansı timeout işlədi?"
+        sualını cavabsız qoyardı.
+
+        Vaxt HƏDDİ arqument DEYİL: hansı sətrin köhnəldiyini
+        `LeaveRequest.expire_override(now=, timeout_minutes=)` qərarlaşdırır,
+        çünki hədd `system_limits`-dədir və Root onu gün ərzində dəyişə bilər
+        (`break_overuse_for_day` ilə eyni əsaslandırma).
+        """
+        ...
 
     def monthly_used_minutes(self, employee_id: EmployeeId, *, year: int, month: int) -> int:
         """İşçinin həmin ay ərzində TƏSDİQLƏNMİŞ icazə dəqiqələrinin cəmi.
@@ -877,6 +915,18 @@ class FineAppealRepository(Protocol):
     def get_for_fine(self, fine_id: FineId) -> FineAppeal | None: ...
 
     def list_pending(self, tenant_id: TenantId) -> list[FineAppeal]: ...
+
+    def list_undecided(self, tenant_id: TenantId) -> list[FineAppeal]:
+        """QƏRAR VERİLMƏMİŞ etirazlar — `PENDING` **və** `EXPIRED` (M-6).
+
+        `list_pending`-dən FƏRQİ və niyə ikisi də lazımdır: `expire_stale`
+        yalnız hələ bağlanmamış (`PENDING`) sətirləri axtarır, HR inbox-u isə
+        müddəti bitmiş, lakin cavabsız qalmış sətirləri də GÖRMƏLİDİR — əks
+        halda `EXPIRED` sətir heç bir ekranda görünməz, cərimə isə mübahisəli
+        qalıb export-a düşməzdi (`Fine.is_exportable`). Yəni gizli, əbədi
+        bloklanmış qeyd yaranardı.
+        """
+        ...
 
     def list_for_employee(
         self, employee_id: EmployeeId, *, limit: int = 50

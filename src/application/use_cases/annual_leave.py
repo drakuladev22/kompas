@@ -18,6 +18,25 @@ qatı üçün praktik nəticələri bunlardır:
     (`ShiftSource` "kim dəyişdi?" sualını cavablandıra bilməzdi).
 
 ──────────────────────────────────────────────────────────────────────────────
+LAKİN SÜKUT DA CAVAB DEYİL — TƏSDİQ PLANI BOŞ QOYA BİLƏR
+──────────────────────────────────────────────────────────────────────────────
+Yuxarıdakı qərarın (matris YENİLƏNMİR) ödənilməmiş qiyməti var: işçi ARTIQ
+növbəyə salınmışsa və məzuniyyət SONRA təsdiqlənirsə, matrisdə həmin günlər
+iş günü olaraq qalır. Mağaza həmin günə adam gözləyir, işçi isə qanuni
+məzuniyyətdədir — yəni növbə SÜKUTLA boş qalır.
+
+Qərar `_warn_planned_shifts`-dədir və o, matrisi DƏYİŞMİR (yuxarıdakı qayda
+qüvvədədir), yalnız MÖVCUD `SHIFT_CHANGE_CONFLICT` bildiriş kanalına sətir
+yazır. Həmin kanalın auditoriyası `can_manage_shifts`-dir
+(`value_objects/notifications.py`) — yəni günü YENİDƏN PLANLAYA BİLƏN şəxs.
+Yeni kateqoriya YARADILMADI: kanalın mövcud tərifi elə "növbə PLANI ilə
+faktiki vəziyyət arasındakı fərq"dir və bu, məhz o fərqdir.
+
+TƏSDİQ BLOKLANMIR: işçinin qanuni haqqını mağazanın planlaşdırma boşluğuna
+görə rədd etmək qaydanı tərsinə çevirərdi. Planlaşdırma problemi
+planlayıcının həll edəcəyi problemdir və ona görə ona xəbər verilir.
+
+──────────────────────────────────────────────────────────────────────────────
 TƏSDİQ AXINI — SHIFT SWAP NAXIŞININ TƏKRARI
 ──────────────────────────────────────────────────────────────────────────────
 `submit` / `pending_inbox` / `my_requests` / `approve` / `reject` metod dəsti
@@ -112,6 +131,13 @@ MANAGE_LEAVE_BALANCES_FLAG = "can_manage_leave_balances"
 #: Bildiriş kateqoriyaları — `SHIFT_SWAP_*` naxışı (kanal adı ekranda süzgəcdir).
 PENDING_NOTIFICATION_CATEGORY = "ANNUAL_LEAVE_PENDING"
 DECIDED_NOTIFICATION_CATEGORY = "ANNUAL_LEAVE_DECIDED"
+
+#: MÖVCUD kanal — `shift_scheduling` ilə EYNİ sətir (bax modul başlığı:
+#: "SÜKUT DA CAVAB DEYİL"). Auditoriyası `can_manage_shifts`-dir, yəni günü
+#: yenidən planlaya bilən şəxs. Yeni kateqoriya yaratsaydıq, o,
+#: `TENANT_NOTIFICATION_AUDIENCE`-də olmadığı üçün fail-open ilə HAMIYA —
+#: o cümlədən `Satıcı`-ya — görünərdi.
+SHIFT_CONFLICT_NOTIFICATION_CATEGORY = "SHIFT_CHANGE_CONFLICT"
 
 #: Bütün TƏQVİM qərarları (hansı il? son tarix keçibmi?) MAĞAZANIN yerli
 #: gününə görə verilir, UTC-yə görə YOX. `Clock` UTC qaytarır və Bakı UTC+4
@@ -477,13 +503,21 @@ class AnnualLeaveUseCase:
             self._release_quietly(employee_id=request.employee_id, year=year, days=deducted)
             raise
 
+        # Planlanmış növbələr AUDİTDƏN ƏVVƏL oxunur ki, "təsdiq neçə iş gününü
+        # boş qoydu?" rəqəmi `after_state`-də QALSIN. Bildirişin özü sonra
+        # gedir — bildiriş uçur, audit sətri qalır.
+        stranded = self._planned_work_days(tenant_id=tenant_id, request=request)
         self._audit.record(
             tenant_id=tenant_id,
             actor_id=approver.id,
             action="ANNUAL_LEAVE_APPROVED",
             entity_type="annual_leave_requests",
             entity_id=request.id,
-            after_state={**request.to_audit_state(), "charged_year": year},
+            after_state={
+                **request.to_audit_state(),
+                "charged_year": year,
+                "stranded_shift_days": len(stranded),
+            },
         )
         self._notifier.notify(
             tenant_id=tenant_id,
@@ -496,6 +530,7 @@ class AnnualLeaveUseCase:
             ),
             is_critical=False,
         )
+        self._warn_planned_shifts(tenant_id=tenant_id, request=request, stranded=stranded)
         return request
 
     def reject(
@@ -729,6 +764,68 @@ class AnnualLeaveUseCase:
         )
         return quantize_days(Decimal(working))
 
+    def _planned_work_days(self, *, tenant_id: TenantId, request: AnnualLeaveRequest) -> list[date]:
+        """Məzuniyyət aralığında PLANLAŞDIRILMIŞ İŞ günləri (bax modul başlığı).
+
+        SƏTRİ OLMAYAN GÜN SAYILMIR. `shift_scheduling.clear_day` şərhi qaydanı
+        yazır: planlaşdırılmamış gün istirahət günü DEYİL, lakin o, həm də
+        heç kimin GÖZLƏDİYİ gün deyil — yenidən planlanmalı növbə yoxdur.
+        Bura yalnız AÇIQ `is_off_day = FALSE` sətirləri düşür, yəni matrisdə
+        real olaraq "bu adam bu gün işləyir" yazılmış günlər.
+
+        Oxu uğursuzluğu TƏSDİQİ DAYANDIRMIR (bax `policy()` ilə eyni fəlsəfə):
+        verilməli cavab "məzuniyyət verilsinmi" deyil, "planlayıcı xəbərdar
+        edilsinmi" idi. Matris oxunmursa xəbərdarlıq itir, işçinin haqqı isə
+        yerində qalır.
+        """
+        try:
+            assignments = self._shifts.list_range(
+                tenant_id,
+                start=request.start_date,
+                end=request.end_date,
+                employee_ids=[request.employee_id],
+            )
+        except Exception as exc:  # pragma: no cover — repo çökməsi
+            _audit_log.warning(
+                "ANNUAL_LEAVE_SHIFT_SCAN_FAILED",
+                extra={"request_id": str(request.id), "error": str(exc)},
+            )
+            return []
+
+        return sorted(
+            assignment.shift_date
+            for assignment in assignments
+            if assignment.employee_id == request.employee_id and not assignment.is_off_day
+        )
+
+    def _warn_planned_shifts(
+        self, *, tenant_id: TenantId, request: AnnualLeaveRequest, stranded: list[date]
+    ) -> None:
+        """Boş qalacaq növbələr barədə PLAN SAHİBİNƏ xəbər verir.
+
+        `recipient_id=None` — konkret alıcı yoxdur, kateqoriya auditoriyası
+        (`can_manage_shifts`) süzgəcdir. `is_critical=True`: bu sətir bir
+        məlumat deyil, İCRA TƏLƏB EDƏN tapşırıqdır (günü yenidən planla) və
+        e-poçt ehtiyat kanalı ilə getməlidir — planlayıcı tətbiqi həmin gün
+        açmaya bilər, növbə isə onsuz da boş qalacaq.
+        """
+        if not stranded:
+            return
+        days = ", ".join(day.isoformat() for day in stranded)
+        self._notifier.notify(
+            tenant_id=tenant_id,
+            recipient_id=None,  # `can_manage_shifts` sahibləri
+            category=SHIFT_CONFLICT_NOTIFICATION_CATEGORY,
+            title_az="Təsdiqlənmiş məzuniyyət planlanmış növbələrə düşür",
+            body_az=(
+                f"{request.start_date.isoformat()} – {request.end_date.isoformat()} "
+                "tarixləri üçün illik məzuniyyət təsdiqləndi, lakin Növbə Matrisində "
+                f"həmin işçi üçün iş günü kimi planlanmış tarixlər var: {days}. "
+                "Növbə cədvəli avtomatik dəyişmir — həmin günləri yenidən planlayın."
+            ),
+            is_critical=True,
+        )
+
     def _charge_year(self, request: AnnualLeaveRequest) -> int:
         """Sorğu HANSI ilin balansından çıxılır.
 
@@ -888,6 +985,7 @@ __all__ = [
     "DECIDED_NOTIFICATION_CATEGORY",
     "MANAGE_LEAVE_BALANCES_FLAG",
     "PENDING_NOTIFICATION_CATEGORY",
+    "SHIFT_CONFLICT_NOTIFICATION_CATEGORY",
     "AnnualLeaveBalanceView",
     "AnnualLeaveError",
     "AnnualLeavePermissionError",

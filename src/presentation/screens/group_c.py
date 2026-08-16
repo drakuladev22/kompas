@@ -31,6 +31,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.domain.document_rules import (
+    ATTENTION_FLAG_LABEL_AZ,
+    ATTENTION_FLAG_LABEL_INLINE_AZ,
+)
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -43,6 +47,7 @@ from src.presentation.widgets.charts import (
 )
 from src.presentation.widgets.data_table import Column, DataTable
 from src.presentation.widgets.forms import FormField, field_label
+from src.presentation.widgets.help_hint import HelpButton
 from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
@@ -58,11 +63,56 @@ from src.presentation.widgets.primitives import (
     stretch,
     title_label,
 )
+from src.presentation.widgets.responsive import LayoutMode
 
 if TYPE_CHECKING:
     from PySide6.QtGui import QShowEvent
 
     from src.presentation.theme.manager import ThemeManager
+
+
+#: İdarə Panelindəki bölmələrin ŞƏBƏKƏ AÇARLARI (audit G-5).
+#:
+#: ──────────────────────────────────────────────────────────────────────────
+#: NİYƏ BURADA SİYAHI VAR VƏ NİYƏ ADLAR SEÇİLMİR
+#: ──────────────────────────────────────────────────────────────────────────
+#: Açarlar `application.use_cases.dashboard_layout.WIDGET_CATALOG`-un
+#: açarlarıdır — Panel Qurucusu məhz onları saxlayır. Ekran tətbiq qatını
+#: İDXAL ETMİR (qat sərhədi, bax `screens/group_i.py: PLACEMENT_SEPARATOR`
+#: şərhi), ona görə siyahı burada TƏKRARLANIR; sükutla ayrılmasın deyə
+#: `tests/unit/test_dashboard_grid.py` iki mənbənin uyğunluğunu QAPI
+#: kimi yoxlayır.
+#:
+#: `open_tasks` BURADA YOXDUR və bu, qəsdəndir: onun öz kartı yoxdur — açıq
+#: tapşırıq sayı rəqəm kartlarının (`stat_tiles`) içindədir. Yerləşdirməsi
+#: olan, lakin bölməsi olmayan açar sükutla BURAXILIR (fail-soft).
+DASHBOARD_SECTION_KEYS: Final[tuple[str, ...]] = (
+    "stat_tiles",
+    "fines_chart",
+    "leave_gauge",
+    "points_leaderboard",
+    "server_health",
+    "ranking_table",
+    "store_vs_network",
+    "metric_trend",
+    "benchmark_outliers",
+)
+
+
+def _is_placement(value: object) -> bool:
+    """Yerləşdirmənin FORMASINI yoxlayır — yararsızı sükutla buraxmaq üçün.
+
+    Dəyər maket yolundan, kontrollerdən və ya gələcək bir skriptdən gələ
+    bilər; üç tam ədəddən ibarət olmayan element düzülüşü SINDIRMAMALIDIR
+    (ekran çökməkdənsə həmin bölməni öz yerində saxlayır). `bool` QƏSDƏN
+    rədd edilir: Python-da `True` bir `int`-dir və `(True, 0, 1)` sətri
+    `1`-ə çevirərək izahsız sürüşmə yaradardı.
+    """
+    return (
+        isinstance(value, tuple)
+        and len(value) == 3  # noqa: PLR2004 — üçlük formanın ÖZÜDÜR (sətir, sütun, en)
+        and all(isinstance(item, int) and not isinstance(item, bool) for item in value)
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -132,6 +182,7 @@ class DashboardScreen(Screen):
             tile.setFixedHeight(metrics.DASHBOARD_ROW_HEIGHT)
             tiles_layout.addWidget(tile, 1)
         self.add(tiles)
+        self._tiles_row = tiles
 
         # --------------------------- qrafik + limit ------------------------- #
         middle = QWidget()
@@ -162,6 +213,8 @@ class DashboardScreen(Screen):
         )
         middle_layout.addWidget(self._leave_meter, 1)
         self.add(middle)
+        self._middle_row = middle
+        self._chart_card = chart_card
 
         # ------------------------ liderlər + serverlər ---------------------- #
         bottom = QWidget()
@@ -183,6 +236,7 @@ class DashboardScreen(Screen):
         self._health.body().addStretch(1)
         bottom_layout.addWidget(self._health, 1)
         self.add(bottom)
+        self._bottom_row = bottom
 
         # ------------------ #24 Çox-Mağaza Benchmark (Faza 9A) --------------- #
         # Dördü də defolt GİZLİDİR (bax sinif başlığı) — yalnız müvafiq
@@ -210,6 +264,182 @@ class DashboardScreen(Screen):
         # görünən boş kart HR-ı ona baxmamağa öyrədərdi.
         self._break_card, self._break_rows = self._build_break_overuse_card()
         self.add(self._break_card)
+
+        # ---------------- şəbəkə yerləşdirməsi (audit G-5) ------------------ #
+        # BURADA HEÇ NƏ DƏYİŞMİR: aşağıdakılar yalnız QEYDİYYATDIR. Şəbəkə
+        # `set_layout()` çağırılana qədər TƏTBİQ OLUNMUR, yəni yerləşdirməsi
+        # olmayan istifadəçidə ekran hərfən əvvəlki kimi qalır (tam-enli
+        # şaquli yığın) — geriyə uyğunluq qapısı budur.
+        self._sections: dict[str, QWidget] = {
+            "stat_tiles": self._tiles_row,
+            "fines_chart": self._chart_card,
+            "leave_gauge": self._leave_meter,
+            "points_leaderboard": self._leaders,
+            "server_health": self._health,
+            "ranking_table": self._ranking_card,
+            "store_vs_network": self._store_vs_network_card,
+            "metric_trend": self._trend_card,
+            "benchmark_outliers": self._outlier_card,
+        }
+        #: `açar → (sətir, sütun, en)`. Boş = şəbəkə yoxdur.
+        self._placements: dict[str, tuple[int, int, int]] = {}
+        self._grid_columns = 1
+        #: Şəbəkə qabı LAZIM OLANA QƏDƏR QURULMUR (eyni naxış: `Screen.
+        #: _section_error_banner`) — şəbəkəsiz ekranda bir dənə də artıq
+        #: widget yaranmır.
+        self._grid_host: QWidget | None = None
+        self._grid: QGridLayout | None = None
+
+    # ------------------------ şəbəkə yerləşdirməsi --------------------------- #
+
+    def set_layout(
+        self,
+        placements: dict[str, tuple[int, int, int]] | None = None,
+        *,
+        columns: int = 1,
+    ) -> None:
+        """Panel Qurucusunda seçilmiş şəbəkəni TƏTBİQ edir (audit G-5).
+
+        Args:
+            placements: `açar → (sətir, sütun, en)` — `DashboardView.
+                placement_map()`-ın çıxışı. `None`/boş → ŞƏBƏKƏ YOXDUR.
+            columns: Şəbəkənin sütun sayı (ROOT: `DASHBOARD_GRID_COLUMNS`).
+
+        ──────────────────────────────────────────────────────────────────────
+        BOŞ YERLƏŞDİRMƏ HEÇ NƏYƏ TOXUNMUR
+        ──────────────────────────────────────────────────────────────────────
+        Qurucuda şəbəkə qurmamış istifadəçi (və köhnə xətti konfiqurasiya)
+        EYNİ görünüşü görməlidir. Ona görə burada "tək sütunlu şəbəkə qur"
+        yolu SEÇİLMƏDİ: nəticə vizual olaraq eyni olsa da, widget-lər yeni
+        qaba köçürülərdi və hər hansı fərq (kart aralığı, uzanma əmsalı)
+        səbəbsiz reqressiya olardı. Heç nə etməmək — sübutu ən asan olan
+        davranışdır.
+
+        İMZA OPSİONALDIR: mövcud `set_*` çağırışlarının heç biri dəyişmir və
+        bu metodu çağırmayan yol (maket və ya köhnə kontroller) sınmır.
+        """
+        known = {
+            key: value
+            for key, value in (placements or {}).items()
+            if key in self._sections and _is_placement(value)
+        }
+        if not known:
+            return
+        self._placements = known
+        self._grid_columns = max(1, columns)
+        self._apply_grid()
+
+    def apply_layout_mode(self, mode: LayoutMode) -> None:
+        """Pəncərə rejimi dəyişdi — şəbəkə yenidən yerləşdirilir.
+
+        SAXLANMIŞ ŞƏBƏKƏ TOXUNULMUR: dar pəncərə yalnız GÖSTƏRİLMƏNİ dəyişir,
+        istifadəçinin seçimini silmir (eyni qərar `DashboardBuilderScreen.
+        apply_layout_mode`-da verilib).
+        """
+        super().apply_layout_mode(mode)
+        if self._grid is not None:
+            self._apply_grid()
+
+    def _apply_grid(self) -> None:
+        """Bölmələri şəbəkəyə köçürür — FAIL-SOFT.
+
+        Dar pəncərədə (`LayoutMode.COMPACT`) şəbəkə TƏK SÜTUNA yığılır və
+        oxunuş sırası (sətir, sonra sütun) qorunur — `application.use_cases.
+        dashboard_layout.collapse_to_single_column()` ilə EYNİ qayda. Rejimi
+        burada ÖLÇMÜRÜK: qərar mərkəzi mexanizmdən gəlir (`widgets/
+        responsive.py` → `Screen.apply_layout_mode`), yeni breakpoint
+        yaradılmır.
+        """
+        grid = self._ensure_grid()
+        compact = self.layout_mode is LayoutMode.COMPACT
+        columns = 1 if compact else self._grid_columns
+
+        for key, row, column, span in self._grid_slots(columns=columns):
+            widget = self._sections[key]
+            # GİZLİ QALAN GİZLİ QALIR: benchmark kartları doldurulana qədər
+            # `setVisible(False)`-dır (bax sinif başlığı) və Qt reparent zamanı
+            # görünürlüyü sıfırlayır — vəziyyət açıq şəkildə bərpa olunmasa,
+            # icazəsi olmayan istifadəçi boş benchmark kartlarını GÖRƏRDİ.
+            hidden = widget.isHidden()
+            self._detach(widget)
+            grid.addWidget(widget, row, column, 1, span)
+            widget.setVisible(not hidden)
+
+        for index in range(max(columns, self._grid_columns)):
+            grid.setColumnStretch(index, 1 if index < columns else 0)
+
+        # Boşalmış sətir qabları GİZLƏNİR: içindəki hər iki kart şəbəkəyə
+        # köçübsə, qab yalnız izahsız bir boşluq qoyardı. Hansısa kart
+        # köçməyibsə (məs. yerləşdirməsi çatışmır) qab GÖRÜNƏN qalır — kart
+        # heç vaxt yox olmamalıdır.
+        for container in (self._middle_row, self._bottom_row):
+            layout = container.layout()
+            container.setVisible(layout is not None and layout.count() > 0)
+
+    def _grid_slots(self, *, columns: int) -> list[tuple[str, int, int, int]]:
+        """Yerləşdirmələri ÜST-ÜSTƏ DÜŞMƏYƏN xanalara çevirir.
+
+        Saxlanmış dəyər üç yolla "yanlış" ola bilər və heç biri istifadəçinin
+        günahı deyil: Root sütun sayını azaldıb, iki kart eyni xanaya düşüb,
+        format köhnədir. Hər üç halda kart YOX OLMAMALIDIR — ona görə burada
+        yer TAPILIR, istisna atılmır (`dashboard_layout.normalize_placements`
+        ilə eyni istiqamət; orada tətbiq qatı, burada ekranın öz müdafiəsi,
+        çünki ekranı maket yolu da doldurur).
+        """
+        ordered = sorted(
+            ((key, self._placements[key]) for key in self._placements if key in self._sections),
+            key=lambda item: (item[1][0], item[1][1], item[0]),
+        )
+        if self.layout_mode is LayoutMode.COMPACT:
+            return [(key, index, 0, 1) for index, (key, _) in enumerate(ordered)]
+
+        occupied: set[tuple[int, int]] = set()
+        slots: list[tuple[str, int, int, int]] = []
+        for key, (raw_row, raw_column, raw_span) in ordered:
+            column = max(0, min(columns - 1, raw_column))
+            span = max(1, min(columns - column, raw_span))
+            row = max(0, raw_row)
+            # Dövr HƏMİŞƏ bitir: sətir sayı sərhədsizdir, yəni ən pis halda
+            # kart yeni sətrə düşür.
+            while any((row, column + offset) in occupied for offset in range(span)):
+                row += 1
+            for offset in range(span):
+                occupied.add((row, column + offset))
+            slots.append((key, row, column, span))
+        return slots
+
+    def _ensure_grid(self) -> QGridLayout:
+        """Şəbəkə qabını BİR DƏFƏ qurur və rəqəm kartlarının yerinə qoyur.
+
+        Yer `indexOf` ilə tapılır, sabit `0` ilə deyil: bölmə-xətası banneri
+        (`Screen.set_section_error`) məzmunun ƏN ÜSTÜNƏ qoyulur və şəbəkəni
+        şərtsiz 0-cı mövqeyə salsaydıq, xəbərdarlıq rəqəmlərin ALTINDA
+        qalardı.
+        """
+        if self._grid is not None:
+            return self._grid
+        host = QWidget()
+        grid = QGridLayout(host)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(metrics.CARD_SPACING)
+        anchor = self.body().indexOf(self._tiles_row)
+        self.body().insertWidget(anchor if anchor >= 0 else self.body().count(), host)
+        self._grid_host = host
+        self._grid = grid
+        return grid
+
+    @staticmethod
+    def _detach(widget: QWidget) -> None:
+        """Widget-i köhnə yerləşdirməsindən AÇIQ şəkildə çıxarır.
+
+        `QGridLayout.addWidget` valideyni onsuz da dəyişir, lakin köhnə
+        `QBoxLayout` elementi orada QALIR və qab "boş deyil" görünərdi —
+        yəni aşağıdakı gizlətmə şərti heç vaxt işə düşməzdi.
+        """
+        parent = widget.parentWidget()
+        layout = parent.layout() if parent is not None else None
+        if layout is not None:
+            layout.removeWidget(widget)
 
     def _build_ranking_card(self) -> Card:
         card = Card(padding=18, spacing=12)
@@ -468,6 +698,40 @@ class DashboardScreen(Screen):
 # --------------------------------------------------------------------------- #
 
 
+#: İcazə Matrisinin kontekstual köməyi (audit G-4).
+#:
+#: Mətn EKRANIN YANINDA yaşayır, mərkəzi kömək kataloqunda deyil — səbəbi
+#: `widgets/help_hint.HelpButton` başlığındadır: deaktiv xananın İKİ fərqli
+#: səbəbi (hardlock ↔ Self-Escalation Guard) sinif başlığında izah olunur və
+#: izahın iki nüsxəsi ayrı fayllarda saxlanılsaydı, biri düzəldiləndə digəri
+#: sükutla arxada qalardı.
+MATRIX_HELP_TITLE: Final = "İcazə Matrisi"
+
+MATRIX_HELP_INTRO: Final = (
+    "Bu ekranda hər vəzifənin hansı icazələrə sahib olduğu təyin edilir. "
+    "Dəyişiklik bir nəfərə deyil, həmin vəzifədə işləyən HƏR KƏSƏ aiddir və "
+    "yazıldığı andan qüvvəyə minir."
+)
+
+MATRIX_HELP_STEPS: Final[tuple[str, ...]] = (
+    "Soldakı siyahıdan vəzifəni seçin — axtarış sahəsi uzun siyahını süzür. "
+    "Sağdakı matris yalnız seçilmiş vəzifəni göstərir; başqa vəzifəyə keçmək "
+    "yazılmamış işarələmələri saxlamır.",
+    "Kateqoriyalar üzrə xanaları işarələyin və ya boşaldın. İşarəni götürmək "
+    "həmin ekranı işçidən TAMAMİLƏ gizlədir — element boz göstərilmir, "
+    "ümumiyyətlə qurulmur.",
+    "Qıfıl ikonu olan xana hardlock-dur: onu heç kim buradan dəyişə bilməz, "
+    "yalnız ROOT İdarə Mərkəzindən. Qıfılsız, lakin sönük xana isə həmin "
+    "icazənin SİZDƏ olmadığını bildirir — özündə olmayan icazəni başqasına "
+    "vermək olmaz.",
+    "«Yadda Saxla» bütün işarələmələri bir anda yazır və audit jurnalına "
+    "salır. «Ləğv Et» vəzifəni bazadakı halına qaytarır — o ana qədər "
+    "edilmiş, lakin saxlanmamış işarələmələr bərpa olunmadan itir.",
+    "«+ Yeni Vəzifə» yeni rol açır. Vəzifənin maşın kodu addan törədilir və "
+    "sonradan DƏYİŞDİRİLƏ BİLMİR: adı düzəltmək olar, kodu yox.",
+)
+
+
 class PermissionMatrixScreen(Screen):
     """Discord-tərzi icazə matrisi: solda vəzifələr, sağda kateqoriyalı grid.
 
@@ -517,6 +781,10 @@ class PermissionMatrixScreen(Screen):
         layout.addWidget(self._build_role_panel())
         layout.addWidget(self._build_matrix_panel(), 1)
         self.add(container)
+
+    def help_button(self) -> HelpButton:
+        """Kontekstual kömək düyməsi — kontroller/testlər üçün."""
+        return self._help
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 - Qt adlandırması
         """Fokus vəzifə axtarışına qoyulur — matrisin GİRİŞ nöqtəsi budur.
@@ -619,6 +887,17 @@ class PermissionMatrixScreen(Screen):
         self._matrix_count = muted_label("")
         head_layout.addWidget(self._matrix_count)
         head_layout.addWidget(stretch())
+
+        # Kontekstual kömək (audit G-4) — deaktiv xananın İKİ fərqli səbəbi
+        # (hardlock ↔ "bu icazə sizdə yoxdur") yalnız tooltip-də izah olunurdu,
+        # yəni siçanı üzərinə gətirməyən istifadəçi fərqi heç vaxt görmürdü.
+        self._help = HelpButton(
+            self.theme,
+            title=MATRIX_HELP_TITLE,
+            intro=MATRIX_HELP_INTRO,
+            steps=MATRIX_HELP_STEPS,
+        )
+        head_layout.addWidget(self._help)
 
         self._cancel = secondary_button("Ləğv Et")
         self._cancel.clicked.connect(self._on_cancel)
@@ -875,6 +1154,38 @@ class RoleCreateDialog(QDialog):
 # --------------------------------------------------------------------------- #
 
 
+#: İşçilər ekranının kontekstual köməyi (audit G-4).
+#:
+#: Mətn EKRANIN YANINDA yaşayır, mərkəzi kömək kataloqunda deyil — səbəbi
+#: `widgets/help_hint.HelpButton` başlığındadır: menyu maddəsi dəyişəndə
+#: (məs. `ACTIONS`-a yeni bənd qoşulanda) redaktə edən adam mətni DƏRHAL
+#: yanında görür; ayrı kataloqda saxlansaydı, mətn sükutla arxada qalardı.
+USERS_HELP_TITLE: Final = "İşçilər"
+
+USERS_HELP_INTRO: Final = (
+    "Bu ekranda mağazaların işçiləri sadalanır. Hər sətrin sonundakı «···» "
+    "düyməsi altı əməliyyat açır — aşağıda hər birinin nə etdiyi yazılıb. "
+    "Diqqət: sonuncusu geri qaytarıla bilmir."
+)
+
+#: Addımların sırası `ACTIONS`-un sırası ilə EYNİDİR — istifadəçi menyunu
+#: açıb köməyi yan-yana oxuyanda gözü eyni ardıcıllığı görməlidir.
+USERS_HELP_STEPS: Final[tuple[str, ...]] = (
+    "«PIN Sıfırla» — işçinin kiosk PIN-ini silir; işçi növbəti girişində "
+    "yeni PIN təyin edir. Köhnə PIN dərhal işləməz olur.",
+    "«Şifrəni Yenilə» — panelə giriş üçün müvəqqəti şifrə verir. İşçi ilk "
+    "girişində onu dəyişməyə məcburdur.",
+    "«Rolu Dəyiş» — işçinin rolunu, deməli görəcəyi ekranları dəyişir. "
+    "Yalnız ÖZÜNÜZDƏN aşağı pilləyə toxuna bilərsiniz.",
+    "«POS Səlahiyyəti» — endirim/void/refund həddini QEYD EDİR. Bu, yalnız "
+    "sənədləşdirmədir: kassanı bloklamır, 1C-yə heç nə göndərmir.",
+    "«Sənədlər» — müqavilə, tibbi arayış və digər sənədlərin bitmə "
+    "tarixlərini idarə edir; bitmiş sənəd növbə cədvəlində xəbərdarlıq verir.",
+    "«Deaktiv Et» — işçini siyahıdan çıxarır və girişini bağlayır. GERİ "
+    "QAYTARILA BİLMİR: yenidən işə götürülərsə yeni işçi kartı açılır.",
+)
+
+
 class UsersScreen(Screen):
     """İşçi cədvəli — axtarış, yeni işçi, sətir əməliyyatları.
 
@@ -929,6 +1240,18 @@ class UsersScreen(Screen):
         toolbar_layout.addWidget(self._search)
         toolbar_layout.addWidget(stretch())
 
+        # Kontekstual kömək (audit G-4) — «···» menyusundakı altı əməliyyatın
+        # hansının nə etdiyi (və hansının GERİ QAYTARILA BİLMƏDİYİ) burada
+        # izah olunur; cədvəlin altındakı bir sətirlik qeyd yalnız adları
+        # sadalayır.
+        self._help = HelpButton(
+            theme,
+            title=USERS_HELP_TITLE,
+            intro=USERS_HELP_INTRO,
+            steps=USERS_HELP_STEPS,
+        )
+        toolbar_layout.addWidget(self._help)
+
         create = action_button(
             "Yeni İşçi",
             icon_name="plus",
@@ -953,6 +1276,10 @@ class UsersScreen(Screen):
             ),
         )
         self.add(self._table)
+
+    def help_button(self) -> HelpButton:
+        """Kontekstual kömək düyməsi — kontroller/testlər üçün."""
+        return self._help
 
     def set_users(self, users: list[dict[str, str]]) -> None:
         self._table.clear()
@@ -1153,9 +1480,11 @@ class EmployeeDocumentDialog(QDialog):
     gətirərdi. `FormField`-in `QLineEdit[variant="form"]` cütü ARTIQ yoxlanılıb.
 
     Signals:
-        document_added: (sənəd növü, nömrə, bitmə tarixi mətni, bloklayıcı,
-            seçilmiş faylın YEREL yolu — boş sətir ola bilər, fayl SEÇİLMƏSƏ
-            belə qeyd yaradılmalıdır, bax `_file_path` başlığı).
+        document_added: (sənəd növü, nömrə, bitmə tarixi mətni, diqqət tələb
+            edən sənəd bayrağı (`is_blocking` — bloklamır, bax
+            `domain/document_rules.py`), seçilmiş faylın YEREL yolu — boş sətir
+            ola bilər, fayl SEÇİLMƏSƏ belə qeyd yaradılmalıdır, bax
+            `_file_path` başlığı).
         deactivate_requested: sətrin `document_id`-si (mətn) — səbəb
             kontrollerdə `QInputDialog` ilə soruşulur (`controllers/open_shift.py`
             `_ask_reason` ilə eyni naxış).
@@ -1204,14 +1533,19 @@ class EmployeeDocumentDialog(QDialog):
                 Column("Növ", 150),
                 Column("Nömrə", 110),
                 Column("Bitmə tarixi", 120),
-                Column("Bloklayıcı", 100),
+                # SÜTUN ADI «Bloklayıcı» DEYİL: sahə heç nə bloklamır və
+                # başlıqdakı söz HR-a yanlış təhlükəsizlik hissi verirdi
+                # (bax `domain/document_rules.py` başlığı). Mətn domendəki
+                # SABİTDƏN gəlir ki, bildiriş və ekran ayrılmasın.
+                Column(ATTENTION_FLAG_LABEL_AZ, 130),
                 Column("Vəziyyət", 100),
                 Column("Əməliyyat"),
             ],
             theme,
             footnote=(
-                "Bloklayıcı sənəd bitibsə Növbə Matrisində təyinat zamanı "
-                "xəbərdarlıq göstərilir — təyinat BLOKLANMIR."
+                f"{ATTENTION_FLAG_LABEL_AZ} sənəd bitibsə Növbə Matrisində təyinat "
+                "zamanı xəbərdarlıq göstərilir — təyinat BLOKLANMIR, işçi işə "
+                "buraxılmağa davam edir."
             ),
         )
         self.set_documents(documents)
@@ -1234,7 +1568,8 @@ class EmployeeDocumentDialog(QDialog):
         card.add(self._expiry)
 
         self._blocking = QCheckBox(
-            "Bu sənəd bitəndə növbə təyinatında xəbərdarlıq göstərilsin (bloklayıcı)"
+            "Bu sənəd bitəndə növbə təyinatında xəbərdarlıq göstərilsin "
+            f"({ATTENTION_FLAG_LABEL_INLINE_AZ} sənəd — təyinat bloklanmır)"
         )
         card.add(self._blocking)
 

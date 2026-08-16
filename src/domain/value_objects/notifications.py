@@ -134,6 +134,17 @@ TENANT_NOTIFICATION_AUDIENCE: Final[dict[str, tuple[str, ...]]] = {
     "DUAL_CONTROL_DEADLOCK_RISK": ("can_control_user_permissions",),
     # `fine_management.submit_appeal`: şərhdə flag adbaad yazılıb.
     "FINE_APPEAL_PENDING": ("can_approve_leave_appeal",),
+    # `fine_management.expire_stale` (M-6): "72 saat keçdi, etiraza hələ
+    # baxılmayıb" xəbərdarlığı. Auditoriya `FINE_APPEAL_PENDING` ilə EYNİDİR —
+    # sətri görməli olan şəxs onu QAPADA bilən şəxsdir. Başqa auditoriya
+    # seçmək (məs. `can_view_audit_logs`) xəbərdarlığı seyrçiyə göstərib
+    # məsul şəxsdən gizlədərdi.
+    "FINE_APPEAL_SLA_BREACH": ("can_approve_leave_appeal",),
+    # `fine_management.approve` (M-6): cərimə ARTIQ export olunub, sonra
+    # ləğv/azaldılıb. Düzəlişi apara bilən yeganə şəxs hesabat faylını
+    # göndərəndir — `can_export_reports`. Etiraza qərar verən HR_Admin-in
+    # özü bunu görməsi kifayət deyil: fayl onun əlində deyil.
+    "FINE_REVERSED_AFTER_EXPORT": ("can_export_reports",),
     # `shift_scheduling.request_swap`: şərhdə flag adbaad yazılıb.
     "SHIFT_SWAP_PENDING": ("can_approve_shift_swap",),
     # `storage/quota_monitor`: şərhdə marşrut adbaad yazılıb.

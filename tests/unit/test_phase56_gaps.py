@@ -48,6 +48,7 @@ from src.application.use_cases.support_chat import (
     SupportThread,
 )
 from src.application.use_cases.sync_conflicts import (
+    RESOLVE_CONFLICT_FLAG,
     ConflictItem,
     ConflictResolutionError,
     Resolution,
@@ -436,6 +437,7 @@ class _Conflicts:
     def __init__(self, items: list[ConflictItem]) -> None:
         self.items = items
         self.resolved: list[tuple[Any, Resolution]] = []
+        self.applied: list[tuple[str, Any]] = []
 
     def list_open(self, tenant_id: TenantId, *, limit: int = 100) -> list[ConflictItem]:
         return list(self.items)
@@ -454,8 +456,29 @@ class _Conflicts:
         resolved_by: Any,
         resolved_at: datetime,
         note: str,
-    ) -> None:
+    ) -> bool:
         self.resolved.append((conflict_id, resolution))
+        return True
+
+    def apply_local_version(
+        self, *, table_name: str, record_id: Any, local_version: dict[str, Any]
+    ) -> int:
+        self.applied.append((table_name, record_id))
+        return 1
+
+
+def _resolve_conflicts_flag() -> PermissionFlag:
+    """Konflikt həlli qapısı (SEC-018) — kataloqdakı HƏQİQİ atributlarla.
+
+    `is_anti_fraud` sükutla `False` qalsaydı, test flag-in zəiflədilmiş
+    nüsxəsini yoxlayardı (bax `migrations/060`).
+    """
+    return PermissionFlag(
+        code=RESOLVE_CONFLICT_FLAG,
+        category="ERP_INFRA",
+        is_anti_fraud=True,
+        excludes_camera_role=True,
+    )
 
 
 def _conflict(table: str) -> ConflictItem:
@@ -484,8 +507,7 @@ def test_audit_critical_conflicts_come_first() -> None:
         audit=RecordingAudit(),  # type: ignore[arg-type]
         clock=FakeClock(NOW),  # type: ignore[arg-type]
     )
-    flag = PermissionFlag(code="can_view_employee_reports", category="HR")
-    hr = make_employee(SystemRole.HR_ADMIN, flags=[flag])
+    hr = make_employee(SystemRole.HR_ADMIN, flags=[_resolve_conflicts_flag()])
 
     inbox = use_case.inbox(tenant_id=TENANT, actor=hr)
 
@@ -499,8 +521,7 @@ def test_resolution_requires_a_note() -> None:
         audit=RecordingAudit(),  # type: ignore[arg-type]
         clock=FakeClock(NOW),  # type: ignore[arg-type]
     )
-    flag = PermissionFlag(code="can_view_employee_reports", category="HR")
-    hr = make_employee(SystemRole.HR_ADMIN, flags=[flag])
+    hr = make_employee(SystemRole.HR_ADMIN, flags=[_resolve_conflicts_flag()])
 
     with pytest.raises(ConflictResolutionError, match="minimum"):
         use_case.resolve(

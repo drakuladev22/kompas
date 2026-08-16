@@ -56,8 +56,18 @@ _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 class PostgresPluginRegistry(_BaseRepository):
     """`plugins` cədvəli — `PluginRegistry` portunun tətbiqi."""
 
+    # `manifest` SÜTUNU DA OXUNUR (audit G-3): plugin-in elan etdiyi
+    # qabiliyyət (`REGISTER_PAGE`/`RENDER_WIDGET`) və tələb etdiyi icazə
+    # flag-ləri YALNIZ orada yaşayır və interfeys səthi (`presentation/
+    # plugin_surface.py`) hər iki qərarı ona görə verir. Ayrıca sorğu ilə
+    # oxumaq siyahıdakı hər plugin üçün bir gediş-gəliş demək olardı.
+    #
+    # `package_path` (migrations/059) DA OXUNUR: sandbox alt-prosesi məhz həmin
+    # faylı icra edir və o, manifestdə YOXDUR (manifest imzanın girişidir —
+    # host-un hesabladığı sahə ora düşsəydi imza yoxlaması sınardı).
     _SELECT = """
-        SELECT id, name, version, publisher, status, signature_verified
+        SELECT id, name, version, publisher, status, signature_verified,
+               manifest, package_path
         FROM plugins
     """
 
@@ -84,6 +94,7 @@ class PostgresPluginRegistry(_BaseRepository):
         manifest: PluginManifest,
         digest: str,
         installed_by: object,
+        package_path: str = "",
     ) -> str:
         """Paketi `PENDING_APPROVAL` vəziyyətində yazır və ID-sini qaytarır.
 
@@ -96,13 +107,17 @@ class PostgresPluginRegistry(_BaseRepository):
         (tenant_id, name, version)` var və "artıq mövcuddur" xətası vermək
         istifadəçini paketi əl ilə silməyə məcbur edərdi. Status isə yenidən
         `PENDING_APPROVAL`-a qayıdır — yeni bayt axını yeni təsdiq deməkdir.
+
+        `package_path` (migrations/059) YENİLƏNİR, saxlanmır: eyni ad+versiya
+        BAŞQA qovluqdan yenidən quraşdırıla bilər və köhnə yolu saxlamaq
+        host-u artıq mövcud olmayan fayla göndərərdi.
         """
         row = self._fetch_one(
             """
             INSERT INTO plugins
                 (tenant_id, name, version, publisher, signature,
-                 signature_verified, status, manifest)
-            VALUES (%s, %s, %s, %s, %s, TRUE, 'PENDING_APPROVAL', %s)
+                 signature_verified, status, manifest, package_path)
+            VALUES (%s, %s, %s, %s, %s, TRUE, 'PENDING_APPROVAL', %s, %s)
             ON CONFLICT (tenant_id, name, version)
             DO UPDATE SET publisher          = EXCLUDED.publisher,
                           signature          = EXCLUDED.signature,
@@ -110,7 +125,8 @@ class PostgresPluginRegistry(_BaseRepository):
                           status             = 'PENDING_APPROVAL',
                           approved_by        = NULL,
                           approved_at        = NULL,
-                          manifest           = EXCLUDED.manifest
+                          manifest           = EXCLUDED.manifest,
+                          package_path       = EXCLUDED.package_path
             RETURNING id
             """,
             (
@@ -120,6 +136,7 @@ class PostgresPluginRegistry(_BaseRepository):
                 manifest.publisher,
                 digest,
                 json.dumps(manifest.to_dict(), ensure_ascii=False),
+                package_path,
             ),
         )
         if row is None:  # pragma: no cover — `RETURNING` həmişə sətir verir
@@ -171,7 +188,70 @@ class PostgresPluginRegistry(_BaseRepository):
             publisher=str(row["publisher"] or "Naməlum naşir"),
             status=PluginStatus(str(row["status"])),
             signature_verified=bool(row["signature_verified"]),
+            manifest=_manifest_of(row.get("manifest")),
+            # `NULL`/olmayan sütun BOŞ SƏTRƏ çevrilir — miqrasiya tətbiq
+            # edilməmiş bazada da sətir oxunmalıdır (icra sonra fail-closed
+            # rədd edilir, bax `presentation/controllers/plugin_page.py`).
+            package_path=str(row.get("package_path") or ""),
         )
+
+
+def _manifest_of(raw: Any) -> PluginManifest | None:
+    """`plugins.manifest` JSONB sütununu `PluginManifest`-ə çevirir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ İSTİSNA ATILMIR
+    ──────────────────────────────────────────────────────────────────────────
+    Sütunun defoltu `'{}'::JSONB`-dir (schema.sql §17), yəni BOŞ manifest
+    tamamilə qanuni haldır — köhnə sətirlər belədir. Üstəlik manifest
+    gələcəkdə bilinməyən bir capability daşıya bilər (yeni versiya köhnə
+    tətbiqdə açılır). Hər iki halda doğru cavab "bu plugin interfeys səthi
+    VERMİR"dir, "plugin siyahısı açılmır" YOX — `list_all` bütün ekranın
+    yeganə mənbəyidir və bir korlanmış sətir onu boşaltmamalıdır.
+
+    Tanınmayan capability SÜKUTLA ATILMIR — jurnala düşür, çünki bu, adətən
+    versiya uyğunsuzluğunun ilk əlamətidir.
+    """
+    from src.infrastructure.plugins.contracts import (  # noqa: PLC0415
+        PluginCapability,
+        PluginError,
+        PluginManifest,
+    )
+
+    if raw is None:
+        return None
+    payload = json.loads(raw) if isinstance(raw, str) else raw
+    if not isinstance(payload, dict) or not payload:
+        return None
+
+    known: set[PluginCapability] = set()
+    unknown: list[str] = []
+    for value in payload.get("capabilities", []):
+        try:
+            known.add(PluginCapability(str(value)))
+        except ValueError:
+            unknown.append(str(value))
+    if unknown:
+        _security_log.warning(
+            "PLUGIN_MANIFEST_UNKNOWN_CAPABILITY",
+            extra={"plugin": str(payload.get("name", "?")), "unknown": unknown},
+        )
+    if not known:
+        return None
+
+    try:
+        return PluginManifest(
+            name=str(payload.get("name", "")),
+            version=str(payload.get("version", "")),
+            publisher=str(payload.get("publisher", "")),
+            capabilities=frozenset(known),
+            entry_point=str(payload.get("entry_point", "")),
+            description_az=str(payload.get("description_az", "")),
+            required_flags=frozenset(str(flag) for flag in payload.get("required_flags", [])),
+        )
+    except PluginError:
+        _log.warning("PLUGIN_MANIFEST_UNREADABLE", extra={"payload_keys": sorted(payload)})
+        return None
 
 
 class PostgresBackupCatalog(_BaseRepository):

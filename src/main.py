@@ -49,6 +49,16 @@ if TYPE_CHECKING:
 
 PRODUCTION_ENVS = frozenset({"PRODUCTION", "STAGING"})
 
+#: Çıxış kodları — HƏR KODUN TƏK MƏNASI OLMALIDIR (bax `docs/cli_reference.md` §3).
+#: `0` uğur, `1` ümumi uğursuzluq — bunlar DƏYİŞMİR (geriyə uyğunluq).
+#: `2` yalnız işə düşmə/baza xətasıdır; təsdiq-tələbi `4`-ə köçürülüb
+#: (`developer_panel.console.EXIT_CONFIRMATION_REQUIRED`) — əvvəl ikisi eyni
+#: kodu qaytarırdı və skript «`--yes` əlavə et» ilə «baza yoxdur» hallarını
+#: ayırd edə bilmirdi.
+EXIT_STARTUP_ERROR = 2
+#: Kiosk nəzarətçisi yenidən-başlatma həddinə çatdı (`_run_watchdog`).
+EXIT_WATCHDOG_RESTART_LIMIT = 3
+
 
 def build_container(*, event_bus: EventBus | None = None) -> DIContainer:
     """Tətbiqin DI qrafını qurur.
@@ -368,9 +378,16 @@ def _run_developer_panel(args: argparse.Namespace) -> int:
 
         return launch(directory, publisher)
 
+    # DİAQNOSTİKA BAYRAQLARI DA ÖTÜRÜLÜR — əvvəl ötürülmürdü və nəticə SÜKUTLA
+    # yanlış idi: `--developer-mode --crashes` çökmə panelini yox, adi müştəri
+    # cədvəlini göstərirdi. Xəta mesajı yox idi, yəni istifadəçi səhv məlumata
+    # baxdığını bilmirdi. `run_console` onları ilk gündən qəbul edir və
+    # `_render_view` məhz onlara görə budaqlanır — boşluq yalnız bu çağırışda idi.
     code, output = run_console(
         directory,
         search=args.search,
+        show_crashes=args.crashes,
+        show_tickets=args.tickets,
         extend=args.extend,
         force_version=args.force_version,
         confirmed=args.yes,
@@ -535,7 +552,7 @@ def _run_watchdog(args: argparse.Namespace) -> int:
     )
     # Yenidən başlatma fırtınası — çıxış kodu qeyri-sıfır olmalıdır ki,
     # Windows Task Scheduler / servis meneceri bunu nasazlıq kimi görsün.
-    return 3 if outcome.hit_restart_limit else 0
+    return EXIT_WATCHDOG_RESTART_LIMIT if outcome.hit_restart_limit else 0
 
 
 def _build_release_publisher(database: Database) -> ReleasePublisher | None:
@@ -767,7 +784,11 @@ def main(argv: list[str] | None = None) -> int:
         get_logger(__name__, channel=LogChannel.ERROR).critical(
             "STARTUP_FAILED", extra=exc.to_dict()
         )
-        return 2
+        # `2` = İŞƏ DÜŞMƏ/BAZA XƏTASI — YALNIZ bu məna. Təsdiq-tələbi əvvəllər
+        # eyni kodu qaytarırdı və skript ikisini ayırd edə bilmirdi; o məna indi
+        # `console.EXIT_CONFIRMATION_REQUIRED`-a (4) köçürülüb. Bax
+        # `docs/cli_reference.md` §3 və `console.py`-dakı çıxış kodu bloku.
+        return EXIT_STARTUP_ERROR
 
 
 if __name__ == "__main__":

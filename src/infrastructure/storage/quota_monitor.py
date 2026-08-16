@@ -34,7 +34,8 @@ from src.infrastructure.config.limits import (
     fallback_int,
 )
 from src.infrastructure.storage.connections import DriveConnection, DriveConnectionStatus
-from src.shared.logger import get_logger
+from src.infrastructure.storage.drive_api import DriveConsentRevokedError
+from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
     from src.domain.interfaces.ports import Notifier
@@ -45,6 +46,9 @@ if TYPE_CHECKING:
     )
 
 _log = get_logger(__name__)
+#: Razılıq ləğvi TƏHLÜKƏSİZLİK kanalına da yazılır: hesabın icazəsinin geri
+#: alınması sübut arxivinə çıxışın itməsi deməkdir və araşdırmada lazım olur.
+_security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 
 #: HƏR İKİSİ FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
 #: (`DRIVE_QUOTA_WARNING_RATIO`, `DRIVE_QUOTA_WARNING_COOLDOWN_DAYS`;
@@ -64,6 +68,8 @@ class QuotaCheckResult:
     quota: QuotaStatus | None = None
     warning_sent: bool = False
     marked_exceeded: bool = False
+    #: Razılıq geri alındığı üçün bağlantı `REVOKED`-a keçdi (bax `check`).
+    marked_revoked: bool = False
     error: str | None = None
 
 
@@ -108,6 +114,41 @@ class DriveQuotaMonitor:
 
         try:
             quota = self._factory.for_connection(connection.id).quota()
+        except DriveConsentRevokedError as exc:
+            # RAZILIQ LƏĞVİ ADİ NASAZLIQ DEYİL — ona görə ümumi `except`-dən
+            # ƏVVƏL tutulur. Fərq praktikdir: şəbəkə nasazlığı özü keçir,
+            # razılıq ləğvi isə HEÇ VAXT keçmir — administrator hesabı yenidən
+            # qoşmalıdır. Ayrılmasaydı, bağlantı `ACTIVE` qalar və ekran
+            # «Aktiv» göstərməyə davam edərdi; həqiqət yalnız növbəti yükləmə
+            # çökəndə üzə çıxardı (bax `DriveConnectionStatus.REVOKED`).
+            #
+            # BİLDİRİŞ YALNIZ VƏZİYYƏT FAKTİKİ DƏYİŞDİKDƏ GEDİR: `mark_revoked`
+            # idempotentdir və ikinci gün `False` qaytarır — əks halda gündəlik
+            # iş eyni xəbərdarlığı hər gecə təkrarlayardı (alarm yorğunluğu, bax
+            # modul başlığı).
+            result.error = str(exc)
+            result.marked_revoked = self._repository.mark_revoked(connection.id, now=moment)
+            if result.marked_revoked:
+                self._notify(
+                    title="Google Drive icazəsi ləğv edilib",
+                    body=(
+                        f"'{connection.google_account_email}' hesabının icazəsi geri alınıb — "
+                        f"yeni cərimə şəkilləri Drive-a YÜKLƏNMİR və bu hesabdakı köhnə "
+                        f"şəkillər AÇILMIR. Ayarlar → Drive Bağlantısı bölməsindən hesabı "
+                        f"yenidən qoşun. Cərimə yaratmaq BLOKLANMAYIB — şəkillər lokal "
+                        f"növbədə gözləyir."
+                    ),
+                    critical=True,
+                )
+                result.warning_sent = True
+            _security_log.error(
+                "DRIVE_CONSENT_REVOKED_DETECTED",
+                extra={
+                    "connection_id": str(connection.id),
+                    "state_changed": result.marked_revoked,
+                },
+            )
+            return result
         except Exception as exc:  # şəbəkə/token nasazlığı monitoru öldürməməlidir
             result.error = str(exc)
             self._repository.record_error(connection.id, f"Kvota yoxlaması: {exc}")
@@ -205,6 +246,10 @@ def status_label(status: DriveConnectionStatus) -> str:
         DriveConnectionStatus.ACTIVE: "Aktiv",
         DriveConnectionStatus.ARCHIVED: "Arxivlənib",
         DriveConnectionStatus.QUOTA_EXCEEDED: "Yer qalmayıb",
+        # Mətn `controllers/drive_connection.STATUS_TEXT` ilə EYNİDİR: iki yerdə
+        # fərqli ifadə işlətsəydik, eyni vəziyyət ekranda və hesabatda başqa
+        # cür adlanardı (`menu.py` başlığındakı ad məkanı qüsuru ilə eyni növ).
+        DriveConnectionStatus.REVOKED: "İcazə ləğv edilib",
     }[status]
 
 

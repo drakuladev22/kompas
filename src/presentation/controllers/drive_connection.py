@@ -87,7 +87,22 @@ class DriveConnectionController:
             )
             return
 
-        active = next((item for item in connections if item.status.value == "ACTIVE"), None)
+        # CARİ HESAB = ARXİVLƏNMƏMİŞ SƏTİR, YALNIZ `ACTIVE` DEYİL.
+        #
+        # Əvvəl yalnız `status == "ACTIVE"` axtarılırdı və bunun iki nəticəsi
+        # vardı: kvotası dolmuş (`QUOTA_EXCEEDED`) və ya razılığı geri alınmış
+        # (`REVOKED`) hesab ekranda «Qoşulmayıb» kimi görünürdü. Yəni ekran
+        # SƏBƏBİ gizlədirdi: administrator «hesab qoşulmayıb» oxuyub yenidən
+        # qoşmağa çalışırdı, halbuki problem başqa idi. İndi sətir tapılır və
+        # `STATUS_TEXT` onun HƏQİQİ vəziyyətini yazır.
+        #
+        # Sıra `connected_at DESC`-dir və tenant başına eyni anda yalnız BİR
+        # arxivlənməmiş sətir olur (`connect()` köhnəni arxivləyir), ona görə
+        # `next(...)` birmənalıdır.
+        active = next(
+            (item for item in connections if item.status.value != "ARCHIVED"),
+            None,
+        )
         if active is None:
             screen.set_active(
                 account=None,

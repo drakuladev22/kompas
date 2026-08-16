@@ -41,7 +41,12 @@ from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.identifiers import StoreId, TenantId
 from src.presentation.composition import ApplicationContext
 from src.shared.runtime import process_instance_id
-from tests.fixtures.fakes import FakeClock, FakeSystemLimits, RecordingAudit
+from tests.fixtures.fakes import (
+    FakeClock,
+    FakeSystemLimits,
+    RecordingAudit,
+    RecordingNotifier,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -80,10 +85,21 @@ EXPECTED_JOBS: Final = (
     # planlayıcıya bir sətir qeydiyyat (`NIGHTLY_BACKUP` naxışı).
     ("FACE_LOG_RETENTION", JobCadence.DAILY, JobWeight.LIGHT),
     ("FINE_EXPIRE_STALE", JobCadence.HOURLY, JobWeight.LIGHT),
+    # M-5 — dual-control təsdiq müddəti. `HOURLY`: hədd DƏQİQƏ vahidlidir
+    # (`DUAL_CONTROL_APPROVAL_TIMEOUT_MINUTES`, defolt 480), gündəlik icra
+    # ən pis halda 24 saatlıq xəta verərdi. `LIGHT`: bir indeksli sorğu +
+    # ləğv olunan sətir qədər yazı.
+    ("DUAL_CONTROL_OVERRIDE_TIMEOUT", JobCadence.HOURLY, JobWeight.LIGHT),
     # #30 (kompas1.md Faza 6) — planlaşdırılmış icra xülasəsi. `DAILY`:
     # `JobCadence`-də `WEEKLY` yoxdur, "bu gün DUE-dur?" sualını use case-in
     # `run()`-u özü verir (bax `executive_digest.py::_due_window`).
     ("EXECUTIVE_DIGEST_RUN", JobCadence.DAILY, JobWeight.LIGHT),
+    # Faza 3.9 — Drive kvota nəzarəti. `DriveQuotaMonitor` yazılıb və test
+    # edilib, LAKİN onu çağıran yol yox idi: 90% xəbərdarlığı və avtomatik
+    # `QUOTA_EXCEEDED` keçidi heç vaxt baş vermirdi. `DAILY`, çünki
+    # təkrar-susma müddəti GÜN vahidlidir (`DRIVE_QUOTA_WARNING_COOLDOWN_DAYS`);
+    # `LIGHT`, çünki iş bir HTTP sorğusu + ən çoxu iki `UPDATE`-dir.
+    ("DRIVE_QUOTA_CHECK", JobCadence.DAILY, JobWeight.LIGHT),
     ("NIGHTLY_BACKUP", JobCadence.DAILY, JobWeight.HEAVY),
 )
 
@@ -156,6 +172,13 @@ class _Appeals(_RecordingUseCase):
         return self._record("fine_appeals.expire_stale", tenant_id=tenant_id)
 
 
+class _LeaveVerification(_RecordingUseCase):
+    """M-5 — təsdiqsiz qalmış vaxt düzəlişlərinin ləğvi (saatlıq iş)."""
+
+    def expire_pending_overrides(self, tenant_id: TenantId) -> Any:
+        return self._record("leave_verification.expire_pending_overrides", tenant_id=tenant_id)
+
+
 class _FieldReports(_RecordingUseCase):
     def notify_overdue_audits(self, tenant_id: TenantId) -> Any:
         return self._record("field_reports.notify_overdue_audits", tenant_id=tenant_id)
@@ -225,6 +248,7 @@ class _FakeSession:
             result=_Report(employees_updated=235, high_risk_count=4, notifications_sent=2),
         )
         self.fine_appeals = _Appeals(calls, result=5)
+        self.leave_verification = _LeaveVerification(calls, result=2)
         self.field_reports = _FieldReports(calls, result=_Report(checked=2, overdue_count=1))
         # #28 — hesabat sahələri `_job_annual_leave_rollover`-in oxuduqları:
         # il, yazılan balans sayı, köçürülən və itən gün.
@@ -244,6 +268,10 @@ class _FakeSession:
         self.face_exemptions = _FaceExemptions(calls, result=2)
         self.face_log_retention = _FaceLogRetention(calls, result=140)
         self.uow = _SessionUow(_Benchmark({STORE_A: "Mağaza A", STORE_B: "Mağaza B"}))
+
+    def max_upload_bytes(self) -> int:
+        """Drive kvota işi fabriki ROOT həddi ilə qurur (`run_evidence_uploads` naxışı)."""
+        return 5 * 1024 * 1024
 
     def commit(self) -> None:
         self.commits += 1
@@ -315,6 +343,56 @@ class _InMemoryRuns:
     def mark_failed(self, *, job_key: str, error: str, **_: Any) -> bool:
         self.failed.append((job_key, error))
         return True
+
+
+class _FakeDriveConnection:
+    """`drive_connections` sətrinin monitorun oxuduğu hissəsi."""
+
+    def __init__(self, *, warning_sent_at: datetime | None = None) -> None:
+        self.id = uuid.uuid4()
+        self.google_account_email = "kompas@example.com"
+        self.quota_warning_sent_at = warning_sent_at
+
+
+class _FakeDriveConnections:
+    """`DriveConnectionRepository` əvəzi — aktiv bağlantı və yazılar."""
+
+    def __init__(self, connection: _FakeDriveConnection | None) -> None:
+        self._connection = connection
+        self.quota_updates: list[tuple[Any, bool]] = []
+        self.warning_marked = 0
+        self.errors: list[str] = []
+
+    def get_active(self) -> _FakeDriveConnection | None:
+        return self._connection
+
+    def update_quota(
+        self, connection_id: Any, quota: Any, *, now: Any = None, mark_exceeded: bool = False
+    ) -> None:
+        self.quota_updates.append((quota, mark_exceeded))
+
+    def mark_quota_warning_sent(self, connection_id: Any, *, now: Any = None) -> None:
+        self.warning_marked += 1
+
+    def record_error(self, connection_id: Any, message: str) -> None:
+        self.errors.append(message)
+
+
+class _FakeDriveFactory:
+    """`DriveProviderFactory` əvəzi — yalnız `quota()` lazımdır."""
+
+    def __init__(self, quota: Any, *, error: Exception | None = None) -> None:
+        self._quota = quota
+        self._error = error
+        self.max_upload_bytes: int | None = None
+
+    def for_connection(self, connection_id: Any) -> _FakeDriveFactory:
+        return self
+
+    def quota(self) -> Any:
+        if self._error is not None:
+            raise self._error
+        return self._quota
 
 
 class _FakeBackupService:
@@ -445,6 +523,7 @@ def test_the_runner_is_a_single_instance_per_context() -> None:
         ("ATTRITION_RISK_RECALC", "attrition_risk.recalculate_all"),
         ("ANNUAL_LEAVE_YEAR_ROLLOVER", "annual_leave.run_year_rollover"),
         ("FINE_EXPIRE_STALE", "fine_appeals.expire_stale"),
+        ("DUAL_CONTROL_OVERRIDE_TIMEOUT", "leave_verification.expire_pending_overrides"),
         ("EXECUTIVE_DIGEST_RUN", "executive_digest.run"),
     ],
 )
@@ -462,6 +541,165 @@ def test_each_handler_calls_its_use_case_method(job_key: str, expected_call: str
     assert calls[0][1]["tenant_id"] == TENANT
     assert session.commits == 1, "Hər iş öz sessiyasını COMMIT etməlidir"
     assert detail, "Sağlamlıq ekranı üçün xülasə qaytarılmalıdır"
+
+
+# --------------------------------------------------------------------------- #
+# 2.1. DRIVE KVOTA NƏZARƏTİ (Faza 3.9) — job HEÇ VAXT işə düşmürdü
+#
+# Monitor sinfi yazılıb, test edilib və ixrac olunub, lakin onu ÇAĞIRAN yol yox
+# idi: 90% xəbərdarlığı və avtomatik `ACTIVE → QUOTA_EXCEEDED` keçidi baş
+# vermirdi. Drive-ın dolduğunu bildirən ilk siqnal növbəti yükləmənin
+# `DriveQuotaExceededError` ilə çökməsi idi — söhbət cərimə SÜBUT şəkillərindən,
+# yəni mübahisə halında cərimənin yeganə əsaslandırmasından gedir.
+# --------------------------------------------------------------------------- #
+
+
+def _quota_job(context: ApplicationContext, database: _FakeDatabase) -> Any:
+    runner, _runs = _runner(context, database)
+    job = runner._registry.get("DRIVE_QUOTA_CHECK")
+    assert job is not None, "Kvota işi reyestrdə OLMALIDIR"
+    return job
+
+
+def _patch_drive(
+    monkeypatch: pytest.MonkeyPatch,
+    context: ApplicationContext,
+    *,
+    factory: _FakeDriveFactory | None,
+    repository: _FakeDriveConnections | None = None,
+) -> tuple[_FakeDriveConnections, RecordingNotifier]:
+    """Drive qatını əvəzləyir; monitorun ÖZÜ həqiqi qalır (hədd məntiqi ölçülür)."""
+    from src.infrastructure.notifications import notifier as notifier_module
+    from src.infrastructure.storage import connections as connections_module
+
+    connections = repository or _FakeDriveConnections(_FakeDriveConnection())
+    notifier = RecordingNotifier()
+    monkeypatch.setattr(
+        connections_module, "DriveConnectionRepository", lambda database, tenant_id: connections
+    )
+    monkeypatch.setattr(notifier_module, "PostgresNotifier", lambda database, *, limits: notifier)
+    monkeypatch.setattr(
+        context,
+        "drive_providers",
+        lambda *, max_upload_bytes: factory,
+    )
+    return connections, notifier
+
+
+def test_the_drive_quota_job_is_silent_when_drive_is_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Google açarları boşdursa iş SAKİT dayanır — istisna ATMIR.
+
+    `.env.example`: `KOMPASOS_GOOGLE_CLIENT_ID/_SECRET` boş qala bilər və
+    cərimələr normal yaranır. İstisna atsaydıq, Drive işlətməyən quraşdırmada
+    gecəlik hesabat HƏR GÜN `FAILED` göstərərdi və əsl nasazlıqlar itərdi.
+    """
+    context, _session, database = _context()
+    _patch_drive(monkeypatch, context, factory=None)
+
+    detail = _quota_job(context, database).handler(_job_context("DRIVE_QUOTA_CHECK"))
+
+    assert "konfiqurasiya edilməyib" in detail
+
+
+def test_the_drive_quota_job_warns_once_the_root_threshold_is_crossed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """95% > `DRIVE_QUOTA_WARNING_RATIO` (0.90) → Root/CEO-ya xəbərdarlıq."""
+    from src.domain.value_objects.storage import QuotaStatus
+
+    context, _session, database = _context()
+    connections, notifier = _patch_drive(
+        monkeypatch,
+        context,
+        factory=_FakeDriveFactory(QuotaStatus(used_bytes=95, total_bytes=100)),
+    )
+
+    detail = _quota_job(context, database).handler(_job_context("DRIVE_QUOTA_CHECK"))
+
+    assert len(notifier.messages) == 1
+    assert notifier.messages[0]["category"] == "DRIVE_QUOTA"
+    assert notifier.messages[0]["recipient_id"] is None, "Bildiriş TENANT səviyyəsindədir"
+    assert connections.warning_marked == 1, "Təkrar xəbərdarlıq üçün an yazılmalıdır"
+    assert "xəbərdarlıq göndərildi" in detail
+
+
+def test_the_drive_quota_job_does_not_warn_below_the_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """89% < 90% — SƏRHƏD ALTINDA xəbərdarlıq YOXDUR (alarm yorğunluğu)."""
+    from src.domain.value_objects.storage import QuotaStatus
+
+    context, _session, database = _context()
+    connections, notifier = _patch_drive(
+        monkeypatch,
+        context,
+        factory=_FakeDriveFactory(QuotaStatus(used_bytes=89, total_bytes=100)),
+    )
+
+    detail = _quota_job(context, database).handler(_job_context("DRIVE_QUOTA_CHECK"))
+
+    assert notifier.messages == []
+    assert connections.warning_marked == 0
+    assert connections.quota_updates[0][1] is False, "Dolu deyil — status DƏYİŞMİR"
+    assert "kvota 89%" in detail
+
+
+def test_the_drive_quota_job_marks_the_connection_as_exceeded_when_full(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """100% → `ACTIVE → QUOTA_EXCEEDED` + kritik bildiriş."""
+    from src.domain.value_objects.storage import QuotaStatus
+
+    context, _session, database = _context()
+    connections, notifier = _patch_drive(
+        monkeypatch,
+        context,
+        factory=_FakeDriveFactory(QuotaStatus(used_bytes=100, total_bytes=100)),
+    )
+
+    detail = _quota_job(context, database).handler(_job_context("DRIVE_QUOTA_CHECK"))
+
+    assert connections.quota_updates[0][1] is True
+    assert notifier.messages[0]["is_critical"] is True
+    assert "QUOTA_EXCEEDED" in detail
+
+
+def test_the_drive_quota_job_survives_a_network_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Şəbəkə/token nasazlığı işi ÇÖKDÜRMÜR — səbəb bağlantı sətrinə yazılır."""
+    context, _session, database = _context()
+    connections, notifier = _patch_drive(
+        monkeypatch,
+        context,
+        factory=_FakeDriveFactory(None, error=RuntimeError("şəbəkə yoxdur")),
+    )
+
+    detail = _quota_job(context, database).handler(_job_context("DRIVE_QUOTA_CHECK"))
+
+    assert "Kvota oxunmadı" in detail
+    assert connections.errors, "Səbəb `drive_connections.last_error`-a yazılmalıdır"
+    assert notifier.messages == []
+
+
+def test_the_drive_quota_job_is_quiet_without_an_active_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hesab hələ qoşulmayıbsa yoxlanacaq bir şey yoxdur — xəta DEYİL."""
+    context, _session, database = _context()
+    _connections, notifier = _patch_drive(
+        monkeypatch,
+        context,
+        factory=_FakeDriveFactory(None),
+        repository=_FakeDriveConnections(None),
+    )
+
+    detail = _quota_job(context, database).handler(_job_context("DRIVE_QUOTA_CHECK"))
+
+    assert "Aktiv Drive bağlantısı yoxdur" in detail
+    assert notifier.messages == []
 
 
 def test_the_staffing_pattern_job_covers_every_active_store() -> None:

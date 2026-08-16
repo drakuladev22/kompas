@@ -48,6 +48,7 @@ import pytest
 from src.application.use_cases.authentication import AccountLockedError
 from src.application.use_cases.face_control import (
     CAMERA_HEALTH_CATEGORY,
+    COMPENSATION_UNAVAILABLE_ACTION,
     DUAL_CONTROL_CATEGORY,
     ENROLLMENT_FLAG,
     ESCALATION_CATEGORY,
@@ -631,12 +632,157 @@ def test_an_exemption_past_its_expiry_no_longer_applies_even_if_the_cron_lagged(
 
 
 # --------------------------------------------------------------------------- #
+# 5b. KOMPENSASİYA EDİCİ NƏZARƏT SÖNDÜRÜLƏNDƏ (SEC-020)
+# --------------------------------------------------------------------------- #
+#
+# BAĞLANAN BOŞLUQ: bənd 14 istisnanın YEGANƏ əvəzləyicisi kimi dual-control
+# axınını göstərir, həmin axın isə adi (struktur-olmayan) Feature Toggle idi.
+# Toggle söndürüləndə davranış TƏRİF OLUNMAMIŞ qalırdı — `_dual_control_required`
+# toggle-a heç vaxt baxmırdı. Aşağıdakı qapılar hər iki pis nəticəni bağlayır:
+# nə sükutlu keçid (PIN-only), nə də çıxışsız ölü-kilid.
+
+
+def test_a_disabled_compensating_control_never_lets_an_exempt_employee_pass() -> None:
+    """Kompensasiya yoxdursa əməliyyat DAVAM ETMİR (fail-closed).
+
+    Əks halda `DUAL_CONTROL` toggle-ını söndürmək istisnalı işçinin PIN-ini
+    tam-səlahiyyətli açara çevirərdi — bənd 14-ün bağladığı aldatma yolu bir
+    kliklə yenidən açılardı.
+    """
+    worker = _employee()
+    gate = _gate(
+        employee=worker,
+        exemptions=[_exemption(worker)],
+        disabled_modules={FeatureModule.DUAL_CONTROL.value},
+    )
+
+    decision = gate.verify(worker)
+
+    assert not decision.allows_operation
+    # Kamera YENƏ AÇILMIR: istisna qüvvədədir, üz tələb edilmir — dəyişən
+    # yalnız İKİNCİ TƏSDİQİN hansı kanaldan gəldiyidir.
+    assert gate.camera.captures == []
+
+
+def test_a_disabled_compensating_control_routes_to_the_manual_approval_channel() -> None:
+    """ÖLÜ-KİLİD YOX: təsdiq `DUAL_CONTROL`-dan ASILI OLMAYAN kanala düşür.
+
+    `DUAL_CONTROL_REQUIRED` qaytarmaq "düzgün" görünürdü və rədd edildi:
+    təsdiqi verəcək axın məhz söndürülüb, yəni istisnalı işçi HEÇ VAXT günə
+    başlaya bilməzdi. Bənd 5-in manual təsdiq kanalı isə həmin toggle-dan
+    asılı deyil.
+    """
+    worker = _employee()
+    gate = _gate(
+        employee=worker,
+        exemptions=[_exemption(worker)],
+        disabled_modules={FeatureModule.DUAL_CONTROL.value},
+    )
+
+    decision = gate.verify(worker)
+
+    assert decision.outcome is FaceGateOutcome.MANUAL_APPROVAL_REQUIRED
+    assert ESCALATION_CATEGORY in gate.notifier.categories()
+    # Söndürülmüş kanala bildiriş GÖNDƏRİLMİR — oxuyan qutu yoxdur.
+    assert DUAL_CONTROL_CATEGORY not in gate.notifier.categories()
+    # Kamera nasazlığı DEYİL — avadanlıq xəbərdarlığı yanlış siqnal olardı.
+    assert CAMERA_HEALTH_CATEGORY not in gate.notifier.categories()
+
+
+def test_the_missing_compensation_is_never_silent() -> None:
+    """Vəziyyət AUDİTƏ öz adı ilə düşür — `FACE_EXEMPT_DUAL_CONTROL` kimi yox.
+
+    İki hal eyni sözlə yazılsaydı, sonrakı araşdırma «bu təsdiqi kim verdi?»
+    sualına heç vaxt cavab tapa bilməzdi.
+    """
+    worker = _employee()
+    gate = _gate(
+        employee=worker,
+        exemptions=[_exemption(worker)],
+        disabled_modules={FeatureModule.DUAL_CONTROL.value},
+    )
+
+    gate.verify(worker)
+
+    assert COMPENSATION_UNAVAILABLE_ACTION in gate.audit.actions()
+    assert "FACE_EXEMPT_DUAL_CONTROL" not in gate.audit.actions()
+
+
+def test_the_worker_is_told_what_to_do_not_that_the_system_failed() -> None:
+    """Mesaj SƏBƏBİ və NÖVBƏTİ ADDIMI deyir (CLAUDE.md §4 — interfeys dili)."""
+    worker = _employee()
+    gate = _gate(
+        employee=worker,
+        exemptions=[_exemption(worker)],
+        disabled_modules={FeatureModule.DUAL_CONTROL.value},
+    )
+
+    decision = gate.verify(worker)
+
+    assert "Sistem xətası" not in decision.message_az
+    assert "istisna" in decision.message_az.lower()
+    assert "manual" in decision.message_az.lower()
+
+
+def test_an_enabled_compensating_control_keeps_the_existing_behaviour() -> None:
+    """REQRESSİYA QAPISI: modul AÇIQ olanda davranış BİR ZƏRRƏ DƏ dəyişmir."""
+    worker = _employee()
+    gate = _gate(employee=worker, exemptions=[_exemption(worker)])
+
+    decision = gate.verify(worker)
+
+    assert decision.outcome is FaceGateOutcome.DUAL_CONTROL_REQUIRED
+    assert decision.requires_dual_control
+    assert DUAL_CONTROL_CATEGORY in gate.notifier.categories()
+    assert "FACE_EXEMPT_DUAL_CONTROL" in gate.audit.actions()
+    assert COMPENSATION_UNAVAILABLE_ACTION not in gate.audit.actions()
+
+
+def test_a_worker_without_an_exemption_is_untouched_by_the_dual_control_toggle() -> None:
+    """REQRESSİYA QAPISI: yoxlama YALNIZ istisna yolundadır.
+
+    `DUAL_CONTROL` söndürülü olsa da, istisnasız işçi normal üz təsdiqindən
+    keçir — yeni qayda mövcud axına ƏLAVƏ maneə qoymur.
+    """
+    worker = _employee()
+    gate = _gate(employee=worker, disabled_modules={FeatureModule.DUAL_CONTROL.value})
+
+    decision = gate.verify(worker)
+
+    assert decision.outcome is FaceGateOutcome.ALLOWED
+    assert decision.allows_operation
+    assert COMPENSATION_UNAVAILABLE_ACTION not in gate.audit.actions()
+
+
+def test_the_compensation_rule_lives_in_the_database_too() -> None:
+    """CLAUDE.md §5 — qayda İKİ yerdədir; DB yarısı miqrasiya 051-dədir.
+
+    Trigger-lər yalnız canlı PostgreSQL-də icra olunur, vahid testlərdə isə
+    sahtə repo-lar var. Bu qapı `test_db_guard_parity.py` ilə eyni sualı
+    verir: «qayda HƏLƏ DƏ İKİ yerdədirmi?» — cavab SQL mətnindən oxunur.
+    """
+    migrations = PROJECT_ROOT / "database" / "migrations"
+    migration = migrations / "051_face_exemption_compensation_lock.sql"
+    assert migration.exists(), "SEC-020-nin DB yarısı (miqrasiya 051) tapılmadı"
+    sql = migration.read_text(encoding="utf-8")
+
+    # İKİ tərəfli invariant: yalnız biri yazılsaydı, sıranı dəyişdirmək
+    # (əvvəlcə modulu söndür, sonra istisna ver) qapını yan keçərdi.
+    assert "ON feature_toggles" in sql
+    assert "ON face_control_exemptions" in sql
+    assert FeatureModule.DUAL_CONTROL.value in sql
+
+
+# --------------------------------------------------------------------------- #
 # 6. İSTİSNANIN İDARƏSİ — SƏLAHİYYƏT, TAVAN, MÜDDƏT-BİTMƏ (bənd 14)
 # --------------------------------------------------------------------------- #
 
 
 def _exemption_use_case(
-    *, limits: dict[str, str] | None = None, exemptions: list[FaceExemption] | None = None
+    *,
+    limits: dict[str, str] | None = None,
+    exemptions: list[FaceExemption] | None = None,
+    disabled_modules: set[str] | None = None,
 ) -> tuple[FaceControlExemptionUseCase, InMemoryFaceExemptions, RecordingAudit, RecordingNotifier]:
     repository = InMemoryFaceExemptions(exemptions or [])
     audit = RecordingAudit()
@@ -644,6 +790,8 @@ def _exemption_use_case(
     use_case = FaceControlExemptionUseCase(
         exemptions=repository,
         limits=FakeSystemLimits(limits),
+        # SEC-020 — defolt hamısı AÇIQ, yəni mövcud testlərin ssenarisi dəyişmir.
+        toggles=FakeFeatureToggles(disabled_modules),
         audit=audit,
         clock=FakeClock(NOW),
         notifier=notifier,
@@ -806,6 +954,119 @@ def test_a_revocation_records_who_and_why() -> None:
     assert revoked.revoked_at == NOW
     assert repository.active_for(worker.id, now=NOW) is None
     assert "FACE_EXEMPTION_REVOKED" in audit.actions()
+
+
+# ------------------- SEC-020: istisna ↔ kompensasiya simmetriyası ----------- #
+#
+# `RootControlUseCase`-dakı kilidin İKİNCİ yarısı. Yalnız orada yazılsaydı,
+# sıranı dəyişdirmək qapını yan keçərdi: əvvəlcə `DUAL_CONTROL`-u söndür
+# (o anda aktiv istisna yoxdur, yəni icazə verilir), sonra istisna ver.
+
+
+def test_an_exemption_may_not_be_granted_while_its_compensation_is_disabled() -> None:
+    """Kompensasiya sönükdürsə YENİ istisna verilmir (bənd 14-ün şərti).
+
+    İstisna vermək «boşluğu açıram» deməkdir; bənd 14 bunu yalnız əvəzi
+    ödənildikdə icazə verir. Əvəz yoxdursa, əməliyyat SÜKUTLA keçməməli və
+    həm də anlaşılmaz «Sistem xətası» ilə bitməməlidir.
+    """
+    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.ROOT)
+    use_case, repository, _audit, _notifier = _exemption_use_case(
+        disabled_modules={FeatureModule.DUAL_CONTROL.value}
+    )
+
+    with pytest.raises(FaceControlError) as caught:
+        use_case.grant(
+            tenant_id=TENANT,
+            actor=root,
+            employee_id=EmployeeId(uuid.uuid4()),
+            reason="Tibbi arayış — üz nahiyəsində sarğı var",
+            expires_at=NOW + timedelta(days=10),
+        )
+
+    assert FeatureModule.DUAL_CONTROL.value in str(caught.value)
+    assert "Cüt-nəzarət" in caught.value.user_message
+    # Sətir YAZILMAYIB: rədd sükutlu "heç nə etmə" deyil, əməliyyat ləğvidir.
+    assert repository.items == {}
+
+
+def test_an_exemption_may_not_be_extended_while_its_compensation_is_disabled() -> None:
+    """Uzatma da «yaradan» əməliyyatdır — kompensasiyasız pəncərəni UZADIR."""
+    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.ROOT)
+    worker = _employee()
+    existing = _exemption(worker)
+    use_case, repository, _audit, _notifier = _exemption_use_case(
+        exemptions=[existing], disabled_modules={FeatureModule.DUAL_CONTROL.value}
+    )
+
+    with pytest.raises(FaceControlError, match=FeatureModule.DUAL_CONTROL.value):
+        use_case.extend(
+            tenant_id=TENANT,
+            actor=root,
+            exemption_id=existing.exemption_id,
+            new_expiry=NOW + timedelta(days=60),
+        )
+
+    assert repository.items[existing.exemption_id].expires_at == existing.expires_at
+
+
+def test_revoking_stays_possible_while_the_compensation_is_disabled() -> None:
+    """ÖLÜ-KİLİD QAPISI: boşluğu BAĞLAYAN yol heç vaxt bloklanmır.
+
+    `revoke` bloklansaydı, sönük modul + aktiv istisna vəziyyəti həll edilə
+    bilməzdi: istisna ləğv olunmur, modul isə istisnaya görə açıla bilməz —
+    yəni qoruma öz sahibini kilidləyərdi.
+    """
+    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.ROOT)
+    worker = _employee()
+    existing = _exemption(worker)
+    use_case, repository, _audit, _notifier = _exemption_use_case(
+        exemptions=[existing], disabled_modules={FeatureModule.DUAL_CONTROL.value}
+    )
+
+    revoked = use_case.revoke(
+        tenant_id=TENANT,
+        actor=root,
+        exemption_id=existing.exemption_id,
+        reason="Kompensasiya modulu söndürüldüyü üçün istisna ləğv edilir",
+    )
+
+    assert revoked.status is FaceExemptionStatus.REVOKED
+    assert repository.active_for(worker.id, now=NOW) is None
+
+
+def test_the_nightly_expiry_stays_possible_while_the_compensation_is_disabled() -> None:
+    """Gecəlik iş də boşluğu BAĞLAYIR — o da bloklanmamalıdır."""
+    worker = _employee()
+    stale = _exemption(
+        worker, granted_at=NOW - timedelta(days=40), expires_at=NOW - timedelta(days=1)
+    )
+    use_case, repository, _audit, _notifier = _exemption_use_case(
+        exemptions=[stale], disabled_modules={FeatureModule.DUAL_CONTROL.value}
+    )
+
+    assert use_case.expire_due(tenant_id=TENANT, now=NOW) == 1
+    assert repository.items[stale.exemption_id].status is FaceExemptionStatus.EXPIRED
+
+
+def test_granting_an_exemption_is_unchanged_while_the_compensation_is_enabled() -> None:
+    """REQRESSİYA QAPISI: modul açıq olanda təyinat axını DƏYİŞMİR."""
+    root = _employee(flags=(MANAGE_EXEMPTIONS_FLAG,), code="ROOT", priority=RolePriority.ROOT)
+    use_case, repository, audit, notifier = _exemption_use_case()
+    worker = EmployeeId(uuid.uuid4())
+
+    exemption = use_case.grant(
+        tenant_id=TENANT,
+        actor=root,
+        employee_id=worker,
+        reason="Tibbi arayış — üz nahiyəsində sarğı var",
+        expires_at=NOW + timedelta(days=30),
+    )
+
+    assert exemption.status is FaceExemptionStatus.ACTIVE
+    assert repository.active_for(worker, now=NOW) is not None
+    assert "FACE_EXEMPTION_GRANTED" in audit.actions()
+    assert "FACE_EXEMPTION_GRANTED" in notifier.categories()
 
 
 def test_an_extension_is_measured_from_the_original_grant_not_from_today() -> None:

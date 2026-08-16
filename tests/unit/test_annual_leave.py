@@ -46,6 +46,7 @@ from src.application.use_cases.annual_leave import (
     DECIDED_NOTIFICATION_CATEGORY,
     MANAGE_LEAVE_BALANCES_FLAG,
     PENDING_NOTIFICATION_CATEGORY,
+    SHIFT_CONFLICT_NOTIFICATION_CATEGORY,
     AnnualLeaveError,
     AnnualLeavePermissionError,
     AnnualLeaveRequestNotFoundError,
@@ -288,10 +289,18 @@ class FakeShifts:
 
     Yazma metodları çağırılsa test DƏRHAL qırılır: təsdiqlənmiş məzuniyyət
     Shift Matrix-i DƏYİŞMİR (üç konseptin ayrılığı).
+
+    `work_days` SONRADAN ƏLAVƏ EDİLDİ (#28 əks istiqamət testi): matrisdə
+    AÇIQ "bu adam bu gün işləyir" sətri olan günlər. Defolt boşdur, yəni
+    mövcud testlərin gördüyü matris hərfən əvvəlki kimi qalır —
+    "sətri olmayan gün" planlaşdırılmamış gündür və heç kim onu gözləmir.
     """
 
-    def __init__(self, off_days: set[date] | None = None) -> None:
+    def __init__(
+        self, off_days: set[date] | None = None, work_days: set[date] | None = None
+    ) -> None:
         self.off_days = off_days or set()
+        self.work_days = work_days or set()
         self.range_calls = 0
 
     def list_range(
@@ -316,6 +325,19 @@ class FakeShifts:
                         employee_id=employee_id,
                         shift_date=cursor,
                         is_off_day=True,
+                    )
+                )
+            elif cursor in self.work_days:
+                result.append(
+                    ShiftAssignment(
+                        assignment_id=ShiftAssignmentId(uuid.uuid4()),
+                        tenant_id=tenant_id,
+                        employee_id=employee_id,
+                        shift_date=cursor,
+                        is_off_day=False,
+                        # İş günü sətri iş rejimi OLMADAN yarana bilmir
+                        # (`chk_shift_mode` domendə də təkrarlanır).
+                        work_mode_id=WorkModeId(uuid.uuid4()),
                     )
                 )
             cursor += timedelta(days=1)
@@ -400,12 +422,13 @@ def build(
     *,
     limits: dict[str, str] | None = None,
     off_days: set[date] | None = None,
+    work_days: set[date] | None = None,
     now: datetime = NOW,
 ) -> Harness:
     clock = FakeClock(now)
     balances = FakeBalances()
     requests = FakeRequests()
-    shifts = FakeShifts(off_days)
+    shifts = FakeShifts(off_days, work_days)
     audit = RecordingAudit()
     notifier = RecordingNotifier()
     fake_limits = FakeLimits(limits)
@@ -1793,3 +1816,131 @@ class TestBalanceEntity:
                 decided_at=NOW,
                 deducted_days=Decimal("-1.00"),
             )
+
+
+# --------------------------------------------------------------------------- #
+# M. ƏKS İSTİQAMƏT — TƏSDİQ PLANLANMIŞ NÖVBƏNİ BOŞ QOYA BİLƏR (#28)
+# --------------------------------------------------------------------------- #
+
+
+class TestStrandedShifts:
+    """Matris DƏYİŞMİR (qayda qüvvədədir), lakin sükut da cavab deyil.
+
+    `AnnualLeaveUseCase.approve` təsdiqdən sonra matrisdə həmin işçi üçün
+    AÇIQ iş günü sətirlərini oxuyur və plan sahibinə (`can_manage_shifts`)
+    MÖVCUD `SHIFT_CHANGE_CONFLICT` kanalı ilə xəbər verir.
+    """
+
+    def test_planlanmis_is_gunu_plan_sahibine_bildirilir(self) -> None:
+        employee = make_employee()
+        approver = make_employee(flags=[MANAGE_FLAG], role=SystemRole.HR_ADMIN)
+        harness = build(work_days={date(2026, 7, 1), date(2026, 7, 2)})
+        harness.balances.seed(employee.id, year=2026, entitled="21.00")
+
+        approved_request(
+            harness,
+            employee=employee,
+            approver=approver,
+            start=date(2026, 7, 1),
+            end=date(2026, 7, 3),
+        )
+
+        assert SHIFT_CONFLICT_NOTIFICATION_CATEGORY in harness.notifier.categories()
+        message = next(
+            m
+            for m in harness.notifier.messages
+            if m["category"] == SHIFT_CONFLICT_NOTIFICATION_CATEGORY
+        )
+        # Konkret alıcı YOXDUR — auditoriya süzgəci `can_manage_shifts`-dir.
+        assert message["recipient_id"] is None
+        # E-poçt ehtiyat kanalı işə düşməlidir: növbə onsuz da boş qalacaq.
+        assert message["is_critical"] is True
+        assert "2026-07-01" in str(message["body_az"])
+        assert "2026-07-02" in str(message["body_az"])
+
+    def test_bos_qalan_gun_sayi_audit_izinde_qalir(self) -> None:
+        """Bildiriş uçur, audit sətri qalır — "neçə növbə boş qaldı?"."""
+        employee = make_employee()
+        approver = make_employee(flags=[MANAGE_FLAG], role=SystemRole.HR_ADMIN)
+        harness = build(work_days={date(2026, 7, 2)})
+        harness.balances.seed(employee.id, year=2026, entitled="21.00")
+
+        approved_request(
+            harness,
+            employee=employee,
+            approver=approver,
+            start=date(2026, 7, 1),
+            end=date(2026, 7, 3),
+        )
+
+        entry = next(e for e in harness.audit.entries if e["action"] == "ANNUAL_LEAVE_APPROVED")
+        assert entry["after_state"]["stranded_shift_days"] == 1
+
+    def test_planlasdirilmamis_gun_bildiris_dogurmur(self) -> None:
+        """Sətri olmayan gün heç kimin GÖZLƏDİYİ gün deyil — yenidən planlanası növbə yoxdur."""
+        employee = make_employee()
+        approver = make_employee(flags=[MANAGE_FLAG], role=SystemRole.HR_ADMIN)
+        harness = build()  # nə off-day, nə iş günü sətri
+        harness.balances.seed(employee.id, year=2026, entitled="21.00")
+
+        approved_request(
+            harness,
+            employee=employee,
+            approver=approver,
+            start=date(2026, 7, 1),
+            end=date(2026, 7, 3),
+        )
+
+        assert SHIFT_CONFLICT_NOTIFICATION_CATEGORY not in harness.notifier.categories()
+
+    def test_istirahet_gunu_bildiris_dogurmur(self) -> None:
+        """Off-day artıq DOĞRU planlanmış gündür — orada boşluq yoxdur."""
+        employee = make_employee()
+        approver = make_employee(flags=[MANAGE_FLAG], role=SystemRole.HR_ADMIN)
+        harness = build(off_days={date(2026, 7, 1), date(2026, 7, 2), date(2026, 7, 3)})
+        harness.balances.seed(employee.id, year=2026, entitled="21.00")
+
+        approved_request(
+            harness,
+            employee=employee,
+            approver=approver,
+            start=date(2026, 7, 1),
+            end=date(2026, 7, 3),
+        )
+
+        assert SHIFT_CONFLICT_NOTIFICATION_CATEGORY not in harness.notifier.categories()
+
+    def test_tesdiq_bloklanmir_novbe_planlanmis_olsa_da(self) -> None:
+        """İşçinin qanuni haqqı mağazanın planlaşdırma boşluğuna görə rədd edilmir."""
+        employee = make_employee()
+        approver = make_employee(flags=[MANAGE_FLAG], role=SystemRole.HR_ADMIN)
+        harness = build(work_days={date(2026, 7, 1), date(2026, 7, 2), date(2026, 7, 3)})
+        harness.balances.seed(employee.id, year=2026, entitled="21.00")
+
+        request = approved_request(
+            harness,
+            employee=employee,
+            approver=approver,
+            start=date(2026, 7, 1),
+            end=date(2026, 7, 3),
+        )
+
+        assert request.status is AnnualLeaveStatus.APPROVED
+        assert harness.balances.get(employee.id, year=2026).used_days == Decimal("3.00")
+
+    def test_matris_yene_de_yazilmir(self) -> None:
+        """Xəbərdarlıq matrisi DÜZƏLTMİR — `FakeShifts` yazma metodları partlayır."""
+        employee = make_employee()
+        approver = make_employee(flags=[MANAGE_FLAG], role=SystemRole.HR_ADMIN)
+        harness = build(work_days={date(2026, 7, 1)})
+        harness.balances.seed(employee.id, year=2026, entitled="21.00")
+
+        approved_request(
+            harness,
+            employee=employee,
+            approver=approver,
+            start=date(2026, 7, 1),
+            end=date(2026, 7, 3),
+        )
+
+        assert harness.shifts.range_calls > 0, "Matris YALNIZ OXUNMALIDIR"

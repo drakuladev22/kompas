@@ -154,6 +154,13 @@ işləyir. Camera Dashboard-da bunu operator üçün açıq mətnlə izah et.
       (bölmə 3) düşür — "bir az diqqətli ol" kimi qeyri-müəyyən tövsiyə
       DEYİL, MƏCBURİ ikinci-təsdiq. Bu, PIN-only-nin yaratdığı boşluğu
       konkret şəkildə əvəzləyir.
+    - **KOMPENSASİYA SÖNDÜRÜLƏ BİLMƏZ (SEC-020):** yuxarıdakı "MƏCBURİ" sözü
+      `DUAL_CONTROL` modulunun aç/bağla vəziyyətindən asılı ola bilməz — ona
+      görə bağlantı ŞƏRTİ KİLİDDİR: aktiv istisnası olan kirayəçidə həmin
+      modul söndürülə bilmir (əvvəlcə istisnalar ləğv edilməlidir) və modul
+      sönükdürsə yeni istisna verilə/uzadıla bilmir; ekranı yan keçən yolla
+      yaranmış vəziyyətdə isə təsdiq sükutla keçmir, bənd 5-in manual təsdiq
+      axınına düşür.
     - Təyinat/uzatma/ləğv HƏR biri `audit_logs`-a tam yazılır.
 
 15. FEATURE TOGGLE-UN MAĞAZA-SƏVİYYƏLİ İŞLƏMƏSİ (YENİ):

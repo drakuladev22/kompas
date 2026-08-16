@@ -21,11 +21,22 @@ DB tərəfi də belədir: `fine_appeals` ayrıca cədvəldir, `UNIQUE (fine_id)`
 — bir cəriməyə BİR etiraz.
 
 ──────────────────────────────────────────────────────────────────────────────
-`EXPIRED` NİYƏ VAR
+`EXPIRED` NİYƏ VAR — VƏ NİYƏ SON SÖZ DEYİL (M-6)
 ──────────────────────────────────────────────────────────────────────────────
 Pəncərə bağlananda cavabsız qalmış etiraz sükutla itmir: `cron_close_expired_appeals`
 onu `EXPIRED` edir. Bu, "HR cavab vermədi" halını "işçi etiraz etmədi" halından
 ayırır — birincisi proses problemidir və hesabatda görünməlidir.
+
+LAKİN `EXPIRED` "rədd edildi" DEMƏK DEYİL. 72 saat İŞÇİNİN GÖNDƏRMƏ hüququnun
+müddətidir (bölmə 4: "işçi ... 72 saat ərzində etiraz göndərə bilər") — HR-ın
+cavab vermə borcunun müddəti deyil, spesifikasiya belə bir müddət təyin
+ETMİR. Ona görə müddəti bitmiş etiraz da qərar ala bilir: `approve()` və
+`reject()` həm `PENDING`, həm `EXPIRED` vəziyyətindən işləyir.
+
+Əks qərar — "EXPIRED terminaldır" — HR-ın süstlüyünü işçi üçün avtomatik
+məğlubiyyətə çevirərdi: cərimə qüvvədə qalar, export-a düşər, pul kəsilər və
+etiraza HEÇ VAXT baxılmazdı. Cəriməni bu müddətdə export-dan saxlayan qayda
+`Fine.is_exportable`-dədir (dördüncü şərt).
 """
 
 from __future__ import annotations
@@ -68,15 +79,25 @@ class AppealStatus(str, Enum):
     def is_open(self) -> bool:
         return self is AppealStatus.PENDING
 
+    @property
+    def is_decided(self) -> bool:
+        """HR QƏRAR VERDİMİ (M-6).
+
+        `EXPIRED` burada `False`-dur: müddətin bitməsi qərar deyil, qərarın
+        GECİKMƏSİDİR. Məhz bu fərq cərimənin export kilidini saxlayır
+        (`Fine.is_exportable` dördüncü şərti).
+        """
+        return self in (AppealStatus.APPROVED, AppealStatus.REJECTED)
+
 
 class FineAppeal(AggregateRoot):
     """İşçinin bir cəriməyə qarşı etirazı.
 
     PENDING ──approve(yeni məbləğ?)──> APPROVED  (cərimə REVERSED/REDUCED)
-       │
+       │                                   ↑
        ├────reject(izah)────────────> REJECTED  (cərimə toxunulmaz qalır)
-       │
-       └────expire()────────────────> EXPIRED   (cron, cavabsız qaldı)
+       │                                   ↑
+       └────expire()────────────────> EXPIRED ──┘ (cron; qərar HƏLƏ mümkündür)
     """
 
     def __init__(
@@ -146,7 +167,7 @@ class FineAppeal(AggregateRoot):
         obyektləridir və birinin digərini mutasiya etməsi asılılığı tərsinə
         çevirərdi.
         """
-        self._require_open()
+        self._require_decidable()
         self._require_note(note)
         if decided_by == self.employee_id:
             raise DomainRuleError(
@@ -162,8 +183,13 @@ class FineAppeal(AggregateRoot):
         self.new_amount = new_amount
 
     def reject(self, *, decided_by: EmployeeId, decided_at: datetime, note: str) -> None:
-        """Etiraz rədd edildi — cərimə olduğu kimi qalır."""
-        self._require_open()
+        """Etiraz rədd edildi — cərimə olduğu kimi qalır.
+
+        İZAH MƏCBURİDİR (`_require_note`, min. 10 simvol): işçi nəyə görə
+        rədd edildiyini bilməlidir — cərimə real pul kəsintisidir və
+        "rədd edildi" sözü tək başına cavab deyil.
+        """
+        self._require_decidable()
         self._require_note(note)
         if decided_by == self.employee_id:
             raise DomainRuleError(
@@ -203,11 +229,22 @@ class FineAppeal(AggregateRoot):
         `system_limits.FINE_APPEAL_WINDOW_HOURS`-dan gəlir və Root onu dəyişə
         bilər (bölmə 3). Çağıran tərəf limiti AÇIQ ötürməlidir — defolt yalnız
         tenant konteksti olmayan yollar üçündür.
-        """
-        return self.status.is_open and self.created_at + timedelta(hours=sla_hours) < now
 
-    def _require_open(self) -> None:
-        if not self.status.is_open:
+        ŞƏRT `is_open` DEYİL, `not is_decided`-dir (M-6): `EXPIRED` sətir məhz
+        SLA-nı aşmış sətirdir və onu "gecikməyib" saymaq inbox-un ən vacib
+        sətirlərini vurğusuz buraxardı.
+        """
+        return not self.status.is_decided and self.created_at + timedelta(hours=sla_hours) < now
+
+    def _require_decidable(self) -> None:
+        """Qərar YALNIZ verilməmiş etiraza (PENDING və ya EXPIRED) verilə bilər.
+
+        `EXPIRED` QƏSDƏN BURAYA DAXİLDİR (M-6, sinif başlığı): müddətin
+        bitməsi HR-ın cavabını əvəz etmir. `APPROVED`/`REJECTED` isə kənardadır
+        — artıq verilmiş qərarın üstündən yazmaq audit izini bulandırardı və
+        işçiyə iki fərqli nəticə bildirilərdi.
+        """
+        if self.status.is_decided:
             raise DomainRuleError(
                 "Bu etiraz artıq qərar alıb",
                 user_message="Bu etiraz artıq emal edilib.",

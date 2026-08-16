@@ -179,6 +179,81 @@ def test_without_flags_the_tenant_table_is_still_the_default() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# REQRESSİYA: CLI bayraqları `run_console`-a FAKTİKİ olaraq çatır
+#
+# `run_console` `show_crashes`/`show_tickets`-i həmişə qəbul edirdi və
+# `_render_view` onlara görə budaqlanırdı — LAKİN `main._run_developer_panel`
+# onları ÖTÜRMÜRDÜ. Nəticə sükutla yanlış idi: `--developer-mode --crashes`
+# adi müştəri cədvəlini göstərirdi və istifadəçi səhv məlumata baxdığını
+# bilmirdi. Yuxarıdakı marşrutlaşdırma testləri bunu tuta bilmirdi, çünki
+# onlar `run_console`-u BİRBAŞA çağırır — boşluq isə çağıran tərəfdə idi.
+# --------------------------------------------------------------------------- #
+
+
+def _developer_cli(monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> dict[str, Any]:
+    """`main(argv)`-i saxta panel qatı ilə işlədir və `run_console` arqumentlərini qaytarır.
+
+    ARQUMENT SİYAHISI ƏL İLƏ QURULMUR: əsl `argparse` parser-i işə düşür, yəni
+    test bayraq adının dəyişməsini də tutur. Loglama və global istisna qarmağı
+    əvəzlənir — vahid test qlobal vəziyyəti dəyişməməlidir.
+    """
+    import src.main as main_module
+    from src.developer_panel import console as console_module
+    from src.infrastructure.licensing import developer_directory as directory_module
+    from src.infrastructure.persistence import connection as connection_module
+
+    captured: dict[str, Any] = {}
+
+    def _fake_run_console(directory: Any, **kwargs: Any) -> tuple[int, str]:
+        captured.update(kwargs)
+        return 0, "saxta çıxış"
+
+    monkeypatch.setattr(console_module, "run_console", _fake_run_console)
+    monkeypatch.setattr(directory_module, "developer_mode_enabled", lambda: True)
+    monkeypatch.setattr(
+        directory_module, "DeveloperTenantDirectory", lambda database: _FakeDirectory()
+    )
+    monkeypatch.setattr(connection_module, "Database", object)
+    monkeypatch.setattr(main_module, "_build_release_publisher", lambda database: None)
+    monkeypatch.setattr(main_module, "configure_logging", lambda **kwargs: "logs")
+    monkeypatch.setattr(main_module, "install_global_exception_hook", lambda: None)
+
+    assert main_module.main(argv) == 0
+    return captured
+
+
+def test_crashes_flag_reaches_run_console(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    captured = _developer_cli(monkeypatch, ["--developer-mode", "--crashes"])
+
+    assert captured["show_crashes"] is True
+    assert captured["show_tickets"] is False
+    capsys.readouterr()
+
+
+def test_tickets_flag_reaches_run_console(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    captured = _developer_cli(monkeypatch, ["--developer-mode", "--tickets"])
+
+    assert captured["show_tickets"] is True
+    assert captured["show_crashes"] is False
+    capsys.readouterr()
+
+
+def test_default_developer_view_asks_for_neither_diagnostic(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Bayraqsız çağırışda hər ikisi `False` olmalıdır — cədvəl görünüşü."""
+    captured = _developer_cli(monkeypatch, ["--developer-mode"])
+
+    assert captured["show_crashes"] is False
+    assert captured["show_tickets"] is False
+    capsys.readouterr()
+
+
+# --------------------------------------------------------------------------- #
 # GUI bölmələri
 # --------------------------------------------------------------------------- #
 

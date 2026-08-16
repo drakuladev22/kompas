@@ -20,6 +20,7 @@ from src.application.use_cases.catalog_management import (
     WorkModeCatalogUseCase,
 )
 from src.application.use_cases.root_control import (
+    CompensatingControlLockedError,
     RootControlError,
     RootControlUseCase,
     StructuralModuleError,
@@ -39,7 +40,7 @@ from src.domain.entities.employee import Employee, PermissionOverride
 from src.domain.entities.position import Position
 from src.domain.entities.sales_points import PointsEntry
 from src.domain.entities.task import Task, TaskStatus
-from src.domain.policies import SystemLimitKey
+from src.domain.policies import FeatureModule, SystemLimitKey
 from src.domain.value_objects.authorization import (
     AuthorizationError,
     PermissionEffect,
@@ -48,6 +49,7 @@ from src.domain.value_objects.authorization import (
 )
 from src.domain.value_objects.catalogs import FineType, LeaveType, WorkMode
 from src.domain.value_objects.credentials import Username
+from src.domain.value_objects.face_recognition import FaceExemption
 from src.domain.value_objects.gamification import (
     PointsPeriod,
     RedemptionStatus,
@@ -61,8 +63,10 @@ from src.domain.value_objects.identifiers import (
     StoreId,
     TaskId,
     TenantId,
+    new_face_exemption_id,
 )
 from src.domain.value_objects.money import Money
+from tests.fixtures.fakes import InMemoryFaceExemptions
 
 NOW = datetime(2026, 8, 12, 9, 0, tzinfo=UTC)
 TENANT = TenantId(uuid.uuid4())
@@ -658,11 +662,15 @@ def _root_use_case(
     toggles: _Toggles | None = None,
     flags: _Flags | None = None,
     audit: _Audit | None = None,
+    face_exemptions: InMemoryFaceExemptions | None = None,
 ) -> RootControlUseCase:
     return RootControlUseCase(
         limits=limits or _Limits(),
         toggles=toggles or _Toggles(),
         flags=flags or _Flags(),
+        # SEC-020 — defolt BOŞ siyahı: aktiv üz-təsdiqi istisnası olmayan
+        # kirayəçi mövcud bütün testlərin ssenarisidir, yəni davranış DƏYİŞMİR.
+        face_exemptions=face_exemptions or InMemoryFaceExemptions([]),
         audit=audit or _Audit(),
         clock=_Clock(),
     )
@@ -757,6 +765,157 @@ def test_enabling_never_needs_a_confirmation() -> None:
         enabled=True,
     )
     assert toggles.written[0][1] is True
+
+
+# --------------------------------------------------------------------------- #
+# SEC-020 — kompensasiya edici nəzarətin şərti kilidi
+# --------------------------------------------------------------------------- #
+#
+# BAĞLANAN BOŞLUQ: `facecontrol.md` bənd 14 PIN-only istisnasının YEGANƏ
+# əvəzləyicisi kimi `DUAL_CONTROL` axınını göstərir, həmin modul isə adi
+# (struktur-olmayan) toggle idi — yəni Root bir kliklə istisnalı işçini
+# kompensasiyasız qoya bilirdi.
+
+
+def _active_face_exemption() -> FaceExemption:
+    return FaceExemption(
+        exemption_id=new_face_exemption_id(),
+        tenant_id=TENANT,
+        employee_id=EmployeeId(uuid.uuid4()),
+        granted_by=EmployeeId(uuid.uuid4()),
+        reason="Tibbi arayış — üz nahiyəsində sarğı var",
+        granted_at=NOW - timedelta(days=1),
+        expires_at=NOW + timedelta(days=30),
+    )
+
+
+def test_dual_control_cannot_be_disabled_while_a_face_exemption_is_active() -> None:
+    """Struktur zəmanət sadə toggle ilə söndürülə bilməz (CLAUDE.md §5)."""
+    toggles = _Toggles()
+    use_case = _root_use_case(
+        toggles=toggles, face_exemptions=InMemoryFaceExemptions([_active_face_exemption()])
+    )
+
+    with pytest.raises(CompensatingControlLockedError) as caught:
+        use_case.set_module_enabled(
+            tenant_id=TENANT,
+            actor=_employee(flags=("can_manage_system_limits",)),
+            module_key=FeatureModule.DUAL_CONTROL.value,
+            enabled=False,
+        )
+
+    # Mesaj SƏBƏBİ (neçə istisna) və NÖVBƏTİ ADDIMI deyir — «Sistem xətası» yox.
+    assert "1 aktiv" in caught.value.user_message
+    assert "ləğv" in caught.value.user_message
+    # Yazı BAŞ VERMƏYİB: qapı sükutlu "heç nə etmə" deyil, əməliyyat ləğvidir.
+    assert not toggles.written
+
+
+def test_disabling_dual_control_works_once_the_exemptions_are_gone() -> None:
+    """KİLİD ƏBƏDİ DEYİL — açar Root-un öz əlindədir.
+
+    Bu yoxlama olmasa, guard "həmişə bloklayan" versiyaya sürüşə bilər və
+    modul bir daha heç vaxt söndürülə bilməzdi.
+    """
+    toggles = _Toggles()
+    use_case = _root_use_case(toggles=toggles, face_exemptions=InMemoryFaceExemptions([]))
+
+    use_case.set_module_enabled(
+        tenant_id=TENANT,
+        actor=_employee(flags=("can_manage_system_limits",)),
+        module_key=FeatureModule.DUAL_CONTROL.value,
+        enabled=False,
+    )
+
+    assert toggles.written[0] == (FeatureModule.DUAL_CONTROL.value, False, None)
+
+
+def test_an_expired_exemption_no_longer_locks_the_module() -> None:
+    """Meyar `list_active` ilə eynidir — müddəti keçmiş sətir kilidləmir.
+
+    Gecəlik iş işləməyəndə (terminal söndürülüb) `ACTIVE` sətir faktiki olaraq
+    bitmiş olur. Yalnız statusa baxsaydıq, cron-un işləməməsi modulu ƏBƏDİ
+    kilidləyərdi.
+    """
+    stale = FaceExemption(
+        exemption_id=new_face_exemption_id(),
+        tenant_id=TENANT,
+        employee_id=EmployeeId(uuid.uuid4()),
+        granted_by=EmployeeId(uuid.uuid4()),
+        reason="Tibbi arayış — üz nahiyəsində sarğı var",
+        granted_at=NOW - timedelta(days=40),
+        expires_at=NOW - timedelta(days=1),
+    )
+    toggles = _Toggles()
+    use_case = _root_use_case(toggles=toggles, face_exemptions=InMemoryFaceExemptions([stale]))
+
+    use_case.set_module_enabled(
+        tenant_id=TENANT,
+        actor=_employee(flags=("can_manage_system_limits",)),
+        module_key=FeatureModule.DUAL_CONTROL.value,
+        enabled=False,
+    )
+
+    assert toggles.written[0][1] is False
+
+
+def test_the_compensation_lock_touches_only_the_compensating_module() -> None:
+    """REQRESSİYA QAPISI: qayda DARDIR — başqa modul sərbəst söndürülür."""
+    toggles = _Toggles()
+    use_case = _root_use_case(
+        toggles=toggles, face_exemptions=InMemoryFaceExemptions([_active_face_exemption()])
+    )
+
+    use_case.set_module_enabled(
+        tenant_id=TENANT,
+        actor=_employee(flags=("can_manage_system_limits",)),
+        module_key=FeatureModule.SHIFT_SWAP.value,
+        enabled=False,
+    )
+
+    assert toggles.written[0] == (FeatureModule.SHIFT_SWAP.value, False, None)
+
+
+def test_enabling_the_compensating_module_is_never_blocked() -> None:
+    """AÇMAQ heç vaxt bloklanmır — əks halda vəziyyət düzəldilə bilməzdi."""
+    toggles = _Toggles()
+    use_case = _root_use_case(
+        toggles=toggles, face_exemptions=InMemoryFaceExemptions([_active_face_exemption()])
+    )
+
+    use_case.set_module_enabled(
+        tenant_id=TENANT,
+        actor=_employee(flags=("can_manage_system_limits",)),
+        module_key=FeatureModule.DUAL_CONTROL.value,
+        enabled=True,
+    )
+
+    assert toggles.written[0][1] is True
+
+
+def test_the_compensation_lock_runs_after_the_permission_check() -> None:
+    """Səlahiyyəti olmayan aktor kilidin mesajını GÖRMƏMƏLİDİR.
+
+    «N aktiv üz-təsdiqi istisnası var» cavabı özü məlumatdır: kimin üz
+    təsdiqindən azad olduğunu bilmək hücum planlaşdırmaq üçün yararlıdır
+    (`FaceControlExemptionUseCase.list_active` ilə eyni qərar). Ona görə
+    səlahiyyət qapısı ƏVVƏL gəlir.
+    """
+    toggles = _Toggles()
+    use_case = _root_use_case(
+        toggles=toggles, face_exemptions=InMemoryFaceExemptions([_active_face_exemption()])
+    )
+
+    with pytest.raises(RootControlError) as caught:
+        use_case.set_module_enabled(
+            tenant_id=TENANT,
+            actor=_employee(),
+            module_key=FeatureModule.DUAL_CONTROL.value,
+            enabled=False,
+        )
+
+    assert not isinstance(caught.value, CompensatingControlLockedError)
+    assert "istisna" not in caught.value.user_message
 
 
 def test_only_root_may_create_a_permission_flag() -> None:

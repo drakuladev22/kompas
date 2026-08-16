@@ -8,6 +8,28 @@ kimi qeydiyyatdadır).
 
 NTP QAYDASI (bölmə 2): saat sürüşməsi 60 saniyəni keçirsə, PIN handshake və
 override kimi vaxt-kritik əməliyyatlar BLOKLANIR.
+
+──────────────────────────────────────────────────────────────────────────────
+GECİKMƏ KİMİN SAATINDAN HESABLANIR (M-3)
+──────────────────────────────────────────────────────────────────────────────
+`verify_return()` `actual_return_time` almadıqda gecikmə ARTIQ operatorun
+klik anına görə hesablanmır — zəncir `LeaveRequest.resolved_return_time()`-dədir
+(qüvvədə olan düzəliş → işçinin STEP 2 möhürü → klik anı). Səbəb və rədd
+edilən alternativ `entities/leave_request.py` başlığındadır.
+
+──────────────────────────────────────────────────────────────────────────────
+`actual_return_time` ARQUMENTİ NİYƏ FLAG TƏLƏB EDİR (M-5)
+──────────────────────────────────────────────────────────────────────────────
+Bu parametr vaxtı ƏLLƏ təyin etməyin İKİNCİ yolu idi — və birincidən
+(`apply_override`) fərqli olaraq nə səbəb, nə dual-control, nə də ayrıca
+audit sətri tələb edirdi. Yəni 30+ dəqiqəlik düzəlişin ikinci təsdiq qaydası
+bir arqumentlə yan keçilə bilərdi (GUI bunu etmirdi, lakin skript və plugin
+edə bilərdi).
+
+İndi parametr `can_override_return_time` tələb edir və auditdə açıq görünür.
+Kamera operatorunun ekrandan etdiyi düzəliş isə YENƏ `apply_override`-dan
+keçir — bu arqument insan yazısı üçün deyil, təsdiqlənmiş xarici siqnal
+(kiosk/kamera qeydi) üçün nəzərdə tutulub.
 """
 
 from __future__ import annotations
@@ -336,6 +358,15 @@ class LeaveVerificationUseCase:
             "can_verify_returns",
             allow_timeout_override=request.status is LeaveStatus.TIMEOUT_ESCALATED,
         )
+        if actual_return_time is not None:
+            # Modul başlığı: açıq vaxt ötürmək manual düzəlişdir və eyni
+            # flag-i tələb edir. Timeout halında HR_Admin/CEO əvəzedici ola
+            # bilir — `_require_camera_permission` bunu onsuz da bilir.
+            self._require_camera_permission(
+                operator_id,
+                "can_override_return_time",
+                allow_timeout_override=request.status is LeaveStatus.TIMEOUT_ESCALATED,
+            )
         self._require_operator_scope(operator_id, request.store_id)
         verified_at, _ = self._verified_now(tenant_id, operation="STEP_3")
 
@@ -438,6 +469,18 @@ class LeaveVerificationUseCase:
                     "status": LeaveStatus.VERIFIED.value,
                     **penalty.to_dict(),
                     "was_manual_override": request.override is not None,
+                    # M-3: hesablamanın MƏNBƏYİ auditdə açıq yazılır. "Niyə
+                    # bu işçiyə 30 dəqiqə gecikmə yazıldı?" sualının cavabı
+                    # bir sətirdə görünməlidir — operatorun klik anı ilə
+                    # faktiki qayıdış anı arasındakı fərq mübahisənin ən
+                    # tez-tez rast gəlinən mövzusudur.
+                    "verified_at": verified_at.isoformat(),
+                    "actual_return_time": (
+                        request.actual_return_time.isoformat()
+                        if request.actual_return_time
+                        else None
+                    ),
+                    "return_time_source": _return_time_source(request, explicit=actual_return_time),
                 },
             )
 
@@ -550,14 +593,22 @@ class LeaveVerificationUseCase:
         # Yazma axını — kilidli oxu (iki təsdiqçinin eyni anda basması).
         request = self._require_request_locked(request_id)
         now = self._clock.now()
+        self._require_dual_control_approver(approver_id, now=now)
 
-        approver = self._employees.get(approver_id)
-        if approver is None or not approver.has_permission(DUAL_CONTROL_APPROVAL_FLAG, now=now):
-            raise OperationNotPermittedError(
-                f"'{DUAL_CONTROL_APPROVAL_FLAG}' səlahiyyəti olmadan dual-control "
-                f"təsdiqi mümkün deyil",
-                context={"approver_id": str(approver_id)},
+        # TIMEOUT ƏVVƏLCƏ YOXLANILIR (M-5): planlaşdırılmış iş saatda bir dəfə
+        # işləyir, təsdiqçi isə düyməni istənilən an basa bilər. Yoxlama
+        # yalnız işdə olsaydı, iki icra arasındakı pəncərədə müddəti bitmiş
+        # sorğu təsdiqlənərdi — yəni hədd praktikada təsadüfi işləyərdi.
+        timeout = self._limit_int(tenant_id, SystemLimitKey.DUAL_CONTROL_APPROVAL_TIMEOUT_MINUTES)
+        if request.expire_override(now=now, timeout_minutes=timeout):
+            self._leave_requests.save(request)
+            self._record_override_closure(
+                tenant_id=tenant_id,
+                actor_id=None,
+                request=request,
+                action="DUAL_CONTROL_EXPIRED",
             )
+            self._notify_override_closed(tenant_id=tenant_id, request=request)
 
         request.approve_override(approver_id=approver_id, approved_at=now)
         self._leave_requests.save(request)
@@ -570,6 +621,148 @@ class LeaveVerificationUseCase:
             after_state={"approved_at": now.isoformat()},
         )
         return request
+
+    def reject_dual_control(
+        self,
+        *,
+        tenant_id: TenantId,
+        approver_id: EmployeeId,
+        request_id: LeaveRequestId,
+        reason: str,
+    ) -> LeaveRequest:
+        """İkinci təsdiqin «yox» cavabı (M-5) — səbəb MƏCBURİDİR.
+
+        `approve_dual_control` ilə EYNİ qapıdan keçir: təsdiq etmək və rədd
+        etmək eyni səlahiyyətin iki üzüdür. Ayrı flag yaratmaq "təsdiqləyə
+        bilirsən, amma imtina edə bilmirsən" kimi mənasız bir vəziyyət
+        yaradardı — və praktikada təsdiqçini «hə» deməyə məcbur edərdi.
+        """
+        request = self._require_request_locked(request_id)
+        now = self._clock.now()
+        self._require_dual_control_approver(approver_id, now=now)
+
+        request.reject_override(approver_id=approver_id, rejected_at=now, reason=reason)
+        self._leave_requests.save(request)
+        self._record_override_closure(
+            tenant_id=tenant_id,
+            actor_id=approver_id,
+            request=request,
+            action="DUAL_CONTROL_REJECTED",
+        )
+        self._notify_override_closed(tenant_id=tenant_id, request=request)
+        return request
+
+    def expire_pending_overrides(self, tenant_id: TenantId) -> int:
+        """Təsdiqsiz qalmış vaxt düzəlişlərini ləğv edir (planlaşdırılmış iş, M-5).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ AVTOMATİK TƏSDİQ YOX
+        ──────────────────────────────────────────────────────────────────────
+        "Heç kim baxmadısa təsdiqlənmiş say" qaydası dual-control-u tamamilə
+        mənasız edərdi: operator sadəcə gözləməklə istənilən düzəlişi keçirə
+        bilərdi. Ona görə timeout LƏĞV edir — orijinal vaxt qüvvədə qalır və
+        sorğunu yazan operator bildiriş alır ki, lazımdırsa yenidən müraciət
+        etsin (bölmə 3: "gözləyən override-lar sonsuza qədər təsdiqsiz
+        qalmasın").
+
+        Returns:
+            Ləğv edilmiş sorğu sayı.
+        """
+        now = self._clock.now()
+        timeout = self._limit_int(tenant_id, SystemLimitKey.DUAL_CONTROL_APPROVAL_TIMEOUT_MINUTES)
+        expired = 0
+
+        for request in self._leave_requests.list_pending_dual_control(tenant_id):
+            if not request.expire_override(now=now, timeout_minutes=timeout):
+                continue
+            self._leave_requests.save(request)
+            expired += 1
+            self._record_override_closure(
+                tenant_id=tenant_id,
+                actor_id=None,
+                request=request,
+                action="DUAL_CONTROL_EXPIRED",
+            )
+            self._notify_override_closed(tenant_id=tenant_id, request=request)
+
+        if expired:
+            _log.warning(
+                "DUAL_CONTROL_OVERRIDES_EXPIRED",
+                extra={"tenant_id": str(tenant_id), "count": expired, "timeout_minutes": timeout},
+            )
+        return expired
+
+    def _require_dual_control_approver(self, approver_id: EmployeeId, *, now: datetime) -> None:
+        """`can_approve_dual_control_override` qapısı — təsdiq və rədd üçün eyni."""
+        approver = self._employees.get(approver_id)
+        if approver is None or not approver.has_permission(DUAL_CONTROL_APPROVAL_FLAG, now=now):
+            raise OperationNotPermittedError(
+                f"'{DUAL_CONTROL_APPROVAL_FLAG}' səlahiyyəti olmadan dual-control "
+                f"qərarı mümkün deyil",
+                context={"approver_id": str(approver_id)},
+            )
+
+    def _record_override_closure(
+        self,
+        *,
+        tenant_id: TenantId,
+        actor_id: EmployeeId | None,
+        request: LeaveRequest,
+        action: str,
+    ) -> None:
+        """Rədd/ləğv izini auditə yazır — hər iki yol üçün TƏK yer.
+
+        `actor_id=None` "qərarı sistem verdi" deməkdir (timeout). Audit
+        sətrini buraxmaq olmazdı: işçinin vaxtı düzəldilməyibsə, bunun
+        SƏBƏBİ sonradan soruşulacaq.
+        """
+        override = request.override
+        self._audit.record(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action=action,
+            entity_type="leave_requests",
+            entity_id=request.id,
+            after_state={
+                "overridden_time": (
+                    override.overridden_time.isoformat() if override is not None else None
+                ),
+                "delta_minutes": override.delta_minutes if override is not None else None,
+                "rejected_at": (
+                    override.rejected_at.isoformat()
+                    if override is not None and override.rejected_at
+                    else None
+                ),
+                # Ləğvdən SONRA hansı vaxt qüvvədədir — sual məhz budur.
+                "effective_return_time": request.resolved_return_time(
+                    fallback=self._clock.now()
+                ).isoformat(),
+            },
+            reason=override.rejection_reason if override is not None else None,
+        )
+
+    def _notify_override_closed(self, *, tenant_id: TenantId, request: LeaveRequest) -> None:
+        """Sorğunu YAZAN operatora bildiriş (M-5).
+
+        Ünvan `recipient_id=None` DEYİL: bu, ümumi xəbərdarlıq deyil, konkret
+        operatorun gözlədiyi cavabdır. O, düzəlişin tətbiq olunduğunu güman
+        edib növbəti sorğuya keçib ola bilər.
+        """
+        override = request.override
+        if override is None:  # pragma: no cover - çağırış yalnız ləğvdən sonradır
+            return
+        self._notifier.notify(
+            tenant_id=tenant_id,
+            recipient_id=override.operator_id,
+            category="DUAL_CONTROL_CLOSED",
+            title_az="Manual vaxt düzəlişi tətbiq olunmadı",
+            body_az=(
+                f"{override.delta_minutes} dəqiqəlik vaxt düzəlişi sorğunuz "
+                f"tətbiq edilmədi. Səbəb: {override.rejection_reason}. "
+                f"İcazənin orijinal vaxtı qüvvədə qalır."
+            ),
+            is_critical=False,
+        )
 
     # ----------------------------- TIMEOUT ---------------------------------- #
 
@@ -861,6 +1054,23 @@ class LeaveVerificationUseCase:
 
     def _limit_int(self, tenant_id: TenantId, key: SystemLimitKey) -> int:
         return self._limits.get_int(tenant_id, key.value, int(DEFAULT_LIMITS[key]))
+
+
+def _return_time_source(request: LeaveRequest, *, explicit: datetime | None) -> str:
+    """Cərimə bazasının MƏNBƏ ETİKETİ — audit sətri üçün (M-3).
+
+    Etiket hesablamadan SONRA, `LeaveRequest.resolved_return_time()` ilə eyni
+    sıra ilə oxunur. Ayrı bir "mənbə" sahəsini entity-yə əlavə etmək RƏDD
+    EDİLDİ: o, `leave_requests` cədvəlində saxlanmalı olan yeni sütun demək
+    olardı, halbuki dəyər mövcud sahələrdən birmənalı çıxarılır.
+    """
+    if explicit is not None:
+        return "EXPLICIT_ARGUMENT"
+    if request.override is not None and request.override.is_effective:
+        return "MANUAL_OVERRIDE"
+    if request.return_claimed_time is not None:
+        return "EMPLOYEE_CLAIM"
+    return "OPERATOR_CLICK"
 
 
 __all__ = [

@@ -112,6 +112,9 @@ _SURFACE_TOKENS = frozenset(
         "--color-warning-bg",
         "--color-danger-bg",
         "--color-info-bg",
+        # Seçilmiş növ-kartının fonu (1c.md sihirbazı) — `--color-accent`-in
+        # YUMŞAQ variantıdır və üzərində mətn oturur, yəni SƏTHdir.
+        "--color-accent-subtle",
         "--color-pin-bg",
         "--color-text-on-accent",
         "--color-action-text",

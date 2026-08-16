@@ -164,19 +164,39 @@ def test_full_happy_path_penalty() -> None:
     assert penalty.total_minutes == 120
 
 
-def test_option_a_uses_operator_click_time() -> None:
-    """Bölmə 4, Option A: `[Təsdiqlə]` CARİ SİSTEM VAXTINI istifadə edir.
+def test_option_a_stamps_the_click_but_does_not_charge_it() -> None:
+    """Bölmə 4, Option A: klik anı MÖHÜRDÜR, cərimənin bazası DEYİL (M-3).
 
-    Operator gec kliklədisə, gecikmə də ona görə hesablanır — bu, qəsdəndir:
-    faktiki qayıdışı təsdiqləmək operatorun məsuliyyətidir. Əgər real qayıdış
-    daha erkən olubsa, Option B (`[Vaxtı Əllə Təyin Et]`) istifadə edilməlidir.
+    ──────────────────────────────────────────────────────────────────────────
+    BU TEST NİYƏ DƏYİŞDİRİLDİ — ƏVVƏLKİ İDDİA HANSI SƏTRƏ SÖYKƏNİRDİ
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl bu test operatorun 2 dəqiqəlik gecikməsinin işçiyə YAZILMASINI
+    "qəsdən" adlandırırdı və bölmə 4-ün bir sətrinə söykənirdi:
+
+        "Option A: Clicks [Təsdiqlə] (Uses current system time)"
+
+    Lakin eyni bölmənin növbəti sətri bunu birbaşa qadağan edir:
+
+        "Cərimə strictly VERIFIED ACTUAL TIME əsasında hesablanır,
+         operatorun düyməni kliklədiyi vaxt əsasında YOX."
+
+    İki sətri barışdıran yeganə oxunuş: sistem vaxtı TƏSDİQ MÖHÜRÜDÜR
+    (`verified_at`), cərimə isə işçinin STEP 2 möhürünə (`return_claimed_time`)
+    əsaslanır. Əks halda kamera növbəsindəki yük işçinin cibindən ödənilərdi.
+
+    Test ZƏİFLƏMİR, GÜCLƏNİR: indi HƏM möhürün yazıldığını, HƏM də onun
+    cəriməyə keçmədiyini yoxlayır.
     """
     leave = open_leave(allowance=60)
     leave.claim_return(claimed_at=at(13, 30))
     penalty = leave.verify_return(operator_id=OPERATOR, verified_at=at(13, 32))
 
-    assert penalty.elapsed_minutes == 92
-    assert penalty.delay_minutes == 32
+    # Möhür saxlanılır — audit "operator nə vaxt baxdı" sualına cavab verir.
+    assert leave.verified_at == at(13, 32)
+    # Cərimə isə işçinin qayıtdığı ana görədir: 12:00 → 13:30 = 90 dəqiqə.
+    assert leave.actual_return_time == at(13, 30)
+    assert penalty.elapsed_minutes == 90
+    assert penalty.delay_minutes == 30
 
 
 def test_penalty_uses_actual_return_not_click_time() -> None:
@@ -333,13 +353,29 @@ def test_timeout_escalation_after_45_minutes() -> None:
 
 
 def test_escalated_leave_can_still_be_verified() -> None:
+    """Timeout-dan sonrakı təsdiq İŞÇİYƏ ƏLAVƏ CƏRİMƏ YAZMIR (M-3).
+
+    ──────────────────────────────────────────────────────────────────────────
+    ƏVVƏLKİ GÖZLƏNTİ NİYƏ DƏYİŞDİ
+    ──────────────────────────────────────────────────────────────────────────
+    Test əvvəl `delay_minutes == 50` gözləyirdi — yəni işçi 13:00-da qayıdıb
+    PIN vurduğu halda, HEÇ KİMİN 45 dəqiqə ərzində ekrana baxmaması ona 50
+    dəqiqəlik gecikmə kimi yazılırdı. Halbuki `TIMEOUT_ESCALATED` statusunun
+    ÖZÜ məhz "təsdiq gecikdi" deməkdir: eskalasiyanın səbəbini cərimənin
+    məbləğinə çevirmək prosesin nasazlığını işçinin cibindən ödəmək olardı.
+
+    İndi baza işçinin öz möhürüdür (12:00 → 13:00 = 60 dəqiqə = tam icazə
+    haqqı), ona görə gecikmə SIFIRDIR. Testin ilkin iddiası (eskalasiyaya
+    düşmüş sorğu YENƏ təsdiqlənə bilir) toxunulmadan qalır.
+    """
     leave = open_leave(allowance=60)
     leave.claim_return(claimed_at=at(13, 0))
     leave.escalate_timeout(now=at(13, 45))
 
     penalty = leave.verify_return(operator_id=APPROVER, verified_at=at(13, 50))
     assert leave.status is LeaveStatus.VERIFIED
-    assert penalty.delay_minutes == 50
+    assert penalty.delay_minutes == 0
+    assert leave.verified_at == at(13, 50)  # möhür yenə audit üçün saxlanılır
 
 
 @pytest.mark.parametrize(

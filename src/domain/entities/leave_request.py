@@ -20,6 +20,33 @@ ANTI-FRAUD ZƏMANƏTLƏRİ:
     * Cərimə YALNIZ təsdiqlənmiş faktiki qayıdış vaxtına əsaslanır — operatorun
       düyməni kliklədiyi vaxta YOX.
     * Timeout-dan sonra Store Manager təsdiq EDƏ BİLMƏZ (dual-control tiering).
+
+──────────────────────────────────────────────────────────────────────────────
+QAYIDIŞ ANI KİMİN SAATINDAN OXUNUR (M-3 DÜZƏLİŞİ)
+──────────────────────────────────────────────────────────────────────────────
+Spesifikasiya bölmə 4 bu barədə İKİ sətir yazır və onlar hərfi oxunuşda
+bir-birinə ziddir:
+
+    "Option A: Clicks `[Təsdiqlə]` (Uses current system time)"
+    "Cərimə strictly VERIFIED ACTUAL TIME əsasında hesablanır, operatorun
+     düyməni kliklədiyi vaxt əsasında YOX."
+
+Yeganə DAXİLƏN TUTARLI oxunuş: operatorun klik anı TƏSDİQ MÖHÜRÜDÜR
+(`verified_at` — auditə düşür), cərimənin bazası isə işçinin FAKTİKİ qayıdış
+siqnalıdır. Sistemdə belə siqnal onsuz da var: STEP 2-də işçi mağaza PC-sində
+PIN daxil edib `[Mən Qayıtdım]` basır və o an NTP-yə qarşı yoxlanılmış vaxtla
+`return_claimed_time`-a yazılır. Yəni "faktiki qayıdış" üçün ayrıca bir
+mənbə İCAD ETMƏYƏ ehtiyac yoxdur — o, artıq qeydə alınıb.
+
+Əvvəl `verified_at` fallback kimi işlədilirdi. Nəticə: işçi 13:00-da qayıdıb
+PIN vurur, operator 13:20-də ekrana baxıb `[Təsdiqlə]` basır → işçiyə 20
+dəqiqə gecikmə yazılır və (dərəcə təyin olunubsa) REAL PUL kəsilir. Operatorun
+növbəsindəki yük işçinin cibindən ödənilə bilməz.
+
+RƏDD EDİLƏN ALTERNATİV: "operator gecikməsi üçün ayrıca tolerantlıq dəqiqəsi
+əlavə edək" — bu, spesifikasiyada olmayan YENİ bir güzəşt qaydası icad etmək
+olardı və həqiqi qayıdış anı onsuz da məlum olduğu halda onu təxmin etməklə
+əvəz edərdi.
 """
 
 from __future__ import annotations
@@ -81,7 +108,28 @@ class LeaveStatus(str, Enum):
 
 @dataclass
 class ManualOverride:
-    """`[Vaxtı Əllə Təyin Et]` qeydi (bölmə 4, Option B)."""
+    """`[Vaxtı Əllə Təyin Et]` qeydi (bölmə 4, Option B).
+
+    ──────────────────────────────────────────────────────────────────────────
+    ÜÇ SONLUQ, İKİSİ ƏVVƏL YOX İDİ (M-5)
+    ──────────────────────────────────────────────────────────────────────────
+    Spesifikasiya yalnız "30+ dəqiqəlik override → dual-control qaydasına
+    düşür" deyir və təsdiqin GƏLMƏDİYİ halları açıq qoyur. DB isə onları
+    ÖNCƏDƏN nəzərdə tutub: `override_status` enum-unda `REJECTED` dəyəri və
+    `manual_time_overrides.rejection_reason` sütunu `schema.sql`-da EYNİ
+    miqrasiyadan bəri mövcuddur, lakin domendə onlara aparan yol yox idi.
+    Yəni bu bir icad deyil, yarımçıq qalmış qaydanın tamamlanmasıdır:
+
+        PENDING_DUAL_CONTROL ──approve()──> APPROVED     (vaxt qüvvəyə minir)
+                 │
+                 ├──reject(səbəb)────────> REJECTED      (təsdiqçi «yox» dedi)
+                 │
+                 └──expire(timeout)──────> REJECTED      (heç kim baxmadı)
+
+    Timeout AVTOMATİK TƏSDİQƏ çevrilmir — bu, dual-control-un özünü mənasız
+    edərdi ("gözlə, özü təsdiqlənəcək"). Sorğu LƏĞV olunur və orijinal vaxt
+    qüvvədə qalır (fail-closed).
+    """
 
     operator_id: EmployeeId
     system_time: datetime
@@ -91,10 +139,56 @@ class ManualOverride:
     requires_dual_control: bool
     approved_by: EmployeeId | None = None
     approved_at: datetime | None = None
+    #: Rədd/ləğv izi. `rejected_by is None`, lakin `rejected_at` doludursa —
+    #: qərarı İNSAN deyil, timeout verib (planlaşdırılmış iş). İki halı bir
+    #: statusda saxlamaq DB enum-unu genişləndirməkdən üstündür: `ALTER TYPE
+    #: ... ADD VALUE` miqrasiyanı tranzaksiyadan kənara çıxarardı, halbuki
+    #: fərq onsuz da `rejection_reason` mətnində və `rejected_by`-da görünür.
+    rejected_by: EmployeeId | None = None
+    rejected_at: datetime | None = None
+    rejection_reason: str | None = None
+
+    @property
+    def is_rejected(self) -> bool:
+        """Təsdiqçi rədd etdi VƏ YA təsdiq müddəti bitdi."""
+        return self.rejected_at is not None
 
     @property
     def is_pending_approval(self) -> bool:
-        return self.requires_dual_control and self.approved_by is None
+        return self.requires_dual_control and self.approved_by is None and not self.is_rejected
+
+    @property
+    def is_effective(self) -> bool:
+        """Düzəliş vaxt hesablamasında NƏZƏRƏ ALINIRMI.
+
+        FAIL-CLOSED: təsdiq gözləyən düzəliş HEÇ NƏYƏ təsir etmir — nə cərimə
+        hesablamasına, nə ekrandakı vaxta. Əks halda operator 30+ dəqiqəlik
+        düzəlişi yazıb dərhal `[Təsdiqlə]` basmaqla ikinci təsdiqi tamamilə
+        yan keçə bilərdi.
+        """
+        return not self.is_rejected and not self.is_pending_approval
+
+    def reject(self, *, rejected_by: EmployeeId | None, rejected_at: datetime, reason: str) -> None:
+        """Rədd/ləğv qeydini yazır — səbəb HƏR İKİ yolda məcburidir.
+
+        Səbəbsiz rədd işçi üçün "vaxtınız düzəldilmədi, niyəsi məlum deyil"
+        demək olardı; həmin sətir isə onun cəriməsinin əsasıdır.
+        """
+        require_aware(rejected_at, field="rejected_at")
+        cleaned = " ".join(reason.split())
+        if len(cleaned) < MIN_OVERRIDE_REASON_LENGTH:
+            raise DomainRuleError(
+                f"Rədd səbəbi minimum {MIN_OVERRIDE_REASON_LENGTH} simvol olmalıdır",
+                user_message=f"Səbəb ən azı {MIN_OVERRIDE_REASON_LENGTH} simvol olmalıdır.",
+            )
+        self.rejected_by = rejected_by
+        self.rejected_at = rejected_at
+        self.rejection_reason = cleaned
+
+    def waiting_minutes(self, *, now: datetime) -> int:
+        """Neçə dəqiqədir ikinci təsdiq gözləyir (timeout ölçüsü)."""
+        require_aware(now, field="now")
+        return int((now - self.system_time).total_seconds() // 60)
 
 
 class LeaveRequest(AggregateRoot):
@@ -240,13 +334,14 @@ class LeaveRequest(AggregateRoot):
         Args:
             verified_at: Operatorun düyməni kliklədiyi an (audit üçün).
             actual_return_time: Faktiki qayıdış anı. `None` olduqda
-                `verified_at` istifadə olunur (operator dərhal təsdiqləyir).
-                **Cərimə HƏMİŞƏ bu dəyərə əsaslanır, `verified_at`-a YOX.**
+                `resolved_return_time()` zənciri işə düşür (modul başlığı,
+                M-3 DÜZƏLİŞİ). **Cərimə HƏMİŞƏ bu dəyərə əsaslanır,
+                `verified_at`-a YOX.**
         """
         require_aware(verified_at, field="verified_at")
         self._require_verifiable()
 
-        actual = actual_return_time or verified_at
+        actual = actual_return_time or self.resolved_return_time(fallback=verified_at)
         require_aware(actual, field="actual_return_time")
 
         penalty = calculate_leave_penalty(
@@ -276,6 +371,35 @@ class LeaveRequest(AggregateRoot):
             )
         )
         return penalty
+
+    def resolved_return_time(self, *, fallback: datetime) -> datetime:
+        """Cərimənin bazası olan FAKTİKİ qayıdış anı (M-3, modul başlığı).
+
+        Zəncir — ən güclü siqnatdan ən zəifə:
+
+            1. QÜVVƏDƏ olan manual düzəliş (`is_effective`) — operator kamera
+               görüntüsünə baxıb, səbəb yazıb, lazım olubsa ikinci təsdiqi
+               alıb. Bu, sistemdəki ən yaxşı sübutdur.
+            2. `return_claimed_time` — işçinin STEP 2-dəki PIN handshake-i.
+               Fiziki mövcudluq siqnalıdır (mağaza PC-si) və NTP-yə qarşı
+               yoxlanılıb.
+            3. `fallback` (operatorun klik anı) — YALNIZ 1 və 2 yoxdursa.
+
+        3-cü pillə vəziyyət maşınına görə ƏLÇATMAZDIR: `_require_verifiable`
+        yalnız 🟡/⚠️ statuslarını buraxır, hər ikisinə isə ancaq
+        `claim_return()` ilə çatılır. O, yalnız köhnə/qüsurlu sətir üçün
+        (məs. miqrasiyadan əvvəlki qeyd) müdafiə xəttidir — `None` qaytarıb
+        çağıranı `TypeError` ilə partlatmaqdansa müəyyən davranış seçilib.
+
+        TƏSDİQ GÖZLƏYƏN düzəliş 1-ci pilləyə DÜŞMÜR (`is_effective` `False`
+        qaytarır) — M-5: gözləmə vəziyyətində ORİJİNAL vaxt keçərlidir.
+        """
+        require_aware(fallback, field="fallback")
+        if self.override is not None and self.override.is_effective:
+            return self.override.overridden_time
+        if self.return_claimed_time is not None:
+            return self.return_claimed_time
+        return fallback
 
     def apply_manual_override(
         self,
@@ -354,15 +478,107 @@ class LeaveRequest(AggregateRoot):
         `chk_override_self_approval` ilə eyni qayda, domen qatında da.
         """
         require_aware(approved_at, field="approved_at")
-        if self.override is None:
-            raise DomainRuleError("Təsdiqlənəcək override yoxdur")
-        if approver_id == self.override.operator_id:
+        override = self._require_override()
+        if approver_id == override.operator_id:
             raise DomainRuleError(
                 "Operator öz override-ını özü təsdiqləyə bilməz (vəzifə ayrılığı)",
                 user_message="Öz əməliyyatınızı özünüz təsdiqləyə bilməzsiniz.",
             )
-        self.override.approved_by = approver_id
-        self.override.approved_at = approved_at
+        # RƏDD EDİLMİŞ/LƏĞV OLUNMUŞ SORĞU DİRİLDİLMİR (M-5). Sükutla təsdiq
+        # etmək təsdiqçiyə "düzəliş qüvvəyə mindi" demək olardı, halbuki
+        # cərimə artıq orijinal vaxta görə hesablanmış ola bilər.
+        if override.is_rejected:
+            raise InvalidStateTransitionError(
+                "Rədd edilmiş və ya müddəti bitmiş vaxt düzəlişi təsdiqlənə bilməz",
+                user_message=(
+                    "Bu düzəliş sorğusu artıq bağlanıb. Lazımdırsa yenidən düzəliş edin."
+                ),
+                context={"rejection_reason": override.rejection_reason},
+            )
+        # TƏSDİQLƏNMİŞ SORĞUYA TƏKRAR TƏSDİQ — vəziyyət maşınında belə keçid
+        # nəzərdə tutulmayıb, ona görə sükutla "heç nə etmə" DEYİL, açıq rədd.
+        if override.approved_by is not None:
+            raise InvalidStateTransitionError(
+                "Bu vaxt düzəlişi artıq təsdiqlənib",
+                user_message="Bu düzəliş artıq təsdiqlənib.",
+                context={"approved_by": str(override.approved_by)},
+            )
+        # ARTIQ TƏSDİQLƏNMİŞ İCAZƏYƏ SONRADAN GƏLƏN TƏSDİQ (M-5). Cərimə
+        # `verify_return` anında YAZILIB; indi gələn təsdiq onu geriyə dönük
+        # düzəldə bilməz. İşçinin yolu var və o, spesifikasiyada yazılıb:
+        # 72 saatlıq ETİRAZ mexanizmi (bölmə 4).
+        if self.status is LeaveStatus.VERIFIED:
+            raise InvalidStateTransitionError(
+                "İcazə artıq təsdiqlənib — vaxt düzəlişi geriyə dönük tətbiq edilmir",
+                user_message=(
+                    "Bu icazə artıq təsdiqlənib. Düzəliş üçün cərimə etirazı yolundan "
+                    "istifadə edin."
+                ),
+                context={"status": self.status.value},
+            )
+        override.approved_by = approver_id
+        override.approved_at = approved_at
+
+    def reject_override(
+        self, *, approver_id: EmployeeId, rejected_at: datetime, reason: str
+    ) -> None:
+        """Dual-control «yox» cavabı (M-5).
+
+        Təsdiqçi yalnız «hə» deyə bilsəydi, ikinci təsdiq bir nəzarət deyil,
+        formal düymə olardı. Rədd edilən düzəliş SİLİNMİR — `REJECTED` izi ilə
+        qalır, çünki "kim nə istədi və kim imtina etdi" sualı sonradan
+        cavablana bilməlidir (bölmə 4 AUDIT qaydası).
+        """
+        override = self._require_override()
+        if approver_id == override.operator_id:
+            # Öz sorğusunu özü bağlamaq da vəzifə ayrılığını pozardı: operator
+            # səhv düzəlişi audit izi olmadan "geri götürə" bilərdi.
+            raise DomainRuleError(
+                "Operator öz vaxt düzəlişini özü rədd edə bilməz (vəzifə ayrılığı)",
+                user_message="Öz sorğunuza özünüz qərar verə bilməzsiniz.",
+            )
+        if not override.is_pending_approval:
+            raise InvalidStateTransitionError(
+                "Yalnız ikinci təsdiq gözləyən vaxt düzəlişi rədd edilə bilər",
+                user_message="Bu düzəliş sorğusu artıq bağlanıb.",
+            )
+        override.reject(rejected_by=approver_id, rejected_at=rejected_at, reason=reason)
+
+    def expire_override(self, *, now: datetime, timeout_minutes: int) -> bool:
+        """Təsdiqsiz qalmış düzəlişi LƏĞV edir (planlaşdırılmış iş, M-5).
+
+        Bölmə 3 (Dual-Control Deadlock Guard) açıq tələb edir ki, "gözləyən
+        override-lar sonsuza qədər təsdiqsiz qalmasın". Guard yalnız
+        XƏBƏRDARLIQ edirdi; bu metod həmin tələbin ikinci yarısıdır.
+
+        Returns:
+            Ləğv MƏHZ BU çağırışda baş verdisə `True` — çağıran yalnız o zaman
+            yazır və bildiriş göndərir (təkrar bildiriş yoxdur).
+        """
+        require_aware(now, field="now")
+        override = self.override
+        if override is None or not override.is_pending_approval:
+            return False
+        waiting = override.waiting_minutes(now=now)
+        if waiting < timeout_minutes:
+            return False
+        override.reject(
+            rejected_by=None,  # qərarı insan vermədi — bax `ManualOverride` şərhi
+            rejected_at=now,
+            reason=(
+                f"Təsdiq müddəti bitdi ({waiting} dəqiqə, hədd {timeout_minutes}) — "
+                f"sorğu avtomatik ləğv olundu, orijinal vaxt qüvvədə qaldı"
+            ),
+        )
+        return True
+
+    def _require_override(self) -> ManualOverride:
+        if self.override is None:
+            raise DomainRuleError(
+                "Təsdiqlənəcək override yoxdur",
+                user_message="Bu sorğuda manual vaxt düzəlişi yoxdur.",
+            )
+        return self.override
 
     # ----------------------------- TIMEOUT ---------------------------------- #
 

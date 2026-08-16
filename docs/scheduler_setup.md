@@ -11,7 +11,7 @@ KompasOS-un bir neçə **əsas biznes qaydası** planlaşdırılmış DB funksiy
 | `cron_escalate_verification_timeouts` | İşçi `🟡` statusunda **sonsuza qədər** qalır; HR heç nə bilmir (bölmə 4, 45 dəq. qaydası) |
 | `cron_detect_unauthorized_absences` | Attendance Report-da "İcazəsiz Qayıb" sütunu **həmişə boş** olur (bölmə 4/6) |
 | `cron_escalate_task_deadlines` | Gecikmiş tapşırıqlar üçün eskalasiya getmir (bölmə 6) |
-| `cron_close_expired_appeals` | Etiraz pəncərəsi bağlanmır → cərimələr **export-a heç vaxt düşmür** (bölmə 6 LOCK) |
+| `cron_close_expired_appeals` | Cavabsız qalmış etiraz `EXPIRED` kimi işarələnmir → HR-ın gecikməsi **heç bir hesabatda görünmür** (M-6). Export kilidinə təsiri YOXDUR: kilid vaxt şərtindən (`appeal_window_closes_at <= now()`) və qərarsız etirazın mövcudluğundan asılıdır, bu funksiyanın işləməsindən yox |
 | `cron_reset_sales_points` | 6 aylıq xal sıfırlanması baş vermir (bölmə 6) |
 | `cron_notify_points_reset_upcoming` | 14 günlük xəbərdarlıq göndərilmir (bölmə 6) |
 | `cron_update_license_payment_status` | Ödəniş gecikməsi aşkarlanmır (bölmə 8) |
@@ -127,7 +127,9 @@ qayda yalnız **Python qatında** yaşayır — onları `pg_cron` çağıra bilm
 | `STAFFING_PATTERN_REFRESH` | #13 həftə-günü kadr ortaları (hər aktiv mağaza) | gündəlik | yüngül |
 | `EMPLOYEE_DOCUMENT_EXPIRY_NOTICE` | #17 sənəd bitmə xəbərdarlığı (30/14/7 gün) | gündəlik | yüngül |
 | `ATTRITION_RISK_RECALC` | #21 işdən çıxma riski balı | gündəlik | yüngül |
-| `FINE_EXPIRE_STALE` | cavabsız etirazların bağlanması (72 saat) | **saatlıq** | yüngül |
+| `FINE_EXPIRE_STALE` | cavabsız etirazların SLA-pozuntusu kimi işarələnməsi (72 saat) | **saatlıq** | yüngül |
+| `DUAL_CONTROL_OVERRIDE_TIMEOUT` | təsdiqsiz qalmış manual vaxt düzəlişinin ləğvi | **saatlıq** | yüngül |
+| `DRIVE_QUOTA_CHECK` | Drive kvotası: 90% xəbərdarlığı, 100%-də `QUOTA_EXCEEDED`, razılıq ləğvində `REVOKED` | gündəlik | yüngül |
 | `NIGHTLY_BACKUP` | `pg_dump` + saxlama müddəti bitmiş faylların silinməsi | gündəlik | **AĞIR** |
 
 **Sıra qorunur:** `BEHAVIOR_BASELINE_RECALC` motordan ƏVVƏL işləyir — motor
@@ -137,6 +139,26 @@ baz xəttini oxuyur, köhnəsi ilə işləsəydi hər anomaliya bir gün gecikə
 işinin tətbiq qatındakı əkizidir və həmin cron `schema.sql`-da `'0 * * * *'`
 ilə qeydiyyatdan keçib — ritmlər eyni olmasa, etiraz pəncərəsinin bağlanma
 anı `pg_cron`-un olub-olmamasından asılı olardı.
+
+**Qeyd (Drive):** `DRIVE_QUOTA_CHECK` Google OAuth açarları təyin edilməyibsə
+**sakit dayanır** (iş `SUCCEEDED`, izahı «Drive konfiqurasiya edilməyib») —
+`.env.example` həmin açarların boş qala biləcəyini yazır və istisna atsaydıq,
+Drive işlətməyən quraşdırmada gecəlik hesabat hər gün `FAILED` göstərərdi.
+Hədd (`DRIVE_QUOTA_WARNING_RATIO`, defolt 0.90) və təkrar-susma müddəti
+(`DRIVE_QUOTA_WARNING_COOLDOWN_DAYS`, defolt 7) **ROOT İdarə Mərkəzindədir**
+və yoxlama anında oxunur.
+
+**Qeyd (M-6):** `FINE_EXPIRE_STALE` artıq etirazı «bağlamır» — `EXPIRED` yalnız
+SLA pozuntusunun izidir. Həmin etiraz sonradan da qərar ala bilir və cərimə
+qərar verilənə qədər Premiya&Cərimə export-una DÜŞMÜR (miqrasiya 052).
+
+`DUAL_CONTROL_OVERRIDE_TIMEOUT` **saatlıq**dır, çünki həddi DƏQİQƏ ilə ölçülür
+(`DUAL_CONTROL_APPROVAL_TIMEOUT_MINUTES`, defolt 480 = bir iş növbəsi) və
+gündəlik ritmdə 24 saatlıq xəta verərdi. Bu işin DB-də əkizi YOXDUR: qərar
+bildiriş göndərməyi və audit sətri yazmağı tələb edir, `pg_cron` isə hər ikisini
+domen qaydaları ilə edə bilməz. **Terminal söndürülü qalsa da təhlükəsizlik
+boşluğu yaranmır:** `approve_dual_control` təsdiqdən ƏVVƏL müddəti özü yoxlayır,
+yəni vaxtı keçmiş sorğu bu iş heç vaxt işləməsə belə təsdiqlənə bilmir.
 
 ### İki giriş nöqtəsi
 

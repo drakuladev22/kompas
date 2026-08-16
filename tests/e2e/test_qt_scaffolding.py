@@ -189,6 +189,7 @@ class _ConflictRepository:
     def __init__(self, item: Any) -> None:
         self._item = item
         self.resolved: list[tuple[Any, Any, str]] = []
+        self.applied: list[tuple[str, Any]] = []
 
     def list_open(self, tenant_id: Any, *, limit: int = 100) -> list[Any]:
         return [] if self.resolved else [self._item]
@@ -207,8 +208,17 @@ class _ConflictRepository:
         resolved_by: Any,
         resolved_at: datetime,
         note: str,
-    ) -> None:
+    ) -> bool:
         self.resolved.append((conflict_id, resolution, note))
+        return True
+
+    def apply_local_version(
+        self, *, table_name: str, record_id: Any, local_version: dict[str, Any]
+    ) -> int:
+        """Hədəf sətrə tətbiq — `KEPT_LOCAL` üçün. Bu ssenari `KEPT_REMOTE`
+        seçir, ona görə siyahı BOŞ qalmalıdır (aşağıda iddia edilir)."""
+        self.applied.append((table_name, record_id))
+        return 1
 
 
 def _new_buffer(path: Path) -> Any:
@@ -375,6 +385,9 @@ def test_offline_to_online_conflict_resolution_e2e(tmp_path: Path) -> None:
 
         assert repository.resolved[0][1] is Resolution.KEPT_REMOTE
         assert "SYNC_CONFLICT_RESOLVED" in audit.actions()
+        # `KEPT_REMOTE` BOŞ ƏMƏLİYYATDIR: konflikt anında hədəf sətirdə onsuz
+        # da bulud versiyası durur (yuxarıdakı 3-cü addım bunu təsdiqlədi).
+        assert repository.applied == [], "`KEPT_REMOTE` hədəf cədvələ yazmamalıdır"
 
         # 5. QƏRAR BUFERƏ TƏTBİQ OLUNUR: yerli versiya atılır, növbə boşalır.
         buffer.resolve_conflict(entry_id, keep_local=False)

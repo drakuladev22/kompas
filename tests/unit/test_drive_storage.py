@@ -12,6 +12,7 @@ Tələbin 6-cı bölməsindəki ssenarilər burada yoxlanılır:
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -721,6 +722,7 @@ class FakeConnectionRepo:
         self.quota_updates: list[tuple[QuotaStatus, bool]] = []
         self.warnings_marked = 0
         self.errors: list[str] = []
+        self.revocations = 0
 
     def get_active(self) -> Any:
         return self.connection
@@ -735,6 +737,16 @@ class FakeConnectionRepo:
 
     def record_error(self, _cid: Any, message: str) -> None:
         self.errors.append(message)
+
+    def mark_revoked(self, _cid: Any, *, now: Any = None) -> bool:
+        """`ACTIVE`/`QUOTA_EXCEEDED` → `REVOKED`. İDEMPOTENT: ikinci dəfə `False`."""
+        from src.infrastructure.storage.connections import DriveConnectionStatus
+
+        if self.connection is None or self.connection.status is DriveConnectionStatus.REVOKED:
+            return False
+        self.connection = replace(self.connection, status=DriveConnectionStatus.REVOKED)
+        self.revocations += 1
+        return True
 
 
 class FakeQuotaFactory:
@@ -859,6 +871,155 @@ def test_no_active_connection_is_not_an_error() -> None:
     assert result.checked is False
     assert result.error is None
     assert notifier.messages == []
+
+
+# --------------------------------------------------------------------------- #
+# RAZILIQ LƏĞVİ — `REVOKED` ARTIQ ÖLÜ VƏZİYYƏT DEYİL
+#
+# `STATUS_TEXT` ilk gündən «İcazə ləğv edilib» sətrini daşıyırdı, lakin enum-da
+# qarşılığı yox idi və heç bir kod ora keçirmirdi: istifadəçi Google-da razılığı
+# geri alanda ekran «Aktiv» göstərməyə davam edirdi və həqiqət yalnız növbəti
+# yükləmə çökəndə üzə çıxırdı.
+# --------------------------------------------------------------------------- #
+
+
+def test_revoked_consent_moves_the_connection_out_of_active() -> None:
+    """`invalid_grant` → `REVOKED` + kritik bildiriş."""
+    from src.infrastructure.storage.connections import DriveConnectionStatus
+    from src.infrastructure.storage.drive_api import DriveConsentRevokedError
+
+    repo = FakeConnectionRepo(make_connection())
+    monitor, notifier = make_monitor(repo, DriveConsentRevokedError("invalid_grant"))
+
+    result = monitor.check(now=AUGUST)
+
+    assert result.marked_revoked is True
+    assert repo.connection.status is DriveConnectionStatus.REVOKED
+    assert repo.connection.status is not DriveConnectionStatus.ACTIVE
+    assert repo.connection.accepts_uploads is False
+    assert notifier.messages[0]["is_critical"] is True
+    assert "ləğv edilib" in notifier.messages[0]["title_az"]
+
+
+def test_revoked_consent_is_not_treated_as_a_transient_network_error() -> None:
+    """Şəbəkə nasazlığından FƏRQLİ yol: `record_error` deyil, vəziyyət dəyişikliyi.
+
+    Birləşdirilsəydi, sistem əbədi «bir azdan yenə cəhd edərəm» vəziyyətində
+    qalar və bağlantı `ACTIVE` görünməyə davam edərdi.
+    """
+    from src.infrastructure.storage.drive_api import DriveConsentRevokedError
+
+    repo = FakeConnectionRepo(make_connection())
+    monitor, _notifier = make_monitor(repo, DriveConsentRevokedError("invalid_grant"))
+
+    monitor.check(now=AUGUST)
+
+    assert repo.errors == [], "Razılıq ləğvi `last_error` sətrinə deyil, VƏZİYYƏTƏ yazılır"
+    assert repo.revocations == 1
+
+
+def test_revocation_notice_is_sent_only_once() -> None:
+    """Gündəlik iş eyni xəbərdarlığı hər gecə təkrarlamamalıdır (alarm yorğunluğu)."""
+    from src.infrastructure.storage.drive_api import DriveConsentRevokedError
+
+    repo = FakeConnectionRepo(make_connection())
+    monitor, notifier = make_monitor(repo, DriveConsentRevokedError("invalid_grant"))
+
+    monitor.check(now=AUGUST)
+    second = monitor.check(now=AUGUST + timedelta(days=1))
+
+    assert second.marked_revoked is False
+    assert len(notifier.messages) == 1
+
+
+def test_invalid_grant_response_is_recognised_as_a_revoked_consent() -> None:
+    """Google razılıq ləğvini HTTP 400 + `{"error": "invalid_grant"}` ilə bildirir.
+
+    YALNIZ STATUS KODUNA baxmaq kifayət etmirdi: 400 həm də «səhv sorğu»
+    deməkdir. Kod cavabın GÖVDƏSİNDƏDİR.
+    """
+    import httpx
+
+    from src.infrastructure.storage.drive_api import _is_revoked_grant
+
+    revoked = httpx.Response(400, json={"error": "invalid_grant"})
+    other = httpx.Response(400, json={"error": "invalid_request"})
+    unreadable = httpx.Response(500, text="<html>gateway</html>")
+
+    assert _is_revoked_grant(revoked) is True
+    assert _is_revoked_grant(other) is False
+    # ŞÜBHƏ HALINDA `False`: naməlum cavabı razılıq ləğvi saymaq işləyən
+    # hesabı səhvən `REVOKED` edərdi (bax funksiyanın docstring-i).
+    assert _is_revoked_grant(unreadable) is False
+
+
+def test_token_refresh_raises_the_revoked_error_not_a_generic_one() -> None:
+    """`_token()` `invalid_grant`-ı AYRICA istisna ilə qaytarmalıdır."""
+    import httpx
+
+    from src.infrastructure.storage.drive_api import (
+        DriveApiClient,
+        DriveApiError,
+        DriveConsentRevokedError,
+        OAuthClient,
+    )
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": "invalid_grant"})
+
+    transport = httpx.Client(transport=httpx.MockTransport(_handler))
+    client = DriveApiClient(
+        oauth=OAuthClient(client_id="id", client_secret="secret"),
+        refresh_token="geri-alınmış-token",
+        transport=transport,
+    )
+
+    with pytest.raises(DriveConsentRevokedError) as caught:
+        client._token()
+
+    # Alt-sinifdir: mövcud `except DriveApiError` blokları hələ də tutur.
+    assert isinstance(caught.value, DriveApiError)
+    assert "yenidən qoşun" in caught.value.user_message
+
+
+def test_other_token_failures_stay_generic_and_retryable() -> None:
+    """Şəbəkə/server nasazlığı razılıq ləğvi SAYILMAMALIDIR — o, öz-özünə keçir."""
+    import httpx
+
+    from src.infrastructure.storage.drive_api import (
+        DriveApiClient,
+        DriveApiError,
+        DriveConsentRevokedError,
+        OAuthClient,
+    )
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="service unavailable")
+
+    transport = httpx.Client(transport=httpx.MockTransport(_handler))
+    client = DriveApiClient(
+        oauth=OAuthClient(client_id="id", client_secret="secret"),
+        refresh_token="işləyən-token",
+        transport=transport,
+    )
+
+    with pytest.raises(DriveApiError) as caught:
+        client._token()
+
+    assert not isinstance(caught.value, DriveConsentRevokedError)
+
+
+def test_revoked_status_has_a_user_facing_label() -> None:
+    """Enum genişləndi — `status_label` sözlüyü də genişlənməlidir.
+
+    Unudulsaydı, hesabat/ekran `KeyError` ilə çökərdi (sözlük tam axtarışdır).
+    """
+    from src.infrastructure.storage.connections import DriveConnectionStatus
+    from src.infrastructure.storage.quota_monitor import status_label
+
+    for status in DriveConnectionStatus:
+        assert status_label(status), f"{status.value} üçün etiket yoxdur"
+    assert status_label(DriveConnectionStatus.REVOKED) == "İcazə ləğv edilib"
 
 
 def test_unlimited_account_reports_zero_usage_ratio() -> None:

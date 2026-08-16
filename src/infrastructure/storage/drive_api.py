@@ -79,6 +79,29 @@ class DriveQuotaExceededError(DriveApiError):
     user_message = "Google Drive hesabında yer qalmayıb — administratorla əlaqə saxlayın."
 
 
+class DriveConsentRevokedError(DriveApiError):
+    """İstifadəçi Google-da razılığı GERİ ALIB — refresh token artıq işləmir.
+
+    NİYƏ AYRICA İSTİSNA: adi `DriveApiError` «şəbəkə/API problemi» deməkdir və
+    ona qarşı düzgün reaksiya GÖZLƏMƏK, sonra yenidən cəhd etməkdir. Razılıq
+    ləğvi isə heç vaxt öz-özünə keçmir — administrator hesabı YENİDƏN
+    qoşmalıdır. İkisini bir istisnada birləşdirsəydik, sistem əbədi olaraq
+    «bir azdan yenə cəhd edərəm» vəziyyətində qalar və ekranda bağlantı hələ də
+    «Aktiv» görünərdi (bax `DriveConnectionStatus.REVOKED`).
+    """
+
+    user_message = (
+        "Google Drive icazəsi ləğv edilib — Ayarlar → Drive Bağlantısı "
+        "bölməsindən hesabı yenidən qoşun."
+    )
+
+
+#: Google OAuth token endpoint-inin razılıq-ləğvi kodu (RFC 6749 §5.2).
+#: Eyni kod «token vaxtı bitib/silinib» halında da qayıdır — praktik nəticə
+#: EYNİDİR: bu refresh token bir daha işləməyəcək.
+OAUTH_REVOKED_ERROR_CODE: Final[str] = "invalid_grant"
+
+
 @dataclass(frozen=True)
 class OAuthClient:
     """Google Cloud layihəsinin OAuth klient məlumatları.
@@ -153,6 +176,18 @@ class DriveApiClient:
                     "DRIVE_TOKEN_REFRESH_FAILED",
                     extra={"status_code": response.status_code},
                 )
+                # RAZILIQ LƏĞVİ AYRICA TANINIR: Google `invalid_grant` məhz
+                # refresh token geri alındıqda (və ya silindikdə) qaytarır. Bu,
+                # təkrar cəhdlə keçən bir nasazlıq DEYİL — bağlantı `REVOKED`
+                # işarələnməli və administrator xəbərdar edilməlidir, əks halda
+                # ekran «Aktiv» göstərməyə davam edər (bax `quota_monitor`).
+                # Kod cavabın GÖVDƏSİNDƏDİR, status kodunda yox: Google onu
+                # HTTP 400 ilə qaytarır, yəni yalnız statusa baxmaq kifayət etmir.
+                if _is_revoked_grant(response):
+                    raise DriveConsentRevokedError(
+                        "Google razılığı geri alınıb (invalid_grant)",
+                        context={"status_code": response.status_code},
+                    )
                 raise DriveApiError(
                     f"Access token alınmadı (HTTP {response.status_code})",
                     user_message="Google Drive bağlantısı bərpa edilməlidir.",
@@ -316,11 +351,29 @@ class DriveApiClient:
         return str(response.json().get("user", {}).get("emailAddress", ""))
 
 
+def _is_revoked_grant(response: httpx.Response) -> bool:
+    """Cavab «razılıq geri alınıb» deyirmi (`{"error": "invalid_grant"}`).
+
+    GÖVDƏ OXUNA BİLMƏSƏ `False` QAYTARILIR: naməlum formatlı cavabı razılıq
+    ləğvi saymaq bağlantını səhvən `REVOKED` edərdi və administrator işləyən
+    hesabı yenidən qoşmağa məcbur olardı — yəni səhv istiqamətdə "təhlükəsiz"
+    olardı. Şübhə halında adi `DriveApiError` daha az zərərlidir: o, təkrar
+    cəhdlə keçir.
+    """
+    try:
+        payload = response.json()
+    except (ValueError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("error") == OAUTH_REVOKED_ERROR_CODE
+
+
 __all__ = [
     "DRIVE_API",
     "FOLDER_MIME",
+    "OAUTH_REVOKED_ERROR_CODE",
     "DriveApiClient",
     "DriveApiError",
+    "DriveConsentRevokedError",
     "DriveQuotaExceededError",
     "OAuthClient",
 ]

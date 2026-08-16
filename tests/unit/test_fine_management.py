@@ -393,6 +393,127 @@ def test_expired_appeals_are_closed_by_the_scheduler(ctx: Ctx) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# M-6 — pəncərə bağlananda GÖZLƏYƏN etiraz
+# --------------------------------------------------------------------------- #
+
+
+def _appealed_fine(ctx: Ctx) -> tuple[Fine, Employee, FineAppealUseCase]:
+    """Nəşr olunmuş cərimə + işçinin göndərdiyi etiraz."""
+    fine = ctx.published_fine()
+    worker = make_employee(SystemRole.SELLER, flags=[], employee_id=WORKER)
+    use_case = ctx.appeals_uc()
+    use_case.submit(
+        tenant_id=TENANT,
+        employee=worker,
+        fine_id=fine.id,
+        reason="Həmin gün formada idim, kamera səhv göstərir",
+    )
+    return fine, worker, use_case
+
+
+def test_an_open_appeal_blocks_the_export_even_before_the_window_closes(ctx: Ctx) -> None:
+    """Etiraz göndərilən an cərimə MÜBAHİSƏLİ olur."""
+    fine, _worker, _use_case = _appealed_fine(ctx)
+
+    assert fine.has_open_appeal is True
+    assert fine.is_exportable(now=NOW + timedelta(hours=80)) is False
+
+
+def test_an_unanswered_appeal_keeps_the_fine_out_of_the_export(ctx: Ctx) -> None:
+    """M-6-nın MƏĞZİ: HR baxmayıbsa, pul KƏSİLMİR.
+
+    Əvvəl `expire_stale` cəriməni export-a buraxırdı — yəni HR-ın süstlüyü
+    işçidən real pul kəsintisi ilə nəticələnirdi.
+    """
+    fine, _worker, use_case = _appealed_fine(ctx)
+    after_window = NOW + timedelta(hours=80)
+    ctx.clock.set(after_window)
+
+    assert use_case.expire_stale(TENANT) == 1
+
+    assert fine.is_exportable(now=after_window) is False
+    assert "FINE_APPEAL_SLA_BREACH" in ctx.notifier.categories()
+
+
+def test_an_expired_appeal_can_still_be_decided(ctx: Ctx) -> None:
+    """72 saat İŞÇİNİN göndərmə hüququnun müddətidir, HR-ın cavab borcunun YOX."""
+    fine, _worker, use_case = _appealed_fine(ctx)
+    ctx.clock.set(NOW + timedelta(hours=80))
+    use_case.expire_stale(TENANT)
+    appeal = next(iter(ctx.appeals.items.values()))
+    assert appeal.status is AppealStatus.EXPIRED
+
+    hr = make_employee(SystemRole.HR_ADMIN, flags=[APPROVE_APPEAL])
+    decision = use_case.approve(
+        tenant_id=TENANT,
+        actor=hr,
+        appeal_id=appeal.id,
+        note="Görüntü yenidən yoxlanıldı, işçi haqlıdır",
+    )
+
+    assert decision.was_approved
+    assert decision.fine.status is FineStatus.REVERSED
+    assert fine.has_open_appeal is False
+
+
+def test_an_undecided_appeal_stays_in_the_hr_inbox_after_the_window(ctx: Ctx) -> None:
+    """`EXPIRED` sətir inbox-dan düşsəydi, cərimə əbədi bloklanardı."""
+    _fine, _worker, use_case = _appealed_fine(ctx)
+    ctx.clock.set(NOW + timedelta(hours=80))
+    use_case.expire_stale(TENANT)
+
+    hr = make_employee(SystemRole.HR_ADMIN, flags=[APPROVE_APPEAL])
+    inbox = use_case.inbox(tenant_id=TENANT, actor=hr)
+
+    assert len(inbox) == 1
+    assert inbox[0].status is AppealStatus.EXPIRED
+    assert inbox[0].is_overdue(now=ctx.clock.now()) is True
+    assert use_case.undecided_count(TENANT) == 1
+
+
+def test_rejecting_an_appeal_releases_the_export_lock(ctx: Ctx) -> None:
+    """Rədd də QƏRARDIR — cərimə qüvvədə qalır və hesabata düşə bilir."""
+    fine, _worker, use_case = _appealed_fine(ctx)
+    hr = make_employee(SystemRole.HR_ADMIN, flags=[APPROVE_APPEAL])
+    appeal = next(iter(ctx.appeals.items.values()))
+
+    use_case.reject(
+        tenant_id=TENANT,
+        actor=hr,
+        appeal_id=appeal.id,
+        note="Görüntüdə işçi forma geyinməyib, etiraz əsassızdır",
+    )
+
+    assert fine.has_open_appeal is False
+    assert fine.status is FineStatus.PUBLISHED
+    assert fine.is_exportable(now=NOW + timedelta(hours=80)) is True
+    assert use_case.undecided_count(TENANT) == 0
+
+
+def test_reversal_after_export_raises_a_payroll_correction_alarm(ctx: Ctx) -> None:
+    """M-6, bənd 3: export-dan sonra ləğv SÜKUTLA baş verə bilməz.
+
+    `exported_period` sıfırlanmır (əks halda növbəti export cəriməni yenidən
+    tutardı) — ona görə düzəlişin YEGANƏ siqnalı bu kritik bildirişdir.
+    """
+    fine, _worker, use_case = _appealed_fine(ctx)
+    fine.exported_period = "2026-08"  # hesabat artıq göndərilib
+    hr = make_employee(SystemRole.HR_ADMIN, flags=[APPROVE_APPEAL])
+    appeal = next(iter(ctx.appeals.items.values()))
+
+    decision = use_case.approve(
+        tenant_id=TENANT,
+        actor=hr,
+        appeal_id=appeal.id,
+        note="Görüntü yenidən yoxlanıldı, cərimə səhvdir",
+    )
+
+    assert decision.fine.requires_payroll_correction is True
+    assert decision.fine.exported_period == "2026-08"
+    assert "FINE_REVERSED_AFTER_EXPORT" in ctx.notifier.categories()
+
+
+# --------------------------------------------------------------------------- #
 # Etiraz SLA-sı — ROOT limiti, kodda sabit ədəd deyil (bölmə 3, bənd 1)
 # --------------------------------------------------------------------------- #
 

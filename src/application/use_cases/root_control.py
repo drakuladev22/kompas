@@ -37,7 +37,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from src.domain.policies import DEFAULT_LIMITS, FeatureModule, SystemLimitKey
+from src.domain.policies import (
+    DEFAULT_LIMITS,
+    FACE_EXEMPTION_COMPENSATING_MODULE,
+    FeatureModule,
+    SystemLimitKey,
+)
 from src.domain.value_objects.authorization import SystemRole
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
@@ -49,6 +54,7 @@ if TYPE_CHECKING:
     from src.domain.interfaces.ports import (
         AuditTrail,
         Clock,
+        FaceExemptionRepository,
         FeatureToggles,
         PermissionFlagRepository,
         SystemLimits,
@@ -101,6 +107,23 @@ class StructuralModuleError(RootControlError):
 
     user_message = (
         "Bu modul sistemin struktur hissəsidir. Söndürmək üçün təsdiq mətni yazmalısınız."
+    )
+
+
+class CompensatingControlLockedError(RootControlError):
+    """Modul BAŞQA bir struktur zəmanətin kompensasiyasını daşıyır (SEC-020).
+
+    `StructuralModuleError`-dan FƏRQLİDİR VƏ AYRI SİNİF OLMASI QƏSDƏNDİR:
+    orada cavab «təsdiq mətni yaz» (yəni əməliyyat mümkündür, sənədləşdirilməli
+    olur), burada isə əməliyyat QƏTİ ŞƏKİLDƏ mümkün deyil — əvvəlcə asılı olan
+    zəmanət aradan qaldırılmalıdır. Eyni sinifdən istifadə etsəydik, ekran
+    istifadəçiyə "təsdiq yazın" deyər, təsdiq yazılandan sonra isə yenidən
+    rədd edərdi.
+    """
+
+    user_message = (
+        "Bu modul aktiv üz-təsdiqi istisnalarının kompensasiya edici nəzarətidir "
+        "və söndürülə bilməz."
     )
 
 
@@ -157,12 +180,19 @@ class RootControlUseCase:
         limits: SystemLimits,
         toggles: FeatureToggles,
         flags: PermissionFlagRepository,
+        # SEC-020: `face_exemptions` MƏCBURİ arqumentdir, `| None = None` DEYİL.
+        # Defolt dəyər versəydik, kompozisiya kökündə onu ötürməyi unutmaq
+        # qapını SÜKUTLA açardı — yəni qoruma "bağlıdır" görünər, faktiki
+        # olaraq isə heç vaxt işləməzdi. Məcburi arqument həmin səhvi tərtib
+        # zamanına (mypy) çəkir.
+        face_exemptions: FaceExemptionRepository,
         audit: AuditTrail,
         clock: Clock,
     ) -> None:
         self._limits = limits
         self._toggles = toggles
         self._flags = flags
+        self._face_exemptions = face_exemptions
         self._audit = audit
         self._clock = clock
 
@@ -310,6 +340,9 @@ class RootControlUseCase:
         now = self._clock.now()
         self._require(actor, MANAGE_LIMITS_FLAG, now=now)
 
+        if not enabled:
+            self._require_no_dependent_guarantee(tenant_id, module_key, actor=actor, now=now)
+
         structural = self._toggles.is_structural(tenant_id, module_key)
         if not enabled and structural:
             cleaned = (confirmation or "").strip()
@@ -345,6 +378,69 @@ class RootControlUseCase:
             reason=confirmation,
         )
         return ModuleView(module_key=module_key, is_enabled=enabled, is_structural=structural)
+
+    def _require_no_dependent_guarantee(
+        self, tenant_id: TenantId, module_key: str, *, actor: Employee, now: datetime
+    ) -> None:
+        """SEC-020 — kompensasiya edici nəzarət ASILISI VARKƏN söndürülə bilməz.
+
+        ──────────────────────────────────────────────────────────────────────
+        BAĞLANAN BOŞLUQ
+        ──────────────────────────────────────────────────────────────────────
+        `facecontrol.md` bənd 14 üz-təsdiqi istisnasını (tibbi/fiziki səbəblə
+        PIN-only) YALNIZ bir şərtlə verir: boşluq MƏCBURİ ikinci-təsdiqlə
+        əvəzlənir. Həmin ikinci təsdiq `DUAL_CONTROL` modulunun axınıdır və o,
+        adi (struktur-olmayan) toggle idi — yəni Root bir kliklə istisnalı
+        işçini kompensasiyasız qoya bilirdi. Nəticə tərif olunmamış davranış
+        idi: ya işçi əbədi bloklanardı, ya da onun PIN-i ilə İSTƏNİLƏN şəxs
+        təkbaşına təsdiq alardı.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ ŞƏRTİ KİLİD, NİYƏ `is_structural = TRUE` DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        `is_structural` variantı ciddi nəzərdən keçirildi və RƏDD EDİLDİ:
+
+          * O, YAZILI TƏSDİQ tələb edir, SÖNDÜRMƏNİ ÖZÜNÜ dayandırmır. 6
+            simvol yazan Root istisnalı işçini yenə kompensasiyasız qoyardı —
+            yəni sənədləşmə əlavə olunar, zəmanət isə bərpa olunmazdı.
+          * Zəmanət ŞƏRTLİDİR: aktiv istisnası olmayan kirayəçidə `DUAL_CONTROL`
+            həqiqətən adi bir qatdır (manual vaxt düzəlişi həddi) və onu qlobal
+            "struktur" elan etmək `is_structural`-ın mənasını seyrəldərdi.
+          * Kilid ƏBƏDİ DEYİL: Root əvvəlcə istisnaları ləğv edir, sonra modulu
+            söndürür. Yəni qapı bağlıdır, açarı isə Root-un öz əlindədir.
+
+        ──────────────────────────────────────────────────────────────────────
+        QAYDA İKİ YERDƏDİR (CLAUDE.md §5)
+        ──────────────────────────────────────────────────────────────────────
+        DB yarısı `enforce_face_exemption_compensation()` trigger-idir
+        (`migrations/051`) — ekranı yan keçən birbaşa `UPDATE feature_toggles`
+        də eyni cavabı alır. Üçüncü qat isə runtime-dır
+        (`FaceVerificationUseCase._exempt_employee_gate`): köhnə/əlüstü
+        yaradılmış vəziyyət də sükutla keçmir.
+        """
+        if module_key != FACE_EXEMPTION_COMPENSATING_MODULE.value:
+            return
+        active = self._face_exemptions.list_active(tenant_id, now=now)
+        if not active:
+            return
+        _security_log.warning(
+            "COMPENSATING_MODULE_DISABLE_BLOCKED",
+            extra={
+                "actor_id": str(actor.id),
+                "module": module_key,
+                "active_exemptions": len(active),
+            },
+        )
+        raise CompensatingControlLockedError(
+            f"«{module_key}» modulu {len(active)} aktiv Face Control istisnasının "
+            f"kompensasiya edici nəzarətidir — söndürülə bilməz (facecontrol.md bənd 14)",
+            user_message=(
+                f"{len(active)} aktiv üz-təsdiqi istisnası var; onların kompensasiya "
+                f"nəzarəti məhz bu moduldur. Modulu söndürmək üçün əvvəlcə həmin "
+                f"istisnaları «Üz Təsdiqi İstisnaları» ekranından ləğv edin."
+            ),
+            context={"module": module_key, "active_exemptions": len(active)},
+        )
 
     # -------------------------- permission registry -------------------------- #
 
@@ -427,6 +523,7 @@ __all__ = [
     "MANAGE_LIMITS_FLAG",
     "MANAGE_PERMISSIONS_FLAG",
     "MIN_CONFIRMATION_LENGTH",
+    "CompensatingControlLockedError",
     "LimitView",
     "ModuleView",
     "RootControlError",

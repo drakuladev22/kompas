@@ -103,10 +103,10 @@ class _Actor:
 class _Connection:
     """`DriveConnectionRepository.connect()`-in qaytardığı obyektin əvəzi."""
 
-    def __init__(self) -> None:
+    def __init__(self, status: str = "ACTIVE") -> None:
         self.id = uuid.uuid4()
         self.google_account_email = "mağaza@şirkət.az"
-        self.status = type("_S", (), {"value": "ACTIVE"})()
+        self.status = type("_S", (), {"value": status})()
         self.quota_used_bytes: int | None = None
         self.quota_total_bytes: int | None = None
         self.connected_at = MOMENT
@@ -226,6 +226,55 @@ def test_audit_failure_is_reported_to_the_user_not_swallowed(monkeypatch: Any) -
     # Uğur yolunun qalan addımları DAYANMIR: keş atılır, növbə boşaldılır.
     assert context.invalidated == 1
     assert context.upload_runs == 1
+
+
+def test_revoked_connection_is_not_shown_as_active(monkeypatch: Any) -> None:
+    """RAZILIQ LƏĞVİNDƏN SONRA EKRAN «Aktiv» GÖSTƏRMƏMƏLİDİR.
+
+    Əvvəl kontroller yalnız `status == "ACTIVE"` sətrini axtarırdı, `REVOKED`
+    isə enum-da ümumiyyətlə yox idi — nəticədə istifadəçi Google-da razılığı
+    geri alanda ekran vəziyyəti dəyişmirdi və problem yalnız növbəti yükləmə
+    çökəndə bilinirdi.
+    """
+    audit = _Audit()
+    controller, _context, repository, screen = _controller(audit, monkeypatch)
+    repository.connection = _Connection(status="REVOKED")
+
+    controller.refresh(screen)
+
+    shown = screen.active[-1]
+    assert shown["status_text"] == "İcazə ləğv edilib"
+    assert shown["status_text"] != "Aktiv"
+    assert shown["tone"] == "danger"
+    # Hesabın adı GÖRÜNMƏLİDİR: «Qoşulmayıb» yazsaydıq, administrator hansı
+    # hesabın icazəsinin ləğv olunduğunu bilməzdi.
+    assert shown["account"] == "mağaza@şirkət.az"
+
+
+def test_quota_exceeded_connection_is_also_shown_with_its_real_state(
+    monkeypatch: Any,
+) -> None:
+    """Eyni boşluq `QUOTA_EXCEEDED`-də də vardı — «Qoşulmayıb» səbəbi gizlədirdi."""
+    audit = _Audit()
+    controller, _context, repository, screen = _controller(audit, monkeypatch)
+    repository.connection = _Connection(status="QUOTA_EXCEEDED")
+
+    controller.refresh(screen)
+
+    assert screen.active[-1]["status_text"] == "Yer qalmayıb"
+    assert screen.active[-1]["tone"] == "warning"
+
+
+def test_archived_only_history_still_reads_as_not_connected(monkeypatch: Any) -> None:
+    """Yalnız arxiv sətri qalıbsa cari hesab YOXDUR — mətn bunu açıq deyir."""
+    audit = _Audit()
+    controller, _context, repository, screen = _controller(audit, monkeypatch)
+    repository.connection = _Connection(status="ARCHIVED")
+
+    controller.refresh(screen)
+
+    assert screen.active[-1]["status_text"] == "Qoşulmayıb"
+    assert screen.active[-1]["account"] is None
 
 
 # --------------------------------------------------------------------------- #

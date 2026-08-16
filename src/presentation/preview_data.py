@@ -37,6 +37,12 @@ from src.domain.value_objects.identifiers import (
     StoreId,
     TenantId,
 )
+from src.infrastructure.plugins.contracts import (
+    PluginCapability,
+    PluginManifest,
+    PluginStatus,
+)
+from src.presentation.plugin_surface import ApprovedPlugin
 
 #: Maketdəki tarix — ekranlardakı "12 Avqust 2026" ilə uyğun olsun deyə sabitdir.
 PREVIEW_NOW: Final = datetime(2026, 8, 12, 9, 42, tzinfo=UTC)
@@ -87,6 +93,12 @@ _ADMIN_FLAGS: Final = (
     # tutuşdurula bilsin.
     "can_conduct_store_audit",
     "can_report_incident",
+    # Aylıq Cərimə İcmalı (miqrasiya 003). `can_issue_fines`-dən FƏRQLİ
+    # olaraq bu flag REAL `ADMIN` rolunda DA var (003: ROOT/CEO/ADMIN/
+    # HR_ADMIN) — yəni önizləmə burada həqiqəti güzgüləyir, güzəşt etmir.
+    # Onun kamera roluna verilə bilməməsi (`excludes_camera_role`) isə
+    # `build_camera_operator` tərəfində qorunur: orada flag YOXDUR.
+    "can_publish_fines",
 )
 
 
@@ -504,6 +516,106 @@ FINES: Final = [
     },
 ]
 
+# --------------------------------------------------------------------------- #
+# Aylıq Cərimə İcmalı (miqrasiya 003) — nəşr gözləyən cərimələr
+# --------------------------------------------------------------------------- #
+#
+# NİYƏ `FINES`-DƏN AYRI: yuxarıdakı siyahı kamera operatorunun ÖZ qeydləridir
+# və statusu göstərir; bu isə `can_publish_fines` sahibinin qərar verdiyi
+# dəstdir — orada YALNIZ `PENDING_REVIEW` sətirlər olur, yəni "status" sütunu
+# mənasızdır. İki maketi birləşdirmək iki ayrı ekranı bir-birinə bənzədərdi.
+#
+# TİPLƏR EKRANIN `NamedTuple`-larına ÇEVRİLİR (`preview_screens._fine_review`)
+# — burada sadə dəyərlər saxlanılır ki, bu modul PySide6 idxal etməsin
+# (`BENCHMARK_RANKING` ilə eyni qərar).
+
+#: Dövr seçicisinin maket dəyərləri — canlı yolda `pending_review_periods`
+#: eyni `key`/`label` cütlərini verir (`controllers/fine_review.py::
+#: _period_options`).
+FINE_REVIEW_PERIODS: Final = [
+    {"key": "2026-07", "label": "İyul 2026"},
+    {"key": "2026-08", "label": "Avqust 2026"},
+]
+
+#: Defolt seçim MAKETDƏ də ƏN KÖHNƏ dövrdür (canlı yolda `_choose_period`).
+FINE_REVIEW_SELECTED_PERIOD: Final = "2026-07"
+
+#: `(fine_id, işçi, növ, məbləğ, tarix, qeydə alan, sübut şəkli varmı)`.
+#: Sıra `FineReviewRow` sahələri ilə eynidir.
+#: `(açar, filial, say mətni, cəm mətni, sətirlər)` — `FineReviewGroup` sırası.
+FINE_REVIEW_GROUPS: Final = (
+    (
+        "st-28may",
+        "Bellona 28 May",
+        "3 cərimə",
+        "90 ₼",
+        (
+            (
+                "fr-1",
+                "Nigar Səfərova",
+                "Formaya uyğun geyinməmək",
+                "25 ₼",
+                "03.07.2026",
+                "Elvin Həsənov",
+                True,
+            ),
+            (
+                "fr-2",
+                "Murad Əliyev",
+                "İcazəsiz çıxış",
+                "40 ₼",
+                "09.07.2026",
+                "Elvin Həsənov",
+                True,
+            ),
+            # AVTOMATİK cərimənin operatoru YOXDUR və sübut şəkli də olmur —
+            # maket hər iki halı göstərir ki, nişanların fərqi görünsün.
+            (
+                "fr-3",
+                "Rəvan İsmayılov",
+                "Gecikmə (avtomatik)",
+                "25 ₼",
+                "14.07.2026",
+                "Sistem (avtomatik)",
+                False,
+            ),
+        ),
+    ),
+    (
+        "st-xetai",
+        "İstikbal Xətai",
+        "2 cərimə",
+        "65 ₼",
+        (
+            (
+                "fr-4",
+                "Aysel Quliyeva",
+                "Kassa qaydalarına əməl etməmək",
+                "50 ₼",
+                "07.07.2026",
+                "Günel Rəhimova",
+                True,
+            ),
+            (
+                "fr-5",
+                "Kamran Vəliyev",
+                "Gecikmə (avtomatik)",
+                "15 ₼",
+                "21.07.2026",
+                "Sistem (avtomatik)",
+                False,
+            ),
+        ),
+    ),
+)
+
+#: Xülasə sətri — canlı yolda `_build_groups` eyni formatı qurur.
+FINE_REVIEW_SUMMARY: Final = "5 cərimə · 2 filial · 155 ₼ nəşr gözləyir"
+
+#: Maketdə BİR sətir "Sil" qərarı ilə göstərilir: qərar nişanının iki tonu
+#: (neytral/təhlükə) və "geri qaytar" düyməsi dizayn baxışında görünsün deyə.
+FINE_REVIEW_DISCARDED: Final = ("fr-3", "Kamera nasazlığı — sətir səhv yazılıb")
+
 ROSTER_ROWS: Final = [
     {
         "employee": "Aysel Quliyeva",
@@ -579,33 +691,47 @@ SWAP_REQUESTS: Final = [
     },
 ]
 
+#: `type` və `latency_meaning` açarları CANLI yolla (bax
+#: `controllers/erp_servers.py::_server_view`) EYNİ olmalıdır — mətnlər
+#: domendəki `ConnectorType.label_az` / `.latency_meaning_az` dəyərləridir.
+#: Maket öz ad məkanını qursaydı (məs. `"HTTP"` ↔ `"HTTP/OData"`), nişanın
+#: tonu maketdə düzgün, istehsalatda isə neytral görünərdi — layihədə məhz
+#: bu qüsur olub (bax `shell/menu.py` başlığı).
 ERP_SERVERS: Final = [
     {
         "name": "1C-BAKI-01",
+        "type": "HTTP/OData",
         "address": "10.20.1.14:1541",
         "stores": "9 mağaza",
         "latency": "42 ms",
+        "latency_meaning": "Şəbəkə cavab müddəti",
         "status": "Aktiv",
     },
     {
         "name": "1C-BAKI-02",
+        "type": "HTTP/OData",
         "address": "10.20.1.15:1541",
         "stores": "6 mağaza",
         "latency": "57 ms",
+        "latency_meaning": "Şəbəkə cavab müddəti",
         "status": "Aktiv",
     },
     {
         "name": "1C-GENCE-01",
-        "address": "10.40.3.7:1541",
+        "type": "COM",
+        "address": "1C-GENCE-SRV",
         "stores": "4 mağaza",
         "latency": "318 ms",
+        "latency_meaning": "COM obyektinin qurulma müddəti",
         "status": "Gecikmə yüksəkdir",
     },
     {
         "name": "1C-SUMQAYIT-01",
-        "address": "10.60.2.5:1541",
+        "type": "Fayl",
+        "address": "\\\\anbar\\1c_exchange",
         "stores": "2 mağaza",
         "latency": "—",
+        "latency_meaning": "Qovluğun oxunma müddəti",
         "status": "Bağlantı yoxdur",
     },
 ]
@@ -1169,6 +1295,71 @@ PLUGINS: Final = [
     },
 ]
 
+#: Maketdə interfeys səthi verən plugin-lər (audit G-3).
+#:
+#: ÜÇ SƏTİR ÜÇ AYRI HALI GÖSTƏRİR və bu, qəsdəndir — maket yalnız "yaxşı
+#: hal"ı göstərsəydi, təhlükəsizlik qapıları dizayn nəzərdən keçirilərkən
+#: görünməz qalardı:
+#:   * `pl-1` — TƏSDİQLƏNMİŞ, imzalı, flag-li → menyuda GÖRÜNÜR;
+#:   * `pl-2` — SÖNDÜRÜLMÜŞ (`DISABLED`) → səth VERMİR;
+#:   * `pl-3` — imzasız VƏ flagsız → səth VERMİR.
+#: Açarlar canlı yolla eyni funksiyadan qurulur (`plugin_surface.
+#: plugin_page_key`), yəni maket öz ad məkanını YARATMIR.
+PLUGIN_SURFACE: Final = (
+    ApprovedPlugin(
+        plugin_id="pl-1",
+        name="Anbar Hesabatı",
+        publisher="Kompas Studio",
+        status=PluginStatus.APPROVED,
+        signature_verified=True,
+        manifest=PluginManifest(
+            name="Anbar Hesabatı",
+            version="1.2.0",
+            publisher="Kompas Studio",
+            capabilities=frozenset(
+                {PluginCapability.REGISTER_PAGE, PluginCapability.RENDER_WIDGET}
+            ),
+            entry_point="anbar_hesabati.py",
+            description_az="Anbar qalığının filial üzrə xülasəsi.",
+            # FLAG MAKET ADMİNİNDƏ MÖVCUD OLMALIDIR (`_ADMIN_FLAGS`) — əks
+            # halda maddə maketdə də doğru şəkildə GİZLƏNƏR və dizayn
+            # baxışında "plugin səhifəsi işləmir" kimi oxunardı. Hesabat
+            # plugin-i üçün `can_export_reports` həm də semantik olaraq
+            # doğrudur (`menu.py`-dakı «Hesabatlar» maddəsinin flag-i).
+            required_flags=frozenset({"can_export_reports"}),
+        ),
+    ),
+    ApprovedPlugin(
+        plugin_id="pl-2",
+        name="SMS Bildiriş Körpüsü",
+        publisher="Kompas Studio",
+        status=PluginStatus.DISABLED,
+        signature_verified=True,
+        manifest=PluginManifest(
+            name="SMS Bildiriş Körpüsü",
+            version="0.9.4",
+            publisher="Kompas Studio",
+            capabilities=frozenset({PluginCapability.REGISTER_PAGE}),
+            entry_point="sms_bridge.py",
+            required_flags=frozenset({"can_broadcast_announcements"}),
+        ),
+    ),
+    ApprovedPlugin(
+        plugin_id="pl-3",
+        name="Köhnə 1C Adapteri",
+        publisher="Naməlum",
+        status=PluginStatus.APPROVED,
+        signature_verified=False,
+        manifest=PluginManifest(
+            name="Köhnə 1C Adapteri",
+            version="0.3.1",
+            publisher="Naməlum",
+            capabilities=frozenset({PluginCapability.REGISTER_PAGE}),
+            entry_point="legacy_1c.py",
+        ),
+    ),
+)
+
 DASHBOARD_WIDGETS: Final = {
     "attendance": ("Davamiyyət xülasəsi", "Bu gün mağazada olan işçilərin sayı"),
     "fines": ("Cərimələr — filial üzrə", "Ayın cərimələri sütun qrafiki"),
@@ -1181,6 +1372,24 @@ DASHBOARD_WIDGETS: Final = {
 DASHBOARD_ORDER: Final = ["attendance", "fines", "leave_gauge", "points", "health", "tasks"]
 #: `tasks` QƏSDƏN gizlidir — gizli widget-in ekranda necə göründüyü yoxlanılsın.
 DASHBOARD_VISIBLE: Final = {"attendance", "fines", "leave_gauge", "points", "health"}
+
+#: Şəbəkə sütun sayı (audit G-5). Canlı yolda `DASHBOARD_GRID_COLUMNS` ROOT
+#: parametrindən gəlir; maket onun DEFOLTUNU təkrarlayır ki, iki yol eyni
+#: görünüşü versin.
+DASHBOARD_GRID_COLUMNS: Final = 2
+
+#: `açar → (sətir, sütun, en)`. Maket QƏSDƏN QARIŞIQ bir şəbəkə göstərir:
+#: tam-enli sətir (`attendance`), yan-yana iki kart (`fines` + `leave_gauge`)
+#: və BOŞ XANALI sətir (`health` tək qalır) — sonuncu, deşiyin çökmə
+#: yaratmadığını maketdə də görünən hala çevirir.
+DASHBOARD_PLACEMENTS: Final = {
+    "attendance": (0, 0, 2),
+    "fines": (1, 0, 1),
+    "leave_gauge": (1, 1, 1),
+    "points": (2, 0, 1),
+    "health": (3, 0, 1),
+    "tasks": (4, 0, 2),
+}
 
 # --------------------------------------------------------------------------- #
 # İstisnalar (#9, kompasos11.md Faza 5)
@@ -1649,3 +1858,69 @@ EXPORT_OVERLAP_NOTICE: Final = (
     "2 cərimə bu aralığa düşür, lakin artıq əvvəlki dövr(lər)də tutulub "
     "(2026-07) — təkrar tutulmur."
 )
+
+# --------------------------------------------------------------------------- #
+# G-1 Sinxronizasiya konfliktləri — bölmə 5 (offline rejim)
+# --------------------------------------------------------------------------- #
+# Açarlar `controllers/sync_conflicts.py`-dakı `_to_list_row` / `_to_field_rows`
+# sözlükləri ilə EYNİDİR (CLAUDE.md bölmə 6 — maket və canlı yol EYNİ açarları
+# işlədir). Sahə ADLARI qəsdən baza sütunlarıdır: canlı yolda da `JSONB`
+# açarları göstərilir və maket onları tərcümə etsəydi, dizayn baxışı real
+# ekrandan fərqli genişlik verərdi.
+#
+# SIRA USE CASE-DƏN GƏLİR: `SyncConflictUseCase.inbox` audit-kritik sətirləri
+# əvvələ çıxarır, ona görə maketdə də `fines` (audit-kritik) birincidir.
+
+SYNC_CONFLICTS: Final = [
+    {
+        "id": "sc-1",
+        "table_label": "Cərimələr",
+        "record_label": "Qeyd: 4f2a9c11",
+        "detected": "12.08.2026 08:14",
+        "diff_count": "2 sahə fərqlidir",
+        "audit_critical": "1",
+    },
+    {
+        "id": "sc-2",
+        "table_label": "Davamiyyət qeydləri",
+        "record_label": "Qeyd: 91b0de77",
+        "detected": "12.08.2026 09:02",
+        "diff_count": "1 sahə fərqlidir",
+        # `attendance_records` bölmə 5-in audit-kritik siyahısında YOXDUR —
+        # maket hər iki halı göstərir ki, nişanın fərqi görünsün.
+        "audit_critical": "0",
+    },
+]
+
+#: `set_comparison(detail, fields)` — seçilmiş konfliktin sahə-sahə müqayisəsi.
+#: Fərqli sahələr ƏVVƏLDƏ (kontroller onları belə sıralayır).
+SYNC_CONFLICT_FIELDS: Final = [
+    {
+        "field": "amount",
+        "local": "45.00",
+        "remote": "30.00",
+        "differs": "1",
+    },
+    {
+        "field": "status",
+        "local": "PENDING_REVIEW",
+        "remote": "PUBLISHED",
+        "differs": "1",
+    },
+    {
+        "field": "employee_id",
+        "local": "7c1d0e44",
+        "remote": "7c1d0e44",
+        "differs": "0",
+    },
+    {
+        "field": "issued_at",
+        "local": "2026-08-11 18:40",
+        "remote": "2026-08-11 18:40",
+        "differs": "0",
+    },
+]
+
+#: «Sistem Sağlamlığı» kartındakı keçidin sayğacı — `SYNC_CONFLICTS` ilə
+#: eyni ədəd olmalıdır, əks halda maket özü ilə ziddiyyət təşkil edərdi.
+SYNC_CONFLICT_OPEN_COUNT: Final = len(SYNC_CONFLICTS)

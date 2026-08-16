@@ -16,7 +16,7 @@ from src.application.use_cases import (
 )
 from src.application.use_cases.leave_verification import MonthlyLeaveUsage
 from src.domain.entities import CheckInStatus, FineSource, LeaveStatus
-from src.domain.entities.base import InvalidStateTransitionError
+from src.domain.entities.base import DomainRuleError, InvalidStateTransitionError
 from src.domain.entities.employee import Employee
 from src.domain.entities.fine import FineStatus
 from src.domain.entities.position import Position
@@ -61,6 +61,9 @@ STORE = StoreId(uuid.uuid4())
 OTHER_STORE = StoreId(uuid.uuid4())
 WORKER = EmployeeId(uuid.uuid4())
 OPERATOR = EmployeeId(uuid.uuid4())
+#: Dual-control ikinci təsdiqçisi (M-5). Kamera rolunda OLA BİLMƏZ (SEC-001),
+#: ona görə HR_Admin kimi qurulur — `_with_approver` onu repo-ya yazır.
+APPROVER = EmployeeId(uuid.uuid4())
 LUNCH = LeaveTypeId(uuid.uuid4())
 DAY = date(2026, 8, 8)
 
@@ -190,6 +193,12 @@ class Ctx:
 @pytest.fixture
 def ctx() -> Ctx:
     return Ctx()
+
+
+def _with_approver(ctx: Ctx) -> EmployeeId:
+    """İkinci təsdiqçini repo-ya yazır və id-sini qaytarır (M-5)."""
+    ctx.employees.save(make_employee(APPROVER, SystemRole.HR_ADMIN, flags=[DUAL_FLAG]))
+    return APPROVER
 
 
 def open_leave(ctx: Ctx):
@@ -564,6 +573,300 @@ def test_dual_control_approval_requires_flag(ctx: Ctx) -> None:
     with pytest.raises(OperationNotPermittedError, match="dual-control"):
         ctx.leave_uc().approve_dual_control(
             tenant_id=TENANT, approver_id=unknown, request_id=request_id
+        )
+
+
+# --------------------------------------------------------------------------- #
+# M-3 — gecikmə OPERATORUN saatından hesablanmır
+# --------------------------------------------------------------------------- #
+
+
+async def test_late_operator_click_does_not_fine_the_employee(ctx: Ctx) -> None:
+    """İşçi vaxtında qayıdıb, operator 40 dəqiqə sonra baxıb → cərimə YOXDUR.
+
+    Bu, M-3-ün bütün mahiyyətidir: `DELAY_FINE_RATE_PER_MINUTE` təyin
+    edilibsə, əvvəlki davranış işçiyə 40 dəqiqəlik REAL PUL cəriməsi yazırdı
+    — halbuki gecikmə tamamilə kamera növbəsinin yükündən doğmuşdu.
+    """
+    ctx.limits.set(SystemLimitKey.DELAY_FINE_RATE_PER_MINUTE, "0.50")
+    open_leave(ctx)  # 12:00, 60 dəqiqəlik nahar
+    ctx.clock.set(at(13, 0))  # işçi TAM vaxtında qayıdıb PIN vurur
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+
+    ctx.clock.set(at(13, 40))  # operator yalnız indi ekrana baxır
+    outcome = await ctx.leave_uc().verify_return(
+        tenant_id=TENANT,
+        operator_id=OPERATOR,
+        request_id=next(iter(ctx.leave_requests.items)),
+    )
+
+    assert outcome.succeeded is True
+    assert outcome.penalty.delay_minutes == 0
+    assert outcome.fine is None, "operatorun gecikməsi cəriməyə çevrilməməlidir"
+    assert outcome.leave_request.verified_at == at(13, 40)  # möhür saxlanılır
+    assert outcome.leave_request.actual_return_time == at(13, 0)
+
+
+async def test_the_audit_entry_names_the_time_source(ctx: Ctx) -> None:
+    """«Niyə bu qədər gecikmə yazıldı?» sualı audit sətrindən cavablanmalıdır."""
+    open_leave(ctx)
+    ctx.clock.set(at(13, 30))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+
+    await ctx.leave_uc().verify_return(
+        tenant_id=TENANT,
+        operator_id=OPERATOR,
+        request_id=next(iter(ctx.leave_requests.items)),
+    )
+
+    entry = next(e for e in ctx.audit.entries if e["action"] == "LEAVE_VERIFIED")
+    assert entry["after_state"]["return_time_source"] == "EMPLOYEE_CLAIM"
+    assert entry["after_state"]["actual_return_time"] == at(13, 30).isoformat()
+
+
+async def test_explicit_return_time_requires_the_override_flag(ctx: Ctx) -> None:
+    """Vaxtı arqumentlə ötürmək DƏ manual düzəlişdir (M-5).
+
+    Yalnız `can_verify_returns` daşıyan operator bu yolla dual-control
+    qaydasını yan keçə bilməməlidir.
+    """
+    open_leave(ctx)
+    ctx.clock.set(at(13, 30))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+
+    verifier = EmployeeId(uuid.uuid4())
+    ctx.employees.save(make_employee(verifier, SystemRole.CAMERA_OPERATOR, flags=[VERIFY_FLAG]))
+    ctx.cameras.mapping[verifier] = [STORE]
+
+    with pytest.raises(OperationNotPermittedError, match="can_override_return_time"):
+        await ctx.leave_uc().verify_return(
+            tenant_id=TENANT,
+            operator_id=verifier,
+            request_id=next(iter(ctx.leave_requests.items)),
+            actual_return_time=at(12, 30),
+        )
+
+
+# --------------------------------------------------------------------------- #
+# M-5 — gözləyən / rədd edilən / müddəti bitən vaxt düzəlişi
+# --------------------------------------------------------------------------- #
+
+
+async def test_auto_approved_override_time_reaches_the_penalty(ctx: Ctx) -> None:
+    """30 dəqiqədən az düzəliş ikinci təsdiq istəmir və DƏRHAL qüvvəyə minir.
+
+    Əvvəl `apply_override` yalnız qeyd yazırdı: `verify_return` düzəlişə HEÇ
+    BAXMIRDI, yəni `[Vaxtı Əllə Təyin Et]` düyməsi cəriməyə təsir etmirdi.
+    """
+    ctx.limits.set(SystemLimitKey.DELAY_FINE_RATE_PER_MINUTE, "0.50")
+    open_leave(ctx)
+    ctx.clock.set(at(13, 20))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+
+    ctx.leave_uc().apply_override(
+        tenant_id=TENANT,
+        operator_id=OPERATOR,
+        request_id=request_id,
+        overridden_time=at(13, 0),  # 20 dəqiqəlik fərq → dual-control YOX
+        reason="Kamera görüntüsündə işçi 13:00-da içəri girir",
+    )
+    outcome = await ctx.leave_uc().verify_return(
+        tenant_id=TENANT, operator_id=OPERATOR, request_id=request_id
+    )
+
+    assert outcome.leave_request.actual_return_time == at(13, 0)
+    assert outcome.penalty.delay_minutes == 0
+    assert outcome.fine is None
+
+
+async def test_pending_override_does_not_change_the_penalty(ctx: Ctx) -> None:
+    """M-5, sual 1: gözləmə vəziyyətində ORİJİNAL vaxt keçərlidir (fail-closed)."""
+    open_leave(ctx)
+    ctx.clock.set(at(13, 40))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+
+    ctx.leave_uc().apply_override(
+        tenant_id=TENANT,
+        operator_id=OPERATOR,
+        request_id=request_id,
+        overridden_time=at(13, 0),  # 40 dəqiqəlik fərq → ikinci təsdiq lazımdır
+        reason="Kamera görüntüsündə işçi 13:00-da içəri girir",
+    )
+    request = ctx.leave_requests.items[request_id]
+    assert request.override is not None
+    assert request.override.is_pending_approval is True
+    assert request.override.is_effective is False
+
+    outcome = await ctx.leave_uc().verify_return(
+        tenant_id=TENANT, operator_id=OPERATOR, request_id=request_id
+    )
+
+    # Təsdiqlənməmiş düzəliş TƏSİR ETMİR — baza işçinin öz möhürüdür.
+    assert outcome.leave_request.actual_return_time == at(13, 40)
+    assert outcome.penalty.delay_minutes == 40
+
+
+def test_approved_override_is_effective_only_after_the_second_approval(ctx: Ctx) -> None:
+    open_leave(ctx)
+    ctx.clock.set(at(13, 40))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+    ctx.leave_uc().apply_override(
+        tenant_id=TENANT,
+        operator_id=OPERATOR,
+        request_id=request_id,
+        overridden_time=at(13, 0),
+        reason="Kamera görüntüsündə işçi 13:00-da içəri girir",
+    )
+
+    request = ctx.leave_uc().approve_dual_control(
+        tenant_id=TENANT, approver_id=_with_approver(ctx), request_id=request_id
+    )
+
+    assert request.override is not None
+    assert request.override.is_effective is True
+    assert request.resolved_return_time(fallback=at(13, 40)) == at(13, 0)
+
+
+def test_dual_control_can_be_rejected_with_a_mandatory_reason(ctx: Ctx) -> None:
+    """M-5, sual 2: təsdiqçi «yox» da deyə bilər — və səbəb məcburidir."""
+    open_leave(ctx)
+    ctx.clock.set(at(13, 40))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+    ctx.leave_uc().apply_override(
+        tenant_id=TENANT,
+        operator_id=OPERATOR,
+        request_id=request_id,
+        overridden_time=at(13, 0),
+        reason="Kamera görüntüsündə işçi 13:00-da içəri girir",
+    )
+
+    with pytest.raises(DomainRuleError, match="10 simvol"):
+        ctx.leave_uc().reject_dual_control(
+            tenant_id=TENANT, approver_id=_with_approver(ctx), request_id=request_id, reason="yox"
+        )
+
+    request = ctx.leave_uc().reject_dual_control(
+        tenant_id=TENANT,
+        approver_id=APPROVER,  # `_with_approver` yuxarıda çağırılıb
+        request_id=request_id,
+        reason="Görüntüdə 13:00 deyil, 13:40 görünür — düzəliş əsassızdır",
+    )
+
+    assert request.override is not None
+    assert request.override.is_rejected is True
+    assert request.override.is_effective is False
+    # Orijinal vaxt qüvvədə qalır.
+    assert request.resolved_return_time(fallback=at(13, 40)) == at(13, 40)
+    assert "DUAL_CONTROL_REJECTED" in ctx.audit.actions()
+    # Sorğunu yazan operator cavabı BİLMƏLİDİR.
+    closed = next(m for m in ctx.notifier.messages if m["category"] == "DUAL_CONTROL_CLOSED")
+    assert closed["recipient_id"] == OPERATOR
+
+
+def test_rejecting_requires_the_dual_control_flag(ctx: Ctx) -> None:
+    """Rədd təsdiqlə EYNİ qapıdan keçir — «yalnız hə deyə bilən» təsdiqçi olmaz."""
+    open_leave(ctx)
+    ctx.clock.set(at(13, 40))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+    ctx.leave_uc().apply_override(
+        tenant_id=TENANT,
+        operator_id=OPERATOR,
+        request_id=request_id,
+        overridden_time=at(13, 0),
+        reason="Kamera görüntüsündə işçi 13:00-da içəri girir",
+    )
+
+    with pytest.raises(OperationNotPermittedError, match="dual-control"):
+        ctx.leave_uc().reject_dual_control(
+            tenant_id=TENANT,
+            approver_id=EmployeeId(uuid.uuid4()),
+            request_id=request_id,
+            reason="Səlahiyyətim olmasa da rədd etmək istəyirəm",
+        )
+
+
+def test_pending_override_expires_instead_of_being_auto_approved(ctx: Ctx) -> None:
+    """M-5, sual 3: müddət dolanda sorğu LƏĞV olunur, avtomatik TƏSDİQLƏNMİR."""
+    open_leave(ctx)
+    ctx.clock.set(at(13, 40))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+    ctx.leave_uc().apply_override(
+        tenant_id=TENANT,
+        operator_id=OPERATOR,
+        request_id=request_id,
+        overridden_time=at(13, 0),
+        reason="Kamera görüntüsündə işçi 13:00-da içəri girir",
+    )
+
+    ctx.limits.set(SystemLimitKey.DUAL_CONTROL_APPROVAL_TIMEOUT_MINUTES, "60")
+    ctx.clock.set(at(14, 41))  # 61 dəqiqə sonra
+    expired = ctx.leave_uc().expire_pending_overrides(TENANT)
+
+    assert expired == 1
+    request = ctx.leave_requests.items[request_id]
+    assert request.override is not None
+    assert request.override.is_rejected is True
+    assert request.override.approved_by is None, "timeout TƏSDİQ deyil"
+    assert request.resolved_return_time(fallback=at(13, 40)) == at(13, 40)
+    assert "DUAL_CONTROL_EXPIRED" in ctx.audit.actions()
+    assert "DUAL_CONTROL_CLOSED" in ctx.notifier.categories()
+    # Təkrar icra ikinci ləğv/bildiriş yaratmır.
+    assert ctx.leave_uc().expire_pending_overrides(TENANT) == 0
+
+
+def test_expired_override_cannot_be_approved_afterwards(ctx: Ctx) -> None:
+    """Müddəti bitmiş sorğu təsdiq düyməsi ilə dirildilə bilməz."""
+    open_leave(ctx)
+    ctx.clock.set(at(13, 40))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+    ctx.leave_uc().apply_override(
+        tenant_id=TENANT,
+        operator_id=OPERATOR,
+        request_id=request_id,
+        overridden_time=at(13, 0),
+        reason="Kamera görüntüsündə işçi 13:00-da içəri girir",
+    )
+
+    ctx.limits.set(SystemLimitKey.DUAL_CONTROL_APPROVAL_TIMEOUT_MINUTES, "60")
+    ctx.clock.set(at(14, 41))
+
+    with pytest.raises(InvalidStateTransitionError, match="müddəti bitmiş"):
+        ctx.leave_uc().approve_dual_control(
+            tenant_id=TENANT, approver_id=_with_approver(ctx), request_id=request_id
+        )
+
+
+async def test_approval_after_verification_is_refused(ctx: Ctx) -> None:
+    """Təsdiq edilmiş icazəyə sonradan gələn təsdiq SÜKUTLA qəbul edilmir.
+
+    Cərimə artıq yazılıb; geriyə dönük düzəliş yolu spesifikasiyada BAŞQADIR
+    (72 saatlıq etiraz), ona görə bu keçid açıq istisna ilə rədd edilir.
+    """
+    open_leave(ctx)
+    ctx.clock.set(at(13, 40))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+    ctx.leave_uc().apply_override(
+        tenant_id=TENANT,
+        operator_id=OPERATOR,
+        request_id=request_id,
+        overridden_time=at(13, 0),
+        reason="Kamera görüntüsündə işçi 13:00-da içəri girir",
+    )
+    await ctx.leave_uc().verify_return(
+        tenant_id=TENANT, operator_id=OPERATOR, request_id=request_id
+    )
+
+    with pytest.raises(InvalidStateTransitionError, match="artıq təsdiqlənib"):
+        ctx.leave_uc().approve_dual_control(
+            tenant_id=TENANT, approver_id=_with_approver(ctx), request_id=request_id
         )
 
 

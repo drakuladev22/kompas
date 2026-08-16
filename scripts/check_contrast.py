@@ -165,6 +165,23 @@ REQUIRED_PAIRS: list[tuple[str, str, float, str]] = [
     # Yoxlayıcı `tokens.py` cütlərini VƏ `qss.py`-dəki faktiki istifadəni
     # ölçür; inline üslub isə hər iki mənbədən kənarda qalırdı — yəni bu dörd
     # cüt bugünə qədər HEÇ VAXT ölçülməmişdi. Boşluq bağlanır.
+    # --- 1C Bağlantı Sihirbazı: növ-kartı və test nəticəsi (1c.md, Faza GUI) -- #
+    #
+    # NİYƏ BU BEŞ CÜT: sihirbazın kartları `--color-accent-subtle` fonunu MƏTNLƏ
+    # birlikdə işlədir (`QFrame[variant="card"][selected="true"]`), test nəticəsi
+    # isə kart fonunun üzərinə İNLİNE semantik rəng qoyur (yaşıl check / qırmızı
+    # X + mətn). Hər ikisi yoxlayıcının əvvəlki əhatəsindən kənarda idi: nə
+    # `tokens.py` cütləri, nə də ölçülən QSS qaydaları bu fonları daşımırdı.
+    ("--color-text-primary", "--color-accent-subtle", AA_NORMAL_TEXT, "Seçilmiş kart başlığı"),
+    ("--color-text-muted", "--color-accent-subtle", AA_NORMAL_TEXT, "Seçilmiş kart izahı"),
+    # Kartın seçilmiş sərhədi və içindəki işarə — qrafik element (1.4.11).
+    ("--color-accent", "--color-card-bg", AA_LARGE_TEXT, "Seçilmiş kart çərçivəsi"),
+    ("--color-accent", "--color-accent-subtle", AA_LARGE_TEXT, "Seçilmiş kart işarəsi"),
+    # Bağlantı testinin nəticəsi (mətn + ikon) sihirbazın kart səthindədir.
+    ("--color-success", "--color-card-bg", AA_NORMAL_TEXT, "Test nəticəsi — uğur"),
+    ("--color-danger", "--color-card-bg", AA_NORMAL_TEXT, "Test nəticəsi — uğursuz"),
+    # «Bağlantı növü dəyişdirilir» xəbərdarlığı — eyni kart səthində.
+    ("--color-warning", "--color-card-bg", AA_NORMAL_TEXT, "Sihirbaz xəbərdarlığı"),
     ("--color-danger", "--color-pin-bg", AA_NORMAL_TEXT, "PIN səthi — xəta mətni"),
     ("--color-success", "--color-pin-bg", AA_NORMAL_TEXT, "PIN səthi — uğur mətni"),
     ("--color-warning", "--color-pin-bg", AA_NORMAL_TEXT, "PIN səthi — xəbərdarlıq"),

@@ -60,14 +60,28 @@ class _Context:
 
 
 class _BuilderScreen:
+    # `placements`/`columns` ŞƏBƏKƏ ARQUMENTLƏRİDİR (audit G-5) və defoltludur:
+    # sahtə real ekranın imzasını GÜZGÜLƏYİR, yəni kontroller onları
+    # ötürməyi dayandırsa test də sınmalıdır — əks halda ekran şəbəkəni
+    # itirər və qüsur yalnız istifadəçidə görünərdi.
     def __init__(self) -> None:
         self.widgets: list[tuple[dict[str, Any], list[str], set[str]]] = []
+        self.placements: list[dict[str, tuple[int, int, int]]] = []
+        self.columns: list[int] = []
         self.errors: list[tuple[str, str]] = []
 
     def set_widgets(
-        self, catalog: dict[str, tuple[str, str]], *, order: list[str], visible: set[str]
+        self,
+        catalog: dict[str, tuple[str, str]],
+        *,
+        order: list[str],
+        visible: set[str],
+        placements: dict[str, tuple[int, int, int]] | None = None,
+        columns: int = 1,
     ) -> None:
         self.widgets.append((dict(catalog), list(order), set(visible)))
+        self.placements.append(dict(placements or {}))
+        self.columns.append(columns)
 
     def show_error(self, *, title: str, message: str) -> None:
         self.errors.append((title, message))
@@ -77,9 +91,14 @@ class _View:
     def __init__(self, keys: tuple[str, ...]) -> None:
         self.order = keys
         self.visible = frozenset(keys)
+        self.columns = 2
 
     def catalog_map(self) -> dict[str, tuple[str, str]]:
         return {key: (key.title(), "izah") for key in self.order}
+
+    def placement_map(self) -> dict[str, tuple[int, int, int]]:
+        """Real `DashboardView`-un eyni metodu — hər açar bir sətirdə."""
+        return {key: (row, 0, 2) for row, key in enumerate(self.order)}
 
 
 class _LayoutUseCase:

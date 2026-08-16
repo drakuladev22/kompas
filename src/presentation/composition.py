@@ -97,6 +97,7 @@ if TYPE_CHECKING:
     from src.application.use_cases.face_control import (
         FaceControlExemptionUseCase,
         FaceEnrollmentUseCase,
+        FaceLockReleaseUseCase,
         FaceReEnrollmentUseCase,
         FaceVerificationLogRetentionUseCase,
         FaceVerificationUseCase,
@@ -106,6 +107,7 @@ if TYPE_CHECKING:
         FineAppealUseCase,
         ManualFineUseCase,
     )
+    from src.application.use_cases.fine_review import MonthlyFineReviewUseCase
     from src.application.use_cases.first_run_setup import FirstRunSetupUseCase
     from src.application.use_cases.leave_verification import LeaveVerificationUseCase
     from src.application.use_cases.morning_check_in import MorningCheckInUseCase
@@ -135,6 +137,7 @@ if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
     from src.domain.interfaces.ports import NtpVerifier
     from src.domain.value_objects.identifiers import EmployeeId, TenantId
+    from src.infrastructure.erp.servers import ErpServerRepository
     from src.infrastructure.licensing.client import LicenseClient
     from src.infrastructure.persistence.connection import Database, PostgresUnitOfWork
 
@@ -446,6 +449,21 @@ class Session:
     daily_attendance: DailyAttendanceSheetUseCase
     manual_fines: ManualFineUseCase
     fine_appeals: FineAppealUseCase
+    # --- Aylıq Cərimə İcmalı (bölmə 4, miqrasiya 003) ----------------------- #
+    #
+    # `FineStatus.PUBLISHED`-ə YEGANƏ yol budur. Use case ARTIQ yazılmışdı,
+    # lakin `Session`-a qoşulmamışdı — yəni onu çağıracaq bir yol YOX idi və
+    # zəncir bütövlükdə ölü qalırdı: cərimə `PENDING_REVIEW` doğulur → nəşr
+    # olunmur → işçi onu görmür → etiraz pəncərəsi açılmır
+    # (`appeal_window_closes_at` YALNIZ nəşrdə dolur) → `EXPORTABLE_STATUSES`
+    # heç vaxt ödənmir, yəni HEÇ BİR cərimə maaşdan kəsilmir.
+    #
+    # `manual_fines` ilə YAN-YANA dayanır və ONDAN ASILI DEYİL: biri cəriməni
+    # YARADIR (kamera-tipli rol, `can_issue_fines`), digəri onu AÇIR
+    # (`can_publish_fines`, kamera roluna HEÇ VAXT verilmir — miqrasiya 003,
+    # `excludes_camera_role`). İkisini bir use case-ə yığmaq vəzifə
+    # ayrılığını kodda görünməz edərdi.
+    fine_review: MonthlyFineReviewUseCase
     tasks: TaskWorkflowUseCase
     sales_points: SalesPointsUseCase
     reports: MonthlyReportUseCase
@@ -474,6 +492,18 @@ class Session:
     sales_review: SalesReviewQueueUseCase
     employee_profile: EmployeeProfileAccessUseCase
     erp_connections: ErpConnectionWizardUseCase
+    # --- 1C konfiqurasiyasının OXU yolu (1c.md GUI fazası) ------------------ #
+    #
+    # `erp_connections` ilə EYNİ repo obyekti, lakin AYRI rol: sihirbaz mövcud
+    # serveri redaktəyə açanda növə xas parametrləri (COM sorğu ayarları, fayl
+    # sütun adları) formaya yükləməlidir. Use case-də belə bir metod YOXDUR və
+    # onu ora əlavə etmək use case-i "sahə oxuyucusu"na çevirərdi (eyni əsas
+    # `refresh()`-in siyahını birbaşa oxumasında izah olunub).
+    #
+    # SİRR EKRANA GETMİR: kontroller yalnız `ConnectorConfig.public_values()`
+    # ötürür (bax `controllers/erp_servers.py` başlığı) və hər oxunuş
+    # `security.log`-a `ERP_CREDENTIALS_ACCESSED` sətri yazır.
+    erp_server_configs: ErpServerRepository
 
     # --- Vahid İstisna Motoru (#9, Faza 3) ---------------------------------- #
     #
@@ -652,6 +682,11 @@ class Session:
     # (`can_manage_face_exemptions`, hardlock 2). `expire_due()` isə
     # `FACE_EXEMPTION_EXPIRY` gecəlik işinin girişidir.
     face_exemptions: FaceControlExemptionUseCase
+    # Üz kilidinin VAXTINDAN ƏVVƏL açılması (bənd 4-ün ödənilməmiş tərəfi) —
+    # EYNİ səlahiyyət qapısı (`can_manage_face_exemptions`, hardlock 2), çünki
+    # hər ikisi konkret işçi üçün üz qapısını yumşaldır (bax
+    # `FaceLockReleaseUseCase` başlığı: `can_manage_employees` niyə rədd edildi).
+    face_lock_release: FaceLockReleaseUseCase
     # Doğrulama jurnalının saxlama müddəti (bənd 17) — `FACE_LOG_RETENTION`
     # gecəlik işinin girişi. EKRANI YOXDUR (`behavior_baselines` ilə eyni
     # naxış): yeganə çağırış nöqtəsi planlayıcıdır.
@@ -1404,14 +1439,17 @@ class ApplicationContext:
         ──────────────────────────────────────────────────────────────────────
         ÇƏKİ VƏ RİTM SEÇİMLƏRİ
         ──────────────────────────────────────────────────────────────────────
-        Yeddi işdən altısı `DAILY`-dir: hamısı CARİ vəziyyəti yenidən hesablayan
-        gün-vahidli əməliyyatlardır (pəncərə DÜNƏNlə bitir). `FINE_EXPIRE_STALE`
-        isə `HOURLY`-dir — o, DB-dəki `cron_close_expired_appeals` işinin tətbiq
-        qatındakı əkizidir və həmin cron `schema.sql`-da `'0 * * * *'` ilə,
-        yəni saatda bir dəfə qeydiyyatdan keçib. Ritmi fərqli seçsəydik, eyni
-        qayda `pg_cron`-lu və `pg_cron`-suz quraşdırmada FƏRQLİ vaxtda işləyər
-        və 72 saatlıq etiraz pəncərəsinin bağlanma anı quraşdırmadan asılı
-        olardı (bax `fine_management.expire_stale` docstring-i, Variant B).
+        İşlərin əksəriyyəti `DAILY`-dir: hamısı CARİ vəziyyəti yenidən
+        hesablayan gün-vahidli əməliyyatlardır (pəncərə DÜNƏNlə bitir).
+        `FINE_EXPIRE_STALE` isə `HOURLY`-dir — o, DB-dəki
+        `cron_close_expired_appeals` işinin tətbiq qatındakı əkizidir və həmin
+        cron `schema.sql`-da `'0 * * * *'` ilə, yəni saatda bir dəfə
+        qeydiyyatdan keçib. Ritmi fərqli seçsəydik, eyni qayda `pg_cron`-lu və
+        `pg_cron`-suz quraşdırmada FƏRQLİ vaxtda işləyər və 72 saatlıq etiraz
+        pəncərəsinin bağlanma anı quraşdırmadan asılı olardı (bax
+        `fine_management.expire_stale` docstring-i, Variant B).
+        `DUAL_CONTROL_OVERRIDE_TIMEOUT` də `HOURLY`-dir və səbəbi eynidir:
+        həddi DƏQİQƏ ilə ölçülən qayda gündəlik ritmlə təsadüfi işləyərdi.
 
         Yalnız `NIGHTLY_BACKUP` `HEAVY`-dir: `pg_dump` xarici prosesdir və
         dəqiqələrlə çəkir — GUI axınında icra olunsaydı interfeys donardı.
@@ -1521,6 +1559,22 @@ class ApplicationContext:
                 JobCadence.HOURLY,
                 JobWeight.LIGHT,
             ),
+            # M-5 — dual-control təsdiq müddəti. `HOURLY`, çünki hədd DƏQİQƏ
+            # vahidlidir (defolt 480) və gündəlik icra ən pis halda 24 saatlıq
+            # xəta verərdi — yəni Root-un təyin etdiyi müddət praktikada
+            # təsadüfi işləyərdi. `LIGHT`: bir indeksli sorğu + ləğv olunan
+            # sətir qədər UPDATE (`FINE_EXPIRE_STALE` ilə eyni ölçü).
+            #
+            # GECİKMİŞ İCRA TƏHLÜKƏSİZ DEYİL, ONA GÖRƏ QAPI İKİ YERDƏDİR:
+            # terminal söndürülü qalsa da, `approve_dual_control` təsdiqdən
+            # ƏVVƏL müddəti özü yoxlayır — yəni vaxtı keçmiş sorğu bu iş heç
+            # vaxt işləməsə belə təsdiqlənə bilmir.
+            (
+                "DUAL_CONTROL_OVERRIDE_TIMEOUT",
+                self._job_expire_pending_overrides,
+                JobCadence.HOURLY,
+                JobWeight.LIGHT,
+            ),
             # #30 — planlaşdırılmış icra xülasəsi (kompas1.md Faza 6). YENİ
             # cron/taymer YAZILMIR: mövcud planlayıcıya BİR sətir qeydiyyat
             # (`ExecutiveDigestUseCase.run`, bax onun modul başlığı).
@@ -1544,9 +1598,100 @@ class ApplicationContext:
                 JobCadence.DAILY,
                 JobWeight.LIGHT,
             ),
+            # Drive kvota nəzarəti (Faza 3.9). `DriveQuotaMonitor` yazılıb, test
+            # edilib və ixrac olunub — LAKİN onu ÇAĞIRAN heç bir yol yox idi.
+            # Nəticədə 90% xəbərdarlığı və avtomatik `ACTIVE → QUOTA_EXCEEDED`
+            # keçidi HEÇ VAXT baş vermirdi; Drive-ın dolduğu yalnız növbəti
+            # yükləmə `DriveQuotaExceededError` ilə çökəndə bilinirdi. Söhbət
+            # cərimə SÜBUT şəkillərindən gedir — mübahisə halında cərimənin
+            # yeganə əsaslandırmasından — ona görə xəbərdarlıqsız itmə
+            # qəbuledilməzdir (`EXCEPTION_ENGINE_RUN` ilə eyni boşluq növü).
+            #
+            # `DAILY`: modulun öz modeli gündəlikdir (`quota_monitor.py` başlığı,
+            # "TƏKRAR XƏBƏRDARLIQ QORUNMASI") və hədd GÜN vahidli
+            # `DRIVE_QUOTA_WARNING_COOLDOWN_DAYS` ilə susdurulur. `HOURLY`
+            # seçsəydik, kvota 90%-i keçən gün 24 Drive API sorğusu edilərdi və
+            # xəbərdarlıq yenə günə bir dəfə gedərdi — yəni yalnız kvota
+            # limitini yeyərdik.
+            #
+            # `LIGHT`: bir HTTP `about` sorğusu + ən çoxu iki `UPDATE`. `HEAVY`
+            # yalnız `pg_dump` üçün ayrılıb (bax yuxarıdakı əsaslandırma).
+            #
+            # YENİ `SystemLimitKey` YARADILMIR: həm hədd
+            # (`DRIVE_QUOTA_WARNING_RATIO`), həm təkrar-susma müddəti
+            # (`DRIVE_QUOTA_WARNING_COOLDOWN_DAYS`) ARTIQ `system_limits`-dədir
+            # (seed: migrations/032) və monitor onları YOXLAMA ANINDA oxuyur.
+            (
+                "DRIVE_QUOTA_CHECK",
+                self._job_drive_quota_check,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
             ("NIGHTLY_BACKUP", self._job_nightly_backup, JobCadence.DAILY, JobWeight.HEAVY),
         ):
             runner.register(ScheduledJob(key=key, handler=handler, cadence=cadence, weight=weight))
+
+    def _job_drive_quota_check(self, context: Any) -> str:
+        """Faza 3.9 — aktiv Drive hesabının kvotasını yoxlayır.
+
+        DRIVE QURULMAYIBSA İŞ SAKİT DAYANIR: `drive_providers()` OAuth klient
+        məlumatları olmadıqda `None` qaytarır və bu, XƏTA DEYİL — `.env.example`
+        həmin açarların boş qala biləcəyini açıq yazır (cərimələr normal yaranır,
+        şəkillər lokal növbədə gözləyir). İstisna atsaydıq, Drive işlətməyən
+        quraşdırmada gecəlik hesabat HƏR GÜN `FAILED` göstərərdi və əsl
+        nasazlıqlar həmin səs-küydə itərdi.
+
+        MONİTOR ÖZÜ DƏ ŞƏBƏKƏ NASAZLIĞINI UDUR (`QuotaCheckResult.error`) —
+        token/şəbəkə problemi işi çökdürmür, `drive_connections.last_error`-a
+        yazılır. Burada onu mətnə çeviririk ki, planlayıcı hesabatında görünsün.
+
+        `context.now` PLANLAYICIDAN gəlir (`Clock` portu ilə eyni mənbə):
+        təkrar-xəbərdarlıq pəncərəsi (`DRIVE_QUOTA_WARNING_COOLDOWN_DAYS`)
+        gecikmiş icrada da FAKTİKİ ana görə hesablanır və `datetime.now()`
+        heç yerdə çağırılmır.
+
+        `_job_nightly_backup` naxışı: `DriveConnectionRepository` `Session`-dan
+        KƏNARDA qurulur, çünki o, `Database` alıb hər əməliyyat üçün öz qısa
+        iş vahidini açır — Drive API çağırışı boyu tranzaksiya saxlamaq
+        CLAUDE.md §6-nın qadağasıdır (şəbəkə taymautu kilidi uzadardı).
+        """
+        from src.infrastructure.notifications.notifier import PostgresNotifier  # noqa: PLC0415
+        from src.infrastructure.storage.connections import (  # noqa: PLC0415
+            DriveConnectionRepository,
+        )
+        from src.infrastructure.storage.quota_monitor import DriveQuotaMonitor  # noqa: PLC0415
+
+        with self.session() as session:
+            max_upload_bytes = int(session.max_upload_bytes())
+        factory = self.drive_providers(max_upload_bytes=max_upload_bytes)
+        if factory is None:
+            return "Drive konfiqurasiya edilməyib — kvota yoxlaması atlandı"
+
+        monitor = DriveQuotaMonitor(
+            repository=DriveConnectionRepository(self._database, self._tenant_id),
+            provider_factory=factory,
+            # Xəbərdarlıq TENANT səviyyəsinə gedir (`recipient_id=None`) və
+            # marşrutlaşdırma `can_manage_drive_connection` flag-inə görə olur —
+            # yəni ayrıca alıcı siyahısı SAXLANMIR (bax `quota_monitor._notify`).
+            notifier=PostgresNotifier(self._database, limits=self._infrastructure_limits),
+            tenant_id=self._tenant_id,
+            # Hədd və təkrar-susma müddəti ROOT-dan; AÇIQ dəyər ötürülmür ki,
+            # Root sürüşdürücünü tərpədəndə növbəti icra onu görsün.
+            limits=self._infrastructure_limits,
+        )
+        result = monitor.check(now=context.now)
+
+        if result.error:
+            return f"Kvota oxunmadı: {result.error}"
+        if not result.checked:
+            return "Aktiv Drive bağlantısı yoxdur"
+
+        parts = [f"kvota {result.quota.percent}%" if result.quota else "kvota naməlum"]
+        if result.marked_exceeded:
+            parts.append("bağlantı QUOTA_EXCEEDED işarələndi")
+        if result.warning_sent:
+            parts.append("xəbərdarlıq göndərildi")
+        return ", ".join(parts)
 
     # --------------------------- planlanmış işlər ---------------------------- #
     #
@@ -1693,6 +1838,17 @@ class ApplicationContext:
             session.commit()
         return f"{closed} etiraz cavabsız bağlandı"
 
+    def _job_expire_pending_overrides(self, context: Any) -> str:
+        """M-5 — ikinci təsdiqi gözləyən vaxt düzəlişlərini ləğv edir.
+
+        `FINE_EXPIRE_STALE` ilə eyni naxış: müddət `system_limits`-dədir, iş
+        yalnız onu TƏTBİQ edir. Avtomatik təsdiq YOXDUR (bax use case).
+        """
+        with self.session() as session:
+            expired = session.leave_verification.expire_pending_overrides(context.tenant_id)
+            session.commit()
+        return f"{expired} vaxt düzəlişi təsdiqsiz ləğv olundu"
+
     def _job_executive_digest(self, context: Any) -> str:
         """#30 — planlaşdırılmış icra xülasəsi (bax `_register_scheduled_jobs`).
 
@@ -1812,6 +1968,7 @@ class ApplicationContext:
         from src.application.use_cases.face_control import (  # noqa: PLC0415
             FaceControlExemptionUseCase,
             FaceEnrollmentUseCase,
+            FaceLockReleaseUseCase,
             FaceMismatchExceptionRule,
             FaceReEnrollmentUseCase,
             FaceVerificationLogRetentionUseCase,
@@ -1823,6 +1980,9 @@ class ApplicationContext:
         from src.application.use_cases.fine_management import (  # noqa: PLC0415
             FineAppealUseCase,
             ManualFineUseCase,
+        )
+        from src.application.use_cases.fine_review import (  # noqa: PLC0415
+            MonthlyFineReviewUseCase,
         )
         from src.application.use_cases.first_run_setup import (  # noqa: PLC0415
             FirstRunSetupUseCase,
@@ -1904,6 +2064,9 @@ class ApplicationContext:
         )
         from src.infrastructure.security.encryption import EncryptionService  # noqa: PLC0415
         from src.infrastructure.security.hashing import HashingService  # noqa: PLC0415
+        from src.presentation.plugin_surface import (  # noqa: PLC0415
+            PluginRegistrySurface,
+        )
         from src.shared.saga_orchestrator import SagaOrchestrator  # noqa: PLC0415
 
         repo = uow.repository
@@ -1969,6 +2132,12 @@ class ApplicationContext:
                 documents=repo("employee_documents"),
                 clock=clock,
             ),
+            # #28 — təsdiqlənmiş illik məzuniyyət xəbərdarlığı. EYNİ bağlantı,
+            # eyni səbəb: məzuniyyət elə bu tranzaksiyada təsdiqlənmişsə (toplu
+            # əməliyyat yolu) təyinat onu DƏRHAL görməlidir. Repo YALNIZ
+            # OXUNUR — matris məzuniyyəti dəyişmir, məzuniyyət matrisi
+            # (bax `entities/annual_leave.py` başlığı).
+            annual_leave=repo("annual_leave_requests"),
         )
 
         # XAL USE CASE-i YEREL DƏYİŞƏNDİR, çünki İKİ yerdə lazımdır: həm
@@ -2218,6 +2387,21 @@ class ApplicationContext:
                 clock=clock,
                 notifier=notifier,
             ),
+            # REPOSITORY ARQUMENTİ YOXDUR VƏ BU, QƏSDƏNDİR: `publish_batch`
+            # cərimələri YADDAŞDA (`dict[FineId, Fine]`) alır və mutasiya edir,
+            # yazma isə ÇAĞIRANA aiddir (bax `controllers/fine_review.py`).
+            # Beləliklə bütün dəst TƏK `commit()`-də yazılır — "bir anda
+            # görünür" tələbi (use case başlığı) məhz bu yolla texniki
+            # zəmanətə çevrilir.
+            #
+            # `limits` MƏCBURİDİR (use case-in öz şərhi): etiraz pəncərəsi
+            # nəşr anında DONDURULUR və sonradan düzəldilə bilmir.
+            fine_review=MonthlyFineReviewUseCase(
+                clock=clock,
+                audit=audit,
+                notifier=notifier,
+                limits=repo("limits"),
+            ),
             tasks=task_workflow,
             sales_points=sales_points,
             # `limits`: Faza 7 — `[Xüsusi Aralıq]` seçiminin maksimum uzunluğu
@@ -2284,6 +2468,21 @@ class ApplicationContext:
             face_exemptions=FaceControlExemptionUseCase(
                 exemptions=repo("face_exemptions"),
                 limits=repo("limits"),
+                # SEC-020: istisna YALNIZ kompensasiya edici nəzarət (dual-control)
+                # açıq olduqda verilə/uzadıla bilər — bənd 14-ün şərti.
+                toggles=repo("toggles"),
+                audit=audit,
+                clock=clock,
+                notifier=notifier,
+            ),
+            # `profiles` EYNİ bağlantıdandır: sayğac/kilid sütunları
+            # `employees` sətrindədir və açılış həmin tranzaksiyada
+            # görünməlidir. `limits` isə yalnız `FACE_REENROLLMENT_REMINDER_
+            # MONTHS` üçündür — "yenidən qeydiyyat tövsiyə olunurmu?" sualı
+            # kilidin özünə deyil, onun SƏBƏBİNƏ aiddir (bənd 13).
+            face_lock_release=FaceLockReleaseUseCase(
+                profiles=repo("face_embeddings"),
+                limits=repo("limits"),
                 audit=audit,
                 clock=clock,
                 notifier=notifier,
@@ -2347,6 +2546,11 @@ class ApplicationContext:
                 limits=repo("limits"),
                 toggles=repo("toggles"),
                 flags=repo("permission_flags"),
+                # SEC-020: `DUAL_CONTROL` aktiv üz-təsdiqi istisnalarının yeganə
+                # kompensasiya edici nəzarətidir — söndürmə cəhdi həmin siyahını
+                # oxumadan qərar verə bilməz. EYNİ bağlantıdan gəlir ki, Root
+                # düyməni basdığı anda mövcud olan sətirlər görünsün.
+                face_exemptions=repo("face_exemptions"),
                 audit=audit,
                 clock=clock,
             ),
@@ -2400,6 +2604,13 @@ class ApplicationContext:
                 store=repo("preferences"),
                 clock=clock,
                 toggles=repo("toggles"),
+                # `limits`: şəbəkənin sütun sayı (`DASHBOARD_GRID_COLUMNS`) —
+                # ROOT parametridir (audit G-5, migrations/058).
+                limits=repo("limits"),
+                # Plugin-lərin verdiyi panel bölmələri (audit G-3). Səth
+                # TƏNBƏLDİR: `plugins` cədvəli yalnız Panel Qurucusu açılanda
+                # oxunur, hər sessiya qurulanda yox.
+                plugin_widgets=PluginRegistrySurface(repo("plugins"), self._tenant_id),
             ),
             db_switch=DatabaseSwitchUseCase(
                 read_only=repo("read_only"),
@@ -2431,7 +2642,16 @@ class ApplicationContext:
                 connectors=OneCConnectorFactory(erp_servers.credentials_for, limits=session_limits),
                 audit=audit,
                 mappings=PostgresStoreServerMappingRepository(self._database, self._tenant_id),
+                # `limits`: fayl-mübadiləsi serverinin defolt sinxronizasiya
+                # dövrü ROOT-dandır (`ERP_FILE_EXCHANGE_SYNC_INTERVAL_SECONDS`).
+                # Port ötürülməsəydi parametr ROOT ekranında görünər, lakin
+                # yeni serverə TƏSİR ETMƏZDİ — səssiz uğursuzluq.
+                limits=repo("limits"),
             ),
+            # Sihirbazın redaktə axını üçün EYNİ repo obyekti (bax `Session`
+            # sahəsindəki izah) — ikinci nüsxə qurmaq eyni serverin iki fərqli
+            # şifrələmə kontekstinə düşməsi riski demək olardı.
+            erp_server_configs=erp_servers,
             # REYESTR HƏR SESSİYADA YENİDƏN QURULUR — qəsdən: use case-lər
             # bağlantıya bağlıdır və sessiyadan uzun yaşamır (bax bu faylın
             # başlığı). Qaydanın özü isə vəziyyətsizdir; onu qlobal saxlamaq

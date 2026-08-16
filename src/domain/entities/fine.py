@@ -25,11 +25,29 @@ Cərimə həftələrlə icmalda qala bilər. Sayğac yaradılışdan başlasayd�
 cəriməni GÖRMƏMİŞ onun etiraz müddəti bitə bilərdi — bu, həm ədalətsizlik,
 həm hüquqi risk olardı. Ona görə pəncərə `publish()` anında açılır.
 
-EXPORT KİLİDİ (bölmə 6, HÜQUQİ RİSK) — ÜÇ ŞƏRT: cərimə Premiya&Cərimə
+EXPORT KİLİDİ (bölmə 6, HÜQUQİ RİSK) — DÖRD ŞƏRT: cərimə Premiya&Cərimə
 hesabatına YALNIZ (a) statusu `PUBLISHED` olduqda, (b) etiraz pəncərəsi
-`published_at`-dan hesablanaraq bağlandıqda, VƏ (c) əvvəllər export
-olunmadıqda düşür. `PENDING_REVIEW` HEÇ VAXT export-a düşmür: işçi onu nə
-görüb, nə də etiraz hüququ alıb.
+`published_at`-dan hesablanaraq bağlandıqda, (c) əvvəllər export olunmadıqda
+VƏ (d) ona qarşı QƏRAR VERİLMƏMİŞ etiraz olmadıqda düşür. `PENDING_REVIEW`
+HEÇ VAXT export-a düşmür: işçi onu nə görüb, nə də etiraz hüququ alıb.
+
+──────────────────────────────────────────────────────────────────────────────
+DÖRDÜNCÜ ŞƏRT NİYƏ ƏLAVƏ OLUNDU (M-6)
+──────────────────────────────────────────────────────────────────────────────
+Əvvəl üç şərt var idi və aralarında bir boşluq gizlənirdi: işçi 71-ci saatda
+etiraz göndərirdi, 72-ci saatda pəncərə bağlanırdı, HR isə hələ baxmamış
+olurdu. Həmin an cərimə export-a "hazır" sayılırdı — yəni PUL KƏSİLİRDİ,
+etiraza isə heç vaxt qərar verilməmişdi. `cron_close_expired_appeals`
+funksiyasının şərhi bu davranışı hərfən yazırdı: "export kilidini açır".
+
+HR-ın baxmaması işçinin günahı deyil. Ona görə pəncərənin bağlanması artıq
+kilidi AÇMIR: qərarı gözləyən etiraz cəriməni MÜBAHİSƏLİ saxlayır və o,
+qərar verilənə qədər hesabata düşmür. Kilid əbədi deyil — HR etirazı
+təsdiqləyəndə və ya rədd edəndə açılır (bax `appeal.py`: müddəti bitmiş
+etiraz da qərar ala bilər).
+
+RƏDD EDİLƏN ALTERNATİV: "pəncərə bağlananda gözləyən etirazı avtomatik rədd
+et" — bu, HR-ın süstlüyünü işçinin cibindən ödəyən qayda olardı.
 """
 
 from __future__ import annotations
@@ -146,6 +164,20 @@ class Fine(AggregateRoot):
         self.reversal_reason: str | None = None
         self.exported_period: str | None = None
 
+        # ────────────────────────────────────────────────────────────────────
+        # NİYƏ `fines`-DƏ BELƏ BİR SÜTUN YOXDUR
+        # ────────────────────────────────────────────────────────────────────
+        # Bu bayraq `fine_appeals.status`-un TÖRƏMƏSİDİR: "bu cəriməyə qərar
+        # verilməmiş etiraz varmı". Onu ayrıca sütun kimi saxlamaq iki mənbə
+        # yaradardı və biri digərindən geri qalanda cərimə ya haqsız
+        # bloklanardı, ya haqsız export olunardı. Ona görə dəyər SQL-də
+        # `EXISTS (...)` ilə hesablanır (bax `repositories.py::_SELECT`) və
+        # burada yalnız YADDAŞDA saxlanılır.
+        #
+        # Defolt `False` düzgündür: yenicə yaranmış cəriməyə hələ etiraz
+        # göndərilə bilməz (o, `PENDING_REVIEW`-dur və işçi onu görmür).
+        self.has_open_appeal = False
+
         self.record_event(
             FineIssuedEvent(
                 fine_id=fine_id,
@@ -254,6 +286,42 @@ class Fine(AggregateRoot):
 
     # ------------------------------- etiraz --------------------------------- #
 
+    def mark_appeal_opened(self) -> None:
+        """İşçi etiraz göndərdi — cərimə MÜBAHİSƏLİ olur (M-6).
+
+        Qərar verilənə qədər export-a düşmür; `is_appeal_window_open` isə
+        toxunulmur, çünki pəncərə vaxt anlayışıdır, bu isə mübahisə faktıdır.
+        """
+        self.has_open_appeal = True
+
+    def mark_appeal_decided(self) -> None:
+        """Etiraza QƏRAR verildi (qəbul və ya rədd) — mübahisə bağlandı.
+
+        Rədd halında da çağırılır: cərimə qüvvədə qalır və artıq export-a
+        düşə bilər. Etirazın "cavabsız qalması" isə bu metoda ÇATMIR — məhz
+        buna görə qərarsız cərimə hesabatda görünmür.
+        """
+        self.has_open_appeal = False
+
+    @property
+    def requires_payroll_correction(self) -> bool:
+        """Export-dan SONRA ləğv/azaldılıb — maaşda düzəliş lazımdır (M-6).
+
+        Bu hal nadirdir, lakin mümkündür: cərimə export olunub (pul kəsilib),
+        sonra idarə qərarı ilə `reverse()` edilib. Hesabat faylı artıq
+        göndərilib, ona görə düzəliş SİSTEMDƏN KƏNARDA aparılmalıdır və
+        məsul şəxs bunu BİLMƏLİDİR — `FineAppealUseCase.approve` məhz bu
+        xassəyə baxıb kritik bildiriş göndərir.
+
+        `exported_period` QƏSDƏN SIFIRLANMIR: sətir hansı dövrdə tutulduğunu
+        həmişəlik saxlamalıdır, əks halda növbəti export onu YENİDƏN tutardı
+        (ikiqat kəsinti).
+        """
+        return self.exported_period is not None and self.status in (
+            FineStatus.REVERSED,
+            FineStatus.REDUCED,
+        )
+
     def is_appeal_window_open(self, *, now: datetime) -> bool:
         """Nəşr olunmamış cərimənin pəncərəsi hələ AÇILMAYIB.
 
@@ -326,7 +394,8 @@ class Fine(AggregateRoot):
     def is_exportable(self, *, now: datetime) -> bool:
         """Premiya&Cərimə hesabatına düşə bilərmi (bölmə 6, LOCK MEXANİZMİ).
 
-        Üç şərt: nəşr olunub + pəncərə bağlıdır + əvvəllər export olunmayıb.
+        Dörd şərt: nəşr olunub + pəncərə bağlıdır + əvvəllər export olunmayıb
+        + qərarsız etirazı yoxdur (modul başlığı, M-6).
 
         `REDUCED` DAXİLDİR: etiraz qismən qəbul olunubsa işçi AZALDILMIŞ
         məbləği yenə ödəyir — onu export-dan çıxarmaq cərimənin sükutla
@@ -338,6 +407,10 @@ class Fine(AggregateRoot):
             return False
         if self.exported_period is not None:
             return False
+        if self.has_open_appeal:
+            # MÜBAHİSƏLİ (M-6): etiraz göndərilib, qərar hələ yoxdur. Pul
+            # kəsintisi mübahisənin nəticəsindən ƏVVƏL edilə bilməz.
+            return False
         return not self.is_appeal_window_open(now=now)
 
     def mark_exported(self, *, period: str, now: datetime) -> None:
@@ -345,9 +418,10 @@ class Fine(AggregateRoot):
         if not self.is_exportable(now=now):
             raise DomainRuleError(
                 "Bu cərimə hələ export edilə bilməz — etiraz pəncərəsi açıqdır, "
-                "cərimə ləğv edilib və ya artıq export olunub",
+                "qərarsız etiraz var, cərimə ləğv edilib və ya artıq export olunub",
                 context={
                     "status": self.status.value,
+                    "has_open_appeal": self.has_open_appeal,
                     "published_at": self.published_at.isoformat() if self.published_at else None,
                     "window_closes_at": (
                         self.appeal_window_closes_at.isoformat()

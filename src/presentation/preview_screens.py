@@ -418,8 +418,18 @@ def _health(screen: group_d.HealthScreen) -> None:
                 "09:12",
                 "warning",
             ),
+            (
+                f"{data.SYNC_CONFLICT_OPEN_COUNT} sinxronizasiya konflikti həll "
+                "gözləyir — eyni qeyd iki yerdə fərqli dəyişdirilib.",
+                "09:41",
+                "warning",
+            ),
         ]
     )
+    # G-1: xəbərdarlığın GEDƏCƏYİ yer. Maketdə keçid HƏMİŞƏ görünür — canlı
+    # yolda isə `screen_data._health` flag-i yoxlayıb sayğacı `0` göndərir və
+    # widget ÜMUMİYYƏTLƏ qurulmur (bax `HealthScreen.set_conflict_action`).
+    screen.set_conflict_action(data.SYNC_CONFLICT_OPEN_COUNT)
 
 
 def _audit(screen: group_d.AuditScreen) -> None:
@@ -622,10 +632,103 @@ def _annual_leave(screen: Any) -> None:
     screen.set_requests(list(data.ANNUAL_LEAVE_PENDING))
 
 
+def _fine_review(screen: Any) -> None:
+    """Aylıq Cərimə İcmalı (miqrasiya 003) — maket və canlı yol EYNİ tiplərlə.
+
+    Sətirlər `FineReviewRow`/`FineReviewGroup` `NamedTuple`-larına çevrilir,
+    yəni `controllers/fine_review.py::_group_rows`-un qurduğu ilə EYNİ
+    strukturdur — uyğunsuzluğu tip yoxlayıcısı da tutur (CLAUDE.md §6).
+
+    Qərar ETİKETLƏRİ maketdə UYDURULMUR: `decision_options()` canlı yolun
+    işlətdiyi EYNİ funksiyadır və `ReviewDecision` üzvlərini gətirir
+    (`_sync_conflicts` ilə eyni qərar).
+    """
+    from src.presentation.controllers.fine_review import (  # noqa: PLC0415
+        decision_options,
+    )
+    from src.presentation.screens.fine_review import (  # noqa: PLC0415
+        FineReviewGroup,
+        FineReviewRow,
+    )
+
+    screen.set_decision_options(decision_options())
+    screen.set_periods(
+        [dict(period) for period in data.FINE_REVIEW_PERIODS],
+        selected=data.FINE_REVIEW_SELECTED_PERIOD,
+    )
+    screen.set_groups(
+        [
+            FineReviewGroup(
+                key=key,
+                store=store,
+                count_text=count_text,
+                total_text=total_text,
+                # Sahələr AÇIQ adlarla verilir (`_dashboard`-dakı
+                # `RankingEntry` ilə eyni qərar): sıra dəyişsə tip
+                # yoxlayıcısı deyil, insan gözü qərarları qarışdırardı.
+                rows=tuple(
+                    FineReviewRow(
+                        fine_id=fine_id,
+                        employee=employee,
+                        fine_type=fine_type,
+                        amount_text=amount_text,
+                        date_text=date_text,
+                        operator=operator,
+                        has_evidence=has_evidence,
+                    )
+                    for (
+                        fine_id,
+                        employee,
+                        fine_type,
+                        amount_text,
+                        date_text,
+                        operator,
+                        has_evidence,
+                    ) in rows
+                ),
+            )
+            for key, store, count_text, total_text, rows in data.FINE_REVIEW_GROUPS
+        ],
+        summary_text=data.FINE_REVIEW_SUMMARY,
+    )
+    # Bir sətir "Sil" vəziyyətində göstərilir — bax `FINE_REVIEW_DISCARDED`.
+    discarded_id, discard_reason = data.FINE_REVIEW_DISCARDED
+    screen.set_decision(
+        discarded_id,
+        decision=decision_options()[-1]["code"],
+        reason=discard_reason,
+    )
+
+
 def _attrition_risk(screen: Any) -> None:
     """#21 (kompasos11.md Faza 9) — açarlar `controllers/attrition_risk.py::
     _to_row` ilə EYNİDİR (CLAUDE.md §6)."""
     screen.set_scores(list(data.ATTRITION_RISK_SCORES))
+
+
+def _sync_conflicts(screen: Any) -> None:
+    """G-1 (bölmə 5) — açarlar `controllers/sync_conflicts.py`-dakı
+    `_to_list_row` / `_to_detail` / `_to_field_rows` ilə EYNİDİR (CLAUDE.md §6).
+
+    Qərar ETİKETLƏRİ maketdə də UYDURULMUR: `resolution_options()` canlı yolun
+    işlətdiyi EYNİ funksiyadır və `Resolution.label_az`-ı gətirir. Maket öz
+    mətnini yazsaydı, enum dəyişəndə iki yol sükutla ayrılardı — `menu.py`
+    başlığındakı tarixi qüsurun eyni forması.
+    """
+    from src.application.use_cases.sync_conflicts import (  # noqa: PLC0415
+        MIN_NOTE_LENGTH,
+    )
+    from src.presentation.controllers.sync_conflicts import (  # noqa: PLC0415
+        resolution_options,
+    )
+
+    screen.set_resolutions(resolution_options())
+    screen.set_note_min_length(MIN_NOTE_LENGTH)
+    screen.set_conflicts([dict(row) for row in data.SYNC_CONFLICTS])
+    screen.set_comparison(
+        dict(data.SYNC_CONFLICTS[0]),
+        [dict(row) for row in data.SYNC_CONFLICT_FIELDS],
+    )
 
 
 def _field_report(
@@ -705,10 +808,14 @@ def _face_exemptions(screen: Any) -> None:
 
 
 def _dashboard_builder(screen: Any) -> None:
+    # `placements`/`columns` (audit G-5) CANLI yolla EYNİ arqumentlərdir
+    # (`controllers/dashboard_builder.py`) — maket öz ad məkanını qurmur.
     screen.set_widgets(
         dict(data.DASHBOARD_WIDGETS),
         order=list(data.DASHBOARD_ORDER),
         visible=set(data.DASHBOARD_VISIBLE),
+        placements=dict(data.DASHBOARD_PLACEMENTS),
+        columns=data.DASHBOARD_GRID_COLUMNS,
     )
 
 
@@ -755,7 +862,9 @@ _POPULATORS: dict[str, Callable[[Any], None]] = {
     "announcements": _announcements,
     "performance_reviews": _performance_reviews,
     "attrition_risk": _attrition_risk,
+    "sync_conflicts": _sync_conflicts,
     "annual_leave": _annual_leave,
+    "fine_review": _fine_review,
     "bulk_operations": _bulk_operations,
     # Face Control (facecontrol.md Faza 4) — hər ikisi ÖZ kontrollerinə
     # bağlıdır (həm oxuyur, həm yazır), maket isə eyni setter-ləri çağırır.

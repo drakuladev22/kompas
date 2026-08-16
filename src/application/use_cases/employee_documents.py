@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Final
 
+from src.domain.document_rules import ATTENTION_FLAG_LABEL_INLINE_AZ
 from src.domain.entities.employee_document import EmployeeDocument
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.authorization import AuthorizationError
@@ -333,7 +334,11 @@ class EmployeeDocumentUseCase:
     ) -> None:
         employee = self._employees.get(document.employee_id)
         employee_label = employee.full_name if employee is not None else str(document.employee_id)
-        blocking_note = " (BLOKLAYICI)" if document.is_blocking else ""
+        # « (BLOKLAYICI)» YAZILMIR: sənəd bitəndə heç nə bloklanmır, yalnız
+        # növbə təyinatında xəbərdarlıq görünür (bax `domain/document_rules.py`
+        # başlığı). Köhnə söz HR-a "işçi işə buraxılmayacaq" vəd edirdi və
+        # gecəlik iş həmin vədi hər 30/14/7 gündə təkrarlayırdı.
+        blocking_note = f" ({ATTENTION_FLAG_LABEL_INLINE_AZ})" if document.is_blocking else ""
         self._notifier.notify(
             tenant_id=tenant_id,
             recipient_id=None,

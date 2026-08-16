@@ -84,6 +84,60 @@ class SyncError(Exception):
     """Bir yazının tətbiqi uğursuz oldu (növbədə qalır, təkrar cəhd olunur)."""
 
 
+def cast_placeholder(column_type: tuple[str, str]) -> sql.Composable:
+    """`%s::tip` — JSON-dan gələn hər dəyər SƏTİRDİR.
+
+    Payload bufer faylında JSON kimi saxlanılır, yəni `date`, `timestamptz`,
+    `uuid`, `numeric` və enum dəyərləri geri oxunanda `str` olur. Açıq cast
+    olmasa PostgreSQL "column is of type date but expression is of type text"
+    deyə imtina edərdi.
+
+    NİYƏ MODUL SƏVİYYƏSİNDƏ, `OfflineSyncService`-in DAXİLİNDƏ DEYİL: eyni
+    JSON→sütun cast qaydası İKİNCİ giriş nöqtəsindən də lazım oldu —
+    `PostgresSyncConflictRepository.apply_local_version()` HR-ın seçdiyi yerli
+    versiyanı eyni `JSONB` formatından hədəf sətrə yazır. Qaydanı orada təkrar
+    yazmaq RƏDD EDİLDİ: massiv istisnası (`_` prefiksi) kimi incəliklər bir
+    nüsxədə düzəlib digərində qalardı və nasazlıq yalnız istehsalatda,
+    konkret sütun tipində üzə çıxardı.
+    """
+    udt_schema, udt_name = column_type
+    if udt_name.startswith("_"):  # massiv tipi — cast tətbiq edilmir
+        return sql.Placeholder()
+    return sql.SQL("{}::{}").format(sql.Placeholder(), sql.Identifier(udt_schema, udt_name))
+
+
+def table_columns(conn: Connection[dict[str, Any]], table_name: str) -> dict[str, tuple[str, str]]:
+    """Cədvəlin real sütunları və tipləri — sxem dəyişikliyi ilə sinxron qalır.
+
+    Cədvəl/sütun adları bufer faylından, yəni MAĞAZA PC-sinin diskindən gəlir
+    (bax modul başlığı) — onları SQL-ə yapışdırmadan ƏVVƏL bazanın ÖZÜNDƏN
+    təsdiqləmək inyeksiyaya qarşı ikinci qatdır. Sorğu parametrləşdirilib.
+
+    Returns:
+        `{sütun_adı: (udt_schema, udt_name)}`. Tip `cast_placeholder()`-də
+        açıq cast üçün lazımdır.
+
+    Raises:
+        SyncError: cədvəl bu sxemdə mövcud deyilsə.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name, udt_schema, udt_name
+              FROM information_schema.columns
+             WHERE table_schema = %s AND table_name = %s
+            """,
+            (SCHEMA, table_name),
+        )
+        columns = {
+            str(row["column_name"]): (str(row["udt_schema"]), str(row["udt_name"]))
+            for row in cur.fetchall()
+        }
+    if not columns:
+        raise SyncError(f"Cədvəl tapılmadı: {table_name}")
+    return columns
+
+
 @dataclass
 class SyncReport:
     """Bir `run_once()` çağırışının nəticəsi — health monitor və testlər üçün."""
@@ -282,17 +336,14 @@ class OfflineSyncService:
 
     @staticmethod
     def _placeholder(column_type: tuple[str, str]) -> sql.Composable:
-        """`%s::tip` — JSON-dan gələn hər dəyər SƏTİRDİR.
+        """Modul səviyyəli `cast_placeholder()`-ə keçid — bax onun docstring-i.
 
-        Payload bufer faylında JSON kimi saxlanılır, yəni `date`, `timestamptz`,
-        `uuid`, `numeric` və enum dəyərləri geri oxunanda `str` olur. Açıq cast
-        olmasa PostgreSQL "column is of type date but expression is of type
-        text" deyə imtina edərdi.
+        Metod SAXLANILIR (silinmir): daxili çağırış nöqtələri və onları yoxlayan
+        testlər bu adı işlədir, funksiyanın ÖZÜ isə artıq modul səviyyəsindədir
+        ki, `sync_conflict_repository` də eyni cast qaydasını TƏKRAR YAZMADAN
+        işlədə bilsin (iki nüsxə olsaydı, biri düzələndə digəri arxada qalardı).
         """
-        udt_schema, udt_name = column_type
-        if udt_name.startswith("_"):  # massiv tipi — cast tətbiq edilmir
-            return sql.Placeholder()
-        return sql.SQL("{}::{}").format(sql.Placeholder(), sql.Identifier(udt_schema, udt_name))
+        return cast_placeholder(column_type)
 
     def _record_conflict(
         self,
@@ -333,30 +384,17 @@ class OfflineSyncService:
     def _columns(
         self, conn: Connection[dict[str, Any]], table_name: str
     ) -> dict[str, tuple[str, str]]:
-        """Cədvəlin real sütunları və tipləri — sxem dəyişikliyi ilə sinxron qalır.
+        """`table_columns()` üzərinə PROSES-ÖMÜRLÜ keş.
 
-        Returns:
-            `{sütun_adı: (udt_schema, udt_name)}`. Tip `_placeholder()`-də
-            açıq cast üçün lazımdır.
+        Keş burada qalır, ortaq funksiyada YOX: servis uzun ömürlüdür və bir
+        bərpa dövründə minlərlə yazı eyni cədvələ dəyir. Konflikt həlli isə
+        istifadəçi tempində, sessiya-ömürlü repository üzərindən gedir — orada
+        keş faydasızdır, sxem dəyişikliyini isə gec görərdi.
         """
         cached = self._column_cache.get(table_name)
         if cached is not None:
             return cached
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT column_name, udt_schema, udt_name
-                  FROM information_schema.columns
-                 WHERE table_schema = %s AND table_name = %s
-                """,
-                (SCHEMA, table_name),
-            )
-            columns = {
-                str(row["column_name"]): (str(row["udt_schema"]), str(row["udt_name"]))
-                for row in cur.fetchall()
-            }
-        if not columns:
-            raise SyncError(f"Cədvəl tapılmadı: {table_name}")
+        columns = table_columns(conn, table_name)
         self._column_cache[table_name] = columns
         return columns
 
@@ -366,4 +404,6 @@ __all__ = [
     "OfflineSyncService",
     "SyncError",
     "SyncReport",
+    "cast_placeholder",
+    "table_columns",
 ]

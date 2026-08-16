@@ -39,15 +39,30 @@ class MenuEntry:
         title_az: İstifadəçiyə görünən ad — YALNIZ Azərbaycan dilində (bölmə 9).
         required_flag: Görünmək üçün lazım olan icazə flag-i.
             `None` → hər autentifikasiya olunmuş istifadəçi görür (məs. "Ayarlar").
+        required_flags: ƏLAVƏ flag-lər — HAMISI tələb olunur. Defolt boşdur,
+            yəni mövcud 40+ maddənin heç birinin davranışı dəyişmir.
         feature_module: Bağlı olduğu Feature Toggle. `None` → toggle-dan asılı deyil.
         order: Menyuda sıra (kiçik əvvəl).
         parent_key: Alt-menyu üçün valideyn açarı.
         icon: İkon adı (Faza 4-də dizayn sistemi ilə uyğunlaşdırılır).
+
+    ──────────────────────────────────────────────────────────────────────────
+    `required_flags` NİYƏ ƏLAVƏ OLUNDU, `required_flag` NİYƏ QALDI
+    ──────────────────────────────────────────────────────────────────────────
+    Plugin manifesti bir DƏST flag elan edir (`PluginManifest.required_flags`)
+    və plugin səhifəsi onların HAMISINI tələb etməlidir — birini seçib
+    qalanını atmaq səlahiyyət qapısını sükutla zəiflədərdi (audit G-3).
+    Mövcud sahəni dəstə çevirmək isə `menu.py`-dakı bütün maddələri,
+    `test_menu_registry.py`-nin parametrləşdirilmiş yoxlamasını və `AdminShell`
+    çağırışlarını toxundurardı. Ona görə köhnə sahə TOXUNULMADI, yenisi
+    ONUN ÜSTÜNƏ QOYULDU: `required_flag` "əsas qapı", `required_flags` isə
+    "əlavə qapılar"dır və ikisi VƏ ilə birləşir.
     """
 
     key: str
     title_az: str
     required_flag: str | None = None
+    required_flags: frozenset[str] = field(default_factory=frozenset)
     feature_module: str | None = None
     order: int = 100
     parent_key: str | None = None
@@ -163,6 +178,12 @@ class NavigationRegistry:
         ):
             return False
         # Şərt 2 — istifadəçinin icazəsi varmı
+        #
+        # `required_flags` (əlavə qapılar) `required_flag`-dən ASILI OLMADAN
+        # yoxlanılır: plugin səhifəsi bir neçə flag tələb edə bilər və birinin
+        # olmaması maddəni gizlətməlidir (bax `MenuEntry` başlığı, audit G-3).
+        if any(not employee.has_permission(flag, now=now) for flag in entry.required_flags):
+            return False
         if entry.required_flag is None:
             return True
         return employee.has_permission(entry.required_flag, now=now)

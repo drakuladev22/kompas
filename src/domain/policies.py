@@ -44,6 +44,13 @@ class SystemLimitKey(str, Enum):
     LATE_TOLERANCE_MINUTES = "LATE_TOLERANCE_MINUTES"
     VERIFICATION_TIMEOUT_MINUTES = "VERIFICATION_TIMEOUT_MINUTES"
     DUAL_CONTROL_THRESHOLD_MINUTES = "DUAL_CONTROL_THRESHOLD_MINUTES"
+    #: İkinci təsdiq nə qədər gözləyə bilər (M-5). AYRI açardır, çünki
+    #: `DUAL_CONTROL_THRESHOLD_MINUTES` "hansı düzəliş təsdiq TƏLƏB EDİR"
+    #: sualına, bu isə "təsdiq NƏ QƏDƏR gözləyə bilər" sualına cavab verir —
+    #: biri hadisənin ölçüsü, digəri prosesin SLA-sıdır. Bir açara
+    #: bağlansaydılar, Root həddi 45-ə qaldıranda gözləmə müddəti də
+    #: sükutla dəyişərdi.
+    DUAL_CONTROL_APPROVAL_TIMEOUT_MINUTES = "DUAL_CONTROL_APPROVAL_TIMEOUT_MINUTES"
     PIN_MAX_FAILED_ATTEMPTS = "PIN_MAX_FAILED_ATTEMPTS"
     PIN_LOCKOUT_MINUTES = "PIN_LOCKOUT_MINUTES"
     NTP_MAX_DRIFT_SECONDS = "NTP_MAX_DRIFT_SECONDS"
@@ -389,6 +396,19 @@ class SystemLimitKey(str, Enum):
     ERP_SYNC_MAX_PAGES_PER_RUN = "ERP_SYNC_MAX_PAGES_PER_RUN"
     ERP_REQUEST_TIMEOUT_SECONDS = "ERP_REQUEST_TIMEOUT_SECONDS"
     ERP_MAX_RETRIES = "ERP_MAX_RETRIES"
+    # Fayl-mübadiləsi tipli 1C serverinin DEFOLT sinxronizasiya dövrü.
+    #
+    # NİYƏ AYRICA AÇAR — HTTP/COM üçün belə açar YOXDUR: onların dövrü
+    # `erp_servers.sync_interval_seconds` sütunundadır və sxem defolt 300
+    # saniyə verir. Fayl mübadiləsi isə real-vaxt DEYİL (1c.md: "hər gecə bir
+    # dəfə sinxronlaşır") — 300 saniyəlik dövr həm mənasız fayl oxumaları
+    # yaradar, həm də sağlamlıq görünüşünü yanıldar: `v_erp_server_health`
+    # STALE həddini `interval * 3` kimi hesablayır, yəni gecəlik ixracı olan
+    # server 15 dəqiqədən sonra "köhnəlmiş" görünərdi.
+    #
+    # Dəyər KİRAYƏÇİYƏ görə dəyişir (kimsə gündə iki dəfə ixrac edir), ona
+    # görə yeri `system_limits`-dir, koddakı sabit deyil.
+    ERP_FILE_EXCHANGE_SYNC_INTERVAL_SECONDS = "ERP_FILE_EXCHANGE_SYNC_INTERVAL_SECONDS"
     # Kiosk nəzarətçisi: yenidən-başlatma fırtınasının pəncərəsi, tavanı və
     # artan gözləmə cədvəli.
     KIOSK_RESTART_WINDOW_MINUTES = "KIOSK_RESTART_WINDOW_MINUTES"
@@ -825,6 +845,30 @@ class SystemLimitKey(str, Enum):
     # diaqnostikasıdır: aşılma System Health Monitor-a xəbərdarlıq yazır və
     # HEÇ VAXT keyfiyyət parametrlərini avtomatik zəiflətmir.
     FACE_VERIFICATION_MAX_SECONDS = "FACE_VERIFICATION_MAX_SECONDS"
+    # --- G-5/G-6 audit boşluqları (seed: migrations/058) --------------------- #
+    #
+    # HƏR İKİSİ GÖRÜNÜŞ PARAMETRİDİR, struktur zəmanət DEYİL (CLAUDE.md §5):
+    # nə anti-fraud vəzifə ayrılığına, nə hardlock iyerarxiyasına, nə də
+    # dual-control axınına toxunurlar. Heç biri SƏLAHİYYƏT genişləndirmir —
+    # ikisi də yalnız ARTIQ icazəli məlumatın necə göstərildiyini təyin edir.
+    #
+    # Kamera Operatorunun mağaza süzgəci NEÇƏ MAĞAZADAN SONRA görünsün.
+    # Spesifikasiya "3-dən çox" deyir, lakin ədədin özü müəssisədən asılıdır:
+    # 21 filiallı şəbəkədə operatorun 6 mağazası ola bilər, kiçik müəssisədə
+    # isə 2. Sabit 3 birincidə süzgəci məcburi, ikincisində isə əlçatmaz
+    # edərdi. SÜZGƏC SƏLAHİYYƏT QAPISI DEYİL — operator onsuz da yalnız ÖZ
+    # təyinatlarını görür (`stores_for_operator`), bu ədəd isə sadəcə
+    # "siyahı nə vaxt uzun sayılır" sualına cavab verir.
+    CAMERA_QUEUE_STORE_FILTER_THRESHOLD = "CAMERA_QUEUE_STORE_FILTER_THRESHOLD"
+    # Panel Qurucusundakı şəbəkənin SÜTUN SAYI. Ekran ölçüsü müəssisədən
+    # müəssisəyə dəyişir: baş ofisdəki 27 düymlük monitorda üç sütun rahat
+    # oxunur, filialdakı 13 düymlük noutbukda isə iki sütun belə sıxdır.
+    # Sabit ədəd birində boş sahə, digərində kəsilmiş başlıq verərdi.
+    #
+    # DAR PƏNCƏRƏ BU DƏYƏRDƏN ASILI DEYİL: `LayoutMode.COMPACT` şəbəkəni
+    # HƏMİŞƏ tək sütuna yığır (bax `dashboard_layout.collapse_to_single_column`)
+    # — yəni Root böyük ədəd yazsa belə dar ekranda düzülüş sınmır.
+    DASHBOARD_GRID_COLUMNS = "DASHBOARD_GRID_COLUMNS"
 
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
@@ -833,6 +877,15 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.LATE_TOLERANCE_MINUTES: "15",
     SystemLimitKey.VERIFICATION_TIMEOUT_MINUTES: "45",
     SystemLimitKey.DUAL_CONTROL_THRESHOLD_MINUTES: "30",
+    # 480 dəqiqə = BİR İŞ NÖVBƏSİ. Ölçü təsadüfi seçilməyib: ikinci təsdiqin
+    # dəyəri hadisənin konteksti CANLI olduğu müddətdədir — təsdiqçi lazım
+    # gələrsə düzəlişi yazan operatordan soruşa bilməlidir. Növbə bitəndən
+    # sonra o operator artıq işdə olmur və təsdiq formal imzaya çevrilir.
+    # `VERIFICATION_TIMEOUT_MINUTES` (45) ilə eyniləşdirmək RƏDD EDİLDİ:
+    # 45 dəqiqə işçini limbo-da saxlamamaq üçündür (o, mağazada gözləyir),
+    # burada isə heç kim gözləmir — icazə axını orijinal vaxtla onsuz da
+    # davam edir (bax `ManualOverride.is_effective`).
+    SystemLimitKey.DUAL_CONTROL_APPROVAL_TIMEOUT_MINUTES: "480",
     SystemLimitKey.PIN_MAX_FAILED_ATTEMPTS: "5",
     SystemLimitKey.PIN_LOCKOUT_MINUTES: "15",
     SystemLimitKey.NTP_MAX_DRIFT_SECONDS: "60",
@@ -1037,6 +1090,11 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.ERP_SYNC_MAX_PAGES_PER_RUN: "10",
     SystemLimitKey.ERP_REQUEST_TIMEOUT_SECONDS: "30.0",
     SystemLimitKey.ERP_MAX_RETRIES: "3",
+    # Fayl mübadiləsi = gündə bir dəfə (86400 san.). 1c.md kartın izahında
+    # istifadəçiyə məhz bunu vəd edir ("hər gecə bir dəfə sinxronlaşır") —
+    # defolt həmin vədlə eyni olmalıdır, əks halda ekranda yazılan ilə
+    # sistemin etdiyi fərqlənərdi.
+    SystemLimitKey.ERP_FILE_EXCHANGE_SYNC_INTERVAL_SECONDS: "86400",
     # `kiosk/watchdog.py`: 10 dəqiqədə 5 yenidən başlatma, 2→30 san. gözləmə.
     SystemLimitKey.KIOSK_RESTART_WINDOW_MINUTES: "10",
     SystemLimitKey.KIOSK_MAX_RESTARTS_PER_WINDOW: "5",
@@ -1323,6 +1381,15 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # PERFORMANS siqnalıdır: aşılma heç nəyi bloklamır və heç bir keyfiyyət
     # parametrini zəiflətmir, yalnız System Health Monitor-a yazılır.
     SystemLimitKey.FACE_VERIFICATION_MAX_SECONDS: "5",
+    # 3 — spesifikasiyanın öz ədədi ("3-dən çox mağazası varsa seçim olsun").
+    # Defolt DAVRANIŞI DƏYİŞMİR: 1–3 mağazalı operator süzgəci əvvəlki kimi
+    # GÖRMÜR, çünki üç sətirlik siyahını süzmək lazım deyil.
+    SystemLimitKey.CAMERA_QUEUE_STORE_FILTER_THRESHOLD: "3",
+    # 2 sütun — mövcud İdarə Paneli maketinin faktiki düzülüşü (qrafik + ölçən,
+    # liderlər + serverlər yan-yana). Defolt 1 seçilsəydi, şəbəkə funksiyası
+    # ilk gündən görünməz qalardı; 3+ isə 1280px minimum pəncərədə kartları
+    # 380px-dən dar edərdi (başlıqlar kəsilir).
+    SystemLimitKey.DASHBOARD_GRID_COLUMNS: "2",
 }
 
 
@@ -1711,8 +1778,32 @@ class FeatureModule(str, Enum):
 
         "Kamera Təsdiqi" STEP1-3 və Morning Check-in axınlarının struktur
         əsasıdır — bunu söndürmək adi bir-kliklik toggle DEYİL.
+
+        `DUAL_CONTROL` BURADA QƏSDƏN YOXDUR (SEC-020). Onu `is_structural`
+        etmək cazibədar görünürdü, lakin `is_structural` STATİK bayraqdır:
+        "həmişə, hər kirayəçidə yazılı təsdiq tələb et" deməkdir. Faktiki
+        zəmanət isə ŞƏRTLİDİR — modul yalnız AKTİV üz-təsdiqi istisnası olan
+        kirayəçidə struktur daşıyıcıdır (`FACE_EXEMPTION_COMPENSATING_MODULE`).
+        Statik bayraq şərti qaydanı ifadə edə bilmir və üstəlik onu ZƏİFLƏDİR:
+        6 simvolluq təsdiq mətni yazan Root istisnalı işçini kompensasiyasız
+        qoymağa DAVAM edərdi. Şərti qapı `RootControlUseCase.set_module_enabled`
+        + `enforce_face_exemption_compensation()` trigger-indədir.
         """
         return self is FeatureModule.CAMERA_VERIFICATION
+
+
+#: Face Control istisnasının (`facecontrol.md` bənd 14) YEGANƏ kompensasiya
+#: edici nəzarəti — SEC-020.
+#:
+#: NİYƏ AYRICA ADLANDIRILIR: `FeatureModule.DUAL_CONTROL` bir neçə yerdə oxunur
+#: (manual vaxt düzəlişi həddi — `leave_verification.apply_override`), lakin
+#: YALNIZ üz-istisnası yolunda o, bir STRUKTUR ZƏMANƏTİN daşıyıcısıdır: bənd
+#: 14 PIN-only boşluğunun MƏCBURİ ikinci-təsdiqlə əvəzlənməsini vəd edir və
+#: həmin ikinci təsdiq məhz bu moduldur. Adlandırılmış sabit bağlantını
+#: grep-lə görünən edir — əks halda «`DUAL_CONTROL` söndürülsə istisnalı işçiyə
+#: nə olur?» sualının cavabı üç ayrı faylda gizli qalardı və məhz bu, auditin
+#: tapdığı boşluq idi.
+FACE_EXEMPTION_COMPENSATING_MODULE: Final[FeatureModule] = FeatureModule.DUAL_CONTROL
 
 
 # --------------------------------------------------------------------------- #
@@ -1757,6 +1848,7 @@ class PerformanceReviewPeriodType(str, Enum):
 
 __all__ = [
     "DEFAULT_LIMITS",
+    "FACE_EXEMPTION_COMPENSATING_MODULE",
     "BreakAllowance",
     "BreakKind",
     "DelayFinePolicy",
