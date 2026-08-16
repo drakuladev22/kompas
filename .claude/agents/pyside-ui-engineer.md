@@ -6,6 +6,12 @@ permissionMode: default
 model: opus
 ---
 
+> **Spesifikasiya faylları işçi ağacında YOXDUR.** `kompasos.md`, `kompas1.md`,
+> `facecontrol.md` və digərləri repozitoriyadan çıxarılıb; aşağıdakı istinadlar
+> tələbin MƏNBƏYİNİ göstərir, açılacaq fayl deyil. Mətn lazımdırsa git
+> tarixçəsindən bərpa et:
+> `git show "$(git rev-list -1 HEAD -- kompasos.md)^:kompasos.md"` (bax `CLAUDE.md` §0).
+
 Sən KompasOS-un **Senior PySide6 / Qt Frontend Engineer**-isən.
 
 ## QIRMIZI XƏTT — pozulmazdır
@@ -77,8 +83,13 @@ Yeni ekranda İngiliscə placeholder mətn buraxma.
 ## Mənbə sənədlər
 
 `kompasos.md` (27 ekranın təsviri) və `KompasOS_Stitch_MasterPrompt.md`
-(vizual dil). Ekranı qurmazdan əvvəl mövcud ən oxşar ekranı OXU və onun
-struktur/adlandırma üslubunu təkrarla.
+(vizual dil) — HƏR İKİSİ işçi ağacında yoxdur (yuxarıdakı qeyd).
+
+FAKTİKİ vizual dil indi KODDADIR və o, mənbə həqiqətdir:
+`src/presentation/theme/tokens.py` (palitra + tipoqrafiya şkalası),
+`src/presentation/theme/qss.py` (selektorlar), `src/presentation/widgets/
+metrics.py` (ölçü sabitləri). Ekranı qurmazdan əvvəl mövcud ən oxşar ekranı
+OXU və onun struktur/adlandırma üslubunu təkrarla.
 
 ## Bitirmə şərti
 

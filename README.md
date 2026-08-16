@@ -9,7 +9,8 @@ Windows masaüstü tətbiqi (`.exe`).
 > konnektorları, lisenziya/auto-update, dizayn sistemi + 27 maket ekranı,
 > Faza 5/6 əməliyyat modulları, ROOT Control Center və GUI kompozisiya kökü
 > hazırdır (naviqasiyada 28 bölmə).
-> Tam plan: [`kompasos.md`](kompasos.md), bölmə 10.
+> Tam plan: `kompasos.md`, bölmə 10 — həmin fayl işçi ağacında YOXDUR,
+> git tarixçəsindən bərpa olunur (bax `CLAUDE.md` §0).
 
 ---
 
@@ -361,7 +362,11 @@ bölməsinə.
 
 ## Sənədlər
 
-- [`kompasos.md`](kompasos.md) — tam texniki spesifikasiya (mənbə həqiqət)
+- `kompasos.md` — tam texniki spesifikasiya (mənbə həqiqət). **İşçi ağacında
+  yoxdur:** repozitoriyadan çıxarılıb, mətn git tarixçəsindədir —
+  `git show "$(git rev-list -1 HEAD -- kompasos.md)^:kompasos.md"`.
+  Koddakı `kompasos.md bölmə N` istinadları mənbə göstəricisidir və
+  qəsdən saxlanılır (bax `CLAUDE.md` §0)
 - [`docs/security_decisions.md`](docs/security_decisions.md) — SEC-001…SEC-017 qərarları
 - [`docs/open_questions.md`](docs/open_questions.md) — açıq/bağlanmış biznes sualları (BR-NNN)
 - [`docs/risk_register.md`](docs/risk_register.md) — risk reyestri: bağlanmış

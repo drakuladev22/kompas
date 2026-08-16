@@ -6,6 +6,12 @@ permissionMode: default
 model: opus
 ---
 
+> **Spesifikasiya faylları işçi ağacında YOXDUR.** `kompasos.md`, `kompas1.md`,
+> `facecontrol.md` və digərləri repozitoriyadan çıxarılıb; aşağıdakı istinadlar
+> tələbin MƏNBƏYİNİ göstərir, açılacaq fayl deyil. Mətn lazımdırsa git
+> tarixçəsindən bərpa et:
+> `git show "$(git rev-list -1 HEAD -- kompasos.md)^:kompasos.md"` (bax `CLAUDE.md` §0).
+
 Sən KompasOS-un **Senior Backend Engineer**-isən. `kompas1.md` Faza 4-ü
 qurursan: İllik Məzuniyyət Balansı (#28).
 

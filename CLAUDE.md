@@ -1,8 +1,33 @@
 # KompasOS — Claude Code Execution Rules
 
 Enterprise Leave / Fine / Break / Shift / ERP-1C / Task / Dashboard sistemi.
-Tam spesifikasiya: [`kompasos.md`](kompasos.md). Bu fayl kodun necə yazıldığını
-izah edir — NƏ yazılacağını spesifikasiya deyir.
+Bu fayl kodun necə yazıldığını izah edir — NƏ yazılacağını spesifikasiya deyir.
+
+---
+
+## 0. Spesifikasiya faylları İŞÇİ AĞACINDA YOXDUR
+
+`kompasos.md`, `kompas1.md`, `kompasos11.md`, `uxui.md`, `facecontrol.md`,
+`nahar.md`, `Rootpanel.md`, `audit.md`, `1c.md`, `design.md`, `test.md` —
+hamısı repozitoriyadan ÇIXARILIB. Kodda və agent təlimatlarında onlara olan
+istinadlar QALIR və qəsdəndir: hər şərh hansı tələbin hansı sənəddən gəldiyini
+göstərir — bu, "niyə belədir" sualının cavabıdır və faylın mövcudluğundan asılı
+deyil.
+
+Mətnin özü git tarixçəsindədir. Bərpa (nümunə `kompasos.md` üçün):
+
+```bash
+git show "$(git rev-list -1 HEAD -- kompasos.md)^:kompasos.md" > kompasos.md
+```
+
+**Faylı açmağa cəhd etmə** — yoxdur. Lazım olarsa yuxarıdakı əmrlə bərpa et,
+işini bitirdikdən sonra isə repozitoriyaya QAYTARMA (silinmə qəsdlidir).
+
+Eyni qayda `design_reference/*.jpg` referans skrinşotlarına da aiddir: onlar
+`.png` dəsti ilə əvəzlənib. `tokens.py`, `primitives.py` və
+`scripts/check_symmetry.py`-dəki `design_reference/dashboard.jpg` tipli
+istinadlar həmin ölçünün HANSI maketdən gəldiyini deyir — ölçü qərarının
+sübutudur, açılacaq fayl deyil.
 
 ---
 
@@ -307,6 +332,7 @@ açarın məcburi olduğunu oradan öyrənir.
 | `KOMPASOS_GOOGLE_CLIENT_ID` / `_SECRET` | ✅ | Şəkillər lokal növbədə gözləyir, cərimələr normal yaranır |
 | `KOMPASOS_EVIDENCE_QUEUE_PATH`, `KOMPASOS_SQLITE_PATH` | ✅ | Defolt `%LOCALAPPDATA%\KompasOS\data\` — CWD-yə nisbi YOX, çünki paketlənmiş `.exe` ixtiyari qovluqdan işə düşür |
 | `KOMPASOS_PRIVATE_SERVER_DSN` | ✅ | Boşdursa baza keçidi işləmir, aydın səbəb qaytarılır |
+| `KOMPASOS_TENANT_ID`, `KOMPASOS_INSTALLATION_PATH` | ✅ | Boş = ilk quraşdırma: kimlik `installation.json`-da yaranır və sihirbaz açılır (SEC-021) |
 | `KOMPASOS_PLUGIN_TRUSTED_PUBLISHERS` | ✅ | Boş = fail-closed, heç bir plugin quraşdırılmır |
 | `KOMPASOS_PLUGIN_PYTHON` | ✅ | Paketlənmiş mühitdə plugin sandbox-u üçün interpretator; tapılmasa plugin icra olunmur |
 

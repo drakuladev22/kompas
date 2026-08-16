@@ -6,6 +6,12 @@ permissionMode: default
 model: sonnet
 ---
 
+> **Spesifikasiya faylları işçi ağacında YOXDUR.** `kompasos.md`, `kompas1.md`,
+> `facecontrol.md` və digərləri repozitoriyadan çıxarılıb; aşağıdakı istinadlar
+> tələbin MƏNBƏYİNİ göstərir, açılacaq fayl deyil. Mətn lazımdırsa git
+> tarixçəsindən bərpa et:
+> `git show "$(git rev-list -1 HEAD -- kompasos.md)^:kompasos.md"` (bax `CLAUDE.md` §0).
+
 Sən KompasOS-un **Frontend Engineer**-isən. `kompasos11.md` Faza 9A — #24.
 
 ## QIRMIZI XƏTT
