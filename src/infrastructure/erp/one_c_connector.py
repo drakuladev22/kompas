@@ -1,10 +1,21 @@
-"""1C:Enterprise 8.3 OData klienti — Faza 3.10.
+"""1C:Enterprise 8.3 OData (HTTP) klienti və konnektor fabriki — Faza 3.10.
 
 Spesifikasiya bölmə 7 hər server üçün `host`, `port`, `istifadəçi adı`,
 `şifrə` sahələrini tələb edir. Protokol seçiminin əsaslandırması
 `src/domain/value_objects/erp.py` modul başlığındadır (qısaca: OData 1C-nin
 standart HTTP interfeysidir, COM Windows-a və lokal 1C quraşdırmasına bağlıdır,
 birbaşa SQL isə 1C-nin biznes məntiqini yan keçir).
+
+──────────────────────────────────────────────────────────────────────────────
+ADLANDIRMA: `OneCConnector` → `OneCHttpConnector`
+──────────────────────────────────────────────────────────────────────────────
+1c.md üç konnektor tələb edir, yəni "1C konnektoru" adı artıq bir tipi
+göstərmir. Sinif ADI dəqiqləşdirildi, MƏNTİQİ isə olduğu kimi qaldı — bir
+sətir də silinmədi, yalnız ortaq hissə `connector_base`-ə çıxarıldı.
+
+`OneCConnector` adı ALİAS kimi saxlanılır: onu dərhal silsəydik, mövcud
+testlər və üçüncü tərəf plugin-ləri (Plugin API `ERP_TRANSFORM` qabiliyyəti)
+sükutla qırılardı, halbuki davranış heç dəyişməyib.
 
 ──────────────────────────────────────────────────────────────────────────────
 NİYƏ SAHƏ ADLARI KONFİQURASİYA EDİLİR
@@ -38,8 +49,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
@@ -50,6 +60,8 @@ from src.domain.value_objects.erp import (
     DEFAULT_PAGE_SIZE,
     ONE_C_ODATA_PATH,
     ConnectionTestResult,
+    ConnectorConfig,
+    ConnectorType,
     ErpAuthenticationError,
     ErpConnectionError,
     ErpProtocolError,
@@ -61,6 +73,15 @@ from src.infrastructure.config.limits import (
     fallback_float,
     fallback_int,
 )
+from src.infrastructure.erp.com_connector import OneCComConnector
+from src.infrastructure.erp.connector_base import (
+    OneCConnectorBase,
+    elapsed_ms,
+    optional_text,
+    to_datetime,
+    to_decimal,
+)
+from src.infrastructure.erp.file_exchange_connector import OneCFileExchangeConnector
 from src.shared.logger import get_logger
 
 if TYPE_CHECKING:
@@ -87,11 +108,28 @@ HTTP_FORBIDDEN: Final[int] = 403
 
 @dataclass(frozen=True)
 class OneCServerConfig:
-    """Bir 1C serverinin bağlantı parametrləri.
+    """Bir 1C mənbəyinin HƏLL EDİLMİŞ (deşifrə olunmuş) bağlantı parametrləri.
 
     `password` BURADA AÇIQ MƏTNDİR — obyekt yalnız işlək yaddaşda mövcuddur,
     `erp_servers.password_encrypted` sütunundan AES-256-GCM ilə açılaraq
     qurulur (bax `servers.ErpServerRepository.credentials_for`).
+
+    ──────────────────────────────────────────────────────────────────────
+    NİYƏ TİP-NEYTRALDIR, HALBUKİ SAHƏ ADLARI HTTP-DƏNDİR
+    ──────────────────────────────────────────────────────────────────────
+    1c.md üç konnektor tələb edir, lakin `ErpConnectorFactory` portu TƏK bir
+    "credential həlledici" ilə işləyir (`Callable[[ErpServerId],
+    OneCServerConfig]`). Hər tip üçün ayrıca konfiqurasiya sinfi qursaydıq,
+    fabrikin imzası `Union` olardı və deşifrə məntiqi üç yerə bölünərdi —
+    halbuki sirr HƏMİŞƏ eyni iki sütundan gəlir.
+
+    Ona görə sütunlar OLDUĞU KİMİ daşınır və mənası tipə görə oxunur:
+
+        HTTP           `host`+`port` = şəbəkə ünvanı, `infobase` = publikasiya
+        COM            `host` = 1C server adı / baza qovluğu, `port` = 0
+        FILE_EXCHANGE  `host` = mübadilə qovluğu, `port` = 0, `infobase` boş
+
+    Tipə XAS qalan parametrlər `connector_config` sözlüyündədir.
     """
 
     host: str
@@ -105,6 +143,8 @@ class OneCServerConfig:
     #: `None` = taymaut ROOT-dan (`ERP_REQUEST_TIMEOUT_SECONDS`) oxunur.
     #: Açıq ədəd verilərsə O QALIR — çağıran onu bilərəkdən təyin edib.
     timeout_seconds: float | None = None
+    connector_type: ConnectorType = ConnectorType.HTTP
+    connector_config: ConnectorConfig = field(default_factory=ConnectorConfig)
 
     @classmethod
     def from_draft(cls, draft: ErpServerDraft) -> OneCServerConfig:
@@ -117,6 +157,8 @@ class OneCServerConfig:
             infobase=draft.infobase,
             use_https=draft.use_https,
             mapping=draft.mapping,
+            connector_type=draft.connector_type,
+            connector_config=draft.connector_config,
         )
 
     @property
@@ -126,15 +168,19 @@ class OneCServerConfig:
 
     def __repr__(self) -> str:
         # Şifrə `repr`-də görünməməlidir: bu obyekt xəta konteksti və
-        # debug çıxışı ilə log-a düşə bilər (SEC-013).
+        # debug çıxışı ilə log-a düşə bilər (SEC-013). `connector_config`
+        # öz `__repr__`-ində sirr açarlarını onsuz da maskalayır.
         return (
-            f"OneCServerConfig(host={self.host}, port={self.port}, "
-            f"infobase={self.infobase}, username={self.username})"
+            f"OneCServerConfig(type={self.connector_type.value}, host={self.host}, "
+            f"port={self.port}, infobase={self.infobase}, username={self.username}, "
+            f"config={self.connector_config!r})"
         )
 
 
-class OneCConnector:
+class OneCHttpConnector(OneCConnectorBase):
     """Bir 1C serveri üçün nazik OData örtüyü. Thread-safe (state saxlamır)."""
+
+    connector_type = ConnectorType.HTTP
 
     def __init__(
         self,
@@ -176,12 +222,6 @@ class OneCConnector:
     def close(self) -> None:
         if self._owns_transport:
             self._http.close()
-
-    def __enter__(self) -> OneCConnector:
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        self.close()
 
     @property
     def config(self) -> OneCServerConfig:
@@ -296,24 +336,14 @@ class OneCConnector:
                     "Sənəd adını yoxlayın."
                 ),
                 detail=f"cavabda `value` sahəsi yoxdur: {sorted(payload)[:5]}",
-                elapsed_ms=_elapsed_ms(started),
+                elapsed_ms=elapsed_ms(started),
             )
 
         return ConnectionTestResult(
             ok=True,
             message="Bağlantı uğurludur — 1C serveri cavab verir.",
             entity_verified=entity,
-            elapsed_ms=_elapsed_ms(started),
-        )
-
-    @staticmethod
-    def _failed_test(exc: Exception, started: float) -> ConnectionTestResult:
-        user_message = getattr(exc, "user_message", "1C serveri ilə əlaqə qurulmadı.")
-        return ConnectionTestResult(
-            ok=False,
-            message=user_message,
-            detail=str(exc),
-            elapsed_ms=_elapsed_ms(started),
+            elapsed_ms=elapsed_ms(started),
         )
 
     # ------------------------------ satışlar ---------------------------------- #
@@ -350,7 +380,7 @@ class OneCConnector:
         parsed = list(self._to_records(rows))
         # Sərhəd saniyəsində artıq emal olunmuş sənədlər burada süzülür —
         # `>=` filtrinin qaçılmaz təkrarı (bax `SyncCursor` docstring-i).
-        records = [record for record in parsed if not cursor.already_seen(record)]
+        records = self._new_records(parsed, cursor)
         _log.info(
             "ERP_SALES_FETCHED",
             extra={
@@ -380,18 +410,36 @@ class OneCConnector:
                 document_id=document_id,
                 seller_id=str(row.get(mapping.seller_field, "") or "").strip(),
                 store_code=str(row.get(mapping.store_field, "") or "").strip(),
-                gross_amount=_to_decimal(row.get(mapping.amount_field), document_id),
-                document_at=_to_datetime(row.get("Date"), document_id),
-                seller_name=_optional_name(row, mapping.seller_name_field),
+                gross_amount=to_decimal(row.get(mapping.amount_field), document_id),
+                document_at=to_datetime(row.get("Date"), document_id),
+                seller_name=optional_text(row, mapping.seller_name_field),
             )
 
 
+#: `OneCConnector` — ADI DƏYİŞDİ, məntiqi yox (bax modul başlığı).
+#: Alias mövcud idxalları qırmamaq üçün saxlanılır.
+OneCConnector = OneCHttpConnector
+
+
 class OneCConnectorFactory:
-    """`ErpConnectorFactory` portunun tətbiqi.
+    """`ErpConnectorFactory` portunun tətbiqi — TİPƏ GÖRƏ konnektor seçir.
 
     Credential-ların DEŞİFRƏSİ burada bitir: ondan yuxarı qatlar (use case,
     sync worker) `EncryptionService`-i heç vaxt görmür və şifrəni əlində
     saxlamır.
+
+    ──────────────────────────────────────────────────────────────────────
+    SEÇİM NİYƏ MƏHZ BURADADIR
+    ──────────────────────────────────────────────────────────────────────
+    1c.md: *"yuxarı səviyyəli kod HANSI connector işlədiyini BİLMİR/BİLMƏLİ
+    DEYİL"*. `SalesSyncService` yalnız `for_server(...)` çağırır və qaytarılan
+    obyektin üç metodunu tanıyır. Seçim məntiqi burada, TƏK bir yerdə qalır:
+    onu sync worker-ə qoysaydıq, sihirbazın `for_draft` yolu ilə iki fərqli
+    seçim qaydası yaranardı və biri gec-tez digərindən ayrılardı.
+
+    `transport` YALNIZ HTTP konnektoruna ötürülür — COM və fayl mübadiləsində
+    `httpx.Client`-in mənası yoxdur. Testlər onları öz sahtələri ilə
+    (`dispatcher`, müvəqqəti qovluq) əvəz edir.
     """
 
     def __init__(
@@ -405,24 +453,36 @@ class OneCConnectorFactory:
         self._transport = transport
         self._limits = limits or InfrastructureLimits()
 
-    def for_draft(self, draft: ErpServerDraft) -> OneCConnector:
-        return OneCConnector(
-            OneCServerConfig.from_draft(draft), transport=self._transport, limits=self._limits
-        )
+    def for_draft(self, draft: ErpServerDraft) -> OneCConnectorBase:
+        return self._build(OneCServerConfig.from_draft(draft))
 
-    def for_server(self, server_id: ErpServerId) -> OneCConnector:
-        return OneCConnector(
-            self._credentials(server_id), transport=self._transport, limits=self._limits
-        )
+    def for_server(self, server_id: ErpServerId) -> OneCConnectorBase:
+        return self._build(self._credentials(server_id))
+
+    def _build(self, config: OneCServerConfig) -> OneCConnectorBase:
+        """`connector_type` → konkret sinif.
+
+        NAMƏLUM TİP OLA BİLMƏZ: `ConnectorType` qapalı enum-dur və DB CHECK-i
+        eyni üç dəyəri saxlayır; oxuma anında naməlum mətn `HTTP`-yə düşür
+        (`ConnectorType.parse`, geriyə uyğunluq). Ona görə burada `else`
+        budağı HTTP-dir və "naməlum tip" istisnası lazım deyil.
+        """
+        if config.connector_type is ConnectorType.COM:
+            return OneCComConnector(config)
+        if config.connector_type is ConnectorType.FILE_EXCHANGE:
+            return OneCFileExchangeConnector(config)
+        return OneCHttpConnector(config, transport=self._transport, limits=self._limits)
 
 
 # --------------------------------------------------------------------------- #
 # Çevirmə köməkçiləri
 # --------------------------------------------------------------------------- #
-
-
-def _elapsed_ms(started: float) -> int:
-    return int((time.monotonic() - started) * 1000)
+#
+# `_elapsed_ms`, `_to_decimal`, `_to_datetime`, `_optional_name` BU FAYLDAN
+# `connector_base`-ə KÖÇDÜ (silinmədi): eyni çevirmələr COM və fayl
+# konnektorlarında da lazımdır və üç nüsxə saxlamaq onların bir gün
+# ayrılmasını qaçılmaz edərdi. Aşağıdakı `_odata_datetime` isə OData-ya XASdır
+# və qəsdən burada qalır.
 
 
 def _odata_datetime(moment: datetime) -> str:
@@ -436,53 +496,9 @@ def _odata_datetime(moment: datetime) -> str:
     return naive.strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def _to_decimal(raw: Any, document_id: str) -> Decimal:
-    if raw is None:
-        return Decimal("0")
-    try:
-        return Decimal(str(raw))
-    except (InvalidOperation, ValueError) as exc:
-        raise ErpProtocolError(
-            "Satış məbləği rəqəm deyil",
-            context={"document_id": document_id, "value": str(raw)[:50]},
-        ) from exc
-
-
-def _to_datetime(raw: Any, document_id: str) -> datetime:
-    """1C sənəd vaxtını oxuyur.
-
-    1C tarixləri qurşaq məlumatı OLMADAN qaytarır (server saatı). Layihədə
-    naive `datetime` qadağandır (ruff DTZ) və müqayisə üçün də təhlükəlidir,
-    ona görə dəyər UTC etiketi ilə daşınır. Bu, "vaxt UTC-dir" demək DEYİL —
-    müqayisə həmişə EYNİ serverin öz dəyərləri arasında aparılır, ona görə
-    etiketin özü nəticəyə təsir etmir. Eyni səbəbdən sorğuya geri yazılarkən
-    etiket kəsilir (`_odata_datetime`).
-    """
-    if not raw:
-        raise ErpProtocolError("1C sənədində tarix yoxdur", context={"document_id": document_id})
-    text = str(raw)
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ErpProtocolError(
-            "1C sənədinin tarixi oxunmadı",
-            context={"document_id": document_id, "value": text[:50]},
-        ) from exc
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-
-
-def _optional_name(row: dict[str, Any], field_name: str | None) -> str | None:
-    if not field_name:
-        return None
-    value = row.get(field_name)
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
 __all__ = [
     "OneCConnector",
     "OneCConnectorFactory",
+    "OneCHttpConnector",
     "OneCServerConfig",
 ]

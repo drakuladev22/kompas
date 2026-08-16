@@ -294,7 +294,25 @@ class SalesSyncService:
 
 
 class ErpSyncManager:
-    """Bütün sinxronlaşdırıla bilən serverləri PARALEL və İZOLYASİYA ilə işlədir."""
+    """Bütün sinxronlaşdırıla bilən serverləri PARALEL və İZOLYASİYA ilə işlədir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    HƏR SERVERİN ÖZ RİTMİ VAR (1c.md — fayl mübadiləsi)
+    ──────────────────────────────────────────────────────────────────────────
+    Dövr çağırıldıqda BÜTÜN serverlər sinxronlaşdırılsaydı, gecəlik fayl
+    ixracı ilə işləyən server də hər 5 dəqiqədə oxunardı: eyni fayl gün
+    ərzində onlarla dəfə açılar, hər dəfə bütün sətirlər parse olunar və
+    hamısı dublikat kimi atılardı — xalis itki.
+
+    Ona görə `run_cycle` hər serverin `sync_interval_seconds` sütununa baxır
+    və VAXTI ÇATMAYAN serveri həmin dövrdə buraxır. Sütunun defoltu tipə
+    görədir (HTTP/COM 300 san., fayl 86400 san. —
+    `ERP_FILE_EXCHANGE_SYNC_INTERVAL_SECONDS`).
+
+    `force=True` bu qapını AÇIQ şəkildə yan keçir: «indi sinxronlaşdır»
+    düyməsi istifadəçinin şüurlu tələbidir və gözləmə müddəti onu
+    saxlamamalıdır.
+    """
 
     def __init__(
         self,
@@ -320,11 +338,24 @@ class ErpSyncManager:
             return self._explicit_max_parallel
         return self._limits.int_of(SystemLimitKey.ERP_SYNC_MAX_PARALLEL_SERVERS)
 
-    def run_cycle(self, *, now: datetime | None = None) -> SyncCycleReport:
+    def run_cycle(self, *, now: datetime | None = None, force: bool = False) -> SyncCycleReport:
+        """Bir sinxronizasiya dövrü.
+
+        Args:
+            force: `True` — dövr intervalı NƏZƏRƏ ALINMIR («indi
+                sinxronlaşdır» düyməsi).
+        """
         started = now or datetime.now(UTC)
-        targets = self._servers.syncable()
+        candidates = self._servers.syncable()
+        targets = candidates if force else [s for s in candidates if _is_due(s, started)]
         if not targets:
-            _log.info("ERP_SYNC_NO_SERVERS")
+            # Fərq LOGLANIR: "server yoxdur" ilə "hamısının vaxtı çatmayıb"
+            # tamamilə fərqli vəziyyətlərdir və ikincisi NORMALDIR — onu
+            # "server yoxdur" kimi göstərmək diaqnostikanı yanıldardı.
+            _log.info(
+                "ERP_SYNC_NO_SERVERS",
+                extra={"candidates": len(candidates), "waiting_for_interval": len(candidates)},
+            )
             return SyncCycleReport(started_at=started, finished_at=started)
 
         workers = min(self._max_parallel_value(), len(targets))
@@ -381,6 +412,23 @@ class ErpSyncManager:
             ok=False,
             error=message,
         )
+
+
+def _is_due(server: ErpServer, moment: datetime) -> bool:
+    """Serverin növbəti sinxronizasiya vaxtı çatıbmı.
+
+    HEÇ VAXT SİNXRONLAŞMAYAN server HƏMİŞƏ növbədədir: yeni əlavə edilmiş
+    konfiqurasiya dərhal işə düşməlidir, əks halda admin serveri qeyd edib
+    "niyə heç nə gəlmir?" sualı ilə bir gün gözləyərdi.
+
+    Müqayisə `>=` ilə gedir ki, dəqiq intervalda çağırılan planlayıcı (məs.
+    hər 300 saniyədə bir, interval da 300) sonsuz "bir saniyə qaldı" halına
+    düşməsin.
+    """
+    if server.last_successful_sync is None:
+        return True
+    elapsed = (moment - server.last_successful_sync).total_seconds()
+    return elapsed >= server.sync_interval_seconds
 
 
 def _tally(report: SyncReport, results: Sequence[MatchResult]) -> None:

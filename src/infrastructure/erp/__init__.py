@@ -2,6 +2,12 @@
 
 from typing import TYPE_CHECKING
 
+from src.infrastructure.erp.com_connector import ComConnectionSettings, OneCComConnector
+from src.infrastructure.erp.connector_base import OneCConnectorBase
+from src.infrastructure.erp.file_exchange_connector import (
+    FileExchangeSettings,
+    OneCFileExchangeConnector,
+)
 from src.infrastructure.erp.health import ErpHealthMonitor, ServerHealth, ServerHealthRow
 from src.infrastructure.erp.matching import (
     FALLBACK_AMBIGUITY_MARGIN,
@@ -13,6 +19,7 @@ from src.infrastructure.erp.matching import (
 from src.infrastructure.erp.one_c_connector import (
     OneCConnector,
     OneCConnectorFactory,
+    OneCHttpConnector,
     OneCServerConfig,
 )
 from src.infrastructure.erp.sales import PostgresMatchDirectory, SalesTransactionRepository
@@ -38,7 +45,11 @@ if TYPE_CHECKING:  # pragma: no cover
     # bir yerdə xəta vermir — nasazlıq yalnız işlək zamanda, DI qoşulanda
     # üzə çıxardı. Aşağıdakı funksiya HEÇ VAXT çağırılmır; onun yeganə işi
     # MyPy-a "bu siniflər bu portları ödəyirmi?" sualını verdirməkdir.
-    from src.domain.interfaces.ports import ErpConnectorFactory, ErpServerRegistry
+    from src.domain.interfaces.ports import (
+        ErpConnectorFactory,
+        ErpServerRegistry,
+        SalesDataConnector,
+    )
 
     def _assert_port_conformance(
         repository: ErpServerRepository, factory: OneCConnectorFactory
@@ -46,19 +57,42 @@ if TYPE_CHECKING:  # pragma: no cover
         _registry: ErpServerRegistry = repository
         _connectors: ErpConnectorFactory = factory
 
+    def _assert_connector_conformance(
+        http: OneCHttpConnector,
+        com: OneCComConnector,
+        files: OneCFileExchangeConnector,
+    ) -> None:
+        """ÜÇÜ DƏ eyni portu ödəməlidir (1c.md: ortaq interfeys).
+
+        Miras tək başına KİFAYƏT ETMİR: `OneCConnectorBase` portun İMZASINI
+        deyil, davranışının bir hissəsini paylaşır. Bir konnektor `fetch_sales`
+        imzasını dəyişsə (məs. `page_size`-ı çıxarsa), miras yenə də qüvvədə
+        qalar, lakin `SalesSyncService` işlək zamanda çökərdi. Aşağıdakı üç
+        təyinat həmin sürüşməni MyPy-a tutdurur.
+        """
+        _http: SalesDataConnector = http
+        _com: SalesDataConnector = com
+        _files: SalesDataConnector = files
+
 
 __all__ = [
     "FALLBACK_AMBIGUITY_MARGIN",
     "FALLBACK_MAX_PARALLEL_SERVERS",
+    "ComConnectionSettings",
     "ConfigBackup",
     "ErpHealthMonitor",
     "ErpServerNotFoundError",
     "ErpServerRepository",
     "ErpSyncManager",
+    "FileExchangeSettings",
     "MatchDirectory",
     "NoVerifiedBackupError",
+    "OneCComConnector",
     "OneCConnector",
+    "OneCConnectorBase",
     "OneCConnectorFactory",
+    "OneCFileExchangeConnector",
+    "OneCHttpConnector",
     "OneCServerConfig",
     "PostgresMatchDirectory",
     "SalesMatcher",

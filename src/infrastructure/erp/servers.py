@@ -27,6 +27,23 @@ backup ID-sinə bağlanaraq şifrələnir.
 Siyahı sorğusu (`_SELECT`) şifrə sütununu QƏSDƏN oxumur — sirri təsadüfən
 yaddaşa gətirməmək üçün; o, yalnız `credentials_for()` ilə açıq şəkildə
 istənildikdə oxunur və hər belə çağırış `security.log`-a düşür.
+
+──────────────────────────────────────────────────────────────────────────────
+`connector_config_encrypted` DA EYNİ QAYDAYA TABEDİR (1c.md, migrations/050)
+──────────────────────────────────────────────────────────────────────────────
+Bağlantı növünə xas parametrlər (COM istifadəçisi/şifrəsi, fayl-paylaşımı
+kimlik məlumatı) bir JSON sənədində saxlanılır və həmin sənəd BÜTÖV şəkildə
+AES-256-GCM ilə şifrələnir — `password_encrypted` ilə eyni naxış, eyni AAD
+(`erp_server:<id>`).
+
+NİYƏ "yalnız sirr sahələrini şifrələmək" RƏDD EDİLDİ: o halda sözlüyün hansı
+açarının sirr olduğu DB sxemində qərarlaşdırılmalı olardı, halbuki açar dəsti
+konnektor tipinə görə dəyişir və gələcəkdə genişlənəcək. Bir açarı siyahıya
+yazmağı unutmaq isə açıq mətnli şifrə deməkdir — geri qaytarıla bilməyən
+səhv. Bütöv şifrələmə bu səhvi STRUKTUR olaraq mümkünsüz edir.
+
+Nəticə: `_SELECT` konfiqurasiya sütununu da oxumur; o, yalnız
+`credentials_for()` və backup yolunda deşifrə olunur.
 """
 
 from __future__ import annotations
@@ -39,6 +56,9 @@ from uuid import UUID, uuid4
 
 from src.application.use_cases.erp_connection import StoreServerLink
 from src.domain.value_objects.erp import (
+    DEFAULT_SYNC_INTERVAL_SECONDS,
+    ConnectorConfig,
+    ConnectorType,
     ErpError,
     ErpServer,
     ErpServerDraft,
@@ -90,9 +110,9 @@ class ErpServerRepository:
 
     _SELECT = """
         SELECT id, tenant_id, server_name, host, port, username, infobase,
-               status, use_https, document_mapping_json, sync_interval_seconds,
-               last_successful_sync, last_sync_started_at, last_error,
-               last_error_at, consecutive_failures, sync_cursor_at,
+               status, use_https, connector_type, document_mapping_json,
+               sync_interval_seconds, last_successful_sync, last_sync_started_at,
+               last_error, last_error_at, consecutive_failures, sync_cursor_at,
                sync_cursor_document_ids
           FROM erp_servers
     """
@@ -135,10 +155,11 @@ class ErpServerRepository:
         return [_row_to_server(row) for row in rows]
 
     def credentials_for(self, server_id: ErpServerId) -> OneCServerConfig:
-        """Şifrəni deşifrə edib hazır bağlantı konfiqurasiyası qurur."""
+        """Şifrəni və tipə xas konfiqurasiyanı deşifrə edib bağlantı qurur."""
         server = self.require(server_id)
         rows = self._fetch_all(
-            "SELECT password_encrypted FROM erp_servers WHERE id = %s", (server_id,)
+            "SELECT password_encrypted, connector_config_encrypted FROM erp_servers WHERE id = %s",
+            (server_id,),
         )
         if not rows:  # pragma: no cover - `require` onsuz da yoxladı
             raise ErpServerNotFoundError(
@@ -156,6 +177,43 @@ class ErpServerRepository:
             infobase=server.infobase,
             use_https=server.use_https,
             mapping=server.mapping,
+            connector_type=server.connector_type,
+            connector_config=self._decrypt_config(
+                rows[0].get("connector_config_encrypted"), server_id
+            ),
+        )
+
+    def _decrypt_config(self, encrypted: str | None, server_id: ErpServerId) -> ConnectorConfig:
+        """Şifrələnmiş JSON → `ConnectorConfig`.
+
+        `NULL` (və ya boş) dəyər BOŞ konfiqurasiya deməkdir, XƏTA DEYİL:
+        migrations/050-dən əvvəlki HTTP sətirlərində sütun ümumiyyətlə yoxdur
+        və onların bütün parametrləri sütunlardadır. Xəta atsaydıq, miqrasiya
+        günü mövcud serverlərin hamısı sinxronizasiyadan düşərdi.
+        """
+        if not encrypted:
+            return ConnectorConfig()
+        raw = self._encryption.decrypt(encrypted, context=f"erp_server:{server_id}")
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):  # pragma: no cover - invariant
+            raise ErpError(
+                "Konnektor konfiqurasiyası yararsızdır",
+                user_message="Server konfiqurasiyası yararsızdır — sihirbazdan yenidən qurun.",
+                context={"server_id": str(server_id)},
+            )
+        return ConnectorConfig.from_dict(parsed)
+
+    def _encrypt_config(self, config: ConnectorConfig, server_id: UUID) -> str | None:
+        """`ConnectorConfig` → şifrələnmiş JSON (boş sözlük üçün `NULL`).
+
+        Boş konfiqurasiyanı `"{}"` kimi şifrələmək olardı, lakin `NULL` daha
+        dürüstdür: sütunun dolu olması "bu serverin tipə xas parametrləri var"
+        deməkdir və diaqnostikada bu fərq görünür.
+        """
+        if not config:
+            return None
+        return self._encryption.encrypt(
+            json.dumps(config.as_dict(), ensure_ascii=False), context=f"erp_server:{server_id}"
         )
 
     # ------------------------------- yazma ----------------------------------- #
@@ -180,8 +238,8 @@ class ErpServerRepository:
                         (id, tenant_id, server_name, host, port, username,
                          password_encrypted, infobase, use_https,
                          document_mapping_json, status, sync_interval_seconds,
-                         created_by)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         connector_type, connector_config_encrypted, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         new_id,
@@ -195,7 +253,9 @@ class ErpServerRepository:
                         draft.use_https,
                         json.dumps(draft.mapping.as_dict()),
                         status.value,
-                        draft.sync_interval_seconds,
+                        draft.effective_sync_interval_seconds,
+                        draft.connector_type.value,
+                        self._encrypt_config(draft.connector_config, new_id),
                         created_by,
                     ),
                 )
@@ -245,7 +305,8 @@ class ErpServerRepository:
                     UPDATE erp_servers
                        SET server_name = %s, host = %s, port = %s, username = %s,
                            password_encrypted = %s, infobase = %s, use_https = %s,
-                           document_mapping_json = %s, sync_interval_seconds = %s
+                           document_mapping_json = %s, sync_interval_seconds = %s,
+                           connector_type = %s, connector_config_encrypted = %s
                      WHERE id = %s
                     """,
                     (
@@ -257,7 +318,9 @@ class ErpServerRepository:
                         draft.infobase,
                         draft.use_https,
                         json.dumps(draft.mapping.as_dict()),
-                        draft.sync_interval_seconds,
+                        draft.effective_sync_interval_seconds,
+                        draft.connector_type.value,
+                        self._encrypt_config(draft.connector_config, server_id),
                         server_id,
                     ),
                 )
@@ -445,6 +508,11 @@ class ErpServerRepository:
             "use_https": config.use_https,
             "sync_interval_seconds": server.sync_interval_seconds,
             "mapping": config.mapping.as_dict(),
+            # Bağlantı NÖVÜ də backup-a düşür: onsuz "bir kliklə geri qaytar"
+            # COM konfiqurasiyasını HTTP kimi bərpa edərdi və server yenidən
+            # işləmək əvəzinə tamamilə yanlış protokolla cəhd edərdi.
+            "connector_type": config.connector_type.value,
+            "connector_config": config.connector_config.as_dict(),
         }
         encrypted = self._encryption.encrypt(
             json.dumps(payload, ensure_ascii=False), context=f"erp_backup:{backup_id}"
@@ -538,8 +606,12 @@ def _row_to_server(row: dict[str, Any]) -> ErpServer:
         infobase=row.get("infobase") or "",
         status=ErpServerStatus(row["status"]),
         use_https=bool(row.get("use_https")),
+        # GERİYƏ UYĞUNLUQ: sütun yoxdursa/`NULL`-dursa sətir HTTP sayılır —
+        # migrations/050-dən əvvəlki bütün serverlər OData ilə qurulub
+        # (bax `ConnectorType.parse`).
+        connector_type=ConnectorType.parse(row.get("connector_type")),
         mapping=OneCDocumentMapping.from_dict(row.get("document_mapping_json")),
-        sync_interval_seconds=row.get("sync_interval_seconds") or 300,
+        sync_interval_seconds=row.get("sync_interval_seconds") or DEFAULT_SYNC_INTERVAL_SECONDS,
         last_successful_sync=row.get("last_successful_sync"),
         last_sync_started_at=row.get("last_sync_started_at"),
         last_error=row.get("last_error"),
@@ -562,7 +634,14 @@ def _draft_from_payload(payload: dict[str, Any]) -> ErpServerDraft:
         infobase=str(payload.get("infobase", "")),
         use_https=bool(payload.get("use_https", False)),
         mapping=OneCDocumentMapping.from_dict(payload.get("mapping")),
-        sync_interval_seconds=int(payload.get("sync_interval_seconds", 300)),
+        sync_interval_seconds=int(
+            payload.get("sync_interval_seconds", DEFAULT_SYNC_INTERVAL_SECONDS)
+        ),
+        # KÖHNƏ BACKUP-LARDA BU AÇARLAR YOXDUR: migrations/050-dən əvvəl
+        # yaradılmış nüsxələr yalnız HTTP konfiqurasiyası saxlayır və
+        # `parse` onları düzgün şəkildə `HTTP`-yə çevirir.
+        connector_type=ConnectorType.parse(payload.get("connector_type")),
+        connector_config=ConnectorConfig.from_dict(payload.get("connector_config")),
     )
 
 

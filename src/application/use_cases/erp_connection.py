@@ -31,14 +31,31 @@ ADLANDIRMA
 bağlantısı sihirbazına aiddir (bölmə 7, «[İnfrastruktur Və Baza Ayarları]»),
 1C server siyahısına yox. İkisini qarışdırmaq mağaza menecerinə 1C
 credential-larına çıxış verə bilərdi.
+
+──────────────────────────────────────────────────────────────────────────────
+ÜÇ BAĞLANTI NÖVÜ — AXIN DƏYİŞMİR (1c.md)
+──────────────────────────────────────────────────────────────────────────────
+Sihirbazın addımları HTTP, COM və fayl mübadiləsi üçün EYNİDİR: doldur → test
+et → saxla. Fərq yalnız `ErpServerDraft.connector_type` və `connector_config`
+sahələrindədir və onları use case OXUMUR — testi konnektor fabriki seçir,
+konkret səbəb mətnini isə konnektorun özü verir.
+
+BURADA əlavə olunan İKİ tipə-bağlı qayda var və hər ikisinin səbəbi eynidir:
+sətri DB-yə çatmazdan ƏVVƏL anlaşılan mesajla dayandırmaq.
+
+    1. Sinxronizasiya dövrü verilməyibsə TİPİN defoltu tətbiq olunur; fayl
+       mübadiləsində bu defolt ROOT parametrindən oxunur.
+    2. Aktivləşdirmə qapısı tipə görə fərqlidir: HTTP/COM üçün baza adı
+       (infobase), fayl mübadiləsi üçün isə QOVLUQ yolu məcburidir.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from src.domain.value_objects.erp import ErpServerStatus
+from src.domain.policies import SystemLimitKey
+from src.domain.value_objects.erp import ConnectorType, ErpServerStatus
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
@@ -50,13 +67,14 @@ if TYPE_CHECKING:
         AuditTrail,
         ErpConnectorFactory,
         ErpServerRegistry,
+        SystemLimits,
     )
     from src.domain.value_objects.erp import (
         ConnectionTestResult,
         ErpServer,
         ErpServerDraft,
     )
-    from src.domain.value_objects.identifiers import ErpServerId, StoreId
+    from src.domain.value_objects.identifiers import ErpServerId, StoreId, TenantId
 
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
@@ -123,6 +141,7 @@ class ErpConnectionWizardUseCase:
         connectors: ErpConnectorFactory,
         audit: AuditTrail,
         mappings: StoreServerMappingRepository | None = None,
+        limits: SystemLimits | None = None,
     ) -> None:
         self._servers = servers
         self._connectors = connectors
@@ -137,6 +156,12 @@ class ErpConnectionWizardUseCase:
         # `None` → xəritələmə ekranı qoşulmayıb (məs. testlərdə). Server
         # idarəetməsi ondan ASILI DEYİL, ona görə məcburi arqument deyil.
         self._mappings = mappings
+        # `None` → ROOT dəyəri oxuna bilmir və tipin domen defoltu işləyir
+        # (`ConnectorType.default_sync_interval_seconds`). Limit oxusu MƏCBURİ
+        # ola bilməz: server əlavə etmək `system_limits` sətrinin mövcud
+        # olmasından asılı olsaydı, bir seed nasazlığı bütün sihirbazı
+        # bağlayardı.
+        self._limits = limits
 
     # -------------------------------- test ----------------------------------- #
 
@@ -152,6 +177,7 @@ class ErpConnectionWizardUseCase:
     def save_new(self, *, actor: Employee, draft: ErpServerDraft, now: datetime) -> SaveOutcome:
         """Yeni server — YALNIZ test uğurlu olduqda aktiv yaradılır."""
         self._assert_may_manage(actor, now=now, operation="CREATE")
+        draft = self._with_resolved_interval(draft, tenant_id=actor.tenant_id)
         test = self._require_successful_test(draft, server_id=None)
         server = self._servers.create(draft, created_by=actor.id, activate=True)
         self._audit.record(
@@ -183,6 +209,7 @@ class ErpConnectionWizardUseCase:
         """Mövcud serverin konfiqurasiyasını əvəz edir (əvvəlki backup-a düşür)."""
         self._assert_may_manage(actor, now=now, operation="UPDATE")
         existing = self._servers.require(server_id)
+        draft = self._with_resolved_interval(draft, tenant_id=actor.tenant_id)
         test = self._require_successful_test(draft, server_id=server_id)
         server = self._servers.update(server_id, draft, updated_by=actor.id, backup_previous=True)
         self._audit.record(
@@ -255,18 +282,7 @@ class ErpConnectionWizardUseCase:
         # sətri "nə dəyişdi" sualına cavab verməzdi — yalnız "nə oldu"ya.
         previous = self._servers.require(server_id)
         if status is ErpServerStatus.ACTIVE:
-            server = previous
-            if not server.infobase.strip():
-                # DB-də `chk_erp_active_requires_infobase` bunu onsuz da
-                # bloklayır; burada isə istifadəçi anlaşılan mesaj alır.
-                raise ErpConnectionError(
-                    "Baza adı (infobase) boş olan server aktivləşdirilə bilməz",
-                    user_message=(
-                        "Serveri aktivləşdirmək üçün əvvəlcə baza adını (infobase) "
-                        "daxil edib bağlantını test edin."
-                    ),
-                    context={"server_id": str(server_id)},
-                )
+            self._assert_activatable(previous)
         self._servers.set_status(server_id, status, changed_by=actor.id, reason=reason)
         # Deaktivləşdirmə sətri SİLMİR, lakin həmin serverdən gələn satış
         # axınını DAYANDIRIR — yəni "hesabatda rəqəmlər niyə azaldı" sualının
@@ -350,6 +366,71 @@ class ErpConnectionWizardUseCase:
             self._mappings.delete(store_id=store_id, server_id=server_id)
 
     # ------------------------------ köməkçilər -------------------------------- #
+
+    def _assert_activatable(self, server: ErpServer) -> None:
+        """Aktivləşdirmə qapısı — TİPƏ GÖRƏ (1c.md).
+
+        DB-də `chk_erp_active_requires_config` eyni qaydanı saxlayır
+        (migrations/050); burada isə istifadəçi anlaşılan mesaj alır. Qayda
+        İKİ yerdədir, çünki ekranı yan keçən skript də ona tabe olmalıdır
+        (CLAUDE.md bölmə 5 naxışı).
+
+        Fayl mübadiləsində `infobase` MƏNASIZDIR — 1C bazası ilə birbaşa
+        əlaqə yoxdur. Orada məcburi olan mübadilə qovluğudur (`host`). Köhnə
+        qaydanı olduğu kimi saxlasaydıq, düzgün qurulmuş fayl serveri heç vaxt
+        aktivləşməzdi.
+        """
+        if server.connector_type.requires_infobase:
+            if server.infobase.strip():
+                return
+            raise ErpConnectionError(
+                "Baza adı (infobase) boş olan server aktivləşdirilə bilməz",
+                user_message=(
+                    "Serveri aktivləşdirmək üçün əvvəlcə baza adını (infobase) "
+                    "daxil edib bağlantını test edin."
+                ),
+                context={
+                    "server_id": str(server.id),
+                    "connector_type": server.connector_type.value,
+                },
+            )
+
+        if server.host.strip():
+            return
+        raise ErpConnectionError(
+            "Mübadilə qovluğu boş olan server aktivləşdirilə bilməz",
+            user_message=(
+                "Serveri aktivləşdirmək üçün əvvəlcə mübadilə qovluğunun yolunu "
+                "daxil edib bağlantını test edin."
+            ),
+            context={"server_id": str(server.id), "connector_type": server.connector_type.value},
+        )
+
+    def _with_resolved_interval(
+        self, draft: ErpServerDraft, *, tenant_id: TenantId
+    ) -> ErpServerDraft:
+        """Dövr göstərilməyibsə tipin defoltunu yazır.
+
+        FAYL MÜBADİLƏSİ ROOT-DAN OXUNUR: "gecədə bir dəfə" bir siyasətdir və
+        müəssisə onu dəyişə bilməlidir (`ERP_FILE_EXCHANGE_SYNC_INTERVAL_
+        SECONDS`). HTTP/COM üçün isə oxu APARILMIR — onların dövrü hər server
+        üçün ayrıca saxlanılır və sistem səviyyəsində bir dəyəri yoxdur.
+
+        Dəyəri həmişə açıq şəkildə yazırıq (draft `None` saxlamır), çünki
+        `erp_servers.sync_interval_seconds` `NOT NULL`-dur və sətrin oxunuşu
+        (`v_erp_server_health`) həmin ədədi STALE həddi kimi işlədir.
+        """
+        if draft.sync_interval_seconds is not None:
+            return draft
+        if draft.connector_type is not ConnectorType.FILE_EXCHANGE or self._limits is None:
+            return replace(draft, sync_interval_seconds=draft.effective_sync_interval_seconds)
+
+        seconds = self._limits.get_int(
+            tenant_id,
+            SystemLimitKey.ERP_FILE_EXCHANGE_SYNC_INTERVAL_SECONDS.value,
+            draft.connector_type.default_sync_interval_seconds,
+        )
+        return replace(draft, sync_interval_seconds=seconds)
 
     def _require_successful_test(
         self, draft: ErpServerDraft, *, server_id: ErpServerId | None

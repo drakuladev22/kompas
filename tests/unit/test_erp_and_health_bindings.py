@@ -144,6 +144,9 @@ class _ErpSession:
 
 
 def _server_row(**overrides: Any) -> dict[str, Any]:
+    #: Sütun dəsti `_server_rows()` sorğusu ilə EYNİDİR — sihirbazın redaktə
+    #: axını `connector_type`/`infobase`/`username`/`sync_interval_seconds`
+    #: sütunlarını da oxuyur (1c.md GUI fazası).
     row: dict[str, Any] = {
         "id": uuid.uuid4(),
         "server_name": "1C-BAKI-01",
@@ -151,6 +154,10 @@ def _server_row(**overrides: Any) -> dict[str, Any]:
         "port": 1541,
         "status": "ACTIVE",
         "last_successful_sync": NOW,
+        "connector_type": "HTTP",
+        "infobase": "kompas_prod",
+        "username": "kompas_sync",
+        "sync_interval_seconds": 300,
         "health": "HEALTHY",
         "sync_delay_seconds": 42,
         "mapped_stores": 9,
@@ -179,7 +186,15 @@ def test_erp_rows_never_carry_credentials() -> None:
 
     controller.refresh(screen)  # type: ignore[arg-type]
 
-    assert set(screen.servers[0]) == {"name", "address", "stores", "latency", "status"}
+    assert set(screen.servers[0]) == {
+        "name",
+        "type",
+        "address",
+        "stores",
+        "latency",
+        "latency_meaning",
+        "status",
+    }
     serialized = str(screen.servers) + str(screen.sync) + str(screen.mapping)
     for forbidden in ("password", "şifrə", "secret", "password_encrypted"):
         assert forbidden.lower() not in serialized.lower()

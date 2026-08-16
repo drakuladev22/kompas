@@ -18,7 +18,24 @@ edilə bilən yerdə saxlanılır. GUI (Faza 5) yalnız mətni göstərir və d�
 çəkir — eyni məntiqi ikinci dəfə yazmır.
 
 Sağlamlıq STATUSUNUN özü `v_erp_server_health` görünüşündə hesablanır
-(migration 004) ki, gələcək telemetriya və hesabatlar eyni tərifi paylaşsın.
+(migration 004; `connector_type` sütunu migration 050-də əlavə olunub) ki,
+gələcək telemetriya və hesabatlar eyni tərifi paylaşsın.
+
+──────────────────────────────────────────────────────────────────────────────
+«GECİKMƏ» ÜÇ TİPDƏ ÜÇ FƏRQLİ ŞEYDİR (1c.md)
+──────────────────────────────────────────────────────────────────────────────
+`sync_delay_seconds` sütunu ŞƏBƏKƏ GECİKMƏSİ DEYİL — o, "son uğurlu
+sinxronizasiyadan bəri keçən vaxt"dır və bu tərif hər üç bağlantı növü üçün
+eyni dərəcədə mənalıdır (fayl mübadiləsində "faylın nə vaxt oxunduğu").
+
+Şəbəkə gecikməsi yalnız `ConnectionTestResult.elapsed_ms`-dədir və orada da
+mənası tipə görə dəyişir: HTTP-də serverin cavab müddəti, COM-da obyektin
+qurulma müddəti, faylda isə qovluğun oxunma müddəti. Ona görə mətn
+`ConnectorType.latency_meaning_az`-dan gəlir — ekran onu özü uydurmur.
+
+DİAQNOZ MƏTNİ DƏ TİPƏ GÖRƏ DƏYİŞİR: "şəbəkə əlaqəsini yoxlayın" məsləhəti
+qovluqdan oxuyan bir server üçün YANILDICIDIR — orada baxılası şey ixrac
+tapşırığı və qovluğun əlçatanlığıdır.
 """
 
 from __future__ import annotations
@@ -27,6 +44,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from src.domain.value_objects.erp import (
+    DEFAULT_SYNC_INTERVAL_SECONDS,
+    ConnectorType,
+    display_address_for,
+)
 from src.shared.logger import get_logger
 
 if TYPE_CHECKING:
@@ -74,6 +96,27 @@ class ServerHealthRow:
     sync_delay_seconds: int | None = None
     last_error: str | None = None
     last_error_at: datetime | None = None
+    #: DEFOLT `HTTP` — köhnə sətirlər və `connector_type` sütununu OXUMAYAN
+    #: çağıranlar (məs. İdarə Paneli xəbərdarlığı) üçün.
+    connector_type: ConnectorType = ConnectorType.HTTP
+    #: `erp_servers.port` — yalnız HTTP-də mənalıdır (bax `address`).
+    port: int = 0
+
+    @property
+    def address(self) -> str:
+        """Ekranda göstərilən ünvan — port yalnız HTTP-də görünür.
+
+        Ekran `f"{host}:{port}"` qursaydı, fayl serveri
+        «\\\\anbar\\1c_exchange:0» kimi görünərdi. Qayda domendə, `ErpServer.
+        display_address`-dədir və burada həmin funksiya İSTİFADƏ OLUNUR —
+        ikinci nüsxə yazmaq iki mətnin bir gün ayrılması demək olardı.
+        """
+        return display_address_for(self.connector_type, self.host, self.port)
+
+    @property
+    def latency_meaning_az(self) -> str:
+        """Ölçülən müddətin bu tip üçün MƏNASI (bax modul başlığı)."""
+        return self.connector_type.latency_meaning_az
 
     @property
     def diagnosis(self) -> str:
@@ -91,16 +134,43 @@ class ServerHealthRow:
                 "«Bağlantını Test Et» ilə yoxlayın."
             )
         if self.health is ServerHealth.STALE:
-            return (
-                "Uzun müddətdir yeni məlumat gəlmir — 1C serverinin işlək olduğunu "
-                "və şəbəkə əlaqəsini yoxlayın."
-            )
+            return self._stale_diagnosis()
         if self.health is ServerHealth.DEGRADED:
-            return (
-                f"Son {self.consecutive_failures} cəhd uğursuz olub — istifadəçi adı/şifrə "
-                "və ya şəbəkə əlaqəsi problemi ola bilər."
-            )
+            return self._degraded_diagnosis()
         return "Server normal işləyir."
+
+    def _stale_diagnosis(self) -> str:
+        """«Uzun müddətdir məlumat gəlmir» — səbəb tipə görə fərqlidir."""
+        if self.connector_type is ConnectorType.FILE_EXCHANGE:
+            return (
+                "Uzun müddətdir yeni fayl oxunmayıb — 1C-dəki gecəlik ixrac "
+                "tapşırığının işlədiyini və mübadilə qovluğunun əlçatan olduğunu "
+                "yoxlayın."
+            )
+        if self.connector_type is ConnectorType.COM:
+            return (
+                "Uzun müddətdir yeni məlumat gəlmir — 1C platformasının bu kompüterdə "
+                "işlək olduğunu və bazanın açıq olduğunu yoxlayın."
+            )
+        return (
+            "Uzun müddətdir yeni məlumat gəlmir — 1C serverinin işlək olduğunu "
+            "və şəbəkə əlaqəsini yoxlayın."
+        )
+
+    def _degraded_diagnosis(self) -> str:
+        """Ardıcıl uğursuzluqlar — ehtimal olunan səbəb tipə görə dəyişir."""
+        attempts = f"Son {self.consecutive_failures} cəhd uğursuz olub"
+        if self.connector_type is ConnectorType.FILE_EXCHANGE:
+            return (
+                f"{attempts} — mübadilə qovluğu əlçatmaz ola bilər və ya fayl formatı "
+                "gözlənilənə uyğun deyil."
+            )
+        if self.connector_type is ConnectorType.COM:
+            return (
+                f"{attempts} — 1C COM komponenti, baza adı və ya istifadəçi/şifrə "
+                "problemi ola bilər."
+            )
+        return f"{attempts} — istifadəçi adı/şifrə və ya şəbəkə əlaqəsi problemi ola bilər."
 
     @property
     def suggests_settings(self) -> bool:
@@ -119,7 +189,7 @@ class ErpHealthMonitor:
         with self._database.unit_of_work(self._tenant_id) as uow, uow.connection.cursor() as cur:
             cur.execute(
                 """
-                SELECT server_id, server_name, host, status, health,
+                SELECT server_id, server_name, host, port, connector_type, status, health,
                        consecutive_failures, mapped_stores, sync_interval_seconds,
                        last_successful_sync, sync_delay_seconds, last_error, last_error_at
                   FROM v_erp_server_health
@@ -143,11 +213,13 @@ def _row_to_health(row: dict[str, Any]) -> ServerHealthRow:
         status=str(row["status"]),
         consecutive_failures=row.get("consecutive_failures") or 0,
         mapped_stores=row.get("mapped_stores") or 0,
-        sync_interval_seconds=row.get("sync_interval_seconds") or 300,
+        sync_interval_seconds=row.get("sync_interval_seconds") or DEFAULT_SYNC_INTERVAL_SECONDS,
         last_successful_sync=row.get("last_successful_sync"),
         sync_delay_seconds=int(delay) if delay is not None else None,
         last_error=row.get("last_error"),
         last_error_at=row.get("last_error_at"),
+        connector_type=ConnectorType.parse(row.get("connector_type")),
+        port=int(row.get("port") or 0),
     )
 
 
