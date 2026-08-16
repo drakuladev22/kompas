@@ -132,6 +132,80 @@ def test_accessible_names_survive_the_icon_migration(qt_app) -> None:  # type: i
 
 
 @requires_qt
+def test_opening_the_window_does_not_draw_a_focus_ring(qt_app) -> None:  # type: ignore[no-untyped-def]
+    """Tətbiq açılanda «kiçilt» düyməsinin ətrafında halqa OLMAMALIDIR.
+
+    Faktiki qüsur: Qt pəncərə göstəriləndə fokusu fokus-zəncirinin BİRİNCİ
+    elementinə verir və başlıq zolağı tərtibatın ən üstündə olduğu üçün bu,
+    «Pəncərəni kiçilt» düyməsi olurdu. `:focus` qaydası isə 2px açıq haşiyə
+    çəkirdi — istifadəçi heç nəyə toxunmadan ekranda AĞ KVADRAT görürdü.
+
+    Ölçdüyümüz şey QSS deyil, QSS-in ASILDIĞI xüsusiyyətdir: `keyfocus`
+    "false" qaldıqca selektor uyğun gəlmir.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QVBoxLayout
+
+    _themed(qt_app, ThemeMode.DARK)
+    window = QWidget()
+    layout = QVBoxLayout(window)
+    bar = TitleBar()
+    layout.addWidget(bar)
+    window.show()
+    qt_app.processEvents()
+
+    minimize, _maximize, _close = bar.buttons()
+    assert qt_app.focusWidget() is minimize, "fokus-zənciri dəyişib — test köhnəlib"
+    assert minimize.property("keyfocus") == "false"
+
+    # Klaviatura yolu POZULMUR: `Tab` səbəbi ilə halqa QAYIDIR.
+    minimize.clearFocus()
+    qt_app.processEvents()
+    minimize.setFocus(Qt.FocusReason.TabFocusReason)
+    qt_app.processEvents()
+    assert minimize.property("keyfocus") == "true"
+
+    minimize.clearFocus()
+    qt_app.processEvents()
+    assert minimize.property("keyfocus") == "false"
+    window.close()
+
+
+@requires_qt
+def test_activating_the_window_keeps_the_keyboard_ring(qt_app) -> None:  # type: ignore[no-untyped-def]
+    """`Alt`+`Tab` ilə qayıdanda klaviatura halqası İTMİR.
+
+    İstifadəçi `Tab`-la düyməyə çatıb başqa proqrama keçirsə, qayıdışda fokus
+    eyni düyməyə `ActiveWindow` səbəbi ilə gəlir. Həmin səbəbi "klaviatura
+    deyil" saysaydıq, halqa itər və istifadəçi fokusun harada olduğunu
+    itirərdi — yəni düzəliş bu dəfə ƏKS istiqamətdə eyni qüsuru yaradardı.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QFocusEvent
+
+    _themed(qt_app, ThemeMode.DARK)
+    button = WindowButton("minimize")
+    button.show()
+    qt_app.processEvents()
+    # Göstərilən pəncərə fokusu ARTIQ düyməyə vermiş ola bilər (aktivləşmə
+    # səbəbi ilə); `setFocus` o halda heç bir hadisə yaratmaz. Ona görə əvvəl
+    # təmizlənir — yəni `Tab` yolu FAKTİKİ olaraq sınanır.
+    button.clearFocus()
+    qt_app.processEvents()
+    button.setFocus(Qt.FocusReason.TabFocusReason)
+    qt_app.processEvents()
+    assert button.property("keyfocus") == "true"
+
+    button.focusOutEvent(
+        QFocusEvent(QFocusEvent.Type.FocusOut, Qt.FocusReason.ActiveWindowFocusReason)
+    )
+    button.focusInEvent(
+        QFocusEvent(QFocusEvent.Type.FocusIn, Qt.FocusReason.ActiveWindowFocusReason)
+    )
+    assert button.property("keyfocus") == "true"
+
+
+@requires_qt
 def test_focus_policy_and_size_are_unchanged(qt_app) -> None:  # type: ignore[no-untyped-def]
     """İkona keçid ƏVVƏLKİ iki qərarı pozmamalıdır (bax `buttons.py`)."""
     from PySide6.QtCore import Qt

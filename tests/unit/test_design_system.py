@@ -195,6 +195,16 @@ def test_icon_button_border_uses_the_strong_token() -> None:
 #: şamil edir.
 _FOCUSABLE_VARIANTS = ["window", "nav", "icon", "action", "secondary", "keypad"]
 
+#: Variantın fokus qaydasını tapan selektor. Demək olar ki hamısı `:focus`
+#: psevdo-sinfidir — İSTİSNA `window`-dur: orada halqa `[keyfocus="true"]`
+#: dinamik xüsusiyyətinə bağlıdır, çünki Qt pəncərə açılanda fokusu başlıq
+#: zolağının «kiçilt» düyməsinə verir və `:focus` hər açılışda görünən ağ
+#: kvadrat çəkirdi (bax `qss.py` və `buttons.py::focusInEvent`).
+#:
+#: Testin ÖLÇDÜYÜ ŞEY DƏYİŞMİR: qaydanın variantın əsas blokundan SONRA
+#: gəlməsi. Yalnız qaydanın adı fərqlidir.
+_FOCUS_SELECTOR = {"window": '[keyfocus="true"]'}
+
 
 @pytest.mark.parametrize("variant", _FOCUSABLE_VARIANTS)
 def test_variant_focus_rule_comes_after_its_base_rule(variant: str) -> None:
@@ -210,7 +220,8 @@ def test_variant_focus_rule_comes_after_its_base_rule(variant: str) -> None:
     idi, sadəcə qüvvəyə minmirdi. Faktiki render `tests/e2e`-də yoxlanılır.
     """
     base = QSS_TEMPLATE.index(f'QPushButton[variant="{variant}"] {{')
-    focus = QSS_TEMPLATE.index(f'QPushButton[variant="{variant}"]:focus')
+    selector = _FOCUS_SELECTOR.get(variant, ":focus")
+    focus = QSS_TEMPLATE.index(f'QPushButton[variant="{variant}"]{selector}')
 
     assert focus > base, (
         f"`{variant}` variantının fokus qaydası əsas blokdan ƏVVƏL gəlir — "

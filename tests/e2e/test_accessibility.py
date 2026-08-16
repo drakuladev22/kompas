@@ -66,12 +66,21 @@ def _shown(app: Any, widget: QWidget) -> QWidget:
 
 
 def _renders_differently_when_focused(app: Any, widget: QWidget) -> bool:
-    """Widget fokus alanda VİZUAL olaraq dəyişirmi."""
+    """Widget KLAVİATURA fokusu alanda VİZUAL olaraq dəyişirmi.
+
+    Fokus səbəbi QƏSDƏN `Tab`-dır, defolt (`Other`) deyil: halqa klaviatura ilə
+    gəzən istifadəçi üçündür və pəncərə düymələri onu məhz həmin səbəbə
+    bağlayır (bax `widgets/buttons.py::focusInEvent` — açılışdakı avtomatik
+    fokus hər dəfə görünən ağ kvadrat çəkirdi). Digər variantlar səbəbə
+    baxmır, yəni yoxlama onlar üçün eyni qalır.
+    """
+    from PySide6.QtCore import Qt
+
     widget.clearFocus()
     app.processEvents()
     unfocused = widget.grab().toImage()
 
-    widget.setFocus()
+    widget.setFocus(Qt.FocusReason.TabFocusReason)
     app.processEvents()
     assert widget.hasFocus(), "widget fokus qəbul etmir — `focusPolicy` yoxlayın"
     focused = widget.grab().toImage()

@@ -911,7 +911,13 @@ QStatusBar {
 
    Qalan variantlarda halqa `--color-focus-ring`-dir və ən pis hal 4.59:1-dir. */
 
-QPushButton[variant="window"]:focus {
+/* HALQA `:focus`-a DEYİL, `[keyfocus="true"]`-ya bağlıdır. Səbəb: Qt pəncərə
+   açılanda fokusu fokus-zəncirinin BİRİNCİ elementinə verir və bu, başlıq
+   zolağının «kiçilt» düyməsidir — yəni tətbiq hər açılışda həmin düymənin
+   ətrafında ağ kvadratla başlayırdı, istifadəçi heç nəyə toxunmadan.
+   Xüsusiyyəti `WindowButton.focusInEvent` yalnız KLAVİATURA səbəbi
+   (`Tab`/`Backtab`/qısayol) ilə qoyur — halqa onsuz da onun üçündür. */
+QPushButton[variant="window"][keyfocus="true"] {
     border: {{--focus-ring-width}} solid {{--color-titlebar-text}};
 }
 
@@ -922,8 +928,8 @@ QPushButton[variant="window"]:focus {
    fokusun harada olduğu görünmürdü. Halqa da mətn/ikon kimi
    `--color-bg-primary`-yə keçir: həmin cüt onsuz da qapıdadır (6.54:1 işıqlı,
    5.02:1 tünd). */
-QPushButton[variant="window"][action="close"]:hover:focus,
-QPushButton[variant="window"][action="close"][hover="true"]:focus {
+QPushButton[variant="window"][action="close"]:hover[keyfocus="true"],
+QPushButton[variant="window"][action="close"][hover="true"][keyfocus="true"] {
     border: {{--focus-ring-width}} solid {{--color-bg-primary}};
 }
 

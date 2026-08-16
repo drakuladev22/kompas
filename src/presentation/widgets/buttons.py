@@ -33,7 +33,7 @@ from src.presentation.widgets.safe_text import plain_tooltip
 
 if TYPE_CHECKING:
     from PySide6.QtCore import QEvent
-    from PySide6.QtGui import QEnterEvent
+    from PySide6.QtGui import QEnterEvent, QFocusEvent
 
 
 def _apply_font(button: QPushButton, *, size: int, weight: QFont.Weight) -> None:
@@ -344,6 +344,11 @@ class WindowButton(QPushButton):
         self.setProperty("variant", "window")
         self.setProperty("action", action)
         self.setProperty("hover", "false")
+        # Fokus halqası KLAVİATURA fokusuna bağlıdır — səbəbi
+        # `focusInEvent`-dədir. Başlanğıc dəyər açıq yazılır ki, QSS
+        # selektoru ilk kadrda da uyğun gəlsin (Qt təyin olunmamış dinamik
+        # xüsusiyyəti `[keyfocus="false"]` kimi saymır).
+        self.setProperty("keyfocus", "false")
         self.setCursor(Qt.CursorShape.ArrowCursor)
         self.setFixedSize(metrics.WINDOW_BUTTON_WIDTH, metrics.TITLEBAR_HEIGHT)
         self.setIconSize(QSize(self.ICON_SIZE, self.ICON_SIZE))
@@ -429,6 +434,66 @@ class WindowButton(QPushButton):
     def leaveEvent(self, event: QEvent) -> None:  # noqa: N802 - Qt adlandırması
         self.set_hovered(False)
         super().leaveEvent(event)
+
+    # -------------------------------- fokus ---------------------------------- #
+
+    #: Fokusun KLAVİATURADAN gəldiyini bildirən səbəblər.
+    KEYBOARD_FOCUS_REASONS: ClassVar[frozenset[Qt.FocusReason]] = frozenset(
+        {
+            Qt.FocusReason.TabFocusReason,
+            Qt.FocusReason.BacktabFocusReason,
+            Qt.FocusReason.ShortcutFocusReason,
+        }
+    )
+
+    def focusInEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt adlandırması
+        """Fokus halqası YALNIZ klaviatura fokusunda çəkilir.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `:focus` PSEVDO-SİNFİ TƏK BAŞINA KİFAYƏT ETMİR
+        ──────────────────────────────────────────────────────────────────────
+        Qt pəncərə göstəriləndə fokusu fokus-zəncirinin BİRİNCİ elementinə
+        verir. Başlıq zolağı tərtibatın ən üstündədir, yəni həmin element
+        «Pəncərəni kiçilt» düyməsidir — nəticədə tətbiq hər açılışda kiçilt
+        düyməsinin ətrafında AĞ KVADRAT (2px `--color-titlebar-text` haşiyə)
+        ilə başlayırdı. İstifadəçi heç nəyə toxunmamışdı; halqa isə "fokus
+        buradadır" deyirdi.
+
+        Səbəb `Qt.FocusReason`-dadır: açılışdakı fokus `ActiveWindow`/`Other`
+        səbəbi ilə gəlir, `Tab` ilə deyil. Halqa isə məhz KLAVİATURA ilə gəzən
+        istifadəçi üçündür — `TabFocus` siyasəti də (bax konstruktor) eyni
+        məntiqlə seçilmişdi: siçan kliki halqa qoymamalıdır.
+
+        FOKUS SİYASƏTİ DƏYİŞMİR: düymə hələ də `Tab` ilə əlçatandır. Çərçivəsiz
+        pəncərədə Windows-un sistem menyusu yoxdur, yəni bu üç düymə
+        kiçiltmənin/bağlamanın yeganə yoludur — onları fokusdan çıxarmaq
+        siçansız istifadəçini pəncərəsiz qoyardı.
+
+        `ActiveWindow` səbəbi MÖVCUD vəziyyəti saxlayır: istifadəçi `Tab`-la bu
+        düyməyə çatıb `Alt`+`Tab` ilə başqa proqrama keçib qayıdarsa, halqa
+        yerində qalmalıdır — həmin halda fokus həqiqətən klaviaturadadır.
+        """
+        if event.reason() is not Qt.FocusReason.ActiveWindowFocusReason:
+            self._set_key_focus(event.reason() in self.KEYBOARD_FOCUS_REASONS)
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt adlandırması
+        """Fokus getdi — halqa da getməlidir.
+
+        `ActiveWindow` burada İSTİSNA DEYİL: pəncərə arxa plana keçəndə halqanı
+        saxlamaq lazımdır, çünki qayıdışda eyni səbəblə geri gəlir və yuxarıdakı
+        şərt onu olduğu kimi buraxır.
+        """
+        if event.reason() is not Qt.FocusReason.ActiveWindowFocusReason:
+            self._set_key_focus(False)
+        super().focusOutEvent(event)
+
+    def _set_key_focus(self, active: bool) -> None:
+        value = "true" if active else "false"
+        if self.property("keyfocus") == value:
+            return
+        self.setProperty("keyfocus", value)
+        refresh_widget_style(self)
 
     # -------------------------------- çəkmə ---------------------------------- #
 
