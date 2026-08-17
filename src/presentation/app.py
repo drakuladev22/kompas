@@ -337,22 +337,67 @@ class KompasApplication:
         from src.presentation.screens.group_a_entry import FirstRunWizard  # noqa: PLC0415
 
         wizard = FirstRunWizard(self._theme)
-        wizard.completed.connect(self._on_setup_completed)
+        # Sihirbaza istinad SAXLANMIR — o, `lambda`-nın bağlamasında yaşayır
+        # və ekranla birlikdə ölür (`CLAUDE.md` §6 kontroller naxışı).
+        wizard.completed.connect(lambda payload: self._on_setup_completed(payload, wizard))
         self._window.set_content(wizard)
 
-    def _on_setup_completed(self, payload: dict[str, object]) -> None:
+    def _on_setup_completed(self, payload: dict[str, object], wizard: QWidget) -> None:
         """Sihirbaz formu doldurdu — hesab/mağaza yaradılır, sonra giriş.
 
         Sihirbaz EKRANI özü heç nə yazmır (o, yalnız formadır); yazma
         `FirstRunSetupUseCase`-dədir və o, "tenant boşdurmu?" qapısını
         yenidən yoxlayır — ekranın vəziyyətinə güvənilmir.
+
+        ──────────────────────────────────────────────────────────────────────
+        DÜZƏLDİLƏ BİLƏN SƏHV FATAL DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəl burada `except Exception` vardı və HƏR uğursuzluq «KompasOS işə
+        düşə bilmədi» ekranına aparırdı. Nəticə istehsalatda göründü: zəif
+        şifrə yazan istifadəçi proqramın SINDIĞINI düşünürdü — halbuki
+        jurnalda sadəcə `WeakSecretError` vardı və düzəliş bir sahədə idi.
+
+        Ayırma İSTİSNA TİPİNƏ görədir, mesaj mətninə görə yox: mətn tərcümə
+        və ya redaktə ilə dəyişə bilər, tip isə dəyişməz. Siyahıda olmayan
+        hər şey FATAL qalır — «bilinməyəni buraxmaq» prinsipi tərsinədir və
+        sükutla yarımçıq quraşdırma yaradardı.
         """
         if self._context is None:
             self.show_login()
             return
+
+        from src.application.use_cases.first_run_setup import (  # noqa: PLC0415
+            SetupValidationError,
+        )
+        from src.domain.value_objects.credentials import (  # noqa: PLC0415
+            InvalidEmailError,
+            InvalidUsernameError,
+        )
+        from src.infrastructure.security.hashing import WeakSecretError  # noqa: PLC0415
+
+        #: İstisna tipi → düzəldiləcək sahənin adı (boş = ümumi mesaj).
+        correctable: tuple[tuple[type[Exception], str], ...] = (
+            (WeakSecretError, "_password"),
+            (InvalidUsernameError, "_username"),
+            (InvalidEmailError, "_email"),
+            (SetupValidationError, ""),
+        )
+
         try:
             self._context.complete_setup(payload)
         except Exception as exc:
+            for kind, field in correctable:
+                if isinstance(exc, kind):
+                    _log.warning(
+                        "FIRST_RUN_SETUP_REJECTED",
+                        extra={"error_type": type(exc).__name__, "field": field or "—"},
+                    )
+                    message = getattr(exc, "user_message", "") or str(exc)
+                    show_error = getattr(wizard, "show_error", None)
+                    if callable(show_error):
+                        show_error(message, field=field)
+                        return
+                    break
             _log.exception("FIRST_RUN_SETUP_FAILED")
             self.show_fatal_error(getattr(exc, "user_message", "Quraşdırma tamamlana bilmədi."))
             return

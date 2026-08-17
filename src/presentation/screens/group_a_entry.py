@@ -599,6 +599,29 @@ class FirstRunWizard(QWidget):
         self._description.setStyleSheet(f"color: {self._theme.color('--color-text-secondary')};")
         layout.addWidget(self._description)
 
+        # ------------------------------------------------------------------
+        # QURAŞDIRMANIN RƏDD CAVABI BURADA GÖRÜNÜR — «İŞƏ DÜŞƏ BİLMƏDİ» YOX
+        # ------------------------------------------------------------------
+        # Əvvəl `complete_setup()` istənilən istisnada tətbiqi FATAL ekrana
+        # aparırdı. Halbuki səbəblərin bir qismi istifadəçinin DÜZƏLDƏ
+        # BİLƏCƏYİ şeydir (zəif şifrə, yararsız istifadəçi adı/e-poçt) —
+        # onları «proqram işə düşə bilmədi» kimi göstərmək istifadəçini
+        # çıxışı olmayan ekranda qoyurdu.
+        #
+        # Rəng cütü `--color-danger` / `--color-danger-bg`-dir, çünki
+        # `--color-danger` KONTENT fonunda yalnız İRİ mətn üçün kifayət edir
+        # (`check_contrast.py` sətir 57). Öz fonu ilə isə adi mətn üçün də
+        # keçir və yeni cüt əlavə etmək lazım gəlmir.
+        self._error = body_label("", size=13)
+        self._error.setWordWrap(True)
+        self._error.setVisible(False)
+        self._error.setStyleSheet(
+            f"background-color: {self._theme.color('--color-danger-bg')};"
+            f"color: {self._theme.color('--color-danger')};"
+            "border-radius: 12px; padding: 12px 14px;"
+        )
+        layout.addWidget(self._error)
+
         self._fields_host = QWidget()
         self._fields_layout = QVBoxLayout(self._fields_host)
         self._fields_layout.setContentsMargins(0, 0, 0, 0)
@@ -634,8 +657,42 @@ class FirstRunWizard(QWidget):
 
     # ------------------------------ addımlar --------------------------------- #
 
+    def show_error(self, message: str, *, field: str = "") -> None:
+        """Quraşdırma rədd edildi — sihirbaz AÇIQ qalır, mesaj göstərilir.
+
+        ────────────────────────────────────────────────────────────────────
+        NİYƏ BİRİNCİ ADDIMA QAYIDIR
+        ────────────────────────────────────────────────────────────────────
+        `complete_setup()`-ın rədd etdiyi sahələr — istifadəçi adı, e-poçt,
+        şifrə — HAMISI birinci addımdadır. Mağaza addımını sihirbaz özü
+        yoxlayır (`_validate_current`), yəni ora çatan səhv qalmır.
+        İstifadəçini olduğu yerdə saxlasaydıq, o, düzəltməli olduğu sahəyə
+        çatmaq üçün üç dəfə «Geri» basmalı olardı.
+
+        Args:
+            message: İstifadəçiyə göstərilən izah.
+            field: Səhvin AİD OLDUĞU sahə (`_password`, `_username`,
+                `_email`). Boşdursa yalnız ümumi mesaj göstərilir. Ad
+                ÇAĞIRANDAN gəlir, mesaj mətnindən çıxarılmır: mətnə baxıb
+                təxmin etmək dil dəyişəndə sükutla sınardı.
+        """
+        self._index = 0
+        self._apply_step()  # sahələr yenidən qurulur, `_answers` bərpa olunur
+
+        self._error.setText(message)
+        self._error.setVisible(True)
+
+        target = getattr(self, field, None) if field else None
+        if target is not None:
+            target.set_error(message)
+
     def _apply_step(self) -> None:
         """Cari addımın sahələrini qurur və göstəriciləri yeniləyir."""
+        # Xəta mesajı YALNIZ göstərildiyi addımda qalır: istifadəçi irəli/geri
+        # keçəndə köhnə mesaj ekranda ilişib qalsaydı, düzəldilmiş sahə hələ
+        # də səhv görünərdi.
+        self._error.setVisible(False)
+
         for position, step in enumerate(self._steps):
             if position < self._index:
                 step.set_state("done")

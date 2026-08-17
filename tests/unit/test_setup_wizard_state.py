@@ -164,6 +164,92 @@ def test_going_back_restores_what_was_typed(qtbot) -> None:  # type: ignore[no-u
 
 
 @requires_qt
+def test_a_rejected_setup_keeps_the_wizard_open(qtbot) -> None:  # type: ignore[no-untyped-def]
+    """Zəif şifrə «işə düşə bilmədi» ekranı DEYİL — düzəldilə bilən səhvdir.
+
+    ────────────────────────────────────────────────────────────────────────
+    QÜSURUN ÖZ SSENARİSİ
+    ────────────────────────────────────────────────────────────────────────
+    İstifadəçi admin hesabı yaradır, şifrə siyasətə uyğun gəlmir,
+    `complete_setup()` `WeakSecretError` atır — və tətbiq FATAL ekrana
+    düşürdü. İstifadəçi proqramın sındığını düşünürdü, halbuki düzəliş bir
+    sahədə idi.
+
+    Yoxlanılan üç şey: sihirbaz açıq qalır, BİRİNCİ addıma qayıdır (düzəldiləcək
+    sahələr oradadır) və yazılanlar İTMİR.
+    """
+    from src.presentation.screens.group_a_entry import FirstRunWizard
+    from src.presentation.theme.manager import ThemeManager
+
+    screen = FirstRunWizard(ThemeManager())
+    for field, value in (
+        (screen._full_name, "Aysel Quliyeva"),
+        (screen._email, "aysel@example.az"),
+        (screen._username, "a.quliyeva"),
+        (screen._password, "qisa"),
+        (screen._password_repeat, "qisa"),
+    ):
+        field.set_text(value)
+    screen._on_next()
+    screen._store_name.set_text("28 May")
+    screen._on_next()
+
+    assert screen.step_index == 2
+    screen.show_error("Şifrə tələblərə cavab vermir: minimum 8 simvol", field="_password")
+
+    assert screen.step_index == 0, "sihirbaz düzəldiləcək addıma qayıtmadı"
+    assert screen._full_name.text() == "Aysel Quliyeva", "yazılanlar itdi"
+    assert screen._error.isVisible() or screen._error.text(), "mesaj göstərilmir"
+    assert "minimum 8 simvol" in screen._error.text()
+
+
+@requires_qt
+def test_moving_on_clears_the_previous_error(qtbot) -> None:  # type: ignore[no-untyped-def]
+    """Düzəlişdən sonra köhnə mesaj ekranda İLİŞİB QALMIR.
+
+    Qalsaydı, artıq düzəldilmiş sahə hələ də səhv görünərdi və istifadəçi
+    nəyi düzəltdiyini bilməzdi.
+    """
+    from src.presentation.screens.group_a_entry import FirstRunWizard
+    from src.presentation.theme.manager import ThemeManager
+
+    screen = FirstRunWizard(ThemeManager())
+    screen.show_error("Şifrə tələblərə cavab vermir", field="_password")
+    assert screen._error.text()
+
+    for field, value in (
+        (screen._full_name, "Ad Soyad"),
+        (screen._email, "a@b.az"),
+        (screen._username, "a.b"),
+        (screen._password, "Aa1!aa1!"),
+        (screen._password_repeat, "Aa1!aa1!"),
+    ):
+        field.set_text(value)
+    screen._on_next()
+
+    assert screen.step_index == 1
+    assert not screen._error.isVisible(), "köhnə xəta mesajı növbəti addımda qaldı"
+
+
+def test_only_correctable_errors_avoid_the_fatal_screen() -> None:
+    """Siyahı TİPƏ görədir və siyahıda olmayan hər şey FATAL qalır.
+
+    Mətnə baxıb qərar versəydik, tərcümə və ya redaktə qapını sükutla
+    sındırardı. «Bilinməyəni buraxmaq» da səhv olardı: naməlum uğursuzluqdan
+    sonra sihirbazı davam etdirmək yarımçıq quraşdırma yaradardı.
+    """
+    source = (_REPO / "src" / "presentation" / "app.py").read_text(encoding="utf-8")
+
+    for name in ("WeakSecretError", "InvalidUsernameError", "InvalidEmailError"):
+        assert name in source, f"`{name}` düzəldilə bilən siyahısında yoxdur"
+    assert "isinstance(exc, kind)" in source, "ayırma tip üzrə deyil"
+    assert "FIRST_RUN_SETUP_REJECTED" in source, "rədd cavabı ayrıca jurnala yazılmır"
+    # Fatal yol SİLİNMƏMƏLİDİR — yalnız daralıb.
+    assert "FIRST_RUN_SETUP_FAILED" in source
+    assert "show_fatal_error" in source
+
+
+@requires_qt
 def test_skip_advances_without_validation_and_drops_the_step(qtbot) -> None:  # type: ignore[no-untyped-def]
     """«Keç» — validasiya YOX, cavablar SİLİNİR.
 

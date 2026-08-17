@@ -146,13 +146,51 @@ _ORIGINAL_HARDCODES: Final[dict[SystemLimitKey, str]] = {
 # --------------------------------------------------------------------------- #
 
 
+#: KÖÇÜRMƏDƏN SONRA QƏSDƏN DƏYİŞDİRİLMİŞ defoltlar: açar → (yeni dəyər, səbəb).
+#:
+#: `_ORIGINAL_HARDCODES` TARİXİ QEYDdir və toxunulmur — orada yazılan ədəd
+#: auditin tapdığı sətirdir. Sonrakı açıq qərarı həmin siyahıda «düzəltsəydik»,
+#: qapı öz mənasını itirərdi: təsadüfi sürüşmə ilə qəsdli dəyişiklik eyni
+#: görünərdi. Ona görə qərar AYRICA yazılır və səbəbi ilə birlikdə qalır.
+_DELIBERATE_CHANGES: Final[dict[SystemLimitKey, tuple[str, str]]] = {
+    SystemLimitKey.PASSWORD_MIN_LENGTH: (
+        "8",
+        "12 simvol İlk Quraşdırma Sihirbazını dayandırırdı (WeakSecretError → "
+        "«işə düşə bilmədi» ekranı). Miqrasiya 066 həddi 8-ə endirdi; "
+        "mürəkkəblik tələbi (böyük/kiçik/rəqəm/simvol) DƏYİŞMƏDİ.",
+    ),
+}
+
+
 @pytest.mark.parametrize("key", sorted(_ORIGINAL_HARDCODES, key=lambda item: item.value))
 def test_default_equals_the_value_that_was_hardcoded(key: SystemLimitKey) -> None:
-    """Köçürmə idarəolunma dəyişikliyidir, davranış dəyişikliyi DEYİL."""
-    assert DEFAULT_LIMITS[key] == _ORIGINAL_HARDCODES[key], (
-        f"`{key.value}` defoltu köhnə hardcode dəyərdən fərqlidir — "
-        "köçürmə davranışı dəyişdirmiş olur."
+    """Köçürmə idarəolunma dəyişikliyidir, davranış dəyişikliyi DEYİL.
+
+    İstisna yalnız `_DELIBERATE_CHANGES`-dədir və orada hər dəyişiklik
+    SƏBƏBİ ilə yazılır — yəni "niyə fərqlidir?" sualı qapının içində
+    cavablanır.
+    """
+    expected = _ORIGINAL_HARDCODES[key]
+    if key in _DELIBERATE_CHANGES:
+        expected, _ = _DELIBERATE_CHANGES[key]
+    assert DEFAULT_LIMITS[key] == expected, (
+        f"`{key.value}` defoltu gözlənilən dəyərdən fərqlidir — "
+        "köçürmə davranışı sükutla dəyişdirmiş olur."
     )
+
+
+def test_a_deliberate_change_is_really_a_change() -> None:
+    """Güzəşt siyahısındakı dəyər köhnəsindən FƏRQLİ olmalıdır.
+
+    Dəyər sonradan geri qaytarılsa, siyahıdan silinməsi unudula bilər və
+    orada ölü bir "istisna" qalar — növbəti dəyişiklik onun altından sükutla
+    keçərdi.
+    """
+    for key, (value, reason) in _DELIBERATE_CHANGES.items():
+        assert value != _ORIGINAL_HARDCODES[key], (
+            f"`{key.value}` üçün istisna köhnə dəyərin eynisidir — siyahıdan çıxarın"
+        )
+        assert reason.strip(), f"`{key.value}` istisnası səbəbsizdir"
 
 
 def test_every_infrastructure_key_is_covered_by_this_gate() -> None:
@@ -393,7 +431,7 @@ def test_module_fallbacks_read_from_default_limits() -> None:
     )
     from src.infrastructure.security.hashing import FALLBACK_MIN_PASSWORD_LENGTH
 
-    assert fallback_int(SystemLimitKey.PASSWORD_MIN_LENGTH) == FALLBACK_MIN_PASSWORD_LENGTH == 12
+    assert fallback_int(SystemLimitKey.PASSWORD_MIN_LENGTH) == FALLBACK_MIN_PASSWORD_LENGTH == 8
     assert fallback_int(SystemLimitKey.BACKUP_MIN_RETENTION_DAYS) == FALLBACK_MIN_RETENTION_DAYS
     assert fallback_int(SystemLimitKey.DB_POOL_MIN_SIZE) == FALLBACK_POOL_MIN == 1
     assert fallback_int(SystemLimitKey.DB_POOL_MAX_SIZE) == FALLBACK_POOL_MAX == 8
@@ -492,3 +530,54 @@ def test_password_policy_length_comes_from_root() -> None:
     source.set(SystemLimitKey.PASSWORD_MIN_LENGTH, "24")
     with pytest.raises(WeakSecretError):
         service.hash_password("Güclü-Şifr1!")
+
+
+def test_eight_characters_are_enough_when_the_password_is_complex() -> None:
+    """Defolt hədd 8-dir və MÜRƏKKƏBLİK tələbi qüvvədə qalır.
+
+    İki şey birlikdə yoxlanılır, çünki hədd endirilərkən əsas risk məhz
+    budur: uzunluqla birlikdə mürəkkəbliyin də sükutla zəifləməsi. `Aa1!aa1!`
+    səkkiz simvoldur və hər dörd sinfi daşıyır — keçməlidir; `parolparol`
+    isə daha UZUN olsa da rədd edilməlidir.
+    """
+    from src.infrastructure.security.hashing import HashingService, WeakSecretError
+
+    service = HashingService(
+        limits=InfrastructureLimits(limits=FakeSystemLimits(), tenant_id=TENANT),
+        time_cost=1,
+        memory_cost=8,
+        parallelism=1,
+    )
+
+    service.hash_password("Aa1!aa1!")
+
+    with pytest.raises(WeakSecretError):
+        service.hash_password("parolparol")
+
+
+def test_the_migration_and_the_code_default_agree_on_the_new_length() -> None:
+    """Hədd İKİ yerdədir: kod defoltu və seed miqrasiyası (066).
+
+    (`DEFAULT_LIMITS` adı bu sətirdə QƏSDƏN yazılmır: o, Python sabitidir və
+    `test_migration_reference_accuracy` eyni sətirdəki identifikatoru həmin
+    miqrasiyanın İÇİNDƏ axtarır — yəni doğru cümlə yalançı xəbərdarlıq
+    yaradardı.)
+
+    Biri dəyişib digəri qalsaydı, nəticə quraşdırma yolundan asılı olardı —
+    mövcud bazada 8, yeni kirayəçidə 12. `CLAUDE.md` §7-nin qadağan etdiyi
+    naxış budur.
+
+    Miqrasiya 066 açarı İKİ blokda daşıyır: mövcud kirayəçilər üçün `UPDATE`,
+    yeni kirayəçilər üçün seed trigger funksiyası.
+    """
+    migration = (_MIGRATIONS_DIR / "066_password_min_length.sql").read_text(encoding="utf-8")
+    expected = DEFAULT_LIMITS[SystemLimitKey.PASSWORD_MIN_LENGTH]
+
+    assert f"SET limit_value = '{expected}'" in migration, (
+        "mövcud kirayəçilər üçün UPDATE kod defoltu ilə uyğun deyil"
+    )
+    assert f"('PASSWORD_MIN_LENGTH', '{expected}'," in migration, (
+        "yeni kirayəçi trigger-i kod defoltu ilə uyğun deyil"
+    )
+    # Aşağı hüdud DƏYİŞMİR: 8-dən aşağı dəyər Root tərəfindən də qoyula bilməz.
+    assert INFRA_LIMIT_BOUNDS[SystemLimitKey.PASSWORD_MIN_LENGTH][0] == Decimal(8)

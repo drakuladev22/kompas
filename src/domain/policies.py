@@ -1104,9 +1104,19 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # dəyişikliyidir. "Yaxşılaşdırılmış" defolt yazsaydıq, mövcud quraşdırma
     # yeniləmədən sonra sükutla başqa cür işləyərdi.
     #
-    # `security/hashing.py`: 12 simvol — OWASP-ın admin hesabları üçün
-    # tövsiyəsi. PIN tərəfi ARTIQ idarə olunurdu, şifrə tərəfi qalmışdı.
-    SystemLimitKey.PASSWORD_MIN_LENGTH: "12",
+    # `security/hashing.py`. BU AÇAR YUXARIDAKI QAYDANIN YEGANƏ İSTİSNASIDIR
+    # və istisna QƏSDLİDİR — köçürmə deyil, sonrakı AÇIQ QƏRARdır:
+    #
+    # Köçürüləndə dəyər 12 idi (OWASP-ın admin hesabları üçün tövsiyəsi).
+    # İlk Quraşdırma Sihirbazı isə məhz burada dayanırdı: istifadəçi admin
+    # hesabı yaradır, `WeakSecretError` atılır və nəticə «KompasOS işə düşə
+    # bilmədi» ekranı olurdu. Hədd miqrasiya 066 ilə 8-ə endirildi.
+    #
+    # ZƏİFLƏYƏN YEGANƏ ŞEY UZUNLUQDUR: böyük hərf, kiçik hərf, rəqəm və
+    # xüsusi simvol tələbi qüvvədədir (`PasswordPolicy`), aşağı hüdud
+    # (`INFRA_LIMIT_BOUNDS`) onsuz da 8 idi, tavan isə 128 olaraq qalır —
+    # daha uzun şifrə istəyən müəssisə onu ROOT panelindən qaldırır.
+    SystemLimitKey.PASSWORD_MIN_LENGTH: "8",
     # `backup/service.py`: spesifikasiyanın "minimum 30 gün" tələbi həm
     # döşəmə, həm də başlanğıc dəyər kimi; `pg_dump` taymautu 1 saat.
     SystemLimitKey.BACKUP_MIN_RETENTION_DAYS: "30",

@@ -52,7 +52,9 @@ def test_same_password_gives_different_hash(hashing_service: HashingService) -> 
 @pytest.mark.parametrize(
     ("password", "expected_fragment"),
     [
-        ("qısa1!A", "12 simvol"),
+        # Yeddi simvol — həddin bir addım altı. Hədd 8-dir (miqrasiya 066);
+        # əvvəl 12 idi və İlk Quraşdırma Sihirbazını dayandırırdı.
+        ("qısa1!A", "8 simvol"),
         ("hamısıkiçik123!", "böyük hərf"),
         ("HAMISIBOYUK123!", "kiçik hərf"),
         ("RəqəmsizŞifrəAB!", "rəqəm"),
