@@ -219,11 +219,11 @@ KompasOS/
 │                            #    + private `app-updates` bucket-i
 ├── scripts/
 │   ├── check_contrast.py    # ✅ WCAG AA yoxlayıcısı (CI-da işləyir)
-│   ├── build_icon.py        # ✅ assets/logo/64.png → kompasos.ico
+│   ├── build_icon.py        # ✅ assets/logo/256.png → kompasos.ico (6 pillə)
 │   └── generate_placeholder_icon.ps1  # ⚠️ KÖHNƏLİB — real loqonu əvəz edər
 ├── assets/
 │   ├── kompasos.ico         # ✅ real loqo; TÖRƏMƏ fayl — build_icon.py qurur
-│   └── logo/                # ✅ 8 PNG: başlıq işarəsi, rozet, splash lockup
+│   └── logo/                # ✅ 9 PNG: 256 master, başlıq işarəsi, rozet, splash
 ├── tests/
 │   ├── unit/                # ✅ domen/shared/security/infrastruktur testləri
 │   ├── integration/         # ✅ DB + Drive (DATABASE_URL yoxdursa skip)
@@ -370,32 +370,33 @@ Tam əsaslandırma: [`docs/security_decisions.md`](docs/security_decisions.md).
 
 ---
 
-## İlk müştəri təhvilindən əvvəl əvəzlənməli
+## İlk müştəri təhvilindən əvvəl əvəzlənməli — ARTIQ BOŞDUR
 
-**(ÇATIŞMAZLIQ DÜZƏLİŞİ:** bu bölmə əvvəllər «Faza 4-dən əvvəl əvəzlənməli»
-adlanırdı və iki maddə saxlayırdı. Faza 4 çoxdan ✅ Tamamlandı sayılır, yəni
-başlıq keçmiş bir tarixə istinad edirdi. İkinci maddə isə tamamilə köhnəlmişdi
-— aşağıya baxın.**)**
+Bu bölmədə açıq maddə QALMADI. Aşağıdakı qeydlər bölmənin tarixçəsidir və
+qəsdən saxlanılır: hər biri sənədin bir dəfə koddan geri qaldığını göstərir və
+səbəbi ilə birlikdə oxunmalıdır.
 
-- **`assets/logo/` üçün 256×256 (və arzuolunan 48×48) ixracı** — `.ico` hazırda
-  16/24/32/48/64 pillələrini daşıyır və hamısı `logo/64.png`-dən (64×64)
-  KİÇİLDİLƏRƏK alınır. **256 pilləsi ümumiyyətlə YOXDUR** və qəsdən yoxdur:
-  64-ü 256-ya böyütmək bulanıq nəticə verərdi, ona görə Windows-un «Böyük
-  ikonlar» görünüşü 64-ü özü miqyaslayır. 48 isə VAR, lakin 64→48 tam olmayan
-  nisbətlə kiçildilir — həmin ölçüyə ayrıca ixrac daha kəskin olardı. Heç bir
-  texniki qapını bloklamır (`test_the_missing_large_tier_is_documented` pillənin
-  yoxluğunu unutqanlıq deyil, QƏRAR kimi qeyd edir), lakin imzalanmış `production`
-  buraxılışı müştəriyə verilməzdən əvvəl həmin ölçülər dizayndan ayrıca ixrac
-  edilib `scripts/build_icon.py` yenidən işlədilməlidir
-  (bax [`assets/README.md`](assets/README.md)).
+**(BAĞLANDI — `assets/logo/` üçün 256×256 ixracı.** Burada yazılırdı ki, `.ico`
+16/24/32/48/64 pillələrini daşıyır, «256 pilləsi ümumiyyətlə YOXDUR və qəsdən
+yoxdur», çünki 64-ü böyütmək bulanıq nəticə verərdi. İzah yarımçıq idi:
+məhdudiyyət qərar deyil, **MƏNBƏ çatışmazlığı** idi — əldəki ən böyük rastr
+64×64 idi. `assets/logo/256.png` gətirildi, `scripts/build_icon.py` artıq BÜTÜN
+pillələri həmin tək masterdən qurur və `.ico` 16/24/32/48/64/**256** daşıyır.
+Windows-un «Böyük ikonlar» görünüşü daha 64-ü miqyaslamır.
 
-**(İKİNCİ ÇATIŞMAZLIQ DÜZƏLİŞİ — `assets/kompasos.ico`:** burada əvvəllər
-«hazırda avtomatik yaradılmış placeholder (Deep Navy + Amber "K", 4 ölçü) …
-real loqosu ilə əvəzlənməlidir» yazılırdı. Bu, `3ae2484` commit-indən sonra
-YANLIŞDIR — real pərgar loqosu gətirilib, `.ico` ondan qurulur, splash və
-başlıq zolağı da həmin fayl dəstini işlədir. Həmin commit README-yə toxunmadığı
-üçün sənəd görülmüş bir işi hələ də görüləsi kimi göstərirdi. Maddədən qalan
-YEGANƏ həqiqi qalıq yuxarıdakı ölçü ixracıdır.**)**
+Qapı da tərsinə çevrildi: `test_the_missing_large_tier_is_documented` (pillənin
+YOXLUĞUNU qapılayırdı) yerinə
+`test_the_large_tier_exists_and_is_not_upscaled` gəldi — o, pillənin
+mövcudluğunu VƏ masterin həqiqətən 256×256 olduğunu birlikdə yoxlayır. İkincisi
+olmasa, dizayn faylı bir gün kiçik ölçüdə ixrac edilsə `.ico` sükutla böyütmə
+ilə qurulardı və reqressiya adı dəyişməmiş qapının altından keçərdi.**)**
+
+**(BAĞLANDI — `assets/kompasos.ico` «placeholder»:** burada əvvəllər «hazırda
+avtomatik yaradılmış placeholder (Deep Navy + Amber "K", 4 ölçü) … real loqosu
+ilə əvəzlənməlidir» yazılırdı. Bu, `3ae2484` commit-indən sonra YANLIŞ idi —
+real pərgar loqosu gətirilib, `.ico` ondan qurulur, splash və başlıq zolağı da
+həmin fayl dəstini işlədir. Həmin commit README-yə toxunmadığı üçün sənəd
+görülmüş bir işi hələ də görüləsi kimi göstərirdi.**)**
 
 **Bu siyahıdan ÇIXARILAN maddə — `src/presentation/theme/tokens.py`:** əvvəlki
 mətn «dizayn tokenləri Faza 4-də YARANIR; yarandığı an `check_contrast.py`

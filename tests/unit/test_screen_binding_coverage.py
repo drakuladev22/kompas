@@ -97,6 +97,13 @@ CONTROLLER_BOUND: Final[dict[str, str]] = {
     # paralel işləyən ikinci HR bağlamış ola bilər (bax
     # `controllers/sync_conflicts.py` başlığı).
     "sync_conflicts": "_attach_sync_conflicts",
+    # DEVICE-1 Cihazlar — HƏM oxuyur (siyahı + təsdiq növbəsi + lisenziya
+    # sayğacı), HƏM yazır (təsdiqlə / blokla / bərpa et / filialı köçür).
+    # Siyahı hər yazıdan sonra YENİDƏN oxunmalıdır və səbəb yalnız sətrin
+    # yerini dəyişməsi deyil: təsdiq lisenziya sayğacını BİR artırır və
+    # sayğac yenilənməsəydi, admin ardıcıl iki cihaz təsdiqləyəndə ikincidə
+    # gözlənilməz «limit doldu» xətası görərdi (bax `controllers/devices.py`).
+    "devices": "_attach_devices",
     # Aylıq Cərimə İcmalı (miqrasiya 003) — HƏM oxuyur (dövrlər + nəşr
     # gözləyən sətirlər), HƏM yazır (`publish_batch`). Nəşr olunmuş cərimə
     # `PENDING_REVIEW`-dan çıxır, yəni siyahı hər göndərmədən sonra yenidən

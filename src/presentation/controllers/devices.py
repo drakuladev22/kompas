@@ -314,6 +314,10 @@ def _to_list_row(device: RegisteredDevice, names: dict[str, str]) -> dict[str, o
     return {
         "id": str(device.id),
         "name": device.device_name or device.machine_name or device.short_code,
+        # AD DEYİL, İD: ekran «Köçür» seçicisində cari filialı seçili göstərir
+        # və uyğunlaşdırmanı ID ilə edir. Ada görə uyğunlaşdırsaydıq, iki
+        # mağazanın eyni adı (məs. iki «Mərkəz») seçimi səhv sətrə bağlayardı.
+        "store_id": str(device.store_id) if device.store_id else "",
         "store": store or "—",
         "type": device_type_label(device.device_type),
         "status": device.status.value,

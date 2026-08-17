@@ -32,6 +32,8 @@ _EXPECTED: Final[tuple[str, ...]] = (
     "16_withoutcontainer.png",
     "32.png",
     "64.png",
+    # `.ico`-nun TƏK masteri (bax `scripts/build_icon.py` başlığı).
+    "256.png",
     "light.png",
     "dark.png",
     "loading_screen_light.png",
@@ -45,9 +47,20 @@ def test_every_runtime_logo_file_is_present() -> None:
     assert not missing, f"çatışan loqo faylı: {missing}"
 
 
-def test_the_reference_mockup_is_not_shipped() -> None:
-    """`windows_app.png` YALNIZ referansdır — paketə/runtime-a düşməməlidir."""
-    assert not (_LOGO_DIR / "windows_app.png").exists()
+def test_the_reference_variants_are_not_shipped() -> None:
+    """Referans/variant fayllar `assets/logo/`-ya DÜŞMÜR.
+
+    `windows_app.png` maketdir. `256 negative.png` isə EYNİ işarənin böyük
+    nüsxəsi DEYİL — konteyneri kvadratdır (squircle deyil) və fonu daha
+    tünddür, yəni ayrı BİR VARİANTDIR. Onu `assets/logo/`-ya köçürmək
+    `build_icon.py`-ın «tək master» qaydasını qeyri-müəyyən edərdi: iki
+    256-lıq fayl arasında hansının seçildiyi fayl adından asılı qalardı.
+
+    İkisi də `design_reference/`-də QALIR — orada olmaları qüsur deyil,
+    dizayn qərarının sübutudur (bax `CLAUDE.md` §0).
+    """
+    for name in ("windows_app.png", "256 negative.png"):
+        assert not (_LOGO_DIR / name).exists(), f"«{name}» runtime qovluğuna düşüb"
 
 
 def test_the_icon_is_built_from_the_logo_sources() -> None:
@@ -69,20 +82,39 @@ def test_the_icon_is_built_from_the_logo_sources() -> None:
     assert sizes == sorted((size, size) for size in ICO_SIZES)
 
 
-def test_the_missing_large_tier_is_documented() -> None:
-    """256×256 pilləsinin YOXLUĞU qərardır, unutqanlıq deyil.
+def test_the_large_tier_exists_and_is_not_upscaled() -> None:
+    """256 pilləsi VAR və NATİW masterdən gəlir — böyütmə ilə DEYİL.
 
-    Mənbə 64×64-dür; 256-ya böyütmək bulanıq nəticə verərdi (logo.md ADDIM 1
-    bunu açıq qadağan edir). Sənədləşməsə, növbəti adam bunu qüsur sanıb
-    böyütmə əlavə edərdi.
+    ────────────────────────────────────────────────────────────────────────
+    BU TEST ƏVVƏL TƏRSİNİ YOXLAYIRDI
+    ────────────────────────────────────────────────────────────────────────
+    Adı `test_the_missing_large_tier_is_documented` idi və 256-nın YOXLUĞUNU
+    qapılayırdı, çünki əldəki ən böyük rastr 64×64 idi — yəni məhdudiyyət
+    dizayn qərarı deyil, MƏNBƏ çatışmazlığı idi. `assets/logo/256.png`
+    gələndən sonra həmin qapı öz məqsədinin ƏKSİNƏ çevrildi: mövcud pilləni
+    QADAĞAN edərdi.
+
+    Yeni qapı iki şeyi birlikdə saxlayır: pillə var VƏ mənbə həqiqətən
+    256×256-dır. İkincisi olmasa, dizayn faylı bir gün kiçik ölçüdə ixrac
+    edilsə `.ico` sükutla böyütmə ilə qurulardı — yəni reqressiya adı
+    dəyişməmiş qapının altından keçərdi.
     """
     import sys
+
+    from PIL import Image
 
     sys.path.insert(0, str(_REPO_ROOT / "scripts"))
     import build_icon  # yol yuxarıda qurulur
 
-    assert 256 not in build_icon.ICO_SIZES
-    assert "256" in (build_icon.__doc__ or "")
+    assert 256 in build_icon.ICO_SIZES, "256 pilləsi siyahıdan çıxıb"
+
+    with Image.open(_LOGO_DIR / build_icon.SOURCE_NAME) as master:
+        assert master.size == (build_icon.SOURCE_SIZE, build_icon.SOURCE_SIZE), (
+            f"master {master.size} — böyütmə ilə qurulan 256 bulanıq olardı"
+        )
+
+    with Image.open(_REPO_ROOT / "assets" / "kompasos.ico") as icon:
+        assert (256, 256) in icon.info.get("sizes", []), "`.ico`-da 256 pilləsi yoxdur"
 
 
 @requires_qt

@@ -1,6 +1,6 @@
 # assets/
 
-Bu qovluqda `kompasos.ico` və `logo/` altqovluğundakı **səkkiz PNG** var.
+Bu qovluqda `kompasos.ico` və `logo/` altqovluğundakı **doqquz PNG** var.
 Cədvəl nəyin mövcud olduğunu VƏ hər faylı KİMİN oxuduğunu göstərir — çünki bu
 faylın əvvəlki iki variantı da məhz burada yanılmışdı: birincisi mövcud
 olmayan bir aktivə (`kompasos-splash.png`) sanki mövcuddur kimi istinad edirdi,
@@ -9,16 +9,18 @@ ikincisi isə (aşağıdakı düzəlişə bax) real loqo gətirildikdən sonra d
 
 | Fayl | Faktiki ölçü | Kim oxuyur |
 |---|---|---|
-| `kompasos.ico` | 16/24/32/48/64 | `src/KompasOS.spec` — `.exe` ikonu + `datas`; runtime-da `presentation/app.py::_apply_window_icon` |
+| `kompasos.ico` | 16/24/32/48/64/**256** | `src/KompasOS.spec` — `.exe` ikonu + `datas`; runtime-da `presentation/app.py::_apply_window_icon` |
 | `logo/16_withoutcontainer.png` | 32×32 | `widgets/brand_assets.TITLE_MARK` — başlıq zolağındakı işarə (BOYANIR, aşağıya bax) |
-| `logo/64.png` | 64×64 | `widgets/brand_assets.APP_MARK` — giriş/sihirbaz ekranlarındakı rozet; **həm də `.ico`-nun MƏNBƏYİ** |
+| `logo/256.png` | 256×256 | **`.ico`-nun TƏK MASTERİ** — bütün pillələr bundan kiçildilir |
+| `logo/64.png` | 64×64 | `widgets/brand_assets.APP_MARK` — giriş/sihirbaz ekranlarındakı rozet |
 | `logo/loading_screen_light.png` | 1066×388 | `brand_assets.splash_asset(dark=False)` — splash lockup |
 | `logo/loading_screen_dark.png` | 1064×388 | `brand_assets.splash_asset(dark=True)` — splash lockup |
 | `logo/16.png` | 32×32 | ❕ Runtime kodu OXUMUR — bax «Oxunmayan dörd fayl» |
 | `logo/32.png` | 64×64 | ❕ Runtime kodu OXUMUR (`64.png` ilə PİKSEL-EYNİ) |
 | `logo/light.png` | 1066×324 | ❕ Runtime kodu OXUMUR — rozetin AÇIQ fonda təqdimat kartı, mətnsiz |
 | `logo/dark.png` | 1064×324 | ❕ Runtime kodu OXUMUR — eyni kart TÜND fonda |
-| `windows_app.png` | — | ❌ Bu qovluqda OLMAMALIDIR — yalnız `design_reference/`-dəki maketdir; `test_the_reference_mockup_is_not_shipped` yoxluğunu qoruyur |
+| `windows_app.png` | — | ❌ Bu qovluqda OLMAMALIDIR — `design_reference/`-dəki maketdir |
+| `256 negative.png` | 256×256 | ❌ Bu qovluqda OLMAMALIDIR — AYRI VARİANTdır (kvadrat konteyner, daha tünd fon), eyni işarənin böyük nüsxəsi DEYİL. `design_reference/`-də qalır |
 
 **Fayl adları piksel ölçüsü DEYİL.** Adlar nöqtə (pt) ölçüsünü, fayllar isə @2x
 rasteri daşıyır: `16.png` → 32×32, `32.png` → 64×64. Bu, dizayndan gəldiyi
@@ -35,7 +37,7 @@ kimi təsvir edirdi. Həmin mətn `3ae2484` commit-indən sonra yanlışdır: re
 pərgar loqosu gətirilib, `.ico` ondan qurulur. Sənəd isə commit-lə birlikdə
 yenilənmədiyi üçün oxucuya hələ də görülməmiş bir iş vəd edirdi.**)**
 
-Fayl **`scripts/build_icon.py` ilə qurulur** və mənbəyi `logo/64.png`-dir:
+Fayl **`scripts/build_icon.py` ilə qurulur** və mənbəyi `logo/256.png`-dir:
 
 ```bash
 .venv/Scripts/python.exe scripts/build_icon.py
@@ -50,24 +52,32 @@ ilə tutuşdurur — faylın əl ilə dəyişdirilməsi də belə tutulur.
 | Xüsusiyyət | Dəyər |
 |---|---|
 | Format | ICO, PNG-sıxılmış |
-| Pillələr | 16, 24, 32, 48, 64 |
-| Mənbə | `logo/64.png` (64×64); kiçik pillələr ondan KİÇİLDİLİR |
+| Pillələr | 16, 24, 32, 48, 64, **256** |
+| Mənbə | `logo/256.png` — TƏK master; bütün pillələr ondan KİÇİLDİLİR |
 
-### 256×256 pilləsi YOXDUR — bu, qərardır
+### 256×256 pilləsi ARTIQ VAR — «itmiş pillə» reqressiyası bağlandı
 
-Köhnə placeholder `.ico`-da 256 vardı; yenisində yoxdur. Səbəb: əldəki ən böyük
-rastr 64×64-dür və onu 256-ya BÖYÜTMƏK bulanıq nəticə verərdi. Nəticə: Windows-un
-«Böyük ikonlar» görünüşü 64-ü özü miqyaslayır.
+**(ÇATIŞMAZLIQ DÜZƏLİŞİ:** bu bölmə əvvəllər «256×256 pilləsi YOXDUR — bu,
+qərardır» adlanırdı və pillənin olmamasını dizayn qərarı kimi izah edirdi.
+İzah yarımçıq idi: məhdudiyyət qərar deyil, MƏNBƏ çatışmazlığı idi — əldəki ən
+böyük rastr 64×64 olduğu üçün 256 yalnız böyütmə ilə alına bilərdi.
+`assets/logo/256.png` gələndən sonra səbəb aradan qalxdı.**)**
 
-Tam keyfiyyət üçün **256×256 dizayndan AYRICA ixrac edilməlidir** — bu, kök
-README-dəki «İlk müştəri təhvilindən əvvəl» siyahısının yeganə açıq maddəsidir.
-`test_the_missing_large_tier_is_documented` pillənin yoxluğunun sənədləşdiyini
-yoxlayır ki, növbəti adam bunu qüsur sanıb böyütmə əlavə etməsin.
+Windows-un «Böyük ikonlar» görünüşü və Alt-Tab artıq 64-ü miqyaslamır — natiw
+256 pilləsini oxuyur.
 
-**24 və 48 haqqında ayrıca qeyd:** 64-dən yalnız 32 (÷2) və 16 (÷4) TAM
-nisbətlə alınır; 24 və 48 tam olmayan nisbətlərdir və bir qədər yumşalır
-(LANCZOS bunu yaxşı idarə edir, amma sıfırlamır). 256 ilə birlikdə ixrac
-edilsələr, onlardan da faydalanardıq. Bu, DAYANDIRICI deyil.
+**BÜTÜN PİLLƏLƏR ARTIQ 256-DAN QURULUR.** «Hər pillə üçün ona ən yaxın mənbə»
+qaydası rədd edildi, çünki `16.png`/`32.png` ayrıca hazırlanmış kiçik-ölçü
+variantları DEYİL (`32.png` ilə `64.png` piksel-eynidir) — yəni onlardan qazanc
+yox idi, qarışıq mənbə isə pillələri bir-birindən bir qədər fərqli edərdi.
+Detallar: `scripts/build_icon.py` başlığı.
+
+`64.png` silinmədi: o, `.ico`-nun mənbəyi olmasa da tətbiq daxilindəki rozetdir
+(`brand_assets.APP_MARK`).
+
+`test_the_large_tier_exists_and_is_not_upscaled` iki şeyi birlikdə saxlayır:
+pillə var VƏ master həqiqətən 256×256-dır. İkincisi olmasa, dizayn faylı bir gün
+kiçik ölçüdə ixrac edilsə `.ico` sükutla böyütmə ilə qurulardı.
 
 ---
 
@@ -110,7 +120,12 @@ oxumur, lakin `logo.md` təhvil xəritəsinin bir hissəsidirlər və
 `test_every_runtime_logo_file_is_present` mövcudluqlarını qoruyur. Silinsəydilər,
 gələcəkdə lazım olduqda dizayndan yenidən istənilməli olardı; qovluqda qalmaları
 isə heç nəyə başa gəlmir (`.spec` `logo/*.png` qlobu ilə hamısını paketə salır,
-ümumi həcm 90 KB-dan azdır).
+ümumi həcm 100 KB-dan azdır).
+
+**`256.png` bu siyahıda DEYİL** və bu, fərqi vurğulamaq üçün ayrıca yazılır: o,
+runtime kodu tərəfindən oxunmasa da (`brand_assets`-də sabiti yoxdur) BİLAVASİTƏ
+işlədilir — `.ico` ondan qurulur. Yəni onu silmək `build_icon.py`-ı dayandırardı,
+qalan dördü isə heç nəyi pozmur.
 
 ---
 

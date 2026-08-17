@@ -705,6 +705,10 @@ class _RootScreen:
         self.face_scope: list[Any] = []
         self.face_tolerance: dict[str, str] = {}
         self.face_rejected: list[str] = []
+        #: Brendinq bölməsi (TENANT-1 Faza 2) — `face_scope` ilə eyni
+        #: səbəbdən AYRICA: `tenant_branding` `system_limits` sətri DEYİL.
+        self.branding: tuple[str, str, str] | None = None
+        self.branding_status: str = ""
 
     def set_limits(self, rows: list[Any]) -> None:
         self.limits = rows
@@ -720,6 +724,14 @@ class _RootScreen:
 
     def reject_face_scope_change(self, store_id: str) -> None:
         self.face_rejected.append(store_id)
+
+    def set_branding(
+        self, *, company_name: str, accent_color: str, warning: str = ""
+    ) -> None:
+        self.branding = (company_name, accent_color, warning)
+
+    def set_branding_status(self, message: str) -> None:
+        self.branding_status = message
 
     def set_modules(self, rows: list[Any]) -> None:
         self.modules = rows

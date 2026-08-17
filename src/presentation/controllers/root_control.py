@@ -54,6 +54,16 @@ _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 #: hər yeni parametr öz flag-ini gətirər və icazə reyestri şişərdi.
 FACE_SCOPE_FLAG = "can_manage_system_limits"
 
+#: Brendinq bölməsi oxunmadıqda göstərilən SAKİT mətn (TENANT-1 Faza 2).
+#:
+#: Xəta modalı DEYİL: panelin qalan bölmələri (limit, modul, registry) işləyir
+#: və istifadəçini «panel açılmadı» ekranına atmaq həmin bölmələri də əlçatmaz
+#: edərdi. Registry bölməsi ilə eyni qərar — bax `_fill`.
+BRANDING_UNAVAILABLE = (
+    "Şirkət kimliyi oxunmadı — bu bölmə müvəqqəti əlçatmazdır. "
+    "Panelin qalan hissəsi işləyir."
+)
+
 
 # --------------------------------------------------------------------------- #
 # Ekran mətnləri
@@ -262,7 +272,19 @@ class RootControlController:
         # başlığı) — lakin bu panelə onsuz da yalnız Root çıxır. Xəbərdarlıq
         # BURADA da hesablanır: uyğunsuz rəng əvvəlki sessiyada yazılmış ola
         # bilər və panel onu yenidən açanda yenə görünməlidir.
-        branding = session.branding.current(tenant_id)
+        #
+        # BÖLMƏ AYRICA DÜŞÜR, PANELİ BAĞLAMIR — registry bölməsi ilə eyni
+        # qərar (yuxarıda). `tenant_branding` cədvəli YENİDİR (migrations/064):
+        # miqrasiya hələ tətbiq olunmamış quraşdırmada sorğu xəta verər və o
+        # halda Root paneli TAMAMİLƏ açılmazdı — yəni bir görünüş ayarı
+        # ucbatından limit/toggle idarəsi əlçatmaz olardı.
+        try:
+            branding = session.branding.current(tenant_id)
+        except Exception:
+            _error_log.exception("ROOT_BRANDING_SECTION_UNAVAILABLE")
+            screen.set_branding(company_name="", accent_color="")
+            screen.set_branding_status(BRANDING_UNAVAILABLE)
+            return
         screen.set_branding(
             company_name=branding.company_name,
             accent_color=branding.accent_color or "",

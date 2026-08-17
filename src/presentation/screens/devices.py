@@ -269,8 +269,9 @@ class DeviceAdminScreen(Screen):
                 Column("Cihaz"),
                 Column("Filial", 200),
                 Column("Tip", 170),
-                Column("Status", 140),
-                Column("Son görünmə", 160, mono=True),
+                Column("Vəziyyət", 140),
+                Column("Son görünmə", 150, mono=True),
+                Column("Əməliyyat", 260),
             ],
             theme,
         )
@@ -322,6 +323,7 @@ class DeviceAdminScreen(Screen):
                     str(device.get("type", "")),
                     chip,
                     str(device.get("last_seen", "—")),
+                    self._build_actions(device),
                 ],
                 # Bloklanmış sətir vurğulanır: admin siyahıya baxanda «niyə
                 # bu mağaza işləmir?» sualının cavabı gözə dəyməlidir.
@@ -331,6 +333,63 @@ class DeviceAdminScreen(Screen):
         self._table.setVisible(bool(devices))
 
     # -------------------------------- daxili --------------------------------- #
+
+    def _build_actions(self, device: dict[str, object]) -> QWidget:
+        """Sətir əməliyyatları — VƏZİYYƏTƏ görə fərqlidir.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ HƏR SƏTİRDƏ EYNİ DÜYMƏ DƏSTİ DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Bloklanmış cihazı «Blokla» etmək, aktiv cihazı «Bərpa Et» etmək
+        mənasızdır — düymə basılar, use case `InvalidStateTransitionError`
+        atar və istifadəçi izah edilməyən xəta görər. Vəziyyətə uyğun olmayan
+        əməliyyatı DEAKTİV etmək əvəzinə GÖSTƏRMƏMƏK seçildi: deaktiv düymə
+        «niyə basılmır?» sualı yaradır, olmayan düymə isə yaratmır.
+
+        Təsdiq gözləyən sətirdə düymə YOXDUR: onun forması yuxarıdaki
+        «Təsdiq gözləyənlər» kartındadır və orada filial/ad seçimi ilə
+        birlikdə gəlir. İki yerdə iki fərqli təsdiq yolu olsaydı, biri
+        filialsız təsdiq imkanı açardı.
+        """
+        device_id = str(device.get("id", ""))
+        status = str(device.get("status", ""))
+        holder = QWidget()
+        layout = QHBoxLayout(holder)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        if status == DeviceStatus.ACTIVE.value:
+            store_box = QComboBox()
+            for store_id, store_name in self._stores:
+                store_box.addItem(store_name, store_id)
+            # Cari filial seçili gəlir ki, «dəyişdir» düyməsi təsadüfən
+            # BİRİNCİ mağazaya köçürməsin.
+            current = str(device.get("store_id", ""))
+            index = store_box.findData(current)
+            if index >= 0:
+                store_box.setCurrentIndex(index)
+            layout.addWidget(store_box, 1)
+
+            move = secondary_button("Köçür")
+            move.clicked.connect(
+                lambda: self.reassign_requested.emit(
+                    {"device_id": device_id, "store_id": store_box.currentData()}
+                )
+            )
+            layout.addWidget(move)
+
+            block = secondary_button("Blokla")
+            block.clicked.connect(lambda: self.block_requested.emit(device_id))
+            layout.addWidget(block)
+        elif status == DeviceStatus.BLOCKED.value:
+            restore = action_button("Bərpa Et")
+            restore.clicked.connect(lambda: self.reactivate_requested.emit(device_id))
+            layout.addWidget(restore)
+            layout.addWidget(stretch())
+        else:
+            layout.addWidget(muted_label("Yuxarıdaki formada təsdiqlənir"))
+
+        return holder
 
     def _build_pending_row(self, device: dict[str, object]) -> QWidget:
         """Bir gözləyən cihaz + onun təsdiq forması.
