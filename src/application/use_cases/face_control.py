@@ -95,7 +95,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 from src.application.use_cases.authentication import AccountLockedError
 from src.domain.policies import (
@@ -361,6 +361,22 @@ class FaceExemptionView:
 # --------------------------------------------------------------------------- #
 
 
+@runtime_checkable
+class AdminCounter(Protocol):
+    """«Neçə aktiv admin var?» — YALNIZ bu sual (SEC-025 şərti üçün).
+
+    Tam `EmployeeRepository` ötürmək daha asan olardı və rədd edildi: bu use
+    case işçi sətirlərini nə oxuyur, nə yazır. Dar protokol həm asılılığı
+    kiçildir, həm də testdə saxtanı bir metodla qurmağa imkan verir.
+
+    Metod adı mövcud `EmployeeRepository.count_active_with_flag` ilə EYNİDİR —
+    yəni `PostgresEmployeeRepository` heç bir adapter olmadan uyğun gəlir
+    (structural typing, `CLAUDE.md` §3).
+    """
+
+    def count_active_with_flag(self, tenant_id: TenantId, flag_code: str) -> int: ...
+
+
 class FaceEnrollmentUseCase:
     """Nəzarətli üz qeydiyyatı — SELF-SERVICE DEYİL (bənd 1).
 
@@ -384,6 +400,7 @@ class FaceEnrollmentUseCase:
         limits: SystemLimits,
         audit: AuditTrail,
         clock: Clock,
+        admins: AdminCounter | None = None,
     ) -> None:
         self._profiles = profiles
         self._camera = camera
@@ -391,6 +408,95 @@ class FaceEnrollmentUseCase:
         self._limits = limits
         self._audit = audit
         self._clock = clock
+        # YALNIZ `enroll_first_account` üçün (SEC-025). İSTƏYƏ BAĞLIDIR, çünki
+        # adi qeydiyyat yolunun ona ehtiyacı yoxdur; verilməyibsə bootstrap
+        # yolu FAIL-CLOSED şəkildə bağlanır (bax həmin metod).
+        self._admins = admins
+
+    def enroll_first_account(
+        self, *, tenant_id: TenantId, actor: Employee, subject_id: EmployeeId
+    ) -> FaceEnrollmentResult:
+        """SEC-025 — tenant-ın İLK admini öz üzünü qeydiyyata sala bilər.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ İSTİSNA VAR VƏ NİYƏ BU QƏDƏR DARDIR
+        ──────────────────────────────────────────────────────────────────────
+        Bənd 1 nəzarətli proses tələb edir: `assert_may_enroll` aktorun
+        subyektin ÖZÜ olmasını qadağan edir, çünki nəzarətsiz qeydiyyatda
+        istənilən üz istənilən hesaba bağlana bilər.
+
+        Lakin İlk Quraşdırma Sihirbazında bu qayda ÖDƏNİLƏ BİLMƏZ: tenant-da
+        yeganə hesab elə həmin CEO-dur, yəni nəzarət edəcək ikinci admin
+        FİZİKİ OLARAQ yoxdur. Qaydanı olduğu kimi saxlasaydıq, CEO-nun üzü heç
+        vaxt qeydiyyata düşməzdi — yəni qayda öz məqsədini deyil, yalnız
+        formasını qorumuş olardı.
+
+        İSTİSNANIN ŞƏRTİ MAŞINLA YOXLANILIR: tenant-da `can_manage_employees`
+        daşıyan AKTİV hesabların sayı 1-dən çox olan kimi bu yol BAĞLANIR.
+        Yəni istisna «ilk hesab» adına deyil, NƏZARƏTİN MÜMKÜN OLMAMASI
+        faktına bağlıdır — ikinci admin yarandığı an qayda öz-özünə qayıdır.
+
+        Audit yazısı da AYRIDIR (`FACE_ENROLLED_BOOTSTRAP`): jurnala baxan
+        adam bu qeydiyyatın nəzarətsiz aparıldığını görməlidir.
+        """
+        if self._admins is None:
+            raise FaceControlPermissionError(
+                "Bootstrap qeydiyyatı üçün admin sayğacı qoşulmayıb",
+                user_message="Üz qeydiyyatı hazırda mümkün deyil.",
+            )
+        if actor.id != subject_id:
+            # Bu metod YALNIZ özünə-qeydiyyat üçündür; başqasının üzü adi
+            # yoldan (`enroll`) keçməlidir ki, nəzarət qapısı işləsin.
+            raise FaceControlPermissionError(
+                "Bootstrap yolu yalnız aktorun ÖZ üzü üçündür",
+                user_message="Bu əməliyyat yalnız öz hesabınız üçündür.",
+                context={"actor_id": str(actor.id), "subject_id": str(subject_id)},
+            )
+
+        now = self._clock.now()
+        if not actor.has_permission(ENROLLMENT_FLAG, now=now):
+            raise FaceControlPermissionError(
+                f"'{ENROLLMENT_FLAG}' səlahiyyəti olmadan üz qeydiyyatı mümkün deyil",
+                context={"actor_id": str(actor.id), "flag": ENROLLMENT_FLAG},
+            )
+
+        admin_count = self._admins.count_active_with_flag(tenant_id, ENROLLMENT_FLAG)
+        if admin_count > 1:
+            _security_log.warning(
+                "FACE_BOOTSTRAP_DENIED",
+                extra={"actor_id": str(actor.id), "admin_count": admin_count},
+            )
+            raise FaceControlPermissionError(
+                "Tenant-da başqa admin var — üz qeydiyyatı nəzarətli aparılmalıdır",
+                user_message=(
+                    "Sistemdə başqa admin olduğu üçün üz qeydiyyatınızı o təsdiqləməlidir."
+                ),
+                context={"admin_count": admin_count},
+            )
+
+        existing = self._profiles.get_profile(subject_id)
+        if existing is not None and existing.is_enrolled:
+            raise FaceControlError(
+                "Üz qeydiyyatı artıq mövcuddur",
+                user_message="Üz qeydiyyatınız artıq var.",
+                context={"employee_id": str(subject_id)},
+            )
+
+        _security_log.warning(
+            "FACE_BOOTSTRAP_ENROLLMENT",
+            extra={
+                "actor_id": str(actor.id),
+                "reason": "tenant-da yeganə admin — nəzarət mümkün deyil (SEC-025)",
+            },
+        )
+        return self.capture_and_store(
+            tenant_id=tenant_id,
+            actor=actor,
+            subject_id=subject_id,
+            action="FACE_ENROLLED_BOOTSTRAP",
+            reason=None,
+            archived=False,
+        )
 
     def enroll(
         self, *, tenant_id: TenantId, actor: Employee, subject_id: EmployeeId

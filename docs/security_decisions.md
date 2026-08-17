@@ -827,6 +827,103 @@ sətri VENDOR yaradırdı. Özünə-host edilən quraşdırmada (`.exe` + müşt
 
 ---
 
+## SEC-024 — `Root` təchizatçının, `CEO` müştərinin ƏN ÜST pilləsidir
+
+**Qərar:** İlk Quraşdırma Sihirbazı müştəriyə `CEO` hesabı yaradır, `Root`
+DEYİL. `Root` pilləsi yalnız təchizatçının öz alətləri ilə (birbaşa baza,
+`scripts/`) qurulur və müştəri quraşdırmasından ona yol yoxdur. CEO-nun nə
+edib-edə bilməyəcəyi isə Root panelindən idarə olunur.
+
+**Səbəb:** Əvvəl sihirbaz `Root` yaradırdı və nəticə iyerarxiyanın öz mənasını
+pozurdu: müştərinin ən üst hesabı təchizatçının pilləsində olurdu, yəni
+lisenziya, vendor telemetriyası və `ROOT_ONLY` hardlock-u ilə qorunan hər şey
+onun əlinin altında qalırdı. Üstəlik «CEO Root-un icazə matrisini dəyişə
+bilir» qüsuru məhz buradan gəlirdi — ikisi EYNİ pillədə idi və
+`Position.outranks()` bərabər pillələr arasında fərq görmür.
+
+İndi `RolePriority.ROOT = 0` `EXECUTIVE = 1`-dən CİDDİ ŞƏKİLDƏ yuxarıdır və
+qayda iyerarxiyanın TƏBİİ NƏTİCƏSİDİR, əlavə qapının yan təsiri deyil.
+
+**Tətbiq:** `application/use_cases/first_run_setup.py` (`SystemRole.CEO`),
+`domain/entities/position.py` (`may_be_edited_by`),
+`application/use_cases/position_management.py`,
+`tests/unit/test_root_ceo_separation.py`,
+`tests/unit/test_employee_creation_path.py`.
+
+---
+
+## SEC-025 — Tenant-ın YEGANƏ admini öz üzünü qeydiyyata sala bilər
+
+**Qərar:** `FaceEnrollmentUseCase.enroll_first_account()` aktorun ÖZ üzünü
+qeydiyyata salmasına icazə verir — LAKİN yalnız `can_manage_employees` daşıyan
+aktiv hesabların sayı **1-dən çox olmadıqda**. Adi `enroll()` yolu
+dəyişməyib: orada `assert_may_enroll` özünə-qeydiyyatı qadağan etməyə davam
+edir. Audit yazısı da ayrıdır — `FACE_ENROLLED_BOOTSTRAP`.
+
+**Səbəb:** `facecontrol.md` bənd 1 üz qeydiyyatını NƏZARƏTLİ proses sayır:
+nəzarətsiz qeydiyyatda işçi istənilən üzü öz hesabına bağlaya bilər. Lakin
+İlk Quraşdırma Sihirbazında bu qayda ÖDƏNİLƏ BİLMƏZ — tenant-da yeganə hesab
+elə CEO-nun özüdür, yəni nəzarət edəcək ikinci admin fiziki olaraq yoxdur.
+Qaydanı olduğu kimi saxlasaydıq, CEO-nun üzü heç vaxt qeydiyyata düşməzdi:
+qayda öz məqsədini deyil, yalnız formasını qorumuş olardı.
+
+İstisnanın şərti ADA GÖRƏ deyil, FAKTA GÖRƏDİR. «Bu, ilk hesabdırmı?» sualı
+bayraq tələb edərdi və bayraq təmizlənməsə istisna sonsuza qədər açıq
+qalardı. «Nəzarət mümkündürmü?» sualı isə sayğacla ölçülür — ikinci admin
+yarandığı an yol ÖZ-ÖZÜNƏ bağlanır.
+
+Sayğac qoşulmayıbsa yol FAIL-CLOSED bağlanır: fail-open olsaydı,
+`composition.py`-da bir sətrin unudulması istisnanı hər hesaba açardı və bunu
+heç bir xəta göstərməzdi.
+
+**Tətbiq:** `application/use_cases/face_control.py` (`AdminCounter`,
+`enroll_first_account`), `presentation/controllers/face_setup.py`,
+`presentation/screens/face_control.py` (`FaceSetupRequiredScreen`),
+`presentation/composition.py` (`admins=repo("employees")`),
+`tests/unit/test_face_setup_flow.py`.
+
+---
+
+## SEC-026 — Panel girişində üz ŞİFRƏNİ əvəz edir; `NOT_APPLICABLE` giriş VERMİR
+
+**Qərar:** `AdminLoginScreen`-dəki «Üzlə daxil ol» düyməsi istifadəçi adı +
+1:1 üz doğrulaması ilə işləyir (1:N tanıma DEYİL). Giriş YALNIZ `ALLOWED` və
+`ALLOWED_LOW_CONFIDENCE` nəticələrində verilir; `NOT_APPLICABLE` daxil olmaqla
+qalan hər şey istifadəçini şifrə sahəsinə qaytarır. `assert_admin_login_
+allowed()` və `must_change_password` qapıları təkrarlanır, audit isə
+`ADMIN_LOGIN` + `method="FACE"` kimi yazılır.
+
+**Səbəb (iki ayrı qərar):**
+
+1. **Niyə 1:1, kioskdakı kimi 1:N deyil.** Kiosk PC-si bir mağazaya bağlıdır
+   (`KOMPASOS_STORE_ID`) və `identify_for_login` axtarışı həmin mağaza ilə
+   məhdudlaşdırır — çünki namizəd sayı artdıqca «ən yaxın qonşu» təsadüfən
+   yaxın düşə bilər. Panel maşınının mağazası yoxdur, yəni eyni yol bütün
+   şəbəkə üzrə gedərdi. Panel girişi isə cərimə kəsmək, icazə təsdiqləmək və
+   səlahiyyət dəyişmək deməkdir: ən riskli tanıma üsulunu ən səlahiyyətli
+   qapıya qoymaq olmazdı.
+
+2. **Niyə `NOT_APPLICABLE` giriş vermir.** Kioskda üz qapısı PIN-dən SONRA
+   işləyir, yəni İKİNCİ amildir — modul söndürüldükdə və ya mağaza pilot
+   əhatəsindən kənarda olduqda axının «yalnız PIN» rejiminə düşməsi doğrudur,
+   birinci amil onsuz da yoxlanılıb. Panel girişində isə üz TƏK amildir. Eyni
+   yumşalmanı təkrarlasaydıq, modulu bağlı kirayəçidə istifadəçi adını yazıb
+   düyməni basmaq panelə girmək üçün kifayət edərdi — şifrə sükutla ləğv
+   olardı.
+
+Düymənin görünmə şərti də kioskdan fərqlidir: burada kamera cihazı AÇILMIR,
+yalnız modul açarı və `cv2` kitabxanası soruşulur. Kiosk `is_available()`
+çağırır və o, cihazı faktiki olaraq tutur; panel maşınında eyni çağırış hər
+idarəçinin veb-kamerasını proqram açıq olduğu müddətcə tutulu saxlayardı —
+halbuki düymə burada alternativdir və şifrə sahəsi elə yanındadır.
+
+**Tətbiq:** `presentation/controllers/face_login.py` (`GRANTING_OUTCOMES`),
+`presentation/screens/group_a_entry.py` (`face_login_requested`),
+`presentation/app.py` (`_on_face_login_requested`),
+`tests/unit/test_face_login_screen.py`.
+
+---
+
 ## Açıq qalan (Faza 3-də bağlanır)
 
 | # | Məsələ | Faza |

@@ -78,7 +78,7 @@ from src.presentation.screens.base import Screen
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.data_table import Column, DataTable
-from src.presentation.widgets.forms import field_label
+from src.presentation.widgets.forms import FormField, field_label
 from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
@@ -984,6 +984,165 @@ def _positive_int(raw: str | None, *, fallback: int) -> int:
     return value if value > 0 else fallback
 
 
+class FaceSetupRequiredScreen(Screen):
+    """İLK GİRİŞ — üz qeydiyyatı tələb olunur (nəzarətli proses).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ ADMİN ŞİFRƏSİ SORUŞULUR
+    ──────────────────────────────────────────────────────────────────────────
+    `facecontrol.md` bənd 1: işçi ÖZ üzünü özü qeydiyyata SALA BİLMƏZ. Səbəb
+    `FaceEnrollmentUseCase.assert_may_enroll`-da yazılıb — nəzarətsiz
+    qeydiyyatda işçi İSTƏNİLƏN üzü öz hesabına bağlaya bilər (məsələn
+    dostunun), sonra həmin adam onun adına giriş edər və üz qatının bütün
+    mənası itər.
+
+    Ona görə bu ekran işçinin qarşısında açılır, lakin çəkilişi YANINDAKI
+    admin öz hesabı ilə təsdiqləyir. Aktor həmin admindir, subyekt isə işçi —
+    yəni `actor.id != subject_id` şərti təbii şəkildə ödənir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    «SONRA» DÜYMƏSİ NİYƏ VAR — QAPI OLMAMASI ÜÇÜN DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Kamerası olmayan mağazada bu ekran MƏCBURİ olsaydı, işçi heç vaxt giriş
+    edə bilməzdi — yəni üz qatı iş dayandıran nasazlığa çevrilərdi. «Sonra»
+    həmin dalanı açır və seçim İZSİZ QALMIR: hər keçid jurnala yazılır və
+    ekran NÖVBƏTİ girişdə yenidən çıxır. Daimi istisna isə ayrıca yoldadır
+    (`face_exemptions`, yalnız Root/CEO).
+
+    Signals:
+        enroll_requested: (admin istifadəçi adı, admin şifrəsi).
+        skipped: «Sonra» — giriş davam edir, tələb qalır.
+    """
+
+    enroll_requested = Signal(str, str)
+    skipped = Signal()
+
+    def __init__(
+        self,
+        theme: ThemeManager,
+        *,
+        employee_name: str = "",
+        supervised: bool = True,
+        parent: QWidget | None = None,
+    ) -> None:
+        """`supervised=False` — İlk Quraşdırma Sihirbazı (SEC-025).
+
+        Həmin halda admin sahələri GİZLƏNİR: aktor elə istifadəçinin özüdür və
+        şifrəni bir neçə saniyə əvvəl yazıb. Onu təkrar soruşmaq nə əlavə
+        yoxlama verər, nə də təhlükəsizlik — yalnız qeydiyyatı uzadardı.
+        """
+        super().__init__(theme, parent=parent)
+        self._supervised = supervised
+
+        # ÖLÇÜLƏR GİRİŞ KARTINDAN GÖTÜRÜLÜB (`AdminLoginScreen`: 40/20).
+        # Bu ekran giriş axınının davamıdır — istifadəçi onu şifrə kartından
+        # DƏRHAL sonra görür. Öz ölçüsünü seçsəydik, iki ardıcıl ekran arasında
+        # kartın gövdəsi «tullanardı» və dizayn səpələnməsi bir dəyər artardı
+        # (`scripts/check_symmetry.py` tavanı).
+        card = Card(padding=40, spacing=20)
+        card.add(title_label("Üz qeydiyyatı tələb olunur", size=22))
+        self._subject = body_label("", size=15)
+        card.add(self._subject)
+        card.add(Divider())
+        card.add(
+            muted_label(
+                (
+                    "Bu, hesabınızla İLK girişdir. Üz qeydiyyatı nəzarətli "
+                    "prosesdir: onu özünüz apara bilməzsiniz — yanınızdakı admin "
+                    "öz hesabı ilə təsdiqləməlidir. Şəkil SAXLANILMIR, yalnız "
+                    "riyazi təmsil yazılır."
+                )
+                if supervised
+                else (
+                    "Sistemdə hələ başqa admin yoxdur, ona görə qeydiyyatı özünüz "
+                    "aparırsınız (SEC-025). Bu, YALNIZ ilk hesab üçün mümkündür — "
+                    "ikinci admin yarandıqdan sonra hər qeydiyyat təsdiq tələb edir. "
+                    "Şəkil SAXLANILMIR, yalnız riyazi təmsil yazılır."
+                ),
+                size=13,
+            )
+        )
+
+        self._username = FormField("Admin istifadəçi adı")
+        self._username.setVisible(supervised)
+        card.add(self._username)
+        self._password = FormField("Admin şifrəsi", password=True)
+        self._password.setVisible(supervised)
+        card.add(self._password)
+
+        self._error = body_label("", size=13)
+        self._error.setWordWrap(True)
+        self._error.setVisible(False)
+        self._error.setStyleSheet(
+            f"background-color: {theme.color('--color-danger-bg')};"
+            f"color: {theme.color('--color-danger')};"
+            "border-radius: 12px; padding: 12px 14px;"
+        )
+        card.add(self._error)
+
+        buttons = QWidget()
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(12)
+
+        later = secondary_button("Sonra")
+        later.clicked.connect(self.skipped)
+        buttons_layout.addWidget(later)
+        buttons_layout.addWidget(stretch())
+
+        self._enroll = action_button("Təsdiqlə və Çək")
+        self._enroll.clicked.connect(self._on_enroll)
+        buttons_layout.addWidget(self._enroll)
+        card.add(buttons)
+
+        self.add(card)
+        self.body().addStretch(1)
+        self.set_employee_name(employee_name)
+
+    # -------------------------------- API ----------------------------------- #
+
+    def set_employee_name(self, name: str) -> None:
+        """Kimin üzünün çəkiləcəyi AÇIQ yazılır.
+
+        Admin öz şifrəsini yazır, yəni ekranda «kimin adına» sualı qalmamalıdır
+        — səhv işçinin üzünü çəkmək sükutla düzəldilə bilməyən qeyddir
+        (yenidən-qeydiyyat AYRI, səbəb tələb edən prosesdir).
+        """
+        self._subject.setText(f"İşçi: {name}" if name else "")
+
+    def set_busy(self, busy: bool) -> None:
+        self._enroll.setEnabled(not busy)
+        self._enroll.setText("Çəkilir…" if busy else "Təsdiqlə və Çək")
+
+    def set_error(self, message: str) -> None:
+        """Sahə səviyyəsində xəta — `Screen.show_error()` DEYİL.
+
+        Baza sinfin `show_error()`-u bütün məzmunu XƏTA VƏZİYYƏTİ ilə əvəz
+        edir (ekran açıla bilmədi halı). Burada isə ekran işləyir, sadəcə
+        cəhd rədd olunub: forma yerində qalmalı, yazılanlar itməməlidir.
+        Ad da fərqlidir ki, ikisi səhvən qarışmasın (`AdminLoginScreen` ilə
+        eyni adlandırma).
+        """
+        self._error.setText(message)
+        self._error.setVisible(True)
+
+    def clear_error(self) -> None:
+        self._error.setVisible(False)
+
+    def _on_enroll(self) -> None:
+        self.clear_error()
+        if not self._supervised:
+            # Bootstrap: aktor onsuz da məlumdur, kimlik soruşulmur.
+            self.enroll_requested.emit("", "")
+            return
+        username = self._username.text().strip()
+        password = self._password.text()
+        if not username or not password:
+            self.set_error("Admin istifadəçi adı və şifrəsi tələb olunur.")
+            return
+        self.enroll_requested.emit(username, password)
+
+
 __all__ = [
     "ENROLLMENT_STATE_CHIPS",
     "FALLBACK_OUTCOME_TITLE",
@@ -992,5 +1151,6 @@ __all__ = [
     "OVERLAY_TITLE_SIZE",
     "FaceEnrollmentScreen",
     "FaceExemptionScreen",
+    "FaceSetupRequiredScreen",
     "FaceVerificationOverlay",
 ]

@@ -20,7 +20,7 @@ from __future__ import annotations
 from contextlib import suppress
 from typing import TYPE_CHECKING, Final
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 
 from src.presentation.theme.manager import set_surface_color
 from src.presentation.theme.tokens import ThemeMode
-from src.presentation.widgets import brand_assets
+from src.presentation.widgets import brand_assets, icons
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.forms import FormField
 from src.presentation.widgets.layout_utils import clear_layout
@@ -254,9 +254,22 @@ class AdminLoginScreen(QWidget):
 
     Signals:
         submitted: (istifadəçi adı, şifrə).
+        face_login_requested: «Üzlə daxil ol» — YALNIZ istifadəçi adı daşıyır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    ÜZ DÜYMƏSİ NİYƏ İSTİFADƏÇİ ADINI DAŞIYIR
+    ──────────────────────────────────────────────────────────────────────────
+    Kioskda düymə heç nə daşımır: orada 1:N tanıma var və sual «bu kimdir?»
+    olur. Panel maşınının mağazası yoxdur, yəni 1:N axtarış bütün şəbəkə üzrə
+    gedərdi — ona görə burada 1:1 doğrulama seçilib və hesab istifadəçi adından
+    tapılır (səbəb `controllers/face_login.py` başlığındadır).
+
+    Şifrə sahəsi göndərilMİR və bu qəsdəndir: üz şifrəni ƏVƏZ EDİR, ona ƏLAVƏ
+    OLUNMUR — əks halda düymənin heç bir mənası qalmazdı.
     """
 
     submitted = Signal(str, str)
+    face_login_requested = Signal(str)
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -318,6 +331,8 @@ class AdminLoginScreen(QWidget):
         self._submit.clicked.connect(self._on_submit)
         card.add(self._submit)
 
+        card.add(self._build_face_button())
+
         card.add(Divider())
 
         # Özünə-xidmət bərpa YOXDUR — səbəbi modul başlığında izah olunub.
@@ -343,6 +358,7 @@ class AdminLoginScreen(QWidget):
         # SONRA, bir yerdə qurulur.
         QWidget.setTabOrder(self._username.input_widget(), self._password.input_widget())
         QWidget.setTabOrder(self._password.input_widget(), self._submit)
+        QWidget.setTabOrder(self._submit, self._face)
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 - Qt adlandırması
         """Ekran görünəndə fokus istifadəçi adı sahəsinə qoyulur.
@@ -372,6 +388,53 @@ class AdminLoginScreen(QWidget):
 
         self.submitted.emit(username, password)
 
+    # ------------------------------ üzlə giriş ------------------------------- #
+
+    def _build_face_button(self) -> QPushButton:
+        """«Üzlə daxil ol» — ŞİFRƏNİN YANINDA, ONUN ƏVƏZİ DEYİL.
+
+        Kioskdakı düymə ilə eyni görünüş və eyni davranış qaydası
+        (`PinPadScreen._build_face_button`): ikinci dərəcəli üslub, çünki
+        şifrə əsas yoldur; kamera və ya modul yoxdursa düymə SÖNÜK QALMIR,
+        GİZLƏNİR — sönük düymə «niyə işləmir?» sualı yaradır və istifadəçi onu
+        təkrar-təkrar basır.
+        """
+        button = secondary_button("Üzlə daxil ol")
+        button.setIcon(icons.icon("face_scan", self._theme.color("--color-text-secondary")))
+        button.setIconSize(QSize(icons.DEFAULT_SIZE, icons.DEFAULT_SIZE))
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setMinimumHeight(48)
+        button.setMaximumHeight(48)
+        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        button.clicked.connect(self._on_face_login)
+        button.setVisible(False)
+        self._face = button
+        return button
+
+    def _on_face_login(self) -> None:
+        """Yalnız istifadəçi adı göndərilir — şifrə sahəsi OXUNMUR.
+
+        Boş sahə xətası ŞİFRƏ sahəsində deyil, İSTİFADƏÇİ ADI sahəsində
+        göstərilir: burada əskik olan məhz odur və göz onu dərhal tapmalıdır.
+        """
+        username = self._username.text().strip()
+        self._username.clear_error()
+        self._password.clear_error()
+
+        if not username:
+            self._username.set_error("Üzlə giriş üçün istifadəçi adınızı yazın")
+            return
+
+        self.face_login_requested.emit(username)
+
+    def set_face_login_available(self, available: bool) -> None:
+        """Modul və kamera kitabxanası hazırdırsa düyməni göstərir."""
+        self._face.setVisible(available)
+
+    def face_button(self) -> QPushButton:
+        """Üz girişi düyməsi — kontroller/testlər üçün."""
+        return self._face
+
     def set_error(self, message: str) -> None:
         """Serverdən gələn xətanı göstərir (yanlış ad/şifrə, bloklanmış hesab).
 
@@ -382,9 +445,16 @@ class AdminLoginScreen(QWidget):
         self._password.set_error(message)
 
     def set_busy(self, busy: bool) -> None:
-        """Sorğu gedərkən düyməni bloklayır — ikiqat göndərmənin qarşısını alır."""
+        """Sorğu gedərkən düymələri bloklayır — ikiqat göndərmənin qarşısını alır.
+
+        ÜZ DÜYMƏSİ DƏ BLOKLANIR: kamera çəkilişi bir neçə saniyə çəkir və o
+        müddətdə şifrə ilə ikinci cəhd açıq qalsaydı, iki paralel giriş axını
+        yaranardı — ikisi də uğurlu olsa, hansı örtüyün qalacağı təsadüfdən
+        asılı olardı.
+        """
         self._submit.setEnabled(not busy)
         self._submit.setText("Yoxlanılır…" if busy else "Daxil Ol")
+        self._face.setEnabled(not busy)
 
     def clear(self) -> None:
         self._username.set_text("")

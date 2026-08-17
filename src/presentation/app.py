@@ -162,6 +162,10 @@ def _stores_az(count: int) -> str:
 #: sayılar və köhnəsi ölü qalar. Ona görə versiya nömrəsi BURAYA yazılmır.
 APP_USER_MODEL_ID: Final = "KompasOS.Desktop.1"
 
+#: Uz qatinin modul acari — sondurulubse qeydiyyat TELEB OLUNMUR.
+#: `controllers/face_setup.FACE_MODULE` ile eyni deyer olmalidir.
+FACE_MODULE_KEY: Final = "CAMERA_VERIFICATION"
+
 
 def _set_app_user_model_id() -> None:
     r"""Taskbar ikonunu düzəldir — `setWindowIcon` TƏK BAŞINA KİFAYƏT ETMİR.
@@ -446,7 +450,87 @@ class KompasApplication:
             _log.exception("FIRST_RUN_SETUP_FAILED")
             self.show_fatal_error(getattr(exc, "user_message", "Quraşdırma tamamlana bilmədi."))
             return
+
+        # CEO-NUN ÜZ QEYDİYYATI SİHİRBAZIN SONUNDADIR (SEC-025).
+        # İşçilər onu İLK GİRİŞDƏ keçir və orada yanlarındakı admin
+        # təsdiqləyir; CEO üçün bu mümkün deyil, çünki o an tenant-da ondan
+        # başqa admin YOXDUR. Şərti use case özü yoxlayır.
+        if self._start_ceo_face_setup(payload):
+            return
         self.show_login()
+
+    def _start_ceo_face_setup(self, payload: dict[str, object]) -> bool:
+        """Sihirbazdan sonra CEO-nun üz qeydiyyatı ekranını açır.
+
+        Returns:
+            `True` — ekran göstərildi; `False` — şərt ödənmir və adi axın
+            (giriş ekranı) davam etməlidir.
+
+        UĞURSUZLUQ AXINI DAYANDIRMIR: quraşdırma ARTIQ tamamlanıb və hesab
+        yaranıb. Üz qeydiyyatı alınmasa istifadəçi giriş edə bilməlidir —
+        əks halda kamerasız maşında quraşdırma dalana düşərdi.
+        """
+        employee = self._ceo_face_setup_subject(payload)
+        if employee is None:
+            return False
+
+        from src.presentation.controllers.face_setup import (  # noqa: PLC0415
+            FaceSetupController,
+        )
+        from src.presentation.screens.face_control import (  # noqa: PLC0415
+            FaceSetupRequiredScreen,
+        )
+
+        assert self._context is not None
+        screen = FaceSetupRequiredScreen(
+            self._theme, employee_name=employee.full_name, supervised=False
+        )
+        FaceSetupController(self._context, employee, bootstrap=True).attach(screen)
+        screen.skipped.connect(self.show_login)
+        self._window.set_content(screen)
+        _log.info("CEO_FACE_SETUP_STARTED", extra={"employee_id": str(employee.id)})
+        return True
+
+    def _ceo_face_setup_subject(self, payload: dict[str, object]) -> Employee | None:
+        """Üz qeydiyyatı LAZIMDIRSA CEO-nu qaytarır, əks halda `None`.
+
+        Aktor SAKİTCƏ autentifikasiya olunur: istifadəçi adı və şifrə formada
+        indicə yazılıb, təkrar soruşmaq nə əlavə yoxlama, nə də təhlükəsizlik
+        verərdi — yalnız quraşdırmanı uzadardı.
+
+        `is_enrollment_required()` BURADA İŞLƏDİLMİR: o, `Root`/`CEO` pilləsini
+        qəsdən istisna sayır (adi ilk-giriş qapısı üçün doğrudur, çünki orada
+        NƏZARƏTÇİ tələb olunur). Bootstrap yolu isə məhz həmin pillə üçündür.
+        """
+        root_raw = payload.get("root")
+        if (
+            self._context is None
+            or self._preview
+            or self._auth is None
+            or not isinstance(root_raw, dict)
+        ):
+            return None
+
+        from src.domain.value_objects.credentials import Username  # noqa: PLC0415
+
+        try:
+            outcome = self._auth.authenticate(
+                Username(str(root_raw.get("username", ""))),
+                str(root_raw.get("password", "")),
+            )
+            employee = getattr(outcome, "employee", None)
+            if not isinstance(employee, Employee):
+                return None
+            with self._context.session() as session:
+                enabled = session.toggles.is_enabled(session.tenant_id, FACE_MODULE_KEY)
+                profile = session.uow.repository("face_embeddings").get_profile(employee.id)
+        except Exception:
+            _log.exception("CEO_FACE_SETUP_CHECK_FAILED")
+            return None
+
+        if not enabled or (profile is not None and profile.is_enrolled):
+            return None
+        return employee
 
     # -------------------------------- giriş ---------------------------------- #
 
@@ -455,8 +539,70 @@ class KompasApplication:
 
         login = AdminLoginScreen(self._theme)
         login.submitted.connect(self._on_login_submitted)
+        login.face_login_requested.connect(self._on_face_login_requested)
+        # DÜYMƏ YALNIZ İŞLƏYƏCƏYİ HALDA GÖRÜNÜR (kioskdakı ilə eyni qayda).
+        # Önizləmədə həmişə göstərilir ki, dizayn baxışı ekranın tam formasını
+        # görsün — orada kamera və baza onsuz da yoxdur.
+        login.set_face_login_available(self._preview or self._face_login_available())
         self._window.set_content(login)
         self._login = login
+
+    def _face_login_available(self) -> bool:
+        """«Üzlə daxil ol» düyməsi bu maşında mənalıdırmı."""
+        if self._context is None:
+            return False
+
+        from src.presentation.controllers.face_login import (  # noqa: PLC0415
+            FaceLoginController,
+        )
+
+        return FaceLoginController(self._context).available()
+
+    def _on_face_login_requested(self, username: str) -> None:
+        """«Üzlə daxil ol» — şifrəsiz giriş (1:1 üz doğrulaması).
+
+        Önizləmədə şifrə yolu ilə EYNİ nümunə ekranı açılır: maket rejimində
+        kamera yoxdur, lakin düymənin AXINI göstərilməlidir — əks halda dizayn
+        baxışında o, ölü bir düymə kimi görünərdi.
+        """
+        from datetime import UTC, datetime  # noqa: PLC0415
+
+        if self._context is None:
+            if self._preview:
+                from src.presentation import preview_data  # noqa: PLC0415
+
+                self.show_admin(preview_data.build_admin(), now=preview_data.PREVIEW_NOW)
+                return
+            self._login.set_error("Baza bağlantısı qurulmayıb — üzlə giriş mümkün deyil.")
+            return
+
+        from src.presentation.controllers.face_login import (  # noqa: PLC0415
+            FaceLoginController,
+        )
+
+        self._login.set_busy(True)
+        try:
+            outcome = FaceLoginController(self._context).authenticate(username)
+        finally:
+            # Düymələr HƏR halda açılır — uğursuzluqdan sonra istifadəçi şifrə
+            # yoluna keçə bilməlidir.
+            self._login.set_busy(False)
+
+        if outcome.failed or outcome.employee is None:
+            self._login.set_error(outcome.message)
+            return
+
+        self._login.clear()
+        employee = outcome.employee
+        # Üz qeydiyyatı qapısı BURADA DA ÇAĞIRILIR, baxmayaraq ki, üzlə girən
+        # işçinin profili onsuz da var: qapı «modul açıq + qeydiyyat yoxdur»
+        # şərtinə baxır və bu yolda `False` qaytarır. Şərti burada təkrar
+        # yazsaydıq, iki mənbə yaranardı.
+        if self._show_face_setup_if_required(
+            employee, on_continue=lambda: self.show_admin(employee, now=datetime.now(UTC))
+        ):
+            return
+        self.show_admin(employee, now=datetime.now(UTC))
 
     def set_kiosk_controller(self, controller: KioskController) -> None:
         """Kiosk PIN körpüsünü qoşur (Faza 5)."""
@@ -518,7 +664,77 @@ class KompasApplication:
             return
 
         self._login.clear()
-        self.show_admin(outcome.employee, now=datetime.now(UTC))  # type: ignore[arg-type]
+        employee = outcome.employee
+        if not isinstance(employee, Employee):  # pragma: no cover - tip qoruyucusu
+            self._login.set_error("Giriş nəticəsi oxuna bilmədi.")
+            return
+
+        # İLK GİRİŞ ÜZ QEYDİYYATI — örtükdən ƏVVƏL. Sonra göstərsəydik, işçi
+        # ekranları bir anlıq görər və qeydiyyat «əlavə pəncərə» kimi oxunardı.
+        if self._show_face_setup_if_required(
+            employee, on_continue=lambda: self.show_admin(employee, now=datetime.now(UTC))
+        ):
+            return
+        self.show_admin(employee, now=datetime.now(UTC))
+
+    def _show_face_setup_if_required(
+        self,
+        employee: Employee,
+        *,
+        on_continue: Callable[[], None],
+        host: Callable[[QWidget], None] | None = None,
+    ) -> bool:
+        """Üz qeydiyyatı tələb olunursa ekranı göstərir.
+
+        Tələb HƏR İKİ giriş qapısında eyni funksiyadan keçir (panel girişi və
+        kiosk PIN-i): yalnız birində qoysaydıq, digər qapı sükutla açıq qalar
+        və işçi üz qeydiyyatını heç vaxt keçməzdi.
+
+        Args:
+            host: Ekranı YERLƏŞDİRƏN funksiya. Defolt əsas pəncərədir; kiosk
+                rejimində isə AYRI pəncərə var (`KioskWindow`) və ekranı ora
+                qoymaq lazımdır. Parametrsiz yazsaydıq, kioskda qeydiyyat
+                ekranı görünməz bir pəncərədə açılardı.
+
+        Returns:
+            `True` — ekran göstərildi və çağıran DAYANMALIDIR.
+        """
+        if self._context is None or self._preview or self._auth is None:
+            return False
+
+        from src.presentation.controllers.face_setup import (  # noqa: PLC0415
+            FaceSetupController,
+            is_enrollment_required,
+        )
+
+        try:
+            with self._context.session() as session:
+                if not is_enrollment_required(session, employee):
+                    return False
+        except Exception:
+            # Yoxlama alınmadısa AXIN DAYANMIR: üz qatı iş dayandıran nasazlığa
+            # çevrilməməlidir (səbəb `is_enrollment_required` başlığındadır).
+            _log.exception("FACE_SETUP_GATE_FAILED")
+            return False
+
+        from src.domain.value_objects.credentials import Username  # noqa: PLC0415
+        from src.presentation.screens.face_control import (  # noqa: PLC0415
+            FaceSetupRequiredScreen,
+        )
+
+        auth = self._auth
+        screen = FaceSetupRequiredScreen(self._theme, employee_name=employee.full_name)
+        # Kontrollerə istinad SAXLANMIR: o, `lambda`-ların bağlamasında yaşayır
+        # və ekranla birlikdə ölür (`CLAUDE.md` §6).
+        FaceSetupController(
+            self._context,
+            employee,
+            authenticate=lambda username, password: auth.authenticate(Username(username), password),
+        ).attach(screen)
+        screen.skipped.connect(on_continue)
+        (host or self._window.set_content)(screen)
+        _log.info("FACE_SETUP_REQUIRED", extra={"employee_id": str(employee.id)})
+        return True
 
     # ------------------------------- örtük ----------------------------------- #
 
@@ -2545,6 +2761,24 @@ class KompasApplication:
             outcome = self._kiosk_controller.authenticate(code)
             if outcome.failed or outcome.employee is None:
                 pin_pad.show_message(outcome.message)
+                return
+
+            # İLK GİRİŞ ÜZ QEYDİYYATI — kiosk qapısında da.
+            #
+            # Mağaza işçisi paneldən yox, MƏHZ buradan girir. Tələbi yalnız
+            # panel girişinə qoysaydıq, işçilərin böyük hissəsi üz qeydiyyatını
+            # heç vaxt keçməzdi — qapı adı ilə qalardı.
+            #
+            # PIN-siz «üzlə giriş» yolunda (`on_face_login`) bu yoxlama
+            # LAZIM DEYİL: orada işçi onsuz da üzü ilə tanınıb, yəni profili
+            # mövcuddur.
+            if self._show_face_setup_if_required(
+                outcome.employee,
+                on_continue=lambda: kiosk.set_content(
+                    self._build_employee_home(outcome, kiosk=kiosk, pin_pad=pin_pad)
+                ),
+                host=kiosk.set_content,
+            ):
                 return
 
             home = self._build_employee_home(outcome, kiosk=kiosk, pin_pad=pin_pad)

@@ -2318,6 +2318,10 @@ class ApplicationContext:
             limits=repo("limits"),
             audit=audit,
             clock=clock,
+            # SEC-025 şərti: tenant-da neçə aktiv admin var. Yalnız bootstrap
+            # yolu (İlk Quraşdırma Sihirbazı) işlədir — bax
+            # `FaceEnrollmentUseCase.enroll_first_account`.
+            admins=repo("employees"),
         )
 
         # 1C REPO-LARI `uow.repository`-DƏ DEYİL — bu, qəsdəndir: onlar

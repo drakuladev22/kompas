@@ -393,6 +393,8 @@ qalmır, qərara çevrilir.
 | ROOT paneli (limit / toggle / registry) | `src/application/use_cases/root_control.py`, `presentation/controllers/root_control.py` |
 | Ekranların CANLI məlumatı (yalnız oxu) | `src/presentation/controllers/screen_data.py` |
 | Ekranların YAZI yolu | `src/presentation/controllers/{fine_entry,camera_queue,drive_connection}.py` |
+| Üz qeydiyyatı qapısı (ilk giriş + CEO bootstrap) | `src/presentation/controllers/face_setup.py`, `use_cases/face_control.py` (`enroll_first_account`, SEC-025) |
+| Panel girişində «Üzlə daxil ol» | `src/presentation/controllers/face_login.py` (SEC-026) |
 | Drive razılığı (OAuth) | `src/infrastructure/storage/oauth_flow.py` |
 | Sübut şəkli növbəsi (SQLite + spool) | `src/infrastructure/storage/upload_queue.py` |
 | Test sahtələri (fakes) | `tests/fixtures/fakes.py` |
