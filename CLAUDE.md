@@ -385,6 +385,7 @@ qalmır, qərara çevrilir.
 | Cihaz kimliyi faylı + aparat izi | `src/infrastructure/config/device_identity.py` |
 | Tenant brendinqi (ad/loqo/rəng) | `src/application/use_cases/tenant_branding.py`, `migrations/064` |
 | Yeni müştəri quraşdırması | `scripts/onboard_new_tenant.py` (`.exe`-yə DÜŞMÜR) |
+| Developer Panelinin açılışı | `scripts/dev_panel.py` (`.env` yükləyir; `.exe`-yə DÜŞMÜR) |
 | Hardlock/anti-fraud qaydaları | `src/domain/value_objects/authorization.py` |
 | Menyu maddələri + flag bağlantısı | `src/presentation/shell/menu.py` |
 | Sistem limitləri & Feature Toggle açarları | `src/domain/policies.py` |
