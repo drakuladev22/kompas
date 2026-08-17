@@ -133,11 +133,35 @@ class PositionManagementUseCase:
     # -------------------------------- baxış ---------------------------------- #
 
     def list_roles(self, *, tenant_id: TenantId, actor: Employee) -> list[RoleSummary]:
-        """Bütün rollar — sistem rolları "redaktə edilə bilməz" işarəsi ilə.
+        """Aktorun TOXUNA BİLDİYİ rollar — sistem rolları ayrıca işarələnir.
 
         Sistem rolu SİLİNMİR/DEAKTİV EDİLMİR (`Position.deactivate` bunu
         bloklayır), lakin ona flag vermək/almaq mümkündür — bölmə 3-dəki
         "rol-defolt" modeli məhz bunu nəzərdə tutur.
+
+        ──────────────────────────────────────────────────────────────────────
+        ÖZÜNDƏN YUXARI ROL SİYAHIDA ÜMUMİYYƏTLƏ GÖRÜNMÜR
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəl bu metod BÜTÜN rolları qaytarırdı və nəticə istifadəçi hesabatı
+        ilə üzə çıxdı: «CEO Root-un icazə matrisini dəyişə bilir». Yazma
+        əslində BLOKLANIRDI (`set_role_flags` → `assert_may_be_edited_by`),
+        lakin ekran `Root` sətrini redaktə oluna bilən kimi göstərirdi —
+        istifadəçi xanaları işarələyir, «Yadda Saxla» basır və yalnız o an
+        rədd cavabı alırdı.
+
+        Bu, bölmə 3-ün «GÖRMƏK = SƏLAHİYYƏTİN OLMASI» prinsipinin pozulması
+        idi: «icazəsiz maddə boz görünmür, tamamilə yoxdur». Süzgəc həmin
+        prinsipi rol siyahısına da tətbiq edir.
+
+        ROOT/DEVELOPER PİLLƏSİ MÜŞTƏRİYƏ AİD DEYİL: `Root` təchizatçının
+        (developer) pilləsidir, `CEO` isə müştərinin ən yüksək hesabıdır.
+        İkisinin ayrılması qəsdlidir — müştəri öz sistemində təchizatçının
+        səlahiyyətlərini nə görməli, nə də dəyişməlidir.
+
+        Süzgəc TƏHLÜKƏSİZLİK QAPISI DEYİL, onun GÖRÜNTÜSÜDÜR. Əsl qapı
+        `Position.assert_may_be_edited_by()`-dədir və ekranı yan keçən kod da
+        ona tabedir — bu, `CLAUDE.md` §5-in «hər qayda iki yerdə» prinsipinin
+        eyni tətbiqidir.
         """
         self._require_permission(actor)
         return [
@@ -147,6 +171,7 @@ class PositionManagementUseCase:
                 flag_count=len(position.granted_flags),
             )
             for position in self._positions.list_for_tenant(tenant_id)
+            if position.may_be_edited_by(actor.position)
         ]
 
     # ------------------------------- yaratma --------------------------------- #
@@ -187,6 +212,21 @@ class PositionManagementUseCase:
             is_system=False,
             is_camera_type=draft.is_camera_type,
         )
+        # ──────────────────────────────────────────────────────────────────────
+        # YARADILAN ROL AKTORDAN CİDDİ ŞƏKİLDƏ AŞAĞI OLMALIDIR
+        # ──────────────────────────────────────────────────────────────────────
+        # Bu yoxlama ƏVVƏL YOX İDİ və boşluq praktikdə belə görünürdü: `CEO`
+        # `can_manage_positions` ilə ÖZ pilləsində (və ya `Root` pilləsində)
+        # custom rol yarada bilirdi. Flag-lər `_apply_flags`-də qorunurdu
+        # (aktor özündə olmayanı verə bilmir), lakin İYERARXİYA qorunmurdu —
+        # nəticədə sistemdə aktordan yuxarı, sonra isə HEÇ KİMİN (Root-dan
+        # başqa) idarə edə bilmədiyi rol yaranırdı.
+        #
+        # Qayda TƏKRAR YAZILMIR: `assert_may_be_edited_by` çağırılır, yəni
+        # «yarada bildiyim rol = sonradan idarə edə bildiyim rol». İki ayrı
+        # şərt yazsaydıq, biri dəyişəndə digəri sükutla geridə qalardı.
+        position.assert_may_be_edited_by(actor.position)
+
         granted = self._apply_flags(position, draft.flag_codes, actor=actor)
         self._positions.save(position)
 

@@ -49,6 +49,10 @@ def _dashboard(screen: group_c.DashboardScreen) -> None:
         open_tasks=summary.open_tasks,
         overdue_tasks=summary.overdue_tasks,
     )
+    # Maket və canlı yol EYNİ metodu çağırır (`CLAUDE.md` §6): burada rəqəm
+    # nümunə şəbəkənindir, istehsalatda isə `screen_data._dashboard_network`
+    # onu bazadan gətirir.
+    screen.set_network_size(employees=summary.employees, stores=summary.stores)
     screen.set_fines_by_branch(list(data.FINES_BY_BRANCH), period="Avqust 2026")
     screen.set_leave_usage(128, 200)
     screen.set_leaders(list(data.LEADERS))

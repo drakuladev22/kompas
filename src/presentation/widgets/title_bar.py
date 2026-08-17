@@ -33,11 +33,17 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QSizePolicy, QWidget
+from PySide6.QtWidgets import (
+    QAbstractButton,
+    QHBoxLayout,
+    QPushButton,
+    QSizePolicy,
+    QWidget,
+)
 
 from src.presentation.theme.manager import enable_styled_background
-from src.presentation.widgets import brand_assets, metrics
-from src.presentation.widgets.buttons import WindowButton
+from src.presentation.widgets import brand_assets, icons, metrics
+from src.presentation.widgets.buttons import TitleBarIconButton, WindowButton
 from src.presentation.widgets.live_clock import LiveClock
 from src.presentation.widgets.primitives import image_label, plain_label
 
@@ -57,11 +63,27 @@ class TitleBar(QWidget):
         minimize_requested: — düyməsi.
         maximize_requested: □ düyməsi (və ya zolağa ikiqat klik).
         close_requested: × düyməsi.
+        theme_toggle_requested: İşıqlı ↔ tünd keçidi.
     """
 
     minimize_requested = Signal()
     maximize_requested = Signal()
     close_requested = Signal()
+    #: ──────────────────────────────────────────────────────────────────────
+    #: TEMA DÜYMƏSİ NİYƏ BAŞLIQ ZOLAĞINDADIR
+    #: ──────────────────────────────────────────────────────────────────────
+    #: Əvvəl o, YALNIZ səhifə başlığında (`page_header.py`) idi — həmin başlıq
+    #: isə `AdminShell`-in içindədir, yəni GİRİŞDƏN SONRA görünür. Nəticə
+    #: istifadəçi hesabatı ilə üzə çıxdı: «işıqlı/qaranlıq mod işləmir».
+    #: Mexanizm işləyirdi; İlk Quraşdırma Sihirbazında, giriş və splash
+    #: ekranlarında onu basmaq üçün DÜYMƏ yox idi və defolt `SYSTEM` olduğu
+    #: üçün Windows tünd rejimdəsə hər şey tünd açılırdı.
+    #:
+    #: Başlıq zolağı HƏR ekranda var (splash, sihirbaz, giriş, örtük), ona görə
+    #: düymənin yeri buradır. Səhifə başlığındakı düymə SİLİNMİR: örtük
+    #: içindəkilər üçün o, əlin altındakı yerdədir və hər ikisi eyni siqnala
+    #: bağlanır.
+    theme_toggle_requested = Signal()
 
     def __init__(
         self,
@@ -115,6 +137,20 @@ class TitleBar(QWidget):
         # yolu saatsız qurulur (bax `live_clock.py` başlığı).
         self._clock_widget = LiveClock()
         layout.addWidget(self._clock_widget)
+
+        # Tema düyməsi pəncərə düymələrindən ƏVVƏL gəlir: sağ künc OS-in
+        # «bağla» sahəsidir və istifadəçi oraya səhvən basmamalıdır.
+        # İkon `WindowButton` DEYİL — o, minimize/maximize/close ailəsinin
+        # görünüşünü daşıyır və tema keçidi OS əməliyyatı kimi oxunardı.
+        self._theme_button = TitleBarIconButton(
+            "moon",
+            "",
+            tooltip="Görünüşü dəyiş",
+            accessible_name="Görünüş rejimini dəyiş",
+            accessible_description="İşıqlı və tünd tema arasında keçid edir",
+        )
+        self._theme_button.clicked.connect(self.theme_toggle_requested)
+        layout.addWidget(self._theme_button)
 
         self._minimize = WindowButton("minimize")
         self._minimize.clicked.connect(self.minimize_requested)
@@ -173,6 +209,7 @@ class TitleBar(QWidget):
         hover_color: str,
         close_hover_color: str,
         brand_mark_color: str = "",
+        dark_mode: bool = True,
     ) -> None:
         """İkon rənglərini temaya uyğunlaşdırır.
 
@@ -187,6 +224,21 @@ class TitleBar(QWidget):
             button.set_colors(idle_color=control_color, hover_color=hover_color)
         self._close.set_colors(idle_color=control_color, hover_color=close_hover_color)
         self.set_logo_color(brand_mark_color or control_color)
+        self.set_theme_icon(dark_mode=dark_mode, color=control_color)
+
+    def set_theme_icon(self, *, dark_mode: bool, color: str) -> None:
+        """Tema düyməsinin ikonu CARİ rejimi deyil, NƏTİCƏNİ göstərir.
+
+        Tünd rejimdə «günəş» çəkilir, çünki basılanda İŞIQLI rejimə keçilir.
+        Cari rejimi göstərsəydik, düymə vəziyyət göstəricisi kimi oxunardı və
+        istifadəçi onu basmaqla nə alacağını təxmin etməli olardı — səhifə
+        başlığındakı düymə də ilk gündən bu qaydadadır (`page_header.py`).
+        """
+        self._theme_button.setIcon(icons.icon("sun" if dark_mode else "moon", color))
+
+    def theme_button(self) -> QPushButton:
+        """Tema düyməsi — testlər və örtük üçün."""
+        return self._theme_button
 
     def set_logo_color(self, color: str) -> None:
         """Başlıq loqosunu verilmiş rənglə yenidən çəkir.

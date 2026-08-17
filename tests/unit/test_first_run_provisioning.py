@@ -56,10 +56,14 @@ class _Positions:
 
     def __init__(self, provisioning: _Provisioning) -> None:
         self._provisioning = provisioning
-        self._root = Position(
+        # Sihirbaz `CEO` yaradır, `Root` YOX: `Root` təchizatçının pilləsidir
+        # (bax `first_run_setup._provision` yanındakı izah). Saxta repo məhz
+        # bu rolu tanıyır — `ROOT` qaytarsaydı, test köhnə davranışı qorumuş
+        # olardı.
+        self._executive = Position(
             position_id=PositionId(uuid.uuid4()),
-            code=SystemRole.ROOT.value,
-            name_az="Root",
+            code=SystemRole.CEO.value,
+            name_az="CEO",
             priority=RolePriority.EXECUTIVE,
             is_system=True,
         )
@@ -67,7 +71,7 @@ class _Positions:
     def get_by_code(self, tenant_id: TenantId, code: str) -> Position | None:
         if not self._provisioning.calls:
             return None
-        return self._root if code == SystemRole.ROOT.value else None
+        return self._executive if code == SystemRole.CEO.value else None
 
 
 class _Employees:

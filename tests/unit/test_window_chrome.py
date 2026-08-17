@@ -154,20 +154,39 @@ def test_opening_the_window_does_not_draw_a_focus_ring(qt_app) -> None:  # type:
     window.show()
     qt_app.processEvents()
 
-    minimize, _maximize, _close = bar.buttons()
-    assert qt_app.focusWidget() is minimize, "fokus-zənciri dəyişib — test köhnəlib"
-    assert minimize.property("keyfocus") == "false"
+    # İLK FOKUSU HANSI DÜYMƏNİN ALDIĞI ARTIQ ÖLÇÜLMÜR.
+    #
+    # Əvvəl burada `focusWidget() is minimize` iddiası vardı və o, zəncirin
+    # SIRASINI qapıya salırdı — halbuki qorunan şey sıra deyil, HALQANIN
+    # OLMAMASIdır. Başlıq zolağına tema düyməsi əlavə olunanda iddia sındı,
+    # zəmanət isə pozulmamışdı.
+    #
+    # İndi qapı birbaşa zəmanəti ölçür: fokusu KİM alırsa alsın, açılışda
+    # halqa çəkilməməlidir. Bu, həm də daha güclüdür — zolağa üçüncü düymə
+    # əlavə edən adam onu da avtomatik yoxlayır.
+    focused = qt_app.focusWidget()
+    assert focused is not None, "başlıq zolağı fokusu ümumiyyətlə almır"
+    assert focused.property("keyfocus") == "false", (
+        "tətbiq açılan kimi fokus halqası çəkilir — istifadəçi heç nəyə "
+        "toxunmadan işıqlı kvadrat görür"
+    )
 
     # Klaviatura yolu POZULMUR: `Tab` səbəbi ilə halqa QAYIDIR.
-    minimize.clearFocus()
+    focused.clearFocus()
     qt_app.processEvents()
-    minimize.setFocus(Qt.FocusReason.TabFocusReason)
+    focused.setFocus(Qt.FocusReason.TabFocusReason)
     qt_app.processEvents()
-    assert minimize.property("keyfocus") == "true"
+    assert focused.property("keyfocus") == "true"
 
-    minimize.clearFocus()
+    focused.clearFocus()
     qt_app.processEvents()
-    assert minimize.property("keyfocus") == "false"
+    assert focused.property("keyfocus") == "false"
+
+    # Zolaqdakı HƏR fokus ala bilən düymə eyni qaydaya tabedir.
+    for button in (*bar.buttons(), bar.theme_button()):
+        assert button.property("keyfocus") == "false", (
+            f"{button.accessibleName()!r} açılışda halqa çəkir"
+        )
     window.close()
 
 

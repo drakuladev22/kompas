@@ -66,6 +66,9 @@ class AdminShell(QWidget):
     """
 
     theme_toggle_requested = Signal()
+    #: Artıq qurulmuş ekrana qayıdış — məlumatın təzələnməsi üçün
+    #: (bax `show_screen` içindəki izah).
+    screen_revisited = Signal(str)
     screen_changed = Signal(str)
 
     def __init__(
@@ -89,6 +92,9 @@ class AdminShell(QWidget):
         self._titles: dict[str, tuple[str, str]] = {}
         #: Cari tərtibat rejimi — pəncərədən gəlir (bax `apply_layout_mode`).
         self._layout_mode = LayoutMode.WIDE
+        #: İstifadəçinin ƏL İLƏ verdiyi qərar; `None` = seçim edilməyib.
+        #: Bax `_on_collapse_toggled`.
+        self._manual_collapse: bool | None = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -100,6 +106,7 @@ class AdminShell(QWidget):
             active_icon_color=theme.color("--color-brand-amber"),
         )
         self._sidebar.navigated.connect(self.show_screen)
+        self._sidebar.collapse_toggled.connect(self._on_collapse_toggled)
         layout.addWidget(self._sidebar)
 
         # ------------------------------ sağ tərəf --------------------------- #
@@ -188,6 +195,7 @@ class AdminShell(QWidget):
             return False
 
         widget = self._screens.get(key)
+        revisited = widget is not None
         if widget is None:
             widget = factory()
             self._screens[key] = widget
@@ -203,6 +211,17 @@ class AdminShell(QWidget):
         self._header.set_page(title, subtitle)
         self._sidebar.set_active(key)
         self.screen_changed.emit(key)
+        # ARTIQ QURULMUŞ ekrana QAYIDIŞ ayrıca siqnaldır.
+        #
+        # Ekranlar bir dəfə qurulur və məlumatı QURULMA anında doldurulur
+        # (`app.py::make`). Yəni istifadəçi mağaza əlavə edib panelə qayıdanda
+        # köhnə rəqəmi görürdü — «yaratdıqca artmalıdır» gözləntisi məhz
+        # burada pozulurdu.
+        #
+        # `screen_changed` bu iş üçün YARAMIR: o, İLK qurulmada da yayılır və
+        # abunəçi məlumatı iki dəfə oxuyardı. Ayrı siqnal fərqi birmənalı edir.
+        if revisited:
+            self.screen_revisited.emit(key)
         return True
 
     def screen_for(self, key: str) -> QWidget | None:
@@ -215,6 +234,20 @@ class AdminShell(QWidget):
         artıq mövcud olan `_screens` reyestri XARİCƏ açılır.
         """
         return self._screens.get(key)
+
+    def set_screen_subtitle(self, key: str, subtitle: str) -> None:
+        """Bir ekranın kontekst mətnini AÇARLA yeniləyir.
+
+        `set_page_subtitle()`-dan fərqi: o, YALNIZ aktiv ekrana yazır və
+        girişdən sonra bütün ekranların say/tarix mətnini bir dəfəyə
+        doldurmaq üçün yaramır — istifadəçi hər ekranı açana qədər gözləmək
+        lazım gələrdi.
+        """
+        entry = self._registry.get(key)
+        title, _ = self._titles.get(key, (entry.title_az if entry else key, ""))
+        self._titles[key] = (title, subtitle)
+        if self._sidebar.active_key == key:
+            self._header.set_page(title, subtitle)
 
     def set_page_subtitle(self, subtitle: str) -> None:
         """Aktiv ekranın kontekst mətnini yeniləyir ("Avqust 2026 · Bellona")."""
@@ -287,10 +320,37 @@ class AdminShell(QWidget):
         # Sol panelin daralması ARTIQ mövcud idi (`Sidebar.set_collapsed` →
         # `NavButton.set_compact`) — burada yalnız ÇAĞIRILIR, yenidən
         # yazılmır (`uxui.md` Addım 3: "mövcud daralma funksiyasını ÇAĞIRARAQ").
-        self._sidebar.set_collapsed(mode is LayoutMode.COMPACT)
+        # ĞƏSDLİ SEÇİM AVTOMATİKANI ÜSTƏLƏYİR
+        # ---------------------------------------------------------------
+        # İstifadəçi paneli ƏL İLƏ açıbsa, pəncərə kiçiləndə onu geri
+        # bağlamaq onun qərarını sükutla ləğv etmək olardı — və əksinə.
+        # `None` = «hələ seçim edilməyib», yəni avtomatika sərbəstdir.
+        self._sidebar.set_collapsed(
+            mode is LayoutMode.COMPACT if self._manual_collapse is None else self._manual_collapse
+        )
         for widget in self._screens.values():
             self._apply_mode_to(widget)
-        _log.debug("SHELL_LAYOUT_MODE", extra={"mode": mode.value})
+        _log.debug(
+            "SHELL_LAYOUT_MODE",
+            extra={"mode": mode.value, "manual_collapse": self._manual_collapse},
+        )
+
+    def _on_collapse_toggled(self, collapsed: bool) -> None:
+        """İstifadəçi paneli əl ilə açdı/bağladı.
+
+        Seçim YADDA SAXLANILIR (`_manual_collapse`) və bundan sonra pəncərə
+        eni onu üstələmir. Saxlanmasaydı, növbəti ölçü dəyişikliyi (məs.
+        pəncərəni böyütmək) paneli istifadəçinin istəmədiyi vəziyyətə
+        qaytarardı.
+
+        EKRANLARA DA XƏBƏR VERİLİR: məzmun sahəsinin eni dəyişir və
+        `Screen.apply_layout_mode()` sütun sayını məhz ona görə hesablayır —
+        çağırılmasaydı, panel bağlananda cədvəllər köhnə enlə qalardı.
+        """
+        self._manual_collapse = collapsed
+        for widget in self._screens.values():
+            self._apply_mode_to(widget)
+        _log.debug("SHELL_SIDEBAR_MANUAL", extra={"collapsed": collapsed})
 
     @property
     def layout_mode(self) -> LayoutMode:

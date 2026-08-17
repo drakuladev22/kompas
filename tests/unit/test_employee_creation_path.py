@@ -68,6 +68,9 @@ ROOT_POSITION = _position(SystemRole.ROOT.value, RolePriority.ROOT)
 # Aktor işçi YARADIR — flag olmadan use case səlahiyyət xətası atır (və bu,
 # düzgün davranışdır; test onu yan keçmir, sadəcə ödəyir).
 ROOT_POSITION.grant(PermissionFlag(code="can_manage_employees", category="HR"))
+# Sihirbaz `CEO` yaradır, `Root` YOX: `Root` təchizatçının (developer)
+# pilləsidir və müştəri quraşdırmasından ona yol yoxdur (SEC-024).
+CEO_POSITION = _position(SystemRole.CEO.value, RolePriority.EXECUTIVE)
 SELLER_POSITION = _position(SystemRole.SELLER.value, RolePriority.STAFF)
 
 
@@ -117,6 +120,7 @@ class _Positions:
     def get_by_code(self, tenant_id: TenantId, code: str) -> Position | None:
         return {
             SystemRole.ROOT.value: ROOT_POSITION,
+            SystemRole.CEO.value: CEO_POSITION,
             SystemRole.SELLER.value: SELLER_POSITION,
         }.get(code)
 
@@ -124,7 +128,7 @@ class _Positions:
         return None
 
     def list_for_tenant(self, tenant_id: TenantId) -> list[Position]:
-        return [ROOT_POSITION, SELLER_POSITION]
+        return [ROOT_POSITION, CEO_POSITION, SELLER_POSITION]
 
     def save(self, position: Position) -> None:
         return None
@@ -187,7 +191,7 @@ def _root_actor() -> Employee:
 # --------------------------------------------------------------------------- #
 
 
-def test_wizard_creates_the_root_row_with_its_secret() -> None:
+def test_wizard_creates_the_executive_row_with_its_secret() -> None:
     employees = _Employees()
     use_case = FirstRunSetupUseCase(
         employees=employees,  # type: ignore[arg-type]
@@ -215,8 +219,10 @@ def test_wizard_creates_the_root_row_with_its_secret() -> None:
     assert len(employees.created) == 1
     employee, raw_password, _raw_pin = employees.created[0]
     assert raw_password == "UzunVeGucluSifre123"
-    # İLK Root şifrəni ÖZÜ seçir — məcburi dəyişmə YOXDUR (bölmə 2).
+    # İLK hesab şifrəni ÖZÜ seçir — məcburi dəyişmə YOXDUR (bölmə 2).
     assert employee.must_change_password is False
+    # Rol `CEO`-dur: sihirbaz müştəriyə təchizatçı pilləsi vermir (SEC-024).
+    assert employee.position.code == SystemRole.CEO.value
 
 
 # --------------------------------------------------------------------------- #

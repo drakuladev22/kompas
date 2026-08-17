@@ -22,12 +22,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from src.presentation.theme.manager import enable_styled_background
-from src.presentation.widgets import metrics
-from src.presentation.widgets.buttons import NavButton
-from src.presentation.widgets.primitives import section_label
+from src.presentation.widgets import icons, metrics
+from src.presentation.widgets.buttons import NavButton, icon_button
+from src.presentation.widgets.primitives import section_label, stretch
+from src.presentation.widgets.safe_text import plain_tooltip
 
 if TYPE_CHECKING:
     from src.presentation.navigation import MenuEntry
@@ -42,9 +43,22 @@ class Sidebar(QWidget):
 
     Signals:
         navigated: İstifadəçi maddəni seçdi (`key` ötürülür).
+        collapse_toggled: Aç/bağla düyməsi basıldı (yeni vəziyyət ötürülür).
     """
 
     navigated = Signal(str)
+    #: ──────────────────────────────────────────────────────────────────────
+    #: DARALTMA ARTIQ YALNIZ PƏNCƏRƏ ENİNDƏN ASILI DEYİL
+    #: ──────────────────────────────────────────────────────────────────────
+    #: `set_collapsed()` əvvəldən vardı, lakin onu YALNIZ `AdminShell.
+    #: apply_layout_mode()` çağırırdı — yəni panel yalnız pəncərə kiçiləndə
+    #: daralırdı və istifadəçinin öz iradəsi yox idi. İstifadəçi hesabatı:
+    #: «açılıb bağlanan navigation olmalıdır».
+    #:
+    #: Düymə vəziyyəti YAYIR, özü qərar vermir: örtük onu «əl ilə seçim» kimi
+    #: yadda saxlayır və avtomatik rejimin üstünə qoyur (bax
+    #: `AdminShell.apply_layout_mode`).
+    collapse_toggled = Signal(bool)
 
     def __init__(
         self,
@@ -75,9 +89,31 @@ class Sidebar(QWidget):
         )
         self._layout.setSpacing(metrics.SIDEBAR_ITEM_SPACING)
 
+        # Başlıq sətri: bölmə adı + aç/bağla düyməsi. Düymə YUXARIDADIR,
+        # çünki daraldılmış rejimdə mətn yox olur və istifadəçi paneli geri
+        # açmaq üçün SABİT bir nöqtə axtarır — siyahının altında olsaydı, uzun
+        # menyuda ekrandan çıxardı.
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(12, 0, 0, metrics.SIDEBAR_LABEL_BOTTOM)
+        header_layout.setSpacing(4)
+
         self._section = section_label(section_title)
-        self._section.setContentsMargins(12, 0, 12, metrics.SIDEBAR_LABEL_BOTTOM)
-        self._layout.addWidget(self._section)
+        header_layout.addWidget(self._section)
+        header_layout.addWidget(stretch())
+
+        self._toggle = icon_button(
+            "chevron_left",
+            idle_icon_color,
+            tooltip="Paneli daralt",
+            accessible_name="Naviqasiya panelini daralt",
+            accessible_description="Sol paneli yalnız ikonlara qədər daraldır",
+        )
+        self._toggle.setFixedSize(metrics.SIDEBAR_TOGGLE_SIZE, metrics.SIDEBAR_TOGGLE_SIZE)
+        self._toggle.clicked.connect(self._on_toggle_clicked)
+        header_layout.addWidget(self._toggle)
+
+        self._layout.addWidget(header)
 
         self._layout.addStretch(1)
 
@@ -138,6 +174,15 @@ class Sidebar(QWidget):
 
     # ------------------------------- görünüş --------------------------------- #
 
+    def _on_toggle_clicked(self) -> None:
+        """Düymə: vəziyyəti çevirir və YAYIR (qərarı örtük verir)."""
+        self.set_collapsed(not self._collapsed)
+        self.collapse_toggled.emit(self._collapsed)
+
+    def toggle_button(self) -> QPushButton:
+        """Aç/bağla düyməsi — testlər və örtük üçün."""
+        return self._toggle
+
     def set_collapsed(self, collapsed: bool) -> None:
         """Paneli daraldır — yalnız ikonlar qalır (spesifikasiya: "daralda bilər")."""
         if collapsed == self._collapsed:
@@ -145,8 +190,21 @@ class Sidebar(QWidget):
         self._collapsed = collapsed
         self.setFixedWidth(metrics.SIDEBAR_COLLAPSED_WIDTH if collapsed else metrics.SIDEBAR_WIDTH)
         self._section.setVisible(not collapsed)
+        self._apply_toggle_icon()
         for button in self._buttons.values():
             button.set_compact(collapsed)
+
+    def _apply_toggle_icon(self) -> None:
+        """İkon NƏTİCƏNİ göstərir: daralmışsa «genişlət» oxu çəkilir."""
+        self._toggle.setIcon(
+            icons.icon(
+                "chevron_right" if self._collapsed else "chevron_left",
+                self._idle_icon_color,
+            )
+        )
+        self._toggle.setToolTip(
+            plain_tooltip("Paneli genişləndir" if self._collapsed else "Paneli daralt")
+        )
 
     @property
     def is_collapsed(self) -> bool:
@@ -160,6 +218,7 @@ class Sidebar(QWidget):
         """
         self._idle_icon_color = idle_icon_color
         self._active_icon_color = active_icon_color
+        self._apply_toggle_icon()
         for button in self._buttons.values():
             button.set_colors(idle_color=idle_icon_color, active_color=active_icon_color)
 

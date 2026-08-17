@@ -728,14 +728,16 @@ def _setup_use_case(
     admin_count: int = 0,
 ) -> tuple[FirstRunSetupUseCase, _SetupStores, _SetupEmployees]:
     positions = _Positions()
-    root_position = Position(
+    # Sihirbaz `CEO` yaradır — `Root` təchizatçının (developer) pilləsidir və
+    # müştəri quraşdırmasından ona yol YOXDUR (bax `first_run_setup`).
+    executive_position = Position(
         position_id=PositionId(uuid.uuid4()),
-        code=SystemRole.ROOT.value,
-        name_az="Root",
+        code=SystemRole.CEO.value,
+        name_az="CEO",
         priority=RolePriority.EXECUTIVE,
         is_system=True,
     )
-    positions.save(root_position)
+    positions.save(executive_position)
     stores = _SetupStores()
     employees = _SetupEmployees(admin_count)
     use_case = FirstRunSetupUseCase(
@@ -766,7 +768,7 @@ def _root_draft() -> RootAccountDraft:
     )
 
 
-def test_setup_creates_root_and_stores() -> None:
+def test_setup_creates_the_executive_account_and_stores() -> None:
     use_case, stores, employees = _setup_use_case()
 
     outcome = use_case.complete(

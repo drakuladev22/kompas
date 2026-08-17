@@ -146,6 +146,12 @@ _BODIES: Final[dict[str, str]] = {
     # şriftdən asılı deyil.
     "arrow_up": '<path d="M8 12.6V3.6M4.4 7.2 8 3.6l3.6 3.6"/>',
     "arrow_down": '<path d="M8 3.4v9M4.4 8.8 8 12.4l3.6-3.6"/>',
+    # Sol panelin aç/bağla düyməsi. İKİ AYRI İKON, bir dönən ikon DEYİL:
+    # `QIcon` fırlanmanı daşımır və düyməni `QTransform` ilə çevirmək hər
+    # tema dəyişikliyində yenidən hesablanmalı olardı. Ox İSTİQAMƏTİ nəticəni
+    # göstərir — sol ox «daralt», sağ ox «genişlət».
+    "chevron_left": '<path d="M10 3.6 5.6 8l4.4 4.4"/>',
+    "chevron_right": '<path d="M6 3.6 10.4 8 6 12.4"/>',
     "send": '<path d="M14 2 7.2 8.8M14 2 9.8 14l-2.6-5.2L2 6.2z"/>',
     "logout": '<path d="M9.4 5.2 12.6 8l-3.2 2.8M12.6 8H6.6"/><path d="M6.2 2.5H3.2v11h3"/>',
     "login": '<path d="M6.6 8H2.2M4 6l-1.8 2L4 10"/><path d="M9.4 2.6h4.4v10.8H9.4"/>',

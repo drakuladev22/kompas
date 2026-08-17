@@ -199,6 +199,9 @@ class DashboardSummary(NamedTuple):
     fines_delta: str
     open_tasks: int
     overdue_tasks: int
+    #: Şəbəkənin ölçüsü — CANLI yolda `employees`/`stores` sayğacıdır.
+    employees: int
+    stores: int
 
 
 DASHBOARD: Final = DashboardSummary(
@@ -210,6 +213,8 @@ DASHBOARD: Final = DashboardSummary(
     fines_delta="keçən aya nisbətən +12%",
     open_tasks=37,
     overdue_tasks=9,
+    employees=235,
+    stores=21,
 )
 
 FINES_BY_BRANCH: Final = [

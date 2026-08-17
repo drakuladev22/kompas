@@ -241,7 +241,103 @@ class NavButton(QPushButton):
         return handle.devicePixelRatio() if handle is not None else 1.0
 
 
-class WindowButton(QPushButton):
+class KeyFocusRingMixin:
+    """Fokus halqasını YALNIZ klaviatura fokusunda göstərən davranış.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AYRICA MİXİN
+    ──────────────────────────────────────────────────────────────────────────
+    Qt pəncərə göstəriləndə fokusu fokus-zəncirinin BİRİNCİ elementinə verir.
+    Başlıq zolağı tərtibatın ən üstündədir, yəni tətbiq açılan kimi oradakı
+    ilk düymə fokus alır — və adi `:focus` qaydası halqanı ŞƏRTSİZ çəkir.
+    İstifadəçi heç nəyə toxunmadan ekranda işıqlı kvadrat görür.
+
+    Davranış əvvəl YALNIZ `WindowButton`-da vardı. Başlıq zolağına tema
+    düyməsi əlavə olunanda eyni problem onda təkrarlandı — məhz buna görə
+    məntiq İKİNCİ NÜSXƏ kimi köçürülmür, ortaq bazaya çıxarılır
+    (`CLAUDE.md` §5: eyni qaydanın iki nüsxəsi sürüşür).
+
+    QSS tərəfi `[keyfocus="true"]` seçicisinə baxır; xüsusiyyət burada
+    saxlanılır.
+    """
+
+    #: Fokusun KLAVİATURADAN gəldiyini bildirən səbəblər.
+    KEYBOARD_FOCUS_REASONS: ClassVar[frozenset[Qt.FocusReason]] = frozenset(
+        {
+            Qt.FocusReason.TabFocusReason,
+            Qt.FocusReason.BacktabFocusReason,
+            Qt.FocusReason.ShortcutFocusReason,
+        }
+    )
+
+    def focusInEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt adlandırması
+        """Halqa yalnız `Tab`/`Shortcut` ilə gələn fokusda çəkilir.
+
+        `ActiveWindow` səbəbi MÖVCUD vəziyyəti saxlayır: istifadəçi `Tab`-la bu
+        düyməyə çatıb `Alt`+`Tab` ilə başqa proqrama keçib qayıdarsa, halqa
+        yerində qalmalıdır — həmin halda fokus həqiqətən klaviaturadadır.
+        """
+        if event.reason() is not Qt.FocusReason.ActiveWindowFocusReason:
+            self._set_key_focus(event.reason() in self.KEYBOARD_FOCUS_REASONS)
+        super().focusInEvent(event)  # type: ignore[misc]
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt adlandırması
+        """Fokus getdi — halqa da getməlidir.
+
+        `ActiveWindow` burada İSTİSNA DEYİL: pəncərə arxa plana keçəndə halqanı
+        saxlamaq lazımdır, çünki qayıdışda eyni səbəblə geri gəlir və yuxarıdakı
+        şərt onu olduğu kimi buraxır.
+        """
+        if event.reason() is not Qt.FocusReason.ActiveWindowFocusReason:
+            self._set_key_focus(False)
+        super().focusOutEvent(event)  # type: ignore[misc]
+
+    def _set_key_focus(self, active: bool) -> None:
+        value = "true" if active else "false"
+        if self.property("keyfocus") == value:  # type: ignore[attr-defined]
+            return
+        self.setProperty("keyfocus", value)  # type: ignore[attr-defined]
+        refresh_widget_style(self)  # type: ignore[arg-type]
+
+
+class TitleBarIconButton(KeyFocusRingMixin, QPushButton):
+    """Başlıq zolağındakı ikon düyməsi (tema keçidi).
+
+    `icon_button()` fabrikasından fərqi YALNIZ fokus halqasındadır: səhifə
+    başlığındakı ikon düymələri məzmun sahəsindədir və heç vaxt ilk fokusu
+    almır, başlıq zolağındakı isə HƏR AÇILIŞDA alır (bax mixin izahı).
+    """
+
+    def __init__(
+        self,
+        icon_name: str,
+        color: str,
+        *,
+        tooltip: str = "",
+        accessible_name: str = "",
+        accessible_description: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setProperty("variant", "icon")
+        # Başlanğıc dəyər AÇIQ yazılır: Qt təyin olunmamış dinamik xüsusiyyəti
+        # `[keyfocus="false"]` kimi saymır (eyni səbəb `WindowButton`-da).
+        self.setProperty("keyfocus", "false")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setIcon(icons.icon(icon_name, color))
+        self.setIconSize(QSize(icons.DEFAULT_SIZE, icons.DEFAULT_SIZE))
+        self.setFixedSize(metrics.HEADER_ICON_BUTTON, metrics.HEADER_ICON_BUTTON)
+        # `TabFocus` — səbəb `WindowButton`-dakı ilə eynidir: siçanla klikləmək
+        # halqa qoymamalıdır, klaviatura yolu isə açıq qalmalıdır.
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        if tooltip:
+            self.setToolTip(plain_tooltip(tooltip))
+        self.setAccessibleName(accessible_name or tooltip)
+        if accessible_description:
+            self.setAccessibleDescription(accessible_description)
+
+
+class WindowButton(KeyFocusRingMixin, QPushButton):
     """Pəncərə başlığındakı kiçilt / böyüt–bərpa / bağla düymələri.
 
     ──────────────────────────────────────────────────────────────────────────
@@ -436,64 +532,10 @@ class WindowButton(QPushButton):
         super().leaveEvent(event)
 
     # -------------------------------- fokus ---------------------------------- #
-
-    #: Fokusun KLAVİATURADAN gəldiyini bildirən səbəblər.
-    KEYBOARD_FOCUS_REASONS: ClassVar[frozenset[Qt.FocusReason]] = frozenset(
-        {
-            Qt.FocusReason.TabFocusReason,
-            Qt.FocusReason.BacktabFocusReason,
-            Qt.FocusReason.ShortcutFocusReason,
-        }
-    )
-
-    def focusInEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt adlandırması
-        """Fokus halqası YALNIZ klaviatura fokusunda çəkilir.
-
-        ──────────────────────────────────────────────────────────────────────
-        NİYƏ `:focus` PSEVDO-SİNFİ TƏK BAŞINA KİFAYƏT ETMİR
-        ──────────────────────────────────────────────────────────────────────
-        Qt pəncərə göstəriləndə fokusu fokus-zəncirinin BİRİNCİ elementinə
-        verir. Başlıq zolağı tərtibatın ən üstündədir, yəni həmin element
-        «Pəncərəni kiçilt» düyməsidir — nəticədə tətbiq hər açılışda kiçilt
-        düyməsinin ətrafında AĞ KVADRAT (2px `--color-titlebar-text` haşiyə)
-        ilə başlayırdı. İstifadəçi heç nəyə toxunmamışdı; halqa isə "fokus
-        buradadır" deyirdi.
-
-        Səbəb `Qt.FocusReason`-dadır: açılışdakı fokus `ActiveWindow`/`Other`
-        səbəbi ilə gəlir, `Tab` ilə deyil. Halqa isə məhz KLAVİATURA ilə gəzən
-        istifadəçi üçündür — `TabFocus` siyasəti də (bax konstruktor) eyni
-        məntiqlə seçilmişdi: siçan kliki halqa qoymamalıdır.
-
-        FOKUS SİYASƏTİ DƏYİŞMİR: düymə hələ də `Tab` ilə əlçatandır. Çərçivəsiz
-        pəncərədə Windows-un sistem menyusu yoxdur, yəni bu üç düymə
-        kiçiltmənin/bağlamanın yeganə yoludur — onları fokusdan çıxarmaq
-        siçansız istifadəçini pəncərəsiz qoyardı.
-
-        `ActiveWindow` səbəbi MÖVCUD vəziyyəti saxlayır: istifadəçi `Tab`-la bu
-        düyməyə çatıb `Alt`+`Tab` ilə başqa proqrama keçib qayıdarsa, halqa
-        yerində qalmalıdır — həmin halda fokus həqiqətən klaviaturadadır.
-        """
-        if event.reason() is not Qt.FocusReason.ActiveWindowFocusReason:
-            self._set_key_focus(event.reason() in self.KEYBOARD_FOCUS_REASONS)
-        super().focusInEvent(event)
-
-    def focusOutEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt adlandırması
-        """Fokus getdi — halqa da getməlidir.
-
-        `ActiveWindow` burada İSTİSNA DEYİL: pəncərə arxa plana keçəndə halqanı
-        saxlamaq lazımdır, çünki qayıdışda eyni səbəblə geri gəlir və yuxarıdakı
-        şərt onu olduğu kimi buraxır.
-        """
-        if event.reason() is not Qt.FocusReason.ActiveWindowFocusReason:
-            self._set_key_focus(False)
-        super().focusOutEvent(event)
-
-    def _set_key_focus(self, active: bool) -> None:
-        value = "true" if active else "false"
-        if self.property("keyfocus") == value:
-            return
-        self.setProperty("keyfocus", value)
-        refresh_widget_style(self)
+    #
+    # Halqa məntiqi `KeyFocusRingMixin`-dədir — başlıq zolağındakı tema
+    # düyməsi ilə ORTAQdır. Əvvəl nüsxə burada idi; ikinci istifadəçi
+    # yarananda köçürmək əvəzinə ortaq bazaya çıxarıldı.
 
     # -------------------------------- çəkmə ---------------------------------- #
 

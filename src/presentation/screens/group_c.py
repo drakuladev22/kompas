@@ -178,7 +178,22 @@ class DashboardScreen(Screen):
         self._pending = StatTile("Təsdiq gözləyir")
         self._fines = StatTile("Bu ayın cərimələri")
         self._tasks = StatTile("Açıq tapşırıqlar")
-        for tile in (self._in_store, self._pending, self._fines, self._tasks):
+        # ŞƏBƏKƏNİN ÖLÇÜSÜ — «neçə işçi, neçə filial».
+        #
+        # Dörd kart ƏMƏLİYYAT rəqəmləridir (bu gün, bu ay); bu ikisi isə
+        # şirkətin ÖZ ölçüsüdür və CEO panelində ilk soruşulan sualdır.
+        # Say bazadan gəlir, ona görə mağaza/işçi əlavə edildikdə ekran
+        # növbəti açılışda ARTIR — heç bir yerdə əl ilə yazılmır.
+        self._employees = StatTile("İşçilər")
+        self._stores = StatTile("Filiallar")
+        for tile in (
+            self._in_store,
+            self._pending,
+            self._fines,
+            self._tasks,
+            self._employees,
+            self._stores,
+        ):
             tile.setFixedHeight(metrics.DASHBOARD_ROW_HEIGHT)
             tiles_layout.addWidget(tile, 1)
         self.add(tiles)
@@ -566,6 +581,21 @@ class DashboardScreen(Screen):
         self._fines.set_value(fines_total, caption=fines_delta)
         self._tasks.set_value(str(open_tasks), caption=f"{overdue_tasks}-u gecikib")
         self.show_content()
+
+    def set_network_size(self, *, employees: int, stores: int) -> None:
+        """«İşçilər» və «Filiallar» kartları — şəbəkənin cari ölçüsü.
+
+        `set_summary()`-dən AYRI metoddur, çünki mənbəyi də ayrıdır: o,
+        günün/ayın əməliyyat rəqəmlərini gətirir, bu isə `employees`/`stores`
+        cədvəllərinin sadə sayını. Bir metoda yığsaydıq, sayları gətirə
+        bilməyən yol (məs. icazəsi dar operator) bütün kartları boş qoyardı.
+
+        `show_content()` BURADA ÇAĞIRILMIR: ekranın «məzmun var» vəziyyətini
+        `set_summary()` təyin edir — iki yerdən çağırmaq vəziyyət keçidini
+        sıraya bağlı edərdi.
+        """
+        self._employees.set_value(str(employees), caption="aktiv")
+        self._stores.set_value(str(stores), caption="aktiv")
 
     def set_fines_by_branch(self, data: list[tuple[str, float, str]], *, period: str) -> None:
         self._chart_period.setText(period)

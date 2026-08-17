@@ -355,8 +355,24 @@ def test_write_session_carries_the_actor_id() -> None:
     assert all(user_id is not None for user_id in context.user_ids)
 
 
-def test_refresh_renders_roles_and_selects_one() -> None:
-    """Sol panel pilləyə görə sıralanır və ilk rol avtomatik seçilir."""
+def test_refresh_shows_only_roles_the_actor_may_edit() -> None:
+    """Siyahıda YALNIZ aktordan CİDDİ ŞƏKİLDƏ aşağı rollar görünür.
+
+    ────────────────────────────────────────────────────────────────────────
+    ƏVVƏL BU TEST ƏKSİNİ QORUYURDU
+    ────────────────────────────────────────────────────────────────────────
+    Köhnə iddia `[CEO, HR_ADMIN]` idi, yəni CEO ÖZ rolunu da siyahıda
+    görürdü. İstifadəçi hesabatı bunun nəticəsini göstərdi: «CEO Root-un
+    icazə matrisini dəyişə bilir». Yazma əslində bloklanırdı
+    (`assert_may_be_edited_by`), lakin ekran sətri redaktə oluna bilən kimi
+    göstərirdi — istifadəçi xanaları işarələyib «Yadda Saxla» basana qədər
+    rədd cavabını görmürdü.
+
+    İndi siyahı `Position.may_be_edited_by()`-dən keçir: aktorun ÖZ pilləsi
+    (SEC-006 — bərabər pillə bloklanır) və ondan yuxarı olan `Root` sətri
+    ümumiyyətlə görünmür. Bu, bölmə 3-ün «GÖRMƏK = SƏLAHİYYƏTİN OLMASI»
+    prinsipidir.
+    """
     target = _position(SystemRole.HR_ADMIN)
     controller, _session, _positions = _build(
         actor_flags=[MANAGE_POSITIONS],
@@ -368,6 +384,26 @@ def test_refresh_renders_roles_and_selects_one() -> None:
     controller.refresh(screen)
 
     codes = [row[0] for row in screen.roles]
-    # CEO (pillə 0) HR_Admin-dən (pillə 2) ƏVVƏL gəlir.
-    assert codes == [SystemRole.CEO.value, SystemRole.HR_ADMIN.value]
-    assert screen.selected == [SystemRole.CEO.value]
+    assert codes == [SystemRole.HR_ADMIN.value], "aktor toxuna bilmədiyi rolu görür"
+    assert screen.selected == [SystemRole.HR_ADMIN.value]
+
+
+def test_root_still_sees_every_role() -> None:
+    """`Root` bərabər-pillə qaydasından AZADDIR (SEC-006 istisnası).
+
+    Süzgəc onu da tutsaydı, təchizatçı öz rolunu redaktə edə bilməzdi və
+    sistem ilk gündən kilidlənərdi.
+    """
+    target = _position(SystemRole.HR_ADMIN)
+    controller, _session, _positions = _build(
+        actor_flags=[MANAGE_POSITIONS],
+        target=target,
+        catalog=[MANAGE_POSITIONS],
+        actor_role=SystemRole.ROOT,
+    )
+    screen = _Screen()
+
+    controller.refresh(screen)
+
+    codes = {row[0] for row in screen.roles}
+    assert codes == {SystemRole.ROOT.value, SystemRole.HR_ADMIN.value}

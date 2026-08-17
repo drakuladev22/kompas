@@ -943,6 +943,20 @@ QPushButton[variant="icon"][active="true"]:focus {
     border: {{--focus-ring-width}} solid {{--color-focus-ring}};
 }
 
+/* BAŞLIQ ZOLAĞINDAKI İKON DÜYMƏSİ İSTİSNADIR.
+   Qt pəncərə açılanda fokusu zəncirin BİRİNCİ elementinə verir və başlıq
+   zolağı tərtibatın ən üstündədir — yəni yuxarıdakı qayda tətbiq açılan kimi
+   heç nəyə toxunmadan işıqlı kvadrat çəkərdi. Halqa `[keyfocus="true"]`-ya
+   bağlanır (`KeyFocusRingMixin`), yəni yalnız `Tab`/`Shortcut` fokusunda
+   görünür. Pəncərə düymələri (`variant="window"`) ilə EYNİ qərar. */
+#TitleBar QPushButton[variant="icon"]:focus {
+    border: {{--focus-ring-width}} solid transparent;
+}
+
+#TitleBar QPushButton[variant="icon"][keyfocus="true"] {
+    border: {{--focus-ring-width}} solid {{--color-focus-ring}};
+}
+
 QPushButton[variant="action"]:focus {
     border: {{--focus-ring-width}} solid {{--color-action-text}};
 }

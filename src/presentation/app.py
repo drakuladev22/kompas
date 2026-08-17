@@ -114,6 +114,46 @@ FALLBACK_SCHEDULER_POLL_INTERVAL_MS: Final = (
 #: Brend ikonu — pəncərə başlığı, Windows Taskbar və Alt-Tab (bölmə 9, 296).
 ICON_RELATIVE_PATH: Final = "assets/kompasos.ico"
 
+#: Ay adları — `application/use_cases/reporting.py`-dəki siyahının EYNİSİ.
+#:
+#: TƏKRAR QƏSDLİDİR: təqdimat qatı hesabat use case-inin PRİVAT sabitini
+#: (`_MONTHS_AZ`) idxal etsəydi, başlıq mətni hesabat məntiqindən asılı
+#: olardı və həmin sabitin adı dəyişəndə örtük sükutla sınardı. Siyahı
+#: TƏQVİM FAKTIdır — dəyişmir.
+MONTHS_AZ: Final[tuple[str, ...]] = (
+    "Yanvar",
+    "Fevral",
+    "Mart",
+    "Aprel",
+    "May",
+    "İyun",
+    "İyul",
+    "Avqust",
+    "Sentyabr",
+    "Oktyabr",
+    "Noyabr",
+    "Dekabr",
+)
+
+
+def _format_date_az(moment: datetime) -> str:
+    """«17 Avqust 2026» — başlıqdakı tarix."""
+    return f"{moment.day} {MONTHS_AZ[moment.month - 1]} {moment.year}"
+
+
+def _format_month_az(moment: datetime) -> str:
+    """«Avqust 2026» — aylıq ekranların dövrü."""
+    return f"{MONTHS_AZ[moment.month - 1]} {moment.year}"
+
+
+def _stores_az(count: int) -> str:
+    """«1 filial» / «21 filial» — say HƏMİŞƏ göstərilir.
+
+    Sıfır da yazılır («0 filial»): mağazasız quraşdırma real vəziyyətdir və
+    onu gizlətmək istifadəçini «niyə heç nə görünmür?» sualı ilə tək qoyardı.
+    """
+    return f"{count} filial"
+
 
 #: Windows Taskbar-ın tətbiqi tanıdığı kimlik.
 #:
@@ -206,6 +246,11 @@ class KompasApplication:
 
         self._registry = build_default_registry()
         self._window = FramelessWindow(title="KompasOS", theme=self._theme)
+        # Başlıq zolağındakı tema düyməsi HƏR ekranda işləyir — splash,
+        # sihirbaz, giriş və örtük. Əvvəl düymə YALNIZ örtüyün səhifə
+        # başlığında idi, yəni girişdən əvvəl temanı dəyişmək mümkün deyildi
+        # və istifadəçi «işıqlı/qaranlıq mod işləmir» kimi görürdü.
+        self._window.theme_toggle_requested.connect(self.toggle_theme)
         self._shell: AdminShell | None = None
         self._support: QWidget | None = None
         self._notifications: QWidget | None = None
@@ -520,6 +565,8 @@ class KompasApplication:
             enabled_modules=self._enabled_modules(),
         )
         shell.theme_toggle_requested.connect(self.toggle_theme)
+        # Panelə QAYIDANDA rəqəmlər yenidən oxunur (bax `_on_screen_revisited`).
+        shell.screen_revisited.connect(self._on_screen_revisited)
         # TƏRTİBAT REJİMİ: pəncərə ölçür, örtük paylayır (bax
         # `widgets/responsive.py`). Bağlantı BURADADIR, çünki örtük hər
         # girişdə yenidən qurulur — köhnə örtükdəki bağlantı onunla birlikdə
@@ -531,12 +578,83 @@ class KompasApplication:
 
         self._window.set_content(shell)
         self._install_overlays(shell)
+        self._refresh_context_subtitles(shell, now=now)
 
         # İlk açılan ekran — menyuda görünən ilk maddə. Sabit "dashboard"
         # yazmaq olmazdı: icazəsi olmayan istifadəçidə boş ekran qalardı.
         visible = shell.sidebar().entry_keys()
         if visible:
             shell.show_screen(visible[0])
+
+    #: Ekrana QAYIDANDA məlumatı yenidən oxunan açarlar.
+    #:
+    #: SİYAHI DARDIR VƏ SƏBƏBİ VAR: hər ekranı hər naviqasiyada yenidən
+    #: doldurmaq onlarla sorğunu istifadəçinin hər klikinə bağlayardı, üstəlik
+    #: yazı yolu olan ekranlarda (cərimə forması, növbə) doldurulmamış formanı
+    #: silərdi. İdarə paneli isə YALNIZ OXUYUR və məhz orada köhnə rəqəm
+    #: görünürdü: mağaza/işçi əlavə edildikdən sonra say dəyişmirdi.
+    REFRESH_ON_REVISIT: Final[frozenset[str]] = frozenset({"dashboard"})
+
+    def _on_screen_revisited(self, key: str) -> None:
+        """Artıq qurulmuş ekrana qayıdış — sayğacları təzələyir."""
+        if key not in self.REFRESH_ON_REVISIT or self._binder is None or self._shell is None:
+            return
+        screen = self._shell.screen_for(key)
+        if screen is None:  # pragma: no cover - siqnal yalnız qurulmuş ekran üçün yayılır
+            return
+        self._binder.populate(key, screen)
+
+    def _refresh_context_subtitles(self, shell: AdminShell, *, now: datetime) -> None:
+        """Başlıqdakı say/tarix mətnlərini CANLI məlumatdan doldurur.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ BU METOD YARANDI
+        ──────────────────────────────────────────────────────────────────────
+        Kontekst mətnləri maketdən gələn SABİTLƏR idi: «21 filial»,
+        «235 nəfər», «12 Avqust 2026». Bir mağazası olan quraşdırmada da ekran
+        «21 filial» yazırdı və istifadəçi onu real say sanırdı.
+
+        SAY BAZADAN GƏLİR, ƏL İLƏ TƏYİN EDİLMİR: mağaza əlavə edildikdə rəqəm
+        növbəti açılışda özü artır. Ayrıca «filial sayı» parametri
+        yaratsaydıq, o, `stores` cədvəli ilə sinxrondan çıxan ikinci həqiqət
+        mənbəyi olardı.
+
+        UĞURSUZLUQ SƏSSİZDİR VƏ BOŞ QALIR: sorğu alınmasa mətn yazılmır.
+        Yanlış rəqəm göstərməkdənsə heç nə göstərməmək dürüstdür — bu, həmin
+        qüsurun ÖZ dərsidir.
+        """
+        if self._context is None:
+            return
+        try:
+            with self._context.session() as session:
+                row = session.uow.connection.execute(
+                    """
+                    SELECT
+                        (SELECT count(*) FROM stores
+                          WHERE tenant_id = %s AND is_active)    AS store_count,
+                        (SELECT count(*) FROM employees
+                          WHERE tenant_id = %s AND is_active)    AS employee_count
+                    """,
+                    (str(self._context.tenant_id), str(self._context.tenant_id)),
+                ).fetchone()
+        except Exception:
+            _log.exception("SHELL_SUBTITLE_COUNTS_UNAVAILABLE")
+            return
+
+        if row is None:
+            return
+        stores = int(row["store_count"])
+        employees = int(row["employee_count"])
+        today = _format_date_az(now)
+
+        shell.set_screen_subtitle("dashboard", f"{_stores_az(stores)} · {today}")
+        shell.set_screen_subtitle("users", f"{employees} nəfər · {_stores_az(stores)}")
+        shell.set_screen_subtitle("daily_roster", today)
+        shell.set_screen_subtitle("fines", _format_month_az(now))
+        _log.debug(
+            "SHELL_SUBTITLES_REFRESHED",
+            extra={"store_count": stores, "employee_count": employees},
+        )
 
     def _enabled_modules(self) -> frozenset[str] | None:
         """Root tərəfindən AÇIQ saxlanılan modulların açarları (bölmə 3).
@@ -1859,16 +1977,29 @@ class KompasApplication:
             ),
         }
 
-        #: Başlıqdakı kontekst mətni (maketdən).
+        #: Başlıqdakı kontekst mətni.
+        #:
+        #: ────────────────────────────────────────────────────────────────
+        #: UYDURMA RƏQƏM YOXDUR — SAY VƏ TARİX CANLI MƏLUMATDANDIR
+        #: ────────────────────────────────────────────────────────────────
+        #: Əvvəl burada maketdən gələn sabitlər vardı: «21 filial»,
+        #: «235 nəfər», «12 Avqust 2026», «Bellona 28 May». İstifadəçi onları
+        #: real sayılar sanırdı — bir mağazası olan quraşdırmada belə ekran
+        #: «21 filial» yazırdı.
+        #:
+        #: İndi rəqəm/tarix daşıyan mətnlər BOŞ başlayır və girişdən sonra
+        #: `_refresh_context_subtitles()` onları bazadan doldurur. Boş
+        #: başlamaq QƏSDLİDİR: doldurula bilməyəndə heç nə göstərilmir —
+        #: yanlış rəqəm göstərməkdənsə boşluq dürüstdür.
         subtitles = {
-            "dashboard": "21 filial · 12 Avqust 2026",
+            "dashboard": "",
             "live_queue": "Canlı · 2 san əvvəl yeniləndi",
-            "daily_roster": "Bellona 28 May · 12 Avqust 2026",
-            "fines": "Avqust 2026 · Bellona 28 May",
+            "daily_roster": "",
+            "fines": "",
             "fine_review": "Ayın əvvəli · göndərmə geri qaytarıla bilmir",
-            "users": "235 nəfər · 21 filial",
+            "users": "",
             "bulk_operations": "CSV işçi idxalı · mağaza şablonu",
-            "reports": "Avqust 2026 · iki ayrı fayl",
+            "reports": "İki ayrı fayl",
             "work_modes": "Növbə şablonları",
             "fine_types": "Standart məbləğlər · anti-fraud",
             "leave_types": "Fasilə kateqoriyaları",

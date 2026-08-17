@@ -71,21 +71,37 @@ WINDOW_BUTTON_WIDTH: Final = 46
 # Sol naviqasiya
 # --------------------------------------------------------------------------- #
 
-#: `width: 226px` — maketin bütün admin ekranlarında eynidir.
-SIDEBAR_WIDTH: Final = 226
+#: Sol panelin eni.
+#:
+#: ──────────────────────────────────────────────────────────────────────────
+#: 226 → 244: MADDƏLƏR «İÇ-İÇƏ» GÖRÜNÜRDÜ
+#: ──────────────────────────────────────────────────────────────────────────
+#: İstifadəçi hesabatı: «naviqasiya sistemi çox iç-içədir, bir az aralarını
+#: açmağını istəyirəm». Ölçülər maketdən hərfi götürülmüşdü (226/40/4), lakin
+#: maketin şrifti ilə Windows-un faktiki interfeys şrifti eyni deyil: uzun
+#: Azərbaycan başlıqları («ROOT İdarə Mərkəzi», «Şübhəli Satışlar») 226px-də
+#: sətrin sonuna dirənir və sətirlər arası 4px boşluq onları BİR BLOK kimi
+#: göstərirdi.
+#:
+#: Üç ölçü BİRLİKDƏ dəyişir — biri tək qalsaydı nisbət pozulardı: en (mətnə
+#: yer), sətir hündürlüyü (toxunma sahəsi) və sətirlərarası boşluq (ayırma).
+SIDEBAR_WIDTH: Final = 244
 #: Daraldılmış rejim (yalnız ikonlar) — spesifikasiya "daralda bilər" deyir.
 SIDEBAR_COLLAPSED_WIDTH: Final = 64
 #: `padding: 20px 12px`.
 SIDEBAR_PADDING_V: Final = 20
 SIDEBAR_PADDING_H: Final = 12
-#: Maddələr arası `gap: 4px`.
-SIDEBAR_ITEM_SPACING: Final = 4
-#: Maddə hündürlüyü `height: 40px`.
-NAV_ITEM_HEIGHT: Final = 40
+#: Maddələr arası boşluq (əvvəl 4px — bax `SIDEBAR_WIDTH` izahı).
+SIDEBAR_ITEM_SPACING: Final = 8
+#: Maddə hündürlüyü (əvvəl 40px).
+NAV_ITEM_HEIGHT: Final = 44
 #: İkon ilə mətn arası `gap: 11px`.
 NAV_ITEM_ICON_SPACING: Final = 11
 #: Bölmə başlığının alt boşluğu `padding: 0 12px 10px`.
 SIDEBAR_LABEL_BOTTOM: Final = 10
+#: Aç/bağla düyməsinin ölçüsü — sətir hündürlüyündən kiçikdir ki, panelin
+#: başlığında «maddə» kimi oxunmasın.
+SIDEBAR_TOGGLE_SIZE: Final = 28
 
 # --------------------------------------------------------------------------- #
 # Səhifə başlığı (header)

@@ -2174,6 +2174,20 @@ ROOT_HELP_STEPS: Final[tuple[str, ...]] = (
 )
 
 
+#: `QSpinBox` 32-bitdir — daha böyük hədd `OverflowError` atır.
+#:
+#: ──────────────────────────────────────────────────────────────────────────
+#: BU SABİT ROOT PARAMETRİ DEYİL — Qt-nin TİP HÜDUDUDUR
+#: ──────────────────────────────────────────────────────────────────────────
+#: `IMAGE_CACHE_MAX_BYTES` tavanı 8 GiB-dir (`8589934592`, migrations/032) və
+#: `QSpinBox.setRange()` onu qəbul EDƏ BİLMİR. Nəticə sadəcə çirkin görünüş
+#: deyildi: istisna `RootControlController._fill`-i ORTADA dayandırırdı, ona
+#: görə ROOT İdarə Mərkəzində limitlərin bir hissəsi görünür, fasilə
+#: parametrləri, modul açarları, icazə registri və brendinq bölmələri isə
+#: ÜMUMİYYƏTLƏ qurulmurdu — panel «boş» görünürdü.
+INT32_MAX: Final = 2_147_483_647
+
+
 class RootControlScreen(Screen):
     """Dinamik limitlər, modul açarları və icazə registri.
 
@@ -2717,16 +2731,27 @@ class RootControlScreen(Screen):
         layout.addWidget(body_label(label, size=13, wrap=False))
         layout.addWidget(stretch())
 
-        if isinstance(value, int):
+        # ƏDƏD OLMAQ KİFAYƏT DEYİL — 32 BİTƏ SIĞMALIDIR
+        #
+        # `QSpinBox` `int32` ilə işləyir və `IMAGE_CACHE_MAX_BYTES` tavanı
+        # (8 GiB) ona sığmır. Əvvəl bu, `OverflowError` idi və bütün paneli
+        # aparırdı (bax `INT32_MAX` şərhi). İndi belə limit MƏTN sahəsi kimi
+        # göstərilir: dəyər yenə redaktə olunur, yenə eyni `set_limit` yolundan
+        # keçir və hüdudlar yenə tətbiq qatında yoxlanılır — itən yeganə şey
+        # spin oxlarıdır.
+        fits_in_spin_box = isinstance(value, int) and abs(minimum) <= INT32_MAX
+        fits_in_spin_box = fits_in_spin_box and abs(maximum) <= INT32_MAX
+        if fits_in_spin_box:
             spin = QSpinBox()
             spin.setProperty("variant", "form")
             spin.setRange(minimum, maximum)
-            spin.setValue(value)
+            spin.setValue(int(value))
             spin.setSuffix(f" {suffix}")
             spin.setFixedWidth(160)
             numbers[key] = spin
             layout.addWidget(spin)
         else:
+            value = str(value)
             field = QLineEdit(value)
             field.setProperty("variant", "form")
             field.setFixedWidth(160)

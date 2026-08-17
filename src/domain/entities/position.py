@@ -139,6 +139,28 @@ class Position(AggregateRoot):
         """Strict Hierarchy Guard: CİDDİ ŞƏKİLDƏ yüksəkdirmi (bərabər → False)."""
         return self.priority.outranks(other.priority)
 
+    def may_be_edited_by(self, actor_position: Position | None) -> bool:
+        """`assert_may_be_edited_by`-ın SƏSSİZ variantı — siyahı süzgəci üçün.
+
+        ────────────────────────────────────────────────────────────────────
+        NİYƏ AYRICA METOD, `try/except` DEYİL
+        ────────────────────────────────────────────────────────────────────
+        `assert_...` uğursuzluqda `security.log`-a XƏBƏRDARLIQ yazır və bu,
+        doğrudur: kimsə qadağan olunmuş dəyişikliyə CƏHD edib. Siyahını
+        süzgəcdən keçirərkən isə heç bir cəhd yoxdur — sadəcə «bu sətir
+        göstərilsinmi?» sualı verilir. `try/except` işlətsəydik, matrisi
+        AÇMAQ hər dəfə onlarla saxta təhlükəsizlik xəbərdarlığı yazardı və
+        jurnaldakı əsl siqnal onların içində itərdi.
+
+        Qayda TƏKRARLANMIR — eyni iki şərt burada da, orada da `outranks()`
+        üzərindən oxunur.
+        """
+        if actor_position is None:
+            return False
+        if actor_position.effective_system_role is SystemRole.ROOT:
+            return True
+        return actor_position.outranks(self)
+
     def assert_may_be_edited_by(self, actor_position: Position | None) -> None:
         """STRICT HIERARCHY GUARD — bu rolun flag dəstinə kim toxuna bilər.
 

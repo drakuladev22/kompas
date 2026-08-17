@@ -84,6 +84,7 @@ _error_log = get_logger(__name__, channel=LogChannel.ERROR)
 
 SECTION_SCREEN: Final = "Ekran məlumatları"
 SECTION_DASHBOARD_SUMMARY: Final = "Xülasə sayğacları"
+SECTION_DASHBOARD_NETWORK: Final = "Şəbəkənin ölçüsü"
 SECTION_DASHBOARD_FINES: Final = "Filial üzrə cərimələr"
 SECTION_DASHBOARD_LEAVE: Final = "İcazə ölçəni"
 SECTION_DASHBOARD_LEADERS: Final = "Xal liderləri"
@@ -350,6 +351,16 @@ class ScreenDataBinder:
             event="DASHBOARD_SUMMARY_FAILED",
             fill=fill_summary,
         )
+        # «Neçə işçi, neçə filial» — AYRICA bölmə, çünki mənbəyi də ayrıdır:
+        # xülasə kartları günün/ayın əməliyyat rəqəmləridir, bu isə şirkətin
+        # ölçüsü. Ayrı bölmə həm də ayrı sınır: cərimə sorğusu pozulsa, say
+        # yenə görünür.
+        self._fill_section(
+            screen,
+            label=SECTION_DASHBOARD_NETWORK,
+            event="DASHBOARD_NETWORK_FAILED",
+            fill=lambda: self._dashboard_network(session, screen),
+        )
         self._fill_section(
             screen,
             label=SECTION_DASHBOARD_FINES,
@@ -389,6 +400,37 @@ class ScreenDataBinder:
             label=SECTION_DASHBOARD_BREAKS,
             event="DASHBOARD_BREAK_OVERUSE_FAILED",
             fill=lambda: self._dashboard_break_overuse(session, screen, today=today),
+        )
+
+    def _dashboard_network(self, session: Session, screen: Any) -> None:
+        """Aktiv işçi və filial sayı — «yaratdıqca artan» rəqəmlər.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ SAYĞAC, NİYƏ PARAMETR DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəl bu rəqəmlər başlıqda SABİT mətn idi («21 filial», «235 nəfər»)
+        və bir mağazalı quraşdırmada da göstərilirdi. Root parametrinə
+        çevirmək daha da pis olardı: `stores` cədvəli ilə sinxrondan çıxan
+        ikinci həqiqət mənbəyi yaranardı — mağaza əlavə edilir, rəqəm qalır.
+
+        `is_active` SÜZGƏCİ QƏSDLİDİR: deaktiv edilmiş mağaza/işçi sətri
+        arxivdə QALIR (soft delete), lakin şəbəkənin CARİ ölçüsü deyil.
+        """
+        row = session.uow.connection.execute(
+            """
+            SELECT
+                (SELECT count(*) FROM employees
+                  WHERE tenant_id = %s AND is_active) AS employee_count,
+                (SELECT count(*) FROM stores
+                  WHERE tenant_id = %s AND is_active) AS store_count
+            """,
+            (str(session.tenant_id), str(session.tenant_id)),
+        ).fetchone()
+        if row is None:  # pragma: no cover - `count(*)` həmişə sətir qaytarır
+            return
+        screen.set_network_size(
+            employees=int(row["employee_count"]),
+            stores=int(row["store_count"]),
         )
 
     def _dashboard_summary(

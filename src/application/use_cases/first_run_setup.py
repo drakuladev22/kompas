@@ -287,7 +287,25 @@ class FirstRunSetupUseCase:
         if provision_tenant:
             self._provision(tenant_id=tenant_id, root=root, stores=stores)
 
-        root_position = self._require_position(tenant_id, SystemRole.ROOT.value)
+        # ──────────────────────────────────────────────────────────────────────
+        # SİHİRBAZ `CEO` YARADIR, `Root` YOX
+        # ──────────────────────────────────────────────────────────────────────
+        # `Root` TƏCHİZATÇININ (developer) pilləsidir: `can_manage_permissions`,
+        # `can_manage_system_limits`, `can_switch_db`, `can_manage_license`,
+        # `can_manage_plugins` — beşi də sistemin ÖZÜNÜ idarə edən açarlardır,
+        # müştərinin biznesini yox. `CEO` isə müştərinin ən yüksək hesabıdır.
+        #
+        # Əvvəl sihirbaz `Root` yaradırdı və nəticə iki qat yanlış idi:
+        #   1. Müştəri quraşdırmanın ilk dəqiqəsində təchizatçı səlahiyyətlərini
+        #      alırdı — icazə modelini genişləndirə, bazanı dəyişə bilirdi;
+        #   2. `Root` pilləsi ARTIQ MƏŞĞUL olduğu üçün təchizatçının öz hesabı
+        #      müştərinin hesabı ilə eyni sətirdə dururdu və «kim nəyi etdi»
+        #      sualı auditdə ayrıla bilmirdi.
+        #
+        # `Root` rolu SİLİNMİR — o, `seed_tenant_defaults()` ilə yaradılır və
+        # boş qalır. Təchizatçı öz hesabını `scripts/onboard_new_tenant.py`
+        # ilə açır; müştəri sihirbazından belə bir yol YOXDUR.
+        executive_position = self._require_position(tenant_id, SystemRole.CEO.value)
 
         # 1. Mağazalar — işçi onlara bağlanacağı üçün ƏVVƏLCƏ yaradılır.
         store_ids: list[StoreId] = []
@@ -303,15 +321,17 @@ class FirstRunSetupUseCase:
             )
             store_ids.append(store_id)
 
-        # 2. Root hesabı.
+        # 2. Müştərinin ən yüksək hesabı (`CEO`) — bax yuxarıdakı izah.
         root_id = new_employee_id()
         root_employee = Employee(
             employee_id=root_id,
             tenant_id=tenant_id,
-            position=root_position,
+            position=executive_position,
             first_name=_require_text(root.first_name, label="Ad"),
             last_name=_require_text(root.last_name, label="Soyad"),
-            store_id=None,  # Root filiala bağlanmır — bütün şəbəkəyə baxır.
+            # Filiala bağlanmır: `CEO` bütün şəbəkəyə baxır və bir mağazaya
+            # bağlansaydı, hesabatlar sükutla həmin mağaza ilə məhdudlaşardı.
+            store_id=None,
             username=root.username,
             notification_email=root.recovery_email,
             has_password=True,

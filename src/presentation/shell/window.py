@@ -47,6 +47,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from src.presentation.shell import native_chrome
+from src.presentation.theme.tokens import ThemeMode
 from src.presentation.widgets import metrics
 from src.presentation.widgets.layout_utils import detach_layout
 from src.presentation.widgets.responsive import LayoutMode, mode_for_width
@@ -80,9 +81,14 @@ class FramelessWindow(QWidget):
     Signals:
         layout_mode_changed: Pəncərə eni tərtibat həddini keçdi
             (`LayoutMode` dəyəri). Bax `shell/responsive.py`.
+        theme_toggle_requested: Başlıq zolağındakı tema düyməsi basıldı.
     """
 
     layout_mode_changed = Signal(str)
+    #: Başlıq zolağı HƏR ekranda var (splash, sihirbaz, giriş, örtük) — ona
+    #: görə tema keçidi buradan da mümkündür. Pəncərə temanı ÖZÜ dəyişmir,
+    #: yalnız siqnalı ötürür (bax `apply_theme` yanındakı izah).
+    theme_toggle_requested = Signal()
 
     def __init__(
         self,
@@ -119,6 +125,11 @@ class FramelessWindow(QWidget):
             self._title_bar.minimize_requested.connect(self.showMinimized)
             self._title_bar.maximize_requested.connect(self.toggle_maximized)
             self._title_bar.close_requested.connect(self.close)
+            # Tema siqnalı pəncərədən YUXARI ötürülür — `KompasApplication`
+            # onu `toggle_theme()`-ə bağlayır. Pəncərə temanı ÖZÜ dəyişmir:
+            # keçid animasiyası, örtük ikonları və saxlanmış tercih bir yerdə,
+            # `app.py`-də idarə olunur.
+            self._title_bar.theme_toggle_requested.connect(self.theme_toggle_requested)
             self._layout.addWidget(self._title_bar)
 
         self._body = QWidget()
@@ -182,6 +193,9 @@ class FramelessWindow(QWidget):
             # yəni eyni marka iki yerdə iki cür görünmür (bax `tokens.py`,
             # `BRAND_TEAL_LIGHT` şərhi və `windows_app.png` referansı).
             brand_mark_color=theme.color("--color-brand-mark"),
+            # Düymə NƏTİCƏNİ göstərir: tünd rejimdə «günəş» (bax
+            # `TitleBar.set_theme_icon`).
+            dark_mode=theme.mode is ThemeMode.DARK,
         )
 
     # --------------------------- maksimallaşdırma ---------------------------- #
