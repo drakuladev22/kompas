@@ -2408,6 +2408,18 @@ def run(
         application.start()
 
     if context is not None:
+        # ──────────────────────────────────────────────────────────────────
+        # SERVER VAXTI SİNXRONİZASİYASI (TIME-1)
+        # ──────────────────────────────────────────────────────────────────
+        # Ekranlar qurulduqdan SONRA başladılır: ilk sorğu sinxrondur (lövbər
+        # hazır olmalıdır) və onu pəncərə görünməzdən əvvəl etmək açılışı
+        # şəbəkə gecikməsi qədər uzadardı. Vaxt-kritik ilk əməliyyat isə
+        # istifadəçinin girişindən sonra baş verir — o vaxta lövbər onsuz da
+        # hazırdır.
+        context.start_time_sync()
+        app.aboutToQuit.connect(context.stop_time_sync)
+        _attach_live_clock(app, application, context)
+
         # KAMERA TUTACAĞI BAĞLANIŞDA BURAXILIR (`facecontrol.md` Faza 3).
         # `OpenCvCameraCapture` cihazı AÇIQ saxlayır (hər doğrulamada bir
         # saniyəlik açılış qiymətini ödəməmək üçün — bax orada). Proses
@@ -2418,6 +2430,26 @@ def run(
 
     _log.info("GUI_STARTED", extra={"preview": preview, "kiosk": kiosk})
     return app.exec()
+
+
+def _attach_live_clock(
+    app: QApplication, application: KompasApplication, context: ApplicationContext
+) -> None:
+    """Başlıq zolağındakı saatı server vaxtına bağlayır (TIME-1 Faza 2.3).
+
+    Kiosk rejimində başlıq zolağı YOXDUR (`show_title_bar=False`) — o halda
+    `title_bar` `None` qaytarır və saat sadəcə qurulmur. Kiosk ekranı onsuz da
+    eyni `Clock` portundan oxuyur.
+
+    Taymer bağlanışda dayandırılır: `QTimer` widget-ə bağlıdır və Qt onu onsuz
+    da məhv edərdi, lakin `aboutToQuit` anında hələ diri olan taymerin bir dəfə
+    də tıqqıldaması artıq bağlanmış bazaya sorğu göndərə bilərdi.
+    """
+    title_bar = application.window().title_bar()
+    if title_bar is None:
+        return
+    title_bar.set_clock_source(context.clock, status=context.time_integrity_status)
+    app.aboutToQuit.connect(title_bar.live_clock.stop)
 
 
 def _leave_type_id_or_none(home: EmployeeHomeScreen) -> LeaveTypeId | None:

@@ -513,6 +513,84 @@ class TimeDriftDetectedEvent(DomainEvent):
 
 
 @dataclass(frozen=True, kw_only=True)
+class DeviceRegisteredEvent(DomainEvent):
+    """Yeni PC özünü qeydiyyata saldı → admin təsdiqi gözlənilir (DEVICE-1)."""
+
+    device_id: str
+    machine_name: str
+    device_type: str
+    #: Telefonla söylənilən qısa kod — admin cihazı bu kodla tapır.
+    short_code: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class DeviceApprovedEvent(DomainEvent):
+    """Admin cihazı təsdiqlədi və filiala təyin etdi (DEVICE-1)."""
+
+    device_id: str
+    store_id: str
+    device_type: str
+    approved_by: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class DeviceBlockedEvent(DomainEvent):
+    """Cihaz bloklandı — admin qərarı və ya passivlik həddi (DEVICE-1).
+
+    `automatic` sahəsi AYRICA saxlanılır, `blocked_by is None` yoxlaması ilə
+    kifayətlənilmir: audit oxuyan adam «kim etdi» sualına «heç kim» cavabını
+    izah edə bilməlidir — «sistem avtomatik» ilə «məlumat itib» arasındakı
+    fərq mübahisə halında əhəmiyyətlidir.
+    """
+
+    device_id: str
+    reason: str
+    blocked_by: str | None
+    automatic: bool
+
+
+@dataclass(frozen=True, kw_only=True)
+class DeviceFingerprintChangedEvent(DomainEvent):
+    """Cihazın aparat izi dəyişdi — BLOKLAMA YOX, xəbərdarlıq (DEVICE-1).
+
+    Səbəb `entities/registered_device.py` başlığındadır: disk dəyişdirmək
+    legitim təmirdir, `device_id` faylını köçürmək isə oğurluqdur — ikisini
+    yalnız adam ayırd edə bilər.
+    """
+
+    device_id: str
+    previous_fingerprint: str
+    observed_fingerprint: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class LocalClockManipulationDetectedEvent(DomainEvent):
+    """PC saatı Postgres server vaxtından həddindən çox fərqlənir (TIME-1).
+
+    `TimeDriftDetectedEvent`-DƏN FƏRQİ — və niyə ikisi birləşdirilmədi:
+
+        TimeDriftDetected            → mənbə NTP; ölçmə UDP/123 tələb edir və
+                                       mağaza şəbəkəsində tez-tez mümkün olmur.
+                                       Nəticə: vaxt-kritik əməliyyat BLOKLANIR.
+        LocalClockManipulationDetected → mənbə Postgres; onsuz da açıq olan
+                                       bağlantıdan gəlir, yəni HƏMİŞƏ ölçülür.
+                                       Nəticə: heç nə BLOKLANMIR.
+
+    Bloklanmamağın səbəbi budur ki, qeydlərin vaxtı artıq serverdən gəlir —
+    manipulyasiya onlara TƏSİR EDƏ BİLMİR. Yəni bloklamaq mağazanı
+    dayandırardı və müqabilində heç nə qorumazdı. Hadisə isə fırıldaqçılıq
+    NİYYƏTİNİN göstəricisidir: saatı dəyişməyə cəhd edən adamın kim olduğunu
+    HR_Admin bilməlidir.
+    """
+
+    #: Server vaxtı − PC-nin Windows saatı. Müsbət → PC-nin saatı GERİ qalır.
+    local_offset_seconds: float
+    #: Qüvvədə olan hədd (`LOCAL_CLOCK_MANIPULATION_THRESHOLD_SECONDS`).
+    threshold_seconds: float
+    machine_name: str
+
+
+@dataclass(frozen=True, kw_only=True)
 class SyncConflictDetectedEvent(DomainEvent):
     """Audit-kritik cədvəldə konflikt → HR_Admin-ə manual həll üçün."""
 
@@ -535,6 +613,10 @@ __all__ = [
     "AnnualLeaveDecidedEvent",
     "AnnualLeaveRequestedEvent",
     "DailyAttendanceSheetConfirmedEvent",
+    "DeviceApprovedEvent",
+    "DeviceBlockedEvent",
+    "DeviceFingerprintChangedEvent",
+    "DeviceRegisteredEvent",
     "DualControlApprovalRequestedEvent",
     "DualControlDecisionEvent",
     "EmployeeDocumentRecordedEvent",
@@ -549,6 +631,7 @@ __all__ = [
     "LeaveReturnClaimedEvent",
     "LeaveVerifiedEvent",
     "LicenseStatusChangedEvent",
+    "LocalClockManipulationDetectedEvent",
     "ManualTimeOverrideEvent",
     "MorningCheckInRejectedEvent",
     "MorningCheckInRequestedEvent",

@@ -389,6 +389,26 @@ class SystemLimitKey(str, Enum):
     NTP_QUERY_TIMEOUT_SECONDS = "NTP_QUERY_TIMEOUT_SECONDS"
     NTP_SAMPLE_TTL_SECONDS = "NTP_SAMPLE_TTL_SECONDS"
     NTP_MAX_ROUND_TRIP_SECONDS = "NTP_MAX_ROUND_TRIP_SECONDS"
+    # Server-lövbərli vaxt (TIME-1). NTP açarlarından AYRIDIR və onları ƏVƏZ
+    # ETMİR: NTP lokal saatın yanlışlığını ÖLÇÜR, Postgres isə qeydin vaxtını
+    # YAZIR. İkisi fərqli tezliklərdə işləyə bilər — NTP şəbəkədən asılıdır,
+    # baza sorğusu isə onsuz da açıq bağlantı üzərindən gedir və ucuzdur.
+    SERVER_TIME_SYNC_INTERVAL_SECONDS = "SERVER_TIME_SYNC_INTERVAL_SECONDS"
+    # Bu müddətdən uzun server-siz qalmış quraşdırmanın qeydləri «vaxt-dəqiqliyi
+    # şübhəli» kimi işarələnir. BLOKLAMA DEYİL — bax `time_integrity.py`.
+    SERVER_TIME_MAX_OFFLINE_TRUST_SECONDS = "SERVER_TIME_MAX_OFFLINE_TRUST_SECONDS"
+    # Windows saatının server vaxtından icazə verilən maksimum fərqi. Aşılarsa
+    # audit yazısı + HR_Admin bildirişi (fırıldaqçılıq siqnalı), əməliyyat isə
+    # BLOKLANMIR — vaxt onsuz da serverdən gəlir.
+    LOCAL_CLOCK_MANIPULATION_THRESHOLD_SECONDS = "LOCAL_CLOCK_MANIPULATION_THRESHOLD_SECONDS"
+    # Həmin bildirişin açıq/qapalı olması (1/0).
+    #
+    # NİYƏ `FeatureModule` DEYİL: modul toggle-ı BİZNES modulunu söndürür və
+    # retroaktiv təsir etmir (`CLAUDE.md` §5) — burada isə söndürülən şey bir
+    # BİLDİRİŞ KANALIDIR, modul deyil. Ayrıca, aşkarlamanın özü (audit yazısı)
+    # bu açardan ASILI DEYİL və söndürülə bilməz: susdurula bilən şey yalnız
+    # xəbərdarlığın çatdırılmasıdır, faktın qeydə alınması yox.
+    LOCAL_CLOCK_MANIPULATION_NOTIFY = "LOCAL_CLOCK_MANIPULATION_NOTIFY"
     # 1C: ad uyğunlaşmasının qərarsızlıq marjası, sinxronizasiya paralelliyi,
     # dövr başına səhifə tavanı, HTTP taymautu və təkrar cəhd sayı.
     ERP_MATCH_AMBIGUITY_MARGIN = "ERP_MATCH_AMBIGUITY_MARGIN"
@@ -1094,6 +1114,17 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.NTP_QUERY_TIMEOUT_SECONDS: "3.0",
     SystemLimitKey.NTP_SAMPLE_TTL_SECONDS: "1800",
     SystemLimitKey.NTP_MAX_ROUND_TRIP_SECONDS: "2.0",
+    # `timekeeping/server_time.py`: 5 dəq. sinxronizasiya, 4 saat oflayn
+    # etibarlılıq, 60 san. manipulyasiya həddi, bildiriş AÇIQ.
+    #
+    # 4 SAAT NİYƏ: bir iş növbəsindən qısadır. Növbə ərzində server qayıtmayıbsa
+    # həmin günün bütün davamiyyət qeydlərinin vaxtı şübhəlidir və HR bunu
+    # növbənin SONUNDA deyil, hələ gün içində görməlidir. Daha uzun dəyər
+    # (məs. 24 saat) xəbərdarlığı faydasız dərəcədə gec edərdi.
+    SystemLimitKey.SERVER_TIME_SYNC_INTERVAL_SECONDS: "300",
+    SystemLimitKey.SERVER_TIME_MAX_OFFLINE_TRUST_SECONDS: "14400",
+    SystemLimitKey.LOCAL_CLOCK_MANIPULATION_THRESHOLD_SECONDS: "60",
+    SystemLimitKey.LOCAL_CLOCK_MANIPULATION_NOTIFY: "1",
     # `erp/matching.py`, `erp/sync_worker.py`, `erp/one_c_connector.py`.
     SystemLimitKey.ERP_MATCH_AMBIGUITY_MARGIN: "0.05",
     SystemLimitKey.ERP_SYNC_MAX_PARALLEL_SERVERS: "4",

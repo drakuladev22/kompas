@@ -71,6 +71,14 @@ INFRA_LIMIT_BOUNDS: Final[dict[SystemLimitKey, tuple[Decimal, Decimal]]] = {
     SystemLimitKey.NTP_QUERY_TIMEOUT_SECONDS: (Decimal("1.0"), Decimal("30.0")),
     SystemLimitKey.NTP_SAMPLE_TTL_SECONDS: (Decimal(60), Decimal(86400)),
     SystemLimitKey.NTP_MAX_ROUND_TRIP_SECONDS: (Decimal("0.1"), Decimal("30.0")),
+    # Server-lövbərli vaxt (TIME-1). Aşağı hüdudlar QORUYUCUDUR: 10 saniyəlik
+    # sinxronizasiya bazanı mənasız yükləyər, 0 isə arxa fon sapını fasiləsiz
+    # dövrə salardı. Oflayn etibarlılığın aşağı hüdudu 300 s — sinxronizasiya
+    # intervalının özündən kiçik dəyər quraşdırmanı DAİMİ `UNTRUSTED` edərdi.
+    SystemLimitKey.SERVER_TIME_SYNC_INTERVAL_SECONDS: (Decimal(30), Decimal(86400)),
+    SystemLimitKey.SERVER_TIME_MAX_OFFLINE_TRUST_SECONDS: (Decimal(300), Decimal(604800)),
+    SystemLimitKey.LOCAL_CLOCK_MANIPULATION_THRESHOLD_SECONDS: (Decimal(5), Decimal(3600)),
+    SystemLimitKey.LOCAL_CLOCK_MANIPULATION_NOTIFY: (Decimal(0), Decimal(1)),
     SystemLimitKey.ERP_MATCH_AMBIGUITY_MARGIN: (Decimal("0.01"), Decimal("0.50")),
     SystemLimitKey.ERP_SYNC_MAX_PARALLEL_SERVERS: (Decimal(1), Decimal(32)),
     SystemLimitKey.ERP_SYNC_MAX_PAGES_PER_RUN: (Decimal(1), Decimal(1000)),

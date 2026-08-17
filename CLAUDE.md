@@ -58,7 +58,7 @@ Hər dəyişiklikdən sonra HAMISI keçməlidir:
 .venv/Scripts/python.exe -m ruff check src/ tests/ scripts/
 .venv/Scripts/python.exe -m ruff format src/ tests/ scripts/
 .venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (320 fayl)
-QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 4656 test, 47 skip
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 5010 test, 54 skip
 .venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast
 ```
 
@@ -191,6 +191,14 @@ bilməz (`docs/security_decisions.md`):
 * **Strict Hierarchy Guard** — yalnız CİDDİ ŞƏKİLDƏ aşağı pilləyə toxunmaq olar.
 * **Self-Escalation Guard** — aktor yalnız ÖZÜNDƏ olan flag-i verə bilər.
 * **Dörd-səviyyəli hardlock** — `HardlockLevel` (`authorization.py`).
+* **Vaxt-möhürü client-dən qəbul edilmir (TIME-1)** — `created_at` (cərimə,
+  etiraz, icazə, davamiyyət) və `fines.published_at` `BEFORE INSERT/UPDATE`
+  trigger-i ilə server vaxtına MƏCBUR edilir (`migrations/062`). Bu qayda da
+  İKİ yerdədir: DB trigger-ində və tətbiqdə (`Clock` portu artıq
+  `ServerTimeService`-dir, yəni Windows saatı dəyişsə də vaxt sürüşmür).
+  `DEFAULT now()` tək başına KİFAYƏT ETMİR — sütunun adı `INSERT`-də açıq
+  çəkiləndə default yan keçilir və repozitoriyaların bir qismi məhz belə
+  yazırdı.
 
 Hər qayda İKİ yerdə var: domendə (`value_objects/authorization.py`) və DB
 trigger-ində (`schema.sql` §18). Birini dəyişəndə DİGƏRİ də dəyişməlidir.
@@ -231,6 +239,7 @@ sonra əlavə olunur:
 | `PANEL_LIMIT = 50` | `notification_repositories.py` | 620px panel hündürlüyünün nəticəsi, biznes həddi deyil |
 | `_DAYS_PER_MONTH = 30` | `attrition_repository.py` | Domendəki eyni təxminin güzgüsü — ikisi birlikdə dəyişməlidir |
 | `RESET_MONTHS = (1, 7)` | `gamification.py` | Mühasibatlıq yarımillikləri — təqvim faktı |
+| `FRESHNESS_INTERVAL_MULTIPLIER = 2.0` | `server_time.py` | Sinxronizasiya intervalının NƏTİCƏSİ, ayrıca siyasət deyil: bir buraxılmış dövr hələ nasazlıq deyil, ikisi artıq nasazlıqdır. Root-a verilsəydi interval ilə ziddiyyətli qoşa dəyər yaranardı |
 
 Bu sabitlər üçün şərh şablonu FƏRQLİDİR: «fallback» yazılmır, **niyə Root
 parametri olmadığı** yazılır.
@@ -366,6 +375,8 @@ qalmır, qərara çevrilir.
 |---|---|
 | İcazə flag kataloqu — **50 flag** (36 `schema.sql`-də: 34 spesifikasiyadan + `can_publish_fines`, `can_manage_drive_connection`; qalan 14 miqrasiyalarda: 021 +6, 038 +6, 047 +1, 056 +1) | `database/schema.sql` §22 + miqrasiyalar |
 | Miqrasiya icraçısı və reyestri | `scripts/apply_migrations.py`, `migrations/061` |
+| Server-lövbərli vaxt + manipulyasiya aşkarlaması | `src/infrastructure/timekeeping/server_time.py`, `migrations/062` |
+| Vaxt etibarlılıq səviyyəsi (domen) | `src/domain/value_objects/time_integrity.py` |
 | Hardlock/anti-fraud qaydaları | `src/domain/value_objects/authorization.py` |
 | Menyu maddələri + flag bağlantısı | `src/presentation/shell/menu.py` |
 | Sistem limitləri & Feature Toggle açarları | `src/domain/policies.py` |

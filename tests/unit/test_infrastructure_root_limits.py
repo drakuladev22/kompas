@@ -12,9 +12,9 @@ test dərhal qırılır və dəyişikliyin şüurlu qərar olduğunu tələb edi
 Üç ayrı qapı var:
 
   1. DEFOLT = KÖHNƏ HARDCODE — köçürmə davranışı dəyişmədi.
-  2. ARALIQ PARİTETİ — `INFRA_LIMIT_BOUNDS` ilə migrations/032-dəki
-     `min_value`/`max_value` eyni olmalıdır. Ayrılsalar, ROOT ekranı "qəbul
-     edilən" göstərən dəyəri kod sükutla kəsərdi.
+  2. ARALIQ PARİTETİ — `INFRA_LIMIT_BOUNDS` ilə seed miqrasiyalarındakı
+     (`_MIGRATIONS`) `min_value`/`max_value` eyni olmalıdır. Ayrılsalar, ROOT
+     ekranı "qəbul edilən" göstərən dəyəri kod sükutla kəsərdi.
   3. CANLI OXU — Root dəyəri dəyişdikdə kod YENİ dəyəri oxumalıdır (köhnəni
      keşləməməlidir), səhv dəyər isə tətbiqi işləməz vəziyyətə salmamalıdır.
 
@@ -46,11 +46,23 @@ from tests.fixtures.fakes import FakeSystemLimits
 
 TENANT: Final = TenantId(uuid.UUID("11111111-1111-1111-1111-111111111111"))
 
-_MIGRATION: Final[Path] = (
-    Path(__file__).resolve().parents[2]
-    / "database"
-    / "migrations"
-    / "032_infrastructure_runtime_limits.sql"
+_MIGRATIONS_DIR: Final[Path] = Path(__file__).resolve().parents[2] / "database" / "migrations"
+
+#: İnfrastruktur limitlərini seed edən BÜTÜN miqrasiyalar.
+#:
+#: Əvvəl burada TƏK fayl (032) vardı və qapı «açar 032-dədir?» soruşurdu. Bu,
+#: 032 yazılan gün doğru idi, lakin qaydanı faylın adına bağlamışdı: sonrakı
+#: miqrasiya ilə gələn hər yeni infrastruktur açarı qapını POZURDU — halbuki
+#: onun qüsuru yox idi, sadəcə başqa faylda yaşayırdı. Nəticədə qapı ya
+#: yumşaldılmalı, ya da hər yeni açar 032-yə geri yazılmalı olardı; ikincisi
+#: tətbiq olunmuş miqrasiyanı sonradan redaktə etmək deməkdir və `schema_
+#: migrations` checksum-u ilə birbaşa ziddiyyətdədir (migrations/061).
+#:
+#: Ona görə siyahı FAYL DEYİL, DƏSTdir. Yeni infrastruktur açarı gətirən
+#: miqrasiya buraya bir sətir əlavə edir.
+_MIGRATIONS: Final[tuple[Path, ...]] = (
+    _MIGRATIONS_DIR / "032_infrastructure_runtime_limits.sql",
+    _MIGRATIONS_DIR / "062_server_time_integrity.sql",
 )
 
 #: Açar → Faza 10.2-dən ƏVVƏL kodda oturan HƏRFİ dəyər.
@@ -110,6 +122,22 @@ _ORIGINAL_HARDCODES: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.UPDATE_DOWNLOAD_TIMEOUT_SECONDS: "300.0",
     SystemLimitKey.UPDATE_SIGNED_URL_TTL_SECONDS: "3600",
     SystemLimitKey.UPDATE_CATALOG_FETCH_LIMIT: "20",
+    # ----------------------------------------------------------------------- #
+    # TIME-1 (migrations/062) — BUNLAR HEÇ VAXT HARDCODE OLMAYIB
+    # ----------------------------------------------------------------------- #
+    # Yuxarıdakı açarlar Faza 10.2 auditinin KÖÇÜRDÜYÜ sabitlərdir və dəyər
+    # sütunu «əvvəl kodda nə yazılırdı» sualına cavab verir. Aşağıdakı dördü
+    # isə YENİ funksiya ilə birlikdə doğulub — köçürüləcək köhnə sabit yox idi.
+    #
+    # Onlar yenə də bu siyahıya yazılır, çünki qapının İKİNCİ vəzifəsi
+    # köçürmə tarixçəsi deyil, ƏHATƏdir: `INFRA_LIMIT_BOUNDS`-da aralığı olan
+    # hər açar burada da görünməlidir (bax `test_every_infrastructure_key_...`).
+    # Dəyər sütunu onlar üçün «modulun fallback sabiti» mənasını daşıyır —
+    # `server_time.py`-dakı `FALLBACK_*` ilə eyni ədəd.
+    SystemLimitKey.SERVER_TIME_SYNC_INTERVAL_SECONDS: "300",
+    SystemLimitKey.SERVER_TIME_MAX_OFFLINE_TRUST_SECONDS: "14400",
+    SystemLimitKey.LOCAL_CLOCK_MANIPULATION_THRESHOLD_SECONDS: "60",
+    SystemLimitKey.LOCAL_CLOCK_MANIPULATION_NOTIFY: "1",
 }
 
 
@@ -186,23 +214,34 @@ def test_defaults_are_inside_their_own_bounds() -> None:
 # --------------------------------------------------------------------------- #
 
 
+def _seeding_body(path: Path) -> str:
+    """Miqrasiyanın şərhsiz gövdəsi — DOWN blokunda yalnız açar adları var."""
+    text = path.read_text(encoding="utf-8")
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("--"))
+
+
 def _migration_bounds() -> dict[str, tuple[Decimal, Decimal]]:
-    """migrations/032-dəki `(limit_key, min_value, max_value)` üçlükləri.
+    """`_MIGRATIONS`-dəki `(limit_key, min_value, max_value)` üçlükləri.
 
     SQL parse edilmir — `VALUES` sətirləri sabit formatdadır və regex kifayət
-    edir. Faylın İKİ bölməsində eyni siyahı var (mövcud kirayəçilər + yeni
+    edir. Hər faylın İKİ bölməsində eyni siyahı var (mövcud kirayəçilər + yeni
     kirayəçi trigger-i); ikisi arasındakı fərq də aşağıda ayrıca yoxlanılır.
     """
-    text = _MIGRATION.read_text(encoding="utf-8")
-    # Şərh sətirlərini (DOWN bloku) çıxarırıq — orada yalnız açar adları var.
-    body = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("--"))
     pattern = re.compile(
         r"\('(?P<key>[A-Z0-9_]+)',\s*'[^']*',\s*'(?:INTEGER|DECIMAL|TEXT)',\s*"
         r"'(?P<min>[0-9.]+)',\s*'(?P<max>[0-9.]+)'"
     )
     found: dict[str, tuple[Decimal, Decimal]] = {}
-    for match in pattern.finditer(body):
-        found[match.group("key")] = (Decimal(match.group("min")), Decimal(match.group("max")))
+    for path in _MIGRATIONS:
+        for match in pattern.finditer(_seeding_body(path)):
+            key = match.group("key")
+            bounds = (Decimal(match.group("min")), Decimal(match.group("max")))
+            # Eyni açarın İKİ miqrasiyada fərqli hüdudla görünməsi sükutlu
+            # qüsurdur: hansının qüvvədə olduğu tətbiq SIRASINDAN asılı olardı.
+            assert found.get(key, bounds) == bounds, (
+                f"`{key}` iki miqrasiyada fərqli hüdudlarla seed edilir: {found[key]} ≠ {bounds}"
+            )
+            found[key] = bounds
     return found
 
 
@@ -213,8 +252,11 @@ def test_code_bounds_match_the_migration() -> None:
     sükutla kəsərdi — istifadəçi "niyə tətbiq olunmur?" sualına cavab tapmazdı.
     """
     sql_bounds = _migration_bounds()
+    names = ", ".join(path.name for path in _MIGRATIONS)
     for key in _ORIGINAL_HARDCODES:
-        assert key.value in sql_bounds, f"`{key.value}` migrations/032-də seed edilməyib"
+        assert key.value in sql_bounds, (
+            f"`{key.value}` heç bir miqrasiyada ({names}) seed edilməyib"
+        )
         assert sql_bounds[key.value] == INFRA_LIMIT_BOUNDS[key], (
             f"`{key.value}`: SQL {sql_bounds[key.value]} ≠ kod {INFRA_LIMIT_BOUNDS[key]}"
         )
@@ -226,13 +268,20 @@ def test_migration_seeds_both_existing_and_new_tenants_identically() -> None:
     Birində unudulsa, yeni kirayəçi parametrsiz qalar (və ya əksinə) — bu,
     yalnız aylar sonra "niyə bu mağazada ekran boşdur?" şəklində üzə çıxardı.
     """
-    text = _MIGRATION.read_text(encoding="utf-8")
-    body = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("--"))
+    bodies = {path.name: _seeding_body(path) for path in _MIGRATIONS}
     for key in _ORIGINAL_HARDCODES:
-        occurrences = body.count(f"('{key.value}',")
-        assert occurrences == 2, (
-            f"`{key.value}` migrations/032-də {occurrences} dəfə görünür — "
+        counts = {name: body.count(f"('{key.value}',") for name, body in bodies.items()}
+        total = sum(counts.values())
+        assert total == 2, (
+            f"`{key.value}` miqrasiyalarda {total} dəfə görünür ({counts}) — "
             "hər açar həm mövcud, həm yeni kirayəçi bloklarında olmalıdır."
+        )
+        # Hər iki görünüş EYNİ faylda olmalıdır: açarı bir miqrasiyada mövcud
+        # kirayəçilərə, digərində trigger-ə yazmaq həmin iki miqrasiya arasında
+        # yaranan quraşdırmanı parametrsiz qoyardı.
+        assert 2 in counts.values(), (
+            f"`{key.value}` iki miqrasiyaya BÖLÜNÜB ({counts}) — "
+            "mövcud kirayəçi INSERT-i və trigger bloku eyni faylda olmalıdır."
         )
 
 

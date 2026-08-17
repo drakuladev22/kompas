@@ -55,6 +55,7 @@ o cümlədən PIN handshake, işləmir)". `license_state()` həmin qərarı veri
 
 from __future__ import annotations
 
+import socket
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -64,6 +65,10 @@ from typing import TYPE_CHECKING, Any, Final
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.infrastructure.config.limits import InfrastructureLimits
 from src.infrastructure.timekeeping.clock import SystemClock
+from src.infrastructure.timekeeping.server_time import (
+    PostgresServerTimeProbe,
+    ServerTimeService,
+)
 from src.shared.data_paths import resolve_data_file
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
@@ -136,8 +141,9 @@ if TYPE_CHECKING:
     from src.application.use_cases.task_workflow import TaskWorkflowUseCase
     from src.application.use_cases.user_management import EmployeeDraft, UserManagementUseCase
     from src.domain.entities.employee import Employee
-    from src.domain.interfaces.ports import NtpVerifier
+    from src.domain.interfaces.ports import Clock, NtpVerifier
     from src.domain.value_objects.identifiers import EmployeeId, TenantId
+    from src.domain.value_objects.time_integrity import TimeIntegrityStatus
     from src.infrastructure.erp.servers import ErpServerRepository
     from src.infrastructure.licensing.client import LicenseClient
     from src.infrastructure.persistence.connection import PostgresUnitOfWork
@@ -835,7 +841,6 @@ class ApplicationContext:
         # tenant yaratmağın yolu məhz belə açılır. Ona görə həmin halda
         # sihirbaz açıq xəta verir, sükutla sətir YARATMIR.
         self._self_hosted = self_hosted
-        self._clock = SystemClock()
         # NTP yoxlayıcısı verilməyibsə `_NullNtp` işlədilir: o, HƏMİŞƏ
         # "təsdiqlənməyib" qaytarır, lakin sürüşmə ÖLÇÜLMƏYİB deyir. Nəticədə
         # `TIME_DRIFT_DETECTED` bloku işə DÜŞMÜR (ölçmə yoxdur, hədd
@@ -877,6 +882,35 @@ class ApplicationContext:
         self._infrastructure_limits = InfrastructureLimits(
             limits=_RootLimitReader(database), tenant_id=tenant_id
         )
+        # ──────────────────────────────────────────────────────────────────
+        # VAXT SERVER LÖVBƏRLİDİR (TIME-1)
+        # ──────────────────────────────────────────────────────────────────
+        # Əvvəl burada — yuxarıda, `self_hosted` sətrinin yanında —
+        # `SystemClock()`, yəni Windows saatı vardı. Bütün domen qatı `Clock`
+        # portundan oxuduğu üçün həmin BİR sətir bütün davamiyyət, cərimə və
+        # timeout hesabını mağaza PC-sinin saatına bağlayırdı: saatı 20 dəqiqə
+        # geri çəkmək gecikməni və onun cəriməsini silərdi.
+        #
+        # İndi vaxt Postgres `clock_timestamp()`-dan lövbərlənir, aradakı
+        # müddət isə `time.monotonic()` ilə ölçülür — sistem saatının
+        # dəyişməsi nəticəyə TƏSİR ETMİR.
+        #
+        # QURULMA YERİ QƏSDƏN BURADIR, `__init__`-in SONUNDA: servis
+        # `_infrastructure_limits`-dən asılıdır (sinxronizasiya intervalı ROOT
+        # parametridir) və o, yuxarıdakı sətirdə yenicə qurulur.
+        #
+        # `SystemClock` yox olmur — lövbər hələ alınmayıbsa (tətbiqin ilk
+        # anları, baza əlçatmaz) FALLBACK odur; həmin halda
+        # `time_integrity_status()` `UNTRUSTED` qaytarır, yəni sistem
+        # bilmədiyini GİZLƏTMİR.
+        self._server_time = ServerTimeService(
+            probe=PostgresServerTimeProbe(database),
+            fallback_clock=SystemClock(),
+            limits=self._infrastructure_limits,
+            machine_name=socket.gethostname(),
+            on_manipulation=self._on_clock_manipulation,
+        )
+        self._clock: Clock = self._server_time
 
     @property
     def database(self) -> TenantDatabase:
@@ -1321,6 +1355,94 @@ class ApplicationContext:
         except Exception:
             _error_log.exception("NTP_DRIFT_READ_FAILED")
             return None
+
+    # ------------------------- server-lövbərli vaxt --------------------------- #
+
+    @property
+    def clock(self) -> Clock:
+        """Tətbiqin vaxt mənbəyi — server lövbərli (TIME-1).
+
+        Təqdimat qatı bunu YALNIZ göstərmək üçün alır (canlı saat). Yazma
+        yolları vaxtı use case-lərdən götürür və onlar onsuz da eyni port
+        nüsxəsini alır — ekranın öz `datetime.now()` çağırışı olsaydı, o,
+        bu qatın bütün mənasını yan keçərdi.
+        """
+        return self._clock
+
+    def start_time_sync(self) -> None:
+        """Server vaxtı sinxronizasiyasını başladır (TIME-1).
+
+        Örtük açılışında çağırılır. Uğursuzluq DAYANDIRICI DEYİL: lövbər
+        qurulmasa `Clock` fallback saata düşür və vəziyyət `UNTRUSTED` olur —
+        tətbiqin işə düşməməsi vaxtın təxmini olmasından pis nəticədir.
+        """
+        try:
+            self._server_time.start()
+        except Exception:
+            _error_log.exception("SERVER_TIME_START_FAILED")
+
+    def stop_time_sync(self) -> None:
+        """Arxa fon sapını dayandırır — bağlanma yolunda çağırılır."""
+        with suppress(Exception):
+            self._server_time.stop()
+
+    def time_integrity_status(self) -> TimeIntegrityStatus:
+        """Vaxtın hazırkı etibarlılıq səviyyəsi — ekran və audit üçün."""
+        return self._server_time.status()
+
+    def server_time_health(self) -> dict[str, object]:
+        """Sistem Sağlamlığı ekranı üçün sətir (bölmə 6)."""
+        try:
+            return self._server_time.health
+        except Exception:
+            _error_log.exception("SERVER_TIME_HEALTH_READ_FAILED")
+            return {}
+
+    def _on_clock_manipulation(self, offset_seconds: float, threshold_seconds: float) -> None:
+        """PC saatı serverdən çox fərqlənir → HR_Admin-ə bildiriş (TIME-1 Faza 4).
+
+        ──────────────────────────────────────────────────────────────────────
+        AŞKARLAMA SÖNDÜRÜLƏ BİLMİR — YALNIZ ÇATDIRILMA
+        ──────────────────────────────────────────────────────────────────────
+        `LOCAL_CLOCK_MANIPULATION_NOTIFY = 0` yazılsa bu metod bildiriş
+        GÖNDƏRMİR, lakin hadisə `security.log`-a onsuz da düşüb (bax
+        `ServerTimeService._check_manipulation`). Yəni Root susdura biləcəyi
+        şey xəbərdarlığın ÇATDIRILMASIDIR, faktın QEYDƏ ALINMASI yox —
+        fırıldaqçılıq siqnalının konfiqurasiya ilə silinməsi onu siqnal
+        olmaqdan çıxarardı.
+
+        ARXA FON SAPINDAN ÇAĞIRILIR: istisna buradan yuxarı qalxsa
+        sinxronizasiya dövrəsini pozar, ona görə hər şey udulur və jurnala
+        yazılır.
+        """
+        try:
+            if self._infrastructure_limits.int_of(SystemLimitKey.LOCAL_CLOCK_MANIPULATION_NOTIFY):
+                self._send_clock_manipulation_notice(offset_seconds, threshold_seconds)
+        except Exception:
+            _error_log.exception("CLOCK_MANIPULATION_NOTIFY_FAILED")
+
+    def _send_clock_manipulation_notice(self, offset_seconds: float, threshold: float) -> None:
+        """Bildirişi yazır — `DriveQuotaMonitor._notify` ilə eyni naxış."""
+        from src.infrastructure.notifications.notifier import PostgresNotifier  # noqa: PLC0415
+
+        machine = socket.gethostname()
+        direction = "geri" if offset_seconds > 0 else "irəli"
+        minutes = abs(offset_seconds) / 60.0
+        PostgresNotifier(self._database, limits=self._infrastructure_limits).notify(
+            tenant_id=self._tenant_id,
+            # `recipient_id=None` → tenant səviyyəli bildiriş; marşrutlaşdırma
+            # icazə flag-inə görə olur, ayrıca alıcı siyahısı SAXLANMIR.
+            recipient_id=None,
+            category="CLOCK_MANIPULATION",
+            title_az="Saat manipulyasiyası aşkarlandı",
+            body_az=(
+                f"«{machine}» kompüterinin saatı server vaxtından {minutes:.0f} dəqiqə "
+                f"{direction} qalıb (icazə verilən hədd {threshold / 60:.0f} dəqiqə). "
+                "Qeydlərin vaxtı server saatı ilə yazılır — dəyişiklik onlara təsir "
+                "etməyib. Bu, saatı dəyişməyə cəhdin göstəricisidir."
+            ),
+            is_critical=True,
+        )
 
     # --------------------------- üz təsdiqi qatı ----------------------------- #
     #

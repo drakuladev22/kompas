@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 from src.domain.policies import SystemLimitKey
+from src.domain.value_objects.time_integrity import APPROXIMATE_LEVELS, TimeTrustLevel
 from src.infrastructure.config.limits import (
     InfrastructureLimits,
     fallback_float,
@@ -106,7 +107,13 @@ CREATE TABLE IF NOT EXISTS outbox (
     queued_at                 TEXT NOT NULL,
     next_attempt_at           TEXT NOT NULL,
     synced_at                 TEXT,
-    remote_version_encrypted  TEXT
+    remote_version_encrypted  TEXT,
+    -- TIME-1: yazının vaxt-möhürü hansı mənbədən gəldi. Oflayn növbənin
+    -- MƏNASI budur ki, server əlçatmaz idi — yəni bu sütun tez-tez
+    -- `SERVER_VERIFIED`-dən fərqli olacaq və bu, NORMALdır. Saxlanmasının
+    -- səbəbi sonradan «bu qeyd nə vaxt yarandı» sualına dürüst cavab
+    -- verməkdir: sinxronizasiya anındakı server vaxtı YARANMA anı DEYİL.
+    time_trust_level          TEXT NOT NULL DEFAULT 'SERVER_VERIFIED'
 );
 CREATE INDEX IF NOT EXISTS idx_outbox_ready ON outbox (sync_status, next_attempt_at, seq);
 CREATE INDEX IF NOT EXISTS idx_outbox_record ON outbox (table_name, record_id, sync_status);
@@ -147,10 +154,18 @@ class BufferedWrite:
     last_error: str | None = None
     #: Konflikt halında uzaq versiyanın surəti (hər iki versiya saxlanılır).
     remote_version: dict[str, Any] | None = None
+    #: Yazının vaxt-möhürünün mənbəyi (TIME-1). Sinxronizasiya anında DEYİL,
+    #: YARANMA anında təyin olunur — sonradan bərpa etmək mümkün olmazdı.
+    time_trust: TimeTrustLevel = TimeTrustLevel.SERVER_VERIFIED
 
     @property
     def is_audit_critical(self) -> bool:
         return self.table_name in AUDIT_CRITICAL_TABLES
+
+    @property
+    def has_approximate_time(self) -> bool:
+        """Vaxtı təxminidirsə `True` — HR_Admin siyahısı bunu soruşur."""
+        return self.time_trust in APPROXIMATE_LEVELS
 
     @property
     def record_key(self) -> tuple[str, str]:
@@ -204,7 +219,29 @@ class OfflineBuffer:
         self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
+        self._upgrade_schema()
         _log.info("OFFLINE_BUFFER_OPENED", extra={"path": str(self._path)})
+
+    def _upgrade_schema(self) -> None:
+        """Mövcud SQLite fayllarına sonradan gələn sütunları əlavə edir.
+
+        `CREATE TABLE IF NOT EXISTS` MÖVCUD cədvələ sütun ƏLAVƏ ETMİR — o,
+        cədvəl varsa heç nə etmir. Yəni yeni sütun yalnız TƏMİZ quraşdırmada
+        yaranardı və yenilənən mağazada `no such column` ilə çökərdi. Bufer
+        faylı isə istifadəçinin `%LOCALAPPDATA%`-sındadır: onu silmək
+        sinxronlaşdırılmamış davamiyyət qeydlərini silmək deməkdir.
+
+        Postgres tərəfdəki `database/migrations/` mexanizmi buraya
+        gətirilmədi: burada bir SQLite faylı və bir neçə sütun var, versiya
+        ağacı deyil (eyni qərar `migrations/061`-də Alembic üçün verilmişdi).
+        """
+        existing = {row["name"] for row in self._conn.execute("PRAGMA table_info(outbox)")}
+        if "time_trust_level" not in existing:
+            self._conn.execute(
+                "ALTER TABLE outbox ADD COLUMN time_trust_level TEXT "
+                "NOT NULL DEFAULT 'SERVER_VERIFIED'"
+            )
+            _log.info("OFFLINE_BUFFER_SCHEMA_UPGRADED", extra={"column": "time_trust_level"})
 
     def _backoff_schedule(self) -> tuple[int, ...]:
         """Təkrar cəhd cədvəli — HƏR UĞURSUZLUQDA oxunur.
@@ -234,8 +271,18 @@ class OfflineBuffer:
         payload: dict[str, Any],
         base_version: datetime | None = None,
         now: datetime | None = None,
+        time_trust: TimeTrustLevel = TimeTrustLevel.SERVER_VERIFIED,
     ) -> str:
-        """Yazını növbəyə salır və onun `id`-sini qaytarır."""
+        """Yazını növbəyə salır və onun `id`-sini qaytarır.
+
+        Args:
+            time_trust: yazının vaxt-möhürünün mənbəyi (TIME-1). Defolt
+                `SERVER_VERIFIED`-dir, çünki bufer YALNIZ oflayn halda deyil,
+                keçici şəbəkə nasazlığında da işlədilir — çağıran tərəf
+                vəziyyəti bilirsə onu AÇIQ ötürür. Defolt olaraq `UNTRUSTED`
+                seçmək bütün növbəni şübhəli göstərərdi və işarə mənasını
+                itirərdi.
+        """
         moment = now or datetime.now(UTC)
         entry_id = str(uuid.uuid4())
         token = self._encryption.encrypt(
@@ -249,8 +296,8 @@ class OfflineBuffer:
                 INSERT INTO outbox (
                     id, seq, tenant_id, table_name, record_id, operation,
                     payload_encrypted, base_version, sync_status, attempts,
-                    queued_at, next_attempt_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)
+                    queued_at, next_attempt_at, time_trust_level
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?, ?)
                 """,
                 (
                     entry_id,
@@ -263,11 +310,17 @@ class OfflineBuffer:
                     base_version.isoformat() if base_version else None,
                     moment.isoformat(),
                     moment.isoformat(),
+                    time_trust.value,
                 ),
             )
         _log.info(
             "OFFLINE_WRITE_QUEUED",
-            extra={"table": table_name, "record_id": record_id, "operation": operation.value},
+            extra={
+                "table": table_name,
+                "record_id": record_id,
+                "operation": operation.value,
+                "time_trust_level": time_trust.value,
+            },
         )
         return entry_id
 
@@ -484,6 +537,7 @@ class OfflineBuffer:
             next_attempt_at=datetime.fromisoformat(row["next_attempt_at"]),
             last_error=row["last_error"],
             remote_version=remote,
+            time_trust=TimeTrustLevel(row["time_trust_level"]),
         )
         return write
 

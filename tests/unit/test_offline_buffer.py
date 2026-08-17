@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from src.domain.value_objects.time_integrity import TimeTrustLevel
 from src.infrastructure.offline.buffer import (
     AUDIT_CRITICAL_TABLES,
     BufferedWrite,
@@ -359,3 +360,79 @@ def test_json_payload_is_stored_as_object_not_string(buffer: OfflineBuffer) -> N
     assert isinstance(write.payload, dict)
     assert write.payload["nested"] == {"a": 1}
     assert json.dumps(write.payload)
+
+
+# --------------------------------------------------------------------------- #
+# Vaxt-etibarlılığı (TIME-1 Faza 3)
+# --------------------------------------------------------------------------- #
+
+
+def test_the_time_trust_level_survives_the_round_trip(buffer: OfflineBuffer) -> None:
+    """Səviyyə YARANMA anında yazılır və oxunanda geri gəlir.
+
+    Sinxronizasiya anında hesablansaydı yanlış olardı: o an server ONSUZ DA
+    əlçatandır, yəni hər oflayn qeyd «server ilə təsdiqlənib» görünərdi.
+    """
+    buffer.enqueue(
+        tenant_id="22222222-2222-2222-2222-222222222222",
+        table_name="attendance_records",
+        record_id="33333333-3333-3333-3333-333333333333",
+        operation=Operation.INSERT,
+        payload={"check_in_status": "PENDING_VERIFICATION"},
+        now=T0,
+        time_trust=TimeTrustLevel.MONOTONIC_ESTIMATE,
+    )
+    write = buffer.pending(now=T0)[0]
+
+    assert write.time_trust is TimeTrustLevel.MONOTONIC_ESTIMATE
+    assert write.has_approximate_time
+
+
+def test_the_default_trust_level_is_server_verified(buffer: OfflineBuffer) -> None:
+    """Bufer yalnız oflayn halda işlədilmir — defolt «şübhəli» OLMAMALIDIR.
+
+    Defolt `UNTRUSTED` seçilsəydi, keçici şəbəkə nasazlığında növbəyə düşən
+    hər yazı şübhəli görünərdi və işarə mənasını itirərdi.
+    """
+    enqueue(buffer)
+    write = buffer.pending(now=T0)[0]
+
+    assert write.time_trust is TimeTrustLevel.SERVER_VERIFIED
+    assert not write.has_approximate_time
+
+
+def test_an_existing_buffer_file_gains_the_new_column(
+    tmp_path: Path, encryption: EncryptionService
+) -> None:
+    """Köhnə SQLite faylı `no such column` ilə ÇÖKMƏMƏLİDİR.
+
+    `CREATE TABLE IF NOT EXISTS` mövcud cədvələ sütun əlavə etmir. Bufer faylı
+    isə istifadəçinin diskindədir və onu silmək sinxronlaşdırılmamış davamiyyət
+    qeydlərini silmək deməkdir — yəni «yenidən yarat» variant deyil.
+    """
+    path = tmp_path / "legacy.db"
+    legacy = sqlite3.connect(path)
+    legacy.executescript(
+        """
+        CREATE TABLE outbox (
+            id TEXT PRIMARY KEY, seq INTEGER NOT NULL, tenant_id TEXT NOT NULL,
+            table_name TEXT NOT NULL, record_id TEXT NOT NULL,
+            operation TEXT NOT NULL CHECK (operation IN ('INSERT', 'UPDATE')),
+            payload_encrypted TEXT NOT NULL, base_version TEXT,
+            sync_status TEXT NOT NULL DEFAULT 'PENDING'
+                CHECK (sync_status IN ('PENDING', 'SYNCED', 'CONFLICT')),
+            attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+            queued_at TEXT NOT NULL, next_attempt_at TEXT NOT NULL,
+            synced_at TEXT, remote_version_encrypted TEXT
+        );
+        CREATE TABLE outbox_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        """
+    )
+    legacy.close()
+
+    buf = OfflineBuffer(path, encryption=encryption)
+    try:
+        enqueue(buf)
+        assert buf.pending(now=T0)[0].time_trust is TimeTrustLevel.SERVER_VERIFIED
+    finally:
+        buf.close()

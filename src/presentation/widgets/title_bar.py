@@ -38,10 +38,16 @@ from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QSizePolicy, QWidget
 from src.presentation.theme.manager import enable_styled_background
 from src.presentation.widgets import brand_assets, metrics
 from src.presentation.widgets.buttons import WindowButton
+from src.presentation.widgets.live_clock import LiveClock
 from src.presentation.widgets.primitives import image_label, plain_label
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from PySide6.QtGui import QMouseEvent
+
+    from src.domain.interfaces.ports import Clock
+    from src.domain.value_objects.time_integrity import TimeIntegrityStatus
 
 
 class TitleBar(QWidget):
@@ -98,6 +104,18 @@ class TitleBar(QWidget):
 
         layout.addStretch(1)
 
+        # ------------------------------------------------------------------
+        # CANLI SAAT — SERVER VAXTI (TIME-1)
+        # ------------------------------------------------------------------
+        # Yeri qəsdən pəncərə düymələrinin SOLUNDADIR: zolağın sağ küncü
+        # OS-in idarə düymələrinə aiddir və istifadəçi oraya "bağla" gözləyir.
+        # Saat mərkəzə qoyulsaydı başlıq mətni ilə yer üstündə yarışardı.
+        #
+        # Mənbə verilməyənə qədər BOŞDUR və taymeri işləmir — maket/önizləmə
+        # yolu saatsız qurulur (bax `live_clock.py` başlığı).
+        self._clock_widget = LiveClock()
+        layout.addWidget(self._clock_widget)
+
         self._minimize = WindowButton("minimize")
         self._minimize.clicked.connect(self.minimize_requested)
         layout.addWidget(self._minimize)
@@ -116,6 +134,25 @@ class TitleBar(QWidget):
     def set_title(self, title: str) -> None:
         """Başlıq mətnini dəyişir — Developer Panelində "KompasOS — Master"."""
         self._title.setText(title)
+
+    def set_clock_source(
+        self,
+        clock: Clock,
+        *,
+        status: Callable[[], TimeIntegrityStatus] | None = None,
+    ) -> None:
+        """Canlı saatı server vaxtına bağlayır (TIME-1).
+
+        `app.py` bunu örtük qurulduqdan sonra çağırır. Çağırılmasa zolaqda
+        saat GÖRÜNMÜR — yanlış (lokal) saat göstərməkdənsə heç nə göstərməmək
+        doğrudur, çünki zolaqdakı rəqəmə istifadəçi sənəd kimi baxır.
+        """
+        self._clock_widget.set_source(clock, status=status)
+
+    @property
+    def live_clock(self) -> LiveClock:
+        """Saat widget-i — pəncərə bağlananda taymeri dayandırmaq üçün."""
+        return self._clock_widget
 
     # ------------------------------ vəziyyət --------------------------------- #
 
