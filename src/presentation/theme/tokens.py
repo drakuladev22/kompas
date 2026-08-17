@@ -419,6 +419,36 @@ METRICS: Final[dict[str, str]] = {
     #: Təqvim gün xanası (`design_reference/calendar.jpg`) — kartdan kiçik,
     #: idarəetmədən böyük: xana nə düymədir, nə də kart.
     "--radius-cell": "12",
+    # --- sol naviqasiya ritmi -------------------------------------------- #
+    #
+    # ──────────────────────────────────────────────────────────────────────
+    # NİYƏ TOKEN, NİYƏ QSS-DƏ ƏDƏD DEYİL
+    # ──────────────────────────────────────────────────────────────────────
+    # `qss.py` `QPushButton[variant="nav"]`-a `min-height: 40px; max-height:
+    # 40px` YAZIRDI. Nəticə sükutlu idi: `metrics.NAV_ITEM_HEIGHT` dəyişəndə
+    # panel GÖRÜNÜŞDƏ dəyişmirdi, çünki QSS öz ədədi ilə onu üstələyirdi.
+    # Yəni «maddələr iç-içədir» şikayətinin bir hissəsi məhz bu boşluqdan
+    # gəlirdi: ölçü iki yerdə idi və biri digərini görmürdü.
+    #
+    # `metrics.NAV_ITEM_HEIGHT` ilə EYNİ dəyər olmalıdır —
+    # `test_navigation_shell_ux` ikisini tutuşdurur.
+    "--nav-item-height": "44",
+    #: Maddələr arası boşluq (`metrics.SIDEBAR_ITEM_SPACING` ilə eyni).
+    "--nav-item-gap": "8",
+    #: İkon ↔ mətn aralığı (`metrics.NAV_ITEM_ICON_SPACING` ilə eyni).
+    #: Referans maketdə (`navbar.jpg`) bu aralıq mətnin nəfəs almasını təmin
+    #: edən ən görünən detaldır — 11px-də sətir «bir söz» kimi oxunurdu.
+    "--nav-icon-gap": "12",
+    #: Sol panelin aç/bağla düyməsi (`metrics.SIDEBAR_TOGGLE_SIZE`).
+    "--sidebar-toggle-size": "28",
+    #: Başlıq zolağı düymələri (`metrics.WINDOW_BUTTON_WIDTH` / `TITLEBAR_HEIGHT`).
+    #:
+    #: TOKEN LAZIM OLDU, çünki QSS-in `min-width`/`max-width` qaydası Qt-də
+    #: `setFixedSize()`-i ÜSTƏLƏYİR: `variant="icon"` baza qaydası 34×34
+    #: yazırdı və Python tərəfdən verilən ölçü sükutla nəzərə alınmırdı.
+    #: Nəticədə tema düyməsi pəncərə düymələrindən kiçik qalırdı.
+    "--window-button-width": "46",
+    "--titlebar-height": "38",
     "--border-width": "1",
     "--focus-ring-width": "2",
     # Kassa PC-lərində toxunma ekranı ola bilər — minimum hədəf ölçüsü.

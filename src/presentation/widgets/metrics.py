@@ -95,10 +95,24 @@ SIDEBAR_PADDING_H: Final = 12
 SIDEBAR_ITEM_SPACING: Final = 8
 #: Maddə hündürlüyü (əvvəl 40px).
 NAV_ITEM_HEIGHT: Final = 44
-#: İkon ilə mətn arası `gap: 11px`.
-NAV_ITEM_ICON_SPACING: Final = 11
-#: Bölmə başlığının alt boşluğu `padding: 0 12px 10px`.
+#: İkon ilə mətn arası aralıq (əvvəl 11px).
+#:
+#: `navbar.jpg` referansında bu, sətrin oxunaqlılığını müəyyən edən ən
+#: görünən ölçüdür: 11px-də ikon və mətn BİR blok kimi oxunurdu. Dəyər
+#: `tokens.METRICS["--nav-icon-gap"]` ilə eyni olmalıdır — biri QSS-ə,
+#: digəri layout-a gedir və fərqlənsələr ikon ilə mətn iki fərqli aralıqla
+#: düzülərdi.
+NAV_ITEM_ICON_SPACING: Final = 12
+#: Bölmə başlığının alt boşluğu.
 SIDEBAR_LABEL_BOTTOM: Final = 10
+#: Naviqasiya sətrinin SOL PADDING-i — `qss.py`-dakı `padding: 0 --space-md`
+#: ilə EYNİ dəyər olmalıdır.
+#:
+#: Bölmə etiketi (`Naviqasiya`) bu dəyərlə hizalanır: fərqlənsələr panelin sol
+#: kənarında İKİ şaquli xətt yaranır — etiket bir yerdən, ikonlar başqa
+#: yerdən başlayır. `navbar.jpg` referansında «MAIN MENU» etiketi ilə
+#: maddələrin ikonları dəqiq eyni xətdədir.
+NAV_ITEM_TEXT_INDENT: Final = 16
 #: Aç/bağla düyməsinin ölçüsü — sətir hündürlüyündən kiçikdir ki, panelin
 #: başlığında «maddə» kimi oxunmasın.
 SIDEBAR_TOGGLE_SIZE: Final = 28

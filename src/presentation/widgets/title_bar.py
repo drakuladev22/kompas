@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
 
 from src.presentation.theme.manager import enable_styled_background
 from src.presentation.widgets import brand_assets, icons, metrics
-from src.presentation.widgets.buttons import TitleBarIconButton, WindowButton
+from src.presentation.widgets.buttons import KeyFocusIconButton, WindowButton
 from src.presentation.widgets.live_clock import LiveClock
 from src.presentation.widgets.primitives import image_label, plain_label
 
@@ -142,12 +142,17 @@ class TitleBar(QWidget):
         # «bağla» sahəsidir və istifadəçi oraya səhvən basmamalıdır.
         # İkon `WindowButton` DEYİL — o, minimize/maximize/close ailəsinin
         # görünüşünü daşıyır və tema keçidi OS əməliyyatı kimi oxunardı.
-        self._theme_button = TitleBarIconButton(
+        # ÖLÇÜ PƏNCƏRƏ DÜYMƏLƏRİ İLƏ EYNİDİR (navbar.md PROBLEM 3 bənd 3).
+        # 34×34 kvadrat qalsaydı, tam hündürlüklü düzbucaqlı düymələrin yanında
+        # «dairə» kimi oxunardı — istifadəçi hesabatı bunu belə təsvir etdi.
+        self._theme_button = KeyFocusIconButton(
             "moon",
             "",
             tooltip="Görünüşü dəyiş",
             accessible_name="Görünüş rejimini dəyiş",
             accessible_description="İşıqlı və tünd tema arasında keçid edir",
+            width=metrics.WINDOW_BUTTON_WIDTH,
+            height=metrics.TITLEBAR_HEIGHT,
         )
         self._theme_button.clicked.connect(self.theme_toggle_requested)
         layout.addWidget(self._theme_button)

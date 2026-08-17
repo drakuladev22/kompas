@@ -26,7 +26,7 @@ from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QVBoxLayout
 
 from src.presentation.theme.manager import enable_styled_background
 from src.presentation.widgets import icons, metrics
-from src.presentation.widgets.buttons import NavButton, icon_button
+from src.presentation.widgets.buttons import KeyFocusIconButton, NavButton
 from src.presentation.widgets.primitives import section_label, stretch
 from src.presentation.widgets.safe_text import plain_tooltip
 
@@ -95,21 +95,36 @@ class Sidebar(QWidget):
         # menyuda ekrandan çıxardı.
         header = QWidget()
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(12, 0, 0, metrics.SIDEBAR_LABEL_BOTTOM)
+        # SOL KƏNAR NAVİQASİYA SƏTRİ İLƏ EYNİDİR.
+        #
+        # Əvvəl burada 12px vardı, `QPushButton[variant="nav"]` isə QSS-də
+        # `padding: 0 16px` daşıyır — yəni bölmə etiketi ikonlardan 4px SOLDA
+        # başlayırdı və panelin sol kənarında iki fərqli şaquli xətt yaranırdı
+        # (navbar.md PROBLEM 1 bənd 4). Dəyər `--space-md`-nin özündən gəlir:
+        # ikisi bir tokendən oxunmasa, biri dəyişəndə digəri sükutla geridə
+        # qalar.
+        header_layout.setContentsMargins(
+            metrics.NAV_ITEM_TEXT_INDENT, 0, 0, metrics.SIDEBAR_LABEL_BOTTOM
+        )
         header_layout.setSpacing(4)
 
         self._section = section_label(section_title)
         header_layout.addWidget(self._section)
         header_layout.addWidget(stretch())
 
-        self._toggle = icon_button(
+        # `icon_button()` DEYİL: bu düymə panelin İLK fokus ala bilən
+        # elementidir, yəni pəncərə açılanda fokusu O alır və adi `:focus`
+        # qaydası halqanı şərtsiz çəkirdi. İstifadəçi hesabatı bunu «ağ dairəvi
+        # cizgi» kimi təsvir etdi (navbar.md PROBLEM 1 bənd 6).
+        self._toggle = KeyFocusIconButton(
             "chevron_left",
             idle_icon_color,
             tooltip="Paneli daralt",
             accessible_name="Naviqasiya panelini daralt",
             accessible_description="Sol paneli yalnız ikonlara qədər daraldır",
+            width=metrics.SIDEBAR_TOGGLE_SIZE,
+            height=metrics.SIDEBAR_TOGGLE_SIZE,
         )
-        self._toggle.setFixedSize(metrics.SIDEBAR_TOGGLE_SIZE, metrics.SIDEBAR_TOGGLE_SIZE)
         self._toggle.clicked.connect(self._on_toggle_clicked)
         header_layout.addWidget(self._toggle)
 

@@ -175,6 +175,11 @@ class NavButton(QPushButton):
         self._active = False
 
         self.setProperty("variant", "nav")
+        # Başlanğıc dəyər AÇIQ yazılır: Qt təyin olunmamış dinamik xüsusiyyəti
+        # `[compact="false"]` kimi saymır (eyni səbəb `WindowButton`-dakı
+        # `keyfocus`-da). Yazılmasa, ilk `set_compact(False)` çağırışına qədər
+        # seçici heç bir vəziyyətlə uyğun gəlmir.
+        self.setProperty("compact", "false")
         self.setProperty("active", "false")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setCheckable(True)
@@ -230,6 +235,21 @@ class NavButton(QPushButton):
         """
         self.setText("" if compact else self.toolTip() or self.text())
         self.setToolTip(self.text() if not compact else self.toolTip())
+        # ──────────────────────────────────────────────────────────────────
+        # DARALDILMIŞ REJİMDƏ İKON MƏRKƏZDƏ OLUR
+        # ──────────────────────────────────────────────────────────────────
+        # `variant="nav"` QSS-də `text-align: left` və `padding: 0 16px`
+        # daşıyır — açıq paneldə düzgündür, çünki mətn ikonun ardından gəlir
+        # və hamısı bir şaquli xətdən başlayır. Daraldılmış paneldə isə mətn
+        # YOXDUR: eyni sol padding ikonu 64px-lik zolağın sol yarısına
+        # sıxışdırırdı və ikonlar mərkəz oxundan sürüşürdü (navbar.jpg-də
+        # daraldılmış zolaqda ikonlar TAM mərkəzdədir).
+        #
+        # `variant` dəyişdirilmir — rəng/fon/aktiv vəziyyət qaydaları eyni
+        # qalmalıdır. Yalnız `compact` xüsusiyyəti qoyulur və QSS onu
+        # mərkəzləmə üçün oxuyur.
+        self.setProperty("compact", "true" if compact else "false")
+        refresh_widget_style(self)
 
     def _refresh_icon(self) -> None:
         color = self._active_color if self._active else self._idle_color
@@ -300,12 +320,23 @@ class KeyFocusRingMixin:
         refresh_widget_style(self)  # type: ignore[arg-type]
 
 
-class TitleBarIconButton(KeyFocusRingMixin, QPushButton):
-    """Başlıq zolağındakı ikon düyməsi (tema keçidi).
+class KeyFocusIconButton(KeyFocusRingMixin, QPushButton):
+    """Halqası YALNIZ klaviatura fokusunda çıxan ikon düyməsi.
 
-    `icon_button()` fabrikasından fərqi YALNIZ fokus halqasındadır: səhifə
-    başlığındakı ikon düymələri məzmun sahəsindədir və heç vaxt ilk fokusu
-    almır, başlıq zolağındakı isə HƏR AÇILIŞDA alır (bax mixin izahı).
+    `icon_button()` fabrikasından fərqi budur. İki yerdə işlənir və ikisində
+    də səbəb eynidir: həmin düymə öz səthinin İLK fokus ala bilən elementidir,
+    yəni pəncərə açılanda fokusu O alır (bax mixin izahı).
+
+        * başlıq zolağı — tema keçidi;
+        * sol panel — aç/bağla düyməsi.
+
+    Səhifə başlığındakı ikon düymələri bu sinifdən İSTİFADƏ ETMİR: onlar
+    məzmun sahəsindədir və ilk fokusu heç vaxt almır, ona görə adi `:focus`
+    halqası orada düzgün davranışdır.
+
+    Ölçü VERİLƏNDƏN gəlir: başlıq zolağında pəncərə düymələri ilə eyni
+    olmalıdır (navbar.md PROBLEM 3 bənd 3), sol paneldə isə naviqasiya
+    sətrindən kiçik.
     """
 
     def __init__(
@@ -316,6 +347,8 @@ class TitleBarIconButton(KeyFocusRingMixin, QPushButton):
         tooltip: str = "",
         accessible_name: str = "",
         accessible_description: str = "",
+        width: int = metrics.HEADER_ICON_BUTTON,
+        height: int = metrics.HEADER_ICON_BUTTON,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -326,7 +359,11 @@ class TitleBarIconButton(KeyFocusRingMixin, QPushButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setIcon(icons.icon(icon_name, color))
         self.setIconSize(QSize(icons.DEFAULT_SIZE, icons.DEFAULT_SIZE))
-        self.setFixedSize(metrics.HEADER_ICON_BUTTON, metrics.HEADER_ICON_BUTTON)
+        self.setFixedSize(width, height)
+        # QSS-in `min/max` qaydası Qt-də `setFixedSize()`-i üstələyə bilir
+        # (bax `qss.py`-dakı izah). Sərt siyasət ölçünü layout tərəfindən də
+        # kilidləyir — əks halda düymə ikonun `sizeHint`-inə yığılırdı.
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         # `TabFocus` — səbəb `WindowButton`-dakı ilə eynidir: siçanla klikləmək
         # halqa qoymamalıdır, klaviatura yolu isə açıq qalmalıdır.
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)

@@ -239,3 +239,160 @@ def test_only_read_only_screens_are_reloaded_on_revisit() -> None:
     from src.presentation.app import KompasApplication
 
     assert set(KompasApplication.REFRESH_ON_REVISIT) == {"dashboard"}
+
+
+# --------------------------------------------------------------------------- #
+# `navbar.md` + `navbar.jpg` — vizual düzülüş qapıları
+# --------------------------------------------------------------------------- #
+
+
+def test_the_row_height_is_not_hardcoded_in_the_stylesheet() -> None:
+    """Sətir hündürlüyü İKİ yerdə OLMAMALIDIR.
+
+    Qüsurun ÖZ ssenarisi: `qss.py` `min-height: 40px; max-height: 40px`
+    yazırdı və bu, `metrics.NAV_ITEM_HEIGHT`-i sükutla üstələyirdi — Python
+    tərəfdə ölçü dəyişəndə panel GÖRÜNÜŞDƏ eyni qalırdı. «Maddələr
+    iç-içədir» hesabatının bir hissəsi məhz bu ikili mənbədən gəlirdi.
+    """
+    from src.presentation.theme import tokens
+
+    source = (_REPO / "src" / "presentation" / "theme" / "qss.py").read_text(encoding="utf-8")
+    nav_block = source[source.index('QPushButton[variant="nav"] {') :]
+    # `index("}")` YARAMIR: token sintaksisi `{{--ad}}` ilə yazılır, yəni ilk
+    # `}` elə tokenin içindədir. Blok SƏTİR BAŞINDAKI `}` ilə bitir.
+    nav_block = nav_block[: nav_block.index("\n}")]
+
+    assert "{{--nav-item-height}}" in nav_block, "hündürlük tokendən gəlmir"
+    assert not re.search(r"min-height:\s*\d", nav_block), "QSS-də ədəd qalıb"
+
+    # Token və metrik EYNİ dəyər olmalıdır — biri QSS-ə, digəri layout-a gedir.
+    assert tokens.METRICS["--nav-item-height"] == str(metrics.NAV_ITEM_HEIGHT)
+    assert tokens.METRICS["--nav-icon-gap"] == str(metrics.NAV_ITEM_ICON_SPACING)
+
+
+def test_the_section_label_does_not_use_the_mono_family() -> None:
+    """«NAVİQASİYA» etiketi mono şriftdə OLMAMALIDIR.
+
+    İstifadəçi onu «NAVIOASIYA» kimi görürdü. Mətn doğru idi (`az_upper`
+    doctest ilə qorunur) — problem renderdə: mono ailə bu sinif maşınlarda
+    həll olunmur (`CLAUDE.md` §2) və əvəzedici şrift `İ`-nin nöqtəsini,
+    `Q`-nun quyruğunu itirir.
+    """
+    source = (_REPO / "src" / "presentation" / "theme" / "qss.py").read_text(encoding="utf-8")
+    block = source[source.index("QLabel#SectionLabel {") :]
+    block = block[: block.index(chr(10) + "}")]  # bax yuxarıdaki `}}` izahı
+    assert "{{--font-family-mono}}" not in block, "bölmə etiketi yenidən mono şriftdədir"
+    assert "{{--font-family}}" in block
+
+
+def test_the_uppercase_helper_keeps_azerbaijani_letters() -> None:
+    """Mətnin ÖZÜ doğrudur — qapı bunu da təsdiqləyir."""
+    from src.presentation.i18n.text import az_upper
+
+    assert az_upper("Naviqasiya") == "NAVİQASİYA"
+
+
+@requires_qt
+def test_the_section_label_lines_up_with_the_icons(qtbot, qt_app) -> None:  # type: ignore[no-untyped-def]
+    """Etiket və ikonlar DƏQİQ eyni şaquli xətdən başlayır.
+
+    Əvvəl etiketin sol kənarı 12px, naviqasiya sətrinin ikonu isə 12+16=28px
+    idi — panelin sol kənarında iki fərqli xətt görünürdü (navbar.md PROBLEM 1
+    bənd 4).
+    """
+    from src.presentation.theme.manager import ThemeManager
+    from src.presentation.widgets.sidebar import Sidebar
+
+    theme = ThemeManager()
+    theme.apply(qt_app)
+    bar = Sidebar(
+        idle_icon_color=theme.color("--color-nav-item-icon"),
+        active_icon_color=theme.color("--color-brand-amber"),
+    )
+    qtbot.addWidget(bar)
+    # Geometry YALNIZ göstərildikdən sonra hesablanır — `show()` olmadan bütün
+    # koordinatlar sıfırdır və ölçmə mənasız olardı.
+    bar.show()
+    qt_app.processEvents()
+
+    label_left = bar._section.mapTo(bar, bar._section.rect().topLeft()).x()
+    expected = metrics.SIDEBAR_PADDING_H + metrics.NAV_ITEM_TEXT_INDENT
+    assert label_left == expected, (
+        f"etiket {label_left}px-dən başlayır, ikonlar isə {expected}px-dən"
+    )
+
+
+@requires_qt
+def test_the_collapsed_rail_centres_its_icons(qtbot, qt_app) -> None:  # type: ignore[no-untyped-def]
+    """Daraldılmış zolaqda mətn TAM gizlənir, ikon MƏRKƏZDƏ olur.
+
+    `navbar.jpg`-də nazik zolaqda ikonlar dəqiq mərkəzdədir. Sol padding
+    qalsaydı, 64px-lik zolaqda ikon sol yarıya sıxışardı və «kəsilmiş mətn»
+    təsiri yaranardı (navbar.md PROBLEM 1 bənd 7).
+    """
+    from src.domain.value_objects.authorization import PermissionFlag
+    from src.presentation.navigation import MenuEntry
+    from src.presentation.theme.manager import ThemeManager
+    from src.presentation.widgets.sidebar import Sidebar
+
+    theme = ThemeManager()
+    theme.apply(qt_app)
+    bar = Sidebar(
+        idle_icon_color=theme.color("--color-nav-item-icon"),
+        active_icon_color=theme.color("--color-brand-amber"),
+    )
+    qtbot.addWidget(bar)
+    bar.set_entries([MenuEntry(key="dashboard", title_az="İdarə Paneli", icon="dashboard")])
+    button = bar._buttons["dashboard"]
+
+    assert button.property("compact") == "false"
+    assert button.text() == "İdarə Paneli"
+
+    bar.set_collapsed(True)
+    assert button.property("compact") == "true", "QSS mərkəzləmə şərti qoyulmur"
+    assert button.text() == "", "daraldılmış rejimdə mətn qalıb"
+    # Ad ekran oxuyucusu üçün İTMİR (mövcud zəmanət).
+    assert button.accessibleName().strip()
+
+    assert PermissionFlag is not None
+
+
+@requires_qt
+def test_the_title_bar_buttons_share_one_size_and_centre(qtbot, qt_app) -> None:  # type: ignore[no-untyped-def]
+    """Dörd düymə (tema, kiçilt, böyüt, bağla) EYNİ ölçü və mərkəzdə.
+
+    Tema düyməsi əvvəl 34×34 idi və tam hündürlüklü düzbucaqlıların yanında
+    «dairə» kimi oxunurdu (navbar.md PROBLEM 3 bənd 3).
+    """
+    from src.presentation.theme.manager import ThemeManager
+    from src.presentation.widgets.title_bar import TitleBar
+
+    theme = ThemeManager()
+    theme.apply(qt_app)
+    bar = TitleBar()
+    qtbot.addWidget(bar)
+    bar.show()
+    qt_app.processEvents()
+
+    buttons = (bar.theme_button(), *bar.buttons())
+    sizes = {(b.width(), b.height()) for b in buttons}
+    assert len(sizes) == 1, f"düymələr fərqli ölçüdədir: {sizes}"
+
+    centres = {b.mapTo(bar, b.rect().center()).y() for b in buttons}
+    assert len(centres) == 1, f"şaquli mərkəzlər fərqlidir: {centres}"
+
+
+def test_icon_buttons_on_bare_surfaces_have_no_border() -> None:
+    """Sol panel və başlıq zolağındaki ikon düyməsi SƏRHƏDSİZDİR.
+
+    İstifadəçi hesabatı: «narıncı düzbucaqlı + ağ dairəvi cizgi, dizayn
+    sisteminə heç uyğun deyil». Baza `variant="icon"` qaydası 1px sərhəd +
+    8px künc daşıyır — səhifə başlığında doğrudur (orada düymənin varlığını
+    göstərən yeganə şey sərhəddir), bu iki səthdə isə qutu kimi ayırır.
+    """
+    source = (_REPO / "src" / "presentation" / "theme" / "qss.py").read_text(encoding="utf-8")
+    marker = '#Sidebar QPushButton[variant="icon"],\n#TitleBar QPushButton[variant="icon"] {'
+    assert marker in source, "sərhədsiz qayda yoxdur"
+    block = source[source.index(marker) :]
+    block = block[: block.index(chr(10) + "}")]  # bax `}}` izahı
+    assert "border: none" in block

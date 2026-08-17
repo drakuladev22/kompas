@@ -15,7 +15,7 @@ konteynerdə saxlanılır və nişan `move()` ilə mütləq mövqeyə qoyulur.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QWidget
 
@@ -181,16 +181,24 @@ class PageHeader(QWidget):
         layout.addStretch(1)
 
         # ------------------------------ sağ tərəf --------------------------- #
-        self._theme_button = icon_button(
-            "sun" if dark_mode else "moon",
-            icon_color,
-            tooltip="Görünüşü dəyiş",
-            accessible_name="Görünüş rejimini dəyiş",
-            accessible_description="İşıqlı və tünd tema arasında keçid edir",
-        )
-        self._theme_button.clicked.connect(self.theme_toggled)
-        layout.addWidget(self._theme_button)
-
+        #
+        # ──────────────────────────────────────────────────────────────────
+        # TEMA DÜYMƏSİ BURADAN SİLİNDİ — DUBLİKAT İDİ
+        # ──────────────────────────────────────────────────────────────────
+        # Eyni əməliyyat başlıq zolağındadır (`widgets/title_bar.py`) və orada
+        # HƏR ekranda görünür — splash, sihirbaz, giriş, örtük. Bu düymə isə
+        # yalnız örtüyün içində, yəni girişdən SONRA görünürdü.
+        #
+        # İki düymə saxlamaq iki problem yaradırdı: (a) istifadəçi eyni
+        # funksiyanı iki yerdə görürdü, (b) sağ blokda üç element (tema, zəng,
+        # avatar) qalırdı və onların şaquli mərkəzi/aralığı bir-birinə
+        # uyğunlaşdırıla bilmirdi — 34×34 kvadrat düymə ilə dairəvi avatar
+        # yanaşı simmetrik oturmur.
+        #
+        # `theme_toggled` SİQNALI QALIR: `AdminShell` onu ötürür və xarici
+        # kod (`app.py`) həmin bağlantıya güvənir. Siqnalı da silmək örtüyün
+        # ictimai API-sini dəyişmək olardı — halbuki tələb yalnız DÜYMƏNİN
+        # silinməsidir (navbar.md PROBLEM 2 bənd 1).
         self._bell = NotificationBell(
             icon_color=icon_color,
             badge_bg=badge_bg,
@@ -253,8 +261,11 @@ class PageHeader(QWidget):
         dark_mode: bool,
     ) -> None:
         self._icon_color = icon_color
-        self._theme_button.setIcon(icons.icon("sun" if dark_mode else "moon", icon_color))
-        self._theme_button.setIconSize(QSize(icons.DEFAULT_SIZE, icons.DEFAULT_SIZE))
+        # `dark_mode` PARAMETRİ QALIR: tema düyməsi buradan silinsə də
+        # (bax konstruktor izahı), çağıranların imzası dəyişməməlidir —
+        # `AdminShell.apply_theme()` onu ötürür və gələcəkdə rejimə görə
+        # dəyişən başqa element əlavə oluna bilər.
+        _ = dark_mode
         self._bell.apply_theme(
             icon_color=icon_color,
             badge_bg=badge_bg,

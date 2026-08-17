@@ -459,14 +459,39 @@ QWidget#NavigationSidebar {
    Böyük hərflər və hərf aralığı QSS-də YOXDUR — onlar `primitives.py`-da
    QFont ilə verilir. Şrift ailəsi mono-dur: maketdə bu etiket `IBM Plex
    Mono` ilə yazılır və onu adi mətndən məhz şrift fərqi ayırır. */
+/* «NAVİQASİYA» ETİKETİ MONO ŞRİFTDƏN ÇIXARILDI.
+
+   İstifadəçi hesabatı: etiket «NAVIOASIYA» kimi görünürdü. Mətn DOĞRU idi
+   (`az_upper("Naviqasiya")` → `NAVİQASİYA`, doctest ilə qorunur) — problem
+   RENDERDƏ idi: bu qayda `--font-family-mono` tələb edir, həmin ailə isə bu
+   sinif maşınlarda HƏLL OLUNMUR (`CLAUDE.md` §2 qeydi:
+   `test_mono_role_resolves_to_a_fixed_pitch_font` məhz buna görə atlanır).
+   Qt əvəzedici şrift seçir və o, `İ`-nin nöqtəsini, `Q`-nun quyruğunu itirir.
+
+   Mono şrift `tokens.py` başlığında izah olunan İŞ üçündür: rəqəmləri sütunda
+   düzmək (ID, versiya, məbləğ). Bölmə etiketi rəqəm daşımır — sütun
+   düzülüşünə ehtiyacı yoxdur, yəni mono onun üçün heç vaxt lazım deyildi.
+   İnterfeys şrifti + hərf aralığı (`primitives.section_label`) referans
+   maketdəki (`navbar.jpg`) «MAIN MENU» görünüşünü onsuz da verir. */
 QLabel#SectionLabel {
     background-color: transparent;
     color: {{--color-text-muted}};
-    font-family: {{--font-family-mono}};
+    font-family: {{--font-family}};
     font-size: {{--font-size-xs}};
     font-weight: {{--font-weight-medium}};
 }
 
+/* HÜNDÜRLÜK ARTIQ BURADA ƏDƏD DEYİL.
+
+   Əvvəl `min-height: 40px; max-height: 40px` yazılırdı və bu, sükutla
+   `metrics.NAV_ITEM_HEIGHT`-i ÜSTƏLƏYİRDİ: Python tərəfdə ölçü dəyişəndə
+   panel görünüşdə eyni qalırdı. «Maddələr iç-içədir» şikayətinin bir hissəsi
+   məhz bu ikili mənbədən gəlirdi.
+
+   `padding` SOL və SAĞ üçün eynidir — aktiv maddənin fon-bloku mətn+ikonu
+   simmetrik əhatə etsin deyə (navbar.md, PROBLEM 1 bənd 3). Şaquli padding
+   VERİLMİR: hündürlük onsuz da sabitdir və şaquli padding onu «içəridən»
+   sıxaraq mətni yuxarı sürüşdürərdi. */
 QPushButton[variant="nav"] {
     background-color: transparent;
     border: none;
@@ -474,10 +499,18 @@ QPushButton[variant="nav"] {
     color: {{--color-nav-item-text}};
     text-align: left;
     padding: 0 {{--space-md}};
-    min-height: 40px;
-    max-height: 40px;
+    min-height: {{--nav-item-height}};
+    max-height: {{--nav-item-height}};
     font-weight: {{--font-weight-normal}};
     font-size: {{--font-size-sm}};
+}
+
+/* Daraldılmış panel: ikon mərkəzdə, mətn YOXDUR (navbar.jpg-dəki nazik
+   zolaq). Sol padding sıfırlanır — əks halda ikon 64px-lik zolağın sol
+   yarısına sıxışır və ikonlar mərkəz oxundan sürüşür. */
+QPushButton[variant="nav"][compact="true"] {
+    text-align: center;
+    padding: 0;
 }
 
 QPushButton[variant="nav"]:hover {
@@ -943,6 +976,52 @@ QPushButton[variant="icon"][active="true"]:focus {
     border: {{--focus-ring-width}} solid {{--color-focus-ring}};
 }
 
+/* ŞƏFFAF SƏTHLƏRDƏKİ İKON DÜYMƏLƏRİ SƏRHƏDSİZDİR.
+
+   `variant="icon"` defoltda 1px sərhəd + 8px künc daşıyır. Səbəb `tokens.py`
+   başlığındadır: səhifə başlığındaki 34×34 düymənin VARLIĞINI göstərən yeganə
+   şey sərhəddir (WCAG 1.4.11).
+
+   Sol panel və başlıq zolağı isə FƏRQLİ kontekstdir — orada düymə öz
+   səthinin içindədir və qonşuları da sərhədsizdir (naviqasiya sətirləri,
+   pəncərə düymələri). Sərhəd orada elementi «görünən» etmir, əksinə: qutu
+   kimi ayırır. İstifadəçi hesabatı bunu belə təsvir etdi — «narıncı
+   düzbucaqlı + ağ dairəvi cizgi, dizayn sisteminə heç uyğun deyil».
+
+   Görünürlük ORADA fərqli yolla təmin olunur: hover fonu + panel səthindən
+   fərqlənən ikon rəngi. */
+#Sidebar QPushButton[variant="icon"],
+#TitleBar QPushButton[variant="icon"] {
+    /* `border: none` — `variant="window"` düymələri ilə EYNİ qərar.
+       Şəffaf 1px sərhəd saxlasaydıq, Qt-nin QSS qutu modelində `min-width`
+       MƏZMUN sahəsi olduğu üçün düymə tokendən 2px böyük çıxardı: tema
+       düyməsi 48×40, pəncərə düymələri isə 46×38 — yəni «hamısı eyni ölçüdə»
+       tələbi (navbar.md PROBLEM 3 bənd 3) pozulardı. Halqa yalnız klaviatura
+       fokusunda əlavə olunur (aşağıda), pəncərə düymələrində olduğu kimi. */
+    border: none;
+    background-color: transparent;
+    min-width: {{--window-button-width}};
+    max-width: {{--window-button-width}};
+    min-height: {{--titlebar-height}};
+    max-height: {{--titlebar-height}};
+}
+
+/* Sol panelin düyməsi naviqasiya sətrindən KİÇİKDİR — panelin başlığında
+   «maddə» kimi oxunmasın deyə (navbar.jpg-də `»` nişanı maddələrdən xırdadır).
+   Qayda zolaq qaydasından SONRA gəlir: bərabər spesifiklikdə sonuncu qalib
+   gəlir (bax bu faylın sonundaki fokus bloku izahı). */
+#Sidebar QPushButton[variant="icon"] {
+    min-width: {{--sidebar-toggle-size}};
+    max-width: {{--sidebar-toggle-size}};
+    min-height: {{--sidebar-toggle-size}};
+    max-height: {{--sidebar-toggle-size}};
+}
+
+#Sidebar QPushButton[variant="icon"]:hover,
+#TitleBar QPushButton[variant="icon"]:hover {
+    background-color: {{--color-neutral-bg}};
+}
+
 /* BAŞLIQ ZOLAĞINDAKI İKON DÜYMƏSİ İSTİSNADIR.
    Qt pəncərə açılanda fokusu zəncirin BİRİNCİ elementinə verir və başlıq
    zolağı tərtibatın ən üstündədir — yəni yuxarıdakı qayda tətbiq açılan kimi
@@ -953,8 +1032,16 @@ QPushButton[variant="icon"][active="true"]:focus {
     border: {{--focus-ring-width}} solid transparent;
 }
 
-#TitleBar QPushButton[variant="icon"][keyfocus="true"] {
+#TitleBar QPushButton[variant="icon"][keyfocus="true"],
+#Sidebar QPushButton[variant="icon"][keyfocus="true"] {
     border: {{--focus-ring-width}} solid {{--color-focus-ring}};
+}
+
+/* Sol panelin aç/bağla düyməsi də eyni qaydadadır: o, panelin İLK fokus ala
+   bilən elementidir, yəni `:focus` şərtsiz olsaydı hər açılışda halqa
+   çəkilərdi. */
+#Sidebar QPushButton[variant="icon"]:focus {
+    border: {{--focus-ring-width}} solid transparent;
 }
 
 QPushButton[variant="action"]:focus {

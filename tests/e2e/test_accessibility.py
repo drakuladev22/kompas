@@ -450,10 +450,16 @@ def test_page_header_icon_buttons_are_named(qt_app) -> None:  # type: ignore[no-
     )
     _shown(qt_app, header)
 
-    theme_button: QPushButton = header._theme_button
-    bell_button: QPushButton = header._bell._button
+    # TEMA DÜYMƏSİ ARTIQ HEADER-DƏ DEYİL — o, başlıq zolağına köçdü
+    # (`widgets/title_bar.py`) və onun adı `test_window_chrome`-da yoxlanılır.
+    # Dublikatın silinməsi `navbar.md` PROBLEM 2 bənd 1-in tələbidir; qapı
+    # onun GERİ QAYITMAMASINI da yoxlayır, çünki iki düymə sağ blokun
+    # simmetriyasını pozurdu.
+    assert not hasattr(header, "_theme_button"), (
+        "tema düyməsi header-ə geri qayıdıb — o, başlıq zolağındadır"
+    )
 
-    assert theme_button.accessibleName().strip()
+    bell_button: QPushButton = header._bell._button
     assert bell_button.accessibleName() == "Bildirişlər"
 
     header.set_unread(5)
