@@ -117,6 +117,46 @@ def test_the_large_tier_exists_and_is_not_upscaled() -> None:
         assert (256, 256) in icon.info.get("sizes", []), "`.ico`-da 256 pilləsi yoxdur"
 
 
+def test_the_splash_background_matches_the_lockup_image() -> None:
+    """`--color-splash-bg` lockup şəklinin ÖZ fonu ilə eyni olmalıdır.
+
+    ────────────────────────────────────────────────────────────────────────
+    NİYƏ MAŞINLA ÖLÇÜLÜR
+    ────────────────────────────────────────────────────────────────────────
+    Lockup PNG-si şəffaf deyil — konteyner fonu ilə birlikdə ixrac olunur.
+    Ekranın fonu ondan bir ton fərqlənəndə nəticə «loqo» kimi yox, fonun
+    üzərinə yapışdırılmış DÜZBUCAQLI kimi görünür. Fərq gözlə çətin seçilir
+    (`#070E1C` ↔ `#0A2B29`), ona görə məhz bu qüsur istehsalata çatmışdı.
+
+    İki dəyər İKİ AYRI mənbədədir (şəkil / palitra) və birini yeniləyib
+    digərini unutmaq təbii səhvdir — buna görə müqayisə testdədir, şərhdə
+    yox. Şəkil yenidən ixrac olunanda bu test onu DƏRHAL deyir.
+    """
+    from PIL import Image
+
+    from src.presentation.theme import tokens
+
+    for mode, asset in (
+        ("DARK", "loading_screen_dark.png"),
+        ("LIGHT", "loading_screen_light.png"),
+    ):
+        with Image.open(_LOGO_DIR / asset) as image:
+            pixels = image.convert("RGBA").getdata()
+        # Ən çox təkrarlanan TAM QEYRİ-ŞƏFFAF piksel = konteynerin fonu.
+        # Şəffaf künclər (kənar boşluq) sayılmır — onlar ekranın fonunu
+        # göstərir, şəklin öz rəngini yox.
+        opaque = [p[:3] for p in pixels if p[3] == 255]
+        dominant = max(set(opaque), key=opaque.count)
+        expected = "#{:02X}{:02X}{:02X}".format(*dominant)
+
+        palette = tokens.DARK_THEME if mode == "DARK" else tokens.LIGHT_THEME
+        actual = palette["--color-splash-bg"].upper()
+        assert actual == expected, (
+            f"{mode}: açılış fonu {actual}, şəkil isə {expected} — "
+            f"konteyner ekranda ayrıca düzbucaqlı kimi görünəcək"
+        )
+
+
 @requires_qt
 def test_a_missing_asset_returns_none(qt_app, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Fayl yoxdursa `None` — istisna ATILMIR (tətbiq loqosuz da açılmalıdır)."""

@@ -786,6 +786,47 @@ Bu üç şərtdən biri olmadan funksiya SEC-022-nin özünü ləğv edərdi.
 
 ---
 
+## SEC-023 — Lisenziya sətrini YARATMAQ icazəlidir, DƏYİŞMƏK deyil
+
+**Qərar:** Tətbiq rolu (`kompasos_app`) `license_tenants`-a `INSERT` edə
+bilir, lakin YALNIZ iki şərtlə: sətir ONUN öz `tenant_id`-si üçündür və
+`license_key_hash` məhz `SELF_HOSTED_NO_LICENSE_KEY` nişanıdır. `UPDATE` və
+`DELETE` üçün nə qrant, nə də RLS siyasəti var.
+
+**Səbəb:** Qorunmalı olan zəmanət «müştəri lisenziya sətrini yarada
+bilməsin» deyil — «MÖVCUD sətri dəyişə bilməsin»dir. Real yan keçmə
+ssenariləri bunlardır: dayandırılmış tenant-ı `AKTIV`-ə qaytarmaq
+(`UPDATE`), `expires_at`-i irəli çəkmək (`UPDATE`), bloklanmış sətri silib
+yenisini yazmaq (`DELETE`). Üçü də qadağan qalır. Sətrin İLK yaradılması isə
+bunların heç biri deyil: o an tenant hələ mövcud deyil, yəni yan keçiləcək
+qərar da yoxdur.
+
+İkinci şərt (`license_key_hash` nişanı) daha incə bir şeyi qoruyur: müştəri
+vendor tərəfindən verilmiş kimi GÖRÜNƏN sətir uydura bilmir. Nişan
+`config_repositories.SELF_HOSTED_LICENSE_MARKER` ilə eyni sətirdir və ikisi
+birlikdə dəyişməlidir.
+
+**Qüsur necə tapıldı:** Paketlənmiş `.exe`-də İlk Quraşdırma Sihirbazı son
+addımda `InsufficientPrivilege: permission denied for table license_tenants`
+ilə dayanırdı — yəni proqram quraşdırıla BİLMİRDİ. Səbəb `CLAUDE.md` §7-dəki
+naxışın təkrarı idi: eyni qayda iki yerdə, iki fərqli cavabla.
+`schema.sql` §28 yalnız `UPDATE, DELETE` geri alır, miqrasiya 006 isə
+`INSERT`-i də geri alırdı. Nəticədə qapı quraşdırma YOLUNDAN asılı idi —
+`schema.sql` ilə təmiz baza işləyir, tam miqrasiya zənciri tətbiq olunmuş
+baza isə İŞLƏMİRDİ.
+
+Fərq həm də zamanın nəticəsidir: 006 yazılanda yalnız SaaS modeli vardı və
+sətri VENDOR yaradırdı. Özünə-host edilən quraşdırmada (`.exe` + müştərinin
+öz Supabase layihəsi) belə bir vendor YOXDUR.
+
+**Tətbiq:** `database/migrations/065_self_hosted_tenant_bootstrap.sql`
+(qrant + `tenant_bootstraps_own_license` siyasəti),
+`infrastructure/persistence/config_repositories.py`
+(`SELF_HOSTED_LICENSE_MARKER`, `PostgresTenantProvisioning`),
+`tests/unit/test_license_bootstrap_privilege.py`.
+
+---
+
 ## Açıq qalan (Faza 3-də bağlanır)
 
 | # | Məsələ | Faza |

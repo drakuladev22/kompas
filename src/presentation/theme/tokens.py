@@ -251,6 +251,9 @@ LIGHT_THEME: Final[dict[str, str]] = {
     "--color-header-bg": "#FFFFFF",
     "--color-header-border": "#DCE2EC",
     "--color-content-bg": "#F4F6FA",
+    # Açılış ekranının fonu — DƏYƏR ŞƏKLİN ÖZÜNDƏNDİR, seçim deyil.
+    # Bax `--color-splash-bg` (tünd palitra) izahı.
+    "--color-splash-bg": "#FFFFFF",
     "--color-card-bg": "#FFFFFF",
     "--color-card-border": "#DCE2EC",
     "--color-divider": "#EDF0F6",
@@ -351,6 +354,23 @@ DARK_THEME: Final[dict[str, str]] = {
     "--color-header-bg": "#0B1424",
     "--color-header-border": "#22314D",
     "--color-content-bg": "#070E1C",
+    # ──────────────────────────────────────────────────────────────────────
+    # AÇILIŞ EKRANININ FONU — DƏYƏR ŞƏKİLDƏN OXUNUB, SEÇİLMƏYİB
+    # ──────────────────────────────────────────────────────────────────────
+    # `loading_screen_dark.png` lockup-u ÖZ konteyner fonu ilə gəlir və o fon
+    # `#0A2B29`-dur (şəkil piksellərinin ~97%-i). Splash `--color-content-bg`
+    # (`#070E1C`) işlədəndə həmin konteyner ekranda AYRICA düzbucaqlı kimi
+    # görünürdü: tünd firuzəyi ləkə tünd-göy fonun üzərində.
+    #
+    # Ona görə burada ayrıca token var və dəyəri şəklin ÖZ fonudur — nəticədə
+    # konteynerin kənarı yox olur və lockup birbaşa ekranın üzərindədir.
+    # Şəkil dəyişəndə bu dəyər də dəyişməlidir; `test_brand_assets.py` ikisini
+    # maşınla müqayisə edir ki, uyğunsuzluq sükutla qalmasın.
+    #
+    # NİYƏ `--color-content-bg`-ni DƏYİŞMƏDİK: o, bütün tətbiqin iş sahəsinin
+    # fonudur və dizayn sistemində onlarla cütlə ölçülüb. Bir ekranın
+    # şəklinə görə onu dartmaq bütün palitranı həmin şəklə tabe edərdi.
+    "--color-splash-bg": "#0A2B29",
     "--color-card-bg": "#0F1B30",
     "--color-card-border": "#22314D",
     "--color-divider": "#1B2B47",

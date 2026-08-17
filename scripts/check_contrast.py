@@ -187,6 +187,15 @@ REQUIRED_PAIRS: list[tuple[str, str, float, str]] = [
     ("--color-warning", "--color-pin-bg", AA_NORMAL_TEXT, "PIN səthi — xəbərdarlıq"),
     ("--color-info", "--color-pin-bg", AA_NORMAL_TEXT, "PIN səthi — məlumat"),
     ("--color-text-muted", "--color-pin-bg", AA_NORMAL_TEXT, "PIN səthi — solğun mətn"),
+    # --- Açılış ekranı: lockup şəklindən gələn AYRICA fon --------------------- #
+    #
+    # NİYƏ BU CÜTLƏR: `SplashScreen` fonunu `setStyleSheet` ilə İNLİNE qoyur,
+    # yəni nə `qss.py` qaydalarında, nə də mövcud cütlərdə görünürdü. Fon indi
+    # `--color-content-bg`-dən FƏRQLİDİR (`#0A2B29` — şəklin öz konteyneri),
+    # ona görə həmin səthdəki mətnin oxunaqlılığı ARTIQ ölçülmüş sayıla bilməz:
+    # ekranda dörd mətn var və hamısı bu fonun üzərindədir.
+    ("--color-text-muted", "--color-splash-bg", AA_NORMAL_TEXT, "Açılış — alt yazı"),
+    ("--color-text-primary", "--color-splash-bg", AA_NORMAL_TEXT, "Açılış — söz nişanı"),
 ]
 
 #: PIN Handshake ekranı fərqli işıqlandırmada istifadə olunur — bölmə 9 orada

@@ -126,8 +126,12 @@ class SplashScreen(QWidget):
         super().__init__(parent)
         self._theme = theme
         self.setObjectName("SplashScreen")
+        # Fon `--color-content-bg` DEYİL: lockup şəkli öz konteyner fonu ilə
+        # gəlir və iki rəng fərqləndikdə konteyner ekranda ayrıca düzbucaqlı
+        # kimi görünür. `--color-splash-bg` məhz şəkildən oxunmuş dəyərdir
+        # (bax `tokens.py` — token izahı və onu şəkillə tutuşduran test).
         self.setStyleSheet(
-            f"#SplashScreen {{ background-color: {theme.color('--color-content-bg')}; }}"
+            f"#SplashScreen {{ background-color: {theme.color('--color-splash-bg')}; }}"
         )
 
         layout = QVBoxLayout(self)
@@ -217,7 +221,7 @@ class SplashScreen(QWidget):
         """
         self._theme = theme
         self.setStyleSheet(
-            f"#SplashScreen {{ background-color: {theme.color('--color-content-bg')}; }}"
+            f"#SplashScreen {{ background-color: {theme.color('--color-splash-bg')}; }}"
         )
         if self._fallback_logo is not None:
             self._fallback_logo.set_colors(

@@ -8,7 +8,8 @@
 #
 # SİRLƏR (GitHub Secrets — heç bir sirr exe daxilinə hardcode olunmur):
 #   KOMPASOS_FERNET_KEY        — Fernet master açarı (test mühiti üçün ayrı açar)
-#   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
+#   KOMPASOS_SUPABASE_URL / KOMPASOS_SUPABASE_SERVICE_ROLE_KEY
+#                              (prefiks MƏCBURİDİR — kod yalnız onu oxuyur)
 #   DATABASE_URL               — inteqrasiya testləri üçün
 #   CODE_SIGNING_CERT_BASE64   — Authenticode .pfx, base64
 #   CODE_SIGNING_CERT_PASSWORD

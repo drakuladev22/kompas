@@ -116,6 +116,10 @@ _SURFACE_TOKENS = frozenset(
         # YUMŞAQ variantıdır və üzərində mətn oturur, yəni SƏTHdir.
         "--color-accent-subtle",
         "--color-pin-bg",
+        # Açılış ekranının fonu. `--color-content-bg`-dən AYRIDIR, çünki
+        # dəyəri lockup şəklinin öz konteynerindən oxunur (bax `tokens.py`) —
+        # üzərində dörd mətn oturur, yəni SƏTHdir.
+        "--color-splash-bg",
         "--color-text-on-accent",
         "--color-action-text",
     }

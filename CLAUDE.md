@@ -68,8 +68,8 @@ dəst saatlarla çəkir və "asmış" kimi görünür. Offscreen-də eyni dəst 
 içində bitir. Yeganə fərq: `test_mono_role_resolves_to_a_fixed_pitch_font`
 atlanır (aşağıya bax).
 
-Kontrast yoxlayıcısı **156 rəng cütünü** (`--include-high-contrast` olmadan
-154) ölçür — həm `tokens.py` cütlərini,
+Kontrast yoxlayıcısı **160 rəng cütünü** (`--include-high-contrast` olmadan
+158) ölçür — həm `tokens.py` cütlərini,
 həm də `qss.py`-dəki FAKTİKİ istifadəni (`::placeholder`, `:disabled`,
 `:focus`, `:hover`, sərhədlər). Yalnız tokenləri yoxlamaq kifayət etmirdi:
 dörd kontrast qüsuru məhz bu boşluqda gizlənmişdi. **Bu rəqəm dəyişkəndir** —
@@ -378,6 +378,7 @@ qalmır, qərara çevrilir.
 |---|---|
 | İcazə flag kataloqu — **51 flag** (36 `schema.sql`-də: 34 spesifikasiyadan + `can_publish_fines`, `can_manage_drive_connection`; qalan 15 miqrasiyalarda: 021 +6, 038 +6, 047 +1, 056 +1, 063 +1 `can_manage_devices`) | `database/schema.sql` §22 + miqrasiyalar |
 | Miqrasiya icraçısı və reyestri | `scripts/apply_migrations.py`, `migrations/061` |
+| Özünə-host lisenziya sətri (SEC-023) | `migrations/065`, `tests/unit/test_license_bootstrap_privilege.py` |
 | Server-lövbərli vaxt + manipulyasiya aşkarlaması | `src/infrastructure/timekeeping/server_time.py`, `migrations/062` |
 | Vaxt etibarlılıq səviyyəsi (domen) | `src/domain/value_objects/time_integrity.py` |
 | Cihaz qeydiyyatı (filial tanıma) | `src/application/use_cases/device_registry.py`, `migrations/063` |
