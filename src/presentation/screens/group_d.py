@@ -2210,6 +2210,15 @@ class RootControlScreen(Screen):
     #: cədvəlidir (soft delete ilə). Onu limit ad məkanına salmaq iki fərqli
     #: yazı hədəfini bir sözlükdə qarışdırmaq olardı.
     face_scope_changed = Signal(str, bool)
+    #: Şirkət kimliyi (TENANT-1 Faza 2) — `dict` (`company_name`,
+    #: `accent_color`, `clear_accent`).
+    #:
+    #: NİYƏ `applied` SÖZLÜYÜNƏ QOŞULMADI: `collected()["limits"]` yalnız
+    #: `SystemLimitKey` dəyərlərini daşıyır və `test_root_control_uses_the_
+    #: shared_key_namespace` məhz bunu yoxlayır. Brendinq isə `system_limits`
+    #: sətri DEYİL — ayrıca `tenant_branding` cədvəlidir (migrations/064).
+    #: `face_scope_changed` ilə eyni qərar.
+    branding_changed = Signal(dict)
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(theme, parent=parent)
@@ -2257,6 +2266,7 @@ class RootControlScreen(Screen):
 
         self.add(self._build_break_card())
         self.add(self._build_face_card())
+        self.add(self._build_branding_card())
 
         self._modules = Card(padding=20, spacing=12)
         self._modules.add(title_label("Modul açarları", size=15))
@@ -2400,6 +2410,97 @@ class RootControlScreen(Screen):
         self._face_tolerance_warning.setVisible(False)
         card.add(self._face_tolerance_warning)
         return card
+
+    def _build_branding_card(self) -> Card:
+        """«Şirkət kimliyi» bölməsi — ad və vurğu rəngi (TENANT-1 Faza 2).
+
+        ──────────────────────────────────────────────────────────────────────
+        LOQO BURADA YÜKLƏNMİR — VƏ BU, QƏSDƏNDİR
+        ──────────────────────────────────────────────────────────────────────
+        Loqo fayl seçici dialoqu tələb edir; həmin dialoq isə Root panelinin
+        BÜTÜN digər sahələri kimi «yaz və Tətbiq Et» ritmindən kənara düşür
+        (fayl seçimi dərhal nəticə verir, toplu tətbiq gözləmir). Onu bu kartın
+        içinə salmaq iki fərqli qarşılıqlı təsir modelini bir bölmədə
+        qarışdırmaq olardı.
+
+        Ad və rəng isə mətn sahələridir və mövcud ritmə tam uyğundur. Loqo
+        `TenantBrandingUseCase.update(logo_png=...)` ilə onsuz da dəyişdirilə
+        bilir — burada YALNIZ ekran yolu yoxdur, imkan yox deyil.
+
+        ──────────────────────────────────────────────────────────────────────
+        XƏBƏRDARLIQ SAHƏSİ HƏMİŞƏ VAR, LAKİN ADƏTƏN GİZLİDİR
+        ──────────────────────────────────────────────────────────────────────
+        Uyğun olmayan rəng RƏDD EDİLMİR (bax `value_objects/branding.py`) —
+        istifadəçi onu saxlaya bilər, lakin nəticəni bilməlidir. Mətn use
+        case-dən gəlir; ekran onu YAZMIR, yalnız göstərir.
+        """
+        card = Card(padding=20, spacing=12)
+        card.add(title_label("Şirkət kimliyi", size=15))
+        card.add(
+            muted_label(
+                "Bu ayarlar YALNIZ görünüşə təsir edir. Funksionallıq, təhlükəsizlik "
+                "qaydaları və icazə matrisi HEÇ BİR müştəri üçün dəyişmir."
+            )
+        )
+
+        card.add(Divider())
+        card.add(plain_label("Şirkət adı"))
+        card.add(
+            muted_label(
+                "Başlıq zolağında «KompasOS — <ad>» kimi görünür. Boş buraxılsa "
+                "yalnız «KompasOS» qalır."
+            )
+        )
+        self._branding_name = QLineEdit()
+        self._branding_name.setPlaceholderText("məs. Yataş Group")
+        card.add(self._branding_name)
+
+        card.add(Divider())
+        card.add(plain_label("Vurğu rəngi"))
+        card.add(muted_label("`#RRGGBB` formatında. Boş buraxılsa defolt Amber işlədilir."))
+        self._branding_accent = QLineEdit()
+        self._branding_accent.setPlaceholderText("#F5A623")
+        card.add(self._branding_accent)
+
+        self._branding_warning = body_label("", size=13)
+        self._branding_warning.setVisible(False)
+        card.add(self._branding_warning)
+
+        # Uğur mesajı XƏBƏRDARLIQDAN AYRI sətirdədir: ikisini bir etiketdə
+        # birləşdirsəydik, «yadda saxlanıldı» mətni oxunaqlılıq
+        # xəbərdarlığının üzərini yazar və istifadəçi problemi görməzdi.
+        self._branding_status = muted_label("")
+        self._branding_status.setVisible(False)
+        card.add(self._branding_status)
+
+        apply_button = action_button("Şirkət kimliyini yadda saxla")
+        apply_button.clicked.connect(self._on_branding_apply)
+        card.add(apply_button)
+        return card
+
+    def _on_branding_apply(self) -> None:
+        accent = self._branding_accent.text().strip()
+        self.branding_changed.emit(
+            {
+                "company_name": self._branding_name.text(),
+                "accent_color": accent or None,
+                # Boş sahə «sil» deməkdir — `None` isə use case-də «dəyişmə»
+                # mənasını daşıyır (bax `TenantBrandingUseCase.update`).
+                "clear_accent": not accent,
+            }
+        )
+
+    def set_branding(self, *, company_name: str, accent_color: str, warning: str = "") -> None:
+        """Cari brendinqi göstərir; `warning` boşdursa xəbərdarlıq gizlənir."""
+        self._branding_name.setText(company_name)
+        self._branding_accent.setText(accent_color)
+        self._branding_warning.setText(warning)
+        self._branding_warning.setVisible(bool(warning))
+
+    def set_branding_status(self, message: str) -> None:
+        """Yazıdan sonrakı sakit məlumat sətri (boş = gizli)."""
+        self._branding_status.setText(message)
+        self._branding_status.setVisible(bool(message))
 
     def set_face_scope(self, stores: list[dict[str, str]]) -> None:
         """Face Control-un mağaza əhatəsi (bənd 15).

@@ -458,6 +458,21 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         icon="image",
     ),
     MenuEntry(
+        key="devices",
+        title_az="Cihazlar",
+        # DEVICE-1: hansı PC hansı filiala aiddir. Yeri `drive_connection`
+        # (165) ilə `root_control` (170) arasındadır və bu, təsadüf deyil:
+        # hər üçü İNFRASTRUKTUR ekranıdır — gündəlik iş axını deyil, sistemi
+        # işlək saxlayan qurğu. Admin onları qonşuluqda axtaracaq.
+        required_flag="can_manage_devices",
+        order=167,
+        # `desktop` — mövcud ikon dəstindən. `monitor` adlı ikon YOXDUR və
+        # `test_every_entry_has_an_icon` bunu dərhal tutdu: qapı ikon adının
+        # uydurulmasına imkan vermir, çünki tapılmayan ad sətri sola sürüşdürür
+        # (bax `sidebar.FALLBACK_ICON`).
+        icon="desktop",
+    ),
+    MenuEntry(
         key="root_control",
         title_az="ROOT İdarə Mərkəzi",
         required_flag="can_manage_system_limits",

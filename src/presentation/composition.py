@@ -94,6 +94,7 @@ if TYPE_CHECKING:
     from src.application.use_cases.daily_attendance import DailyAttendanceSheetUseCase
     from src.application.use_cases.dashboard_layout import DashboardLayoutUseCase
     from src.application.use_cases.db_switch import DatabaseSwitchUseCase
+    from src.application.use_cases.device_registry import DeviceRegistryUseCase
     from src.application.use_cases.employee_documents import EmployeeDocumentUseCase
     from src.application.use_cases.employee_profile import EmployeeProfileAccessUseCase
     from src.application.use_cases.erp_connection import ErpConnectionWizardUseCase
@@ -139,6 +140,7 @@ if TYPE_CHECKING:
     from src.application.use_cases.support_chat import SupportChatUseCase
     from src.application.use_cases.sync_conflicts import SyncConflictUseCase
     from src.application.use_cases.task_workflow import TaskWorkflowUseCase
+    from src.application.use_cases.tenant_branding import TenantBrandingUseCase
     from src.application.use_cases.user_management import EmployeeDraft, UserManagementUseCase
     from src.domain.entities.employee import Employee
     from src.domain.interfaces.ports import Clock, NtpVerifier
@@ -538,6 +540,8 @@ class Session:
     positions: PositionManagementUseCase
     support: SupportChatUseCase
     sync_conflicts: SyncConflictUseCase
+    devices: DeviceRegistryUseCase
+    branding: TenantBrandingUseCase
     setup: FirstRunSetupUseCase
     root_control: RootControlUseCase
     permission_guard: PermissionHierarchyGuardUseCase
@@ -2147,6 +2151,9 @@ class ApplicationContext:
         from src.application.use_cases.db_switch import (  # noqa: PLC0415
             DatabaseSwitchUseCase,
         )
+        from src.application.use_cases.device_registry import (  # noqa: PLC0415
+            DeviceRegistryUseCase,
+        )
         from src.application.use_cases.document_compliance import (  # noqa: PLC0415
             DocumentComplianceAdvisor,
         )
@@ -2247,6 +2254,9 @@ class ApplicationContext:
         )
         from src.application.use_cases.task_workflow import (  # noqa: PLC0415
             TaskWorkflowUseCase,
+        )
+        from src.application.use_cases.tenant_branding import (  # noqa: PLC0415
+            TenantBrandingUseCase,
         )
         from src.application.use_cases.user_management import (  # noqa: PLC0415
             UserManagementUseCase,
@@ -2737,6 +2747,24 @@ class ApplicationContext:
                 clock=clock,
                 # `SYNC_CONFLICT_PAGE_SIZE` — konflikt növbəsinin səhifəsi.
                 limits=repo("limits"),
+            ),
+            branding=TenantBrandingUseCase(
+                repository=repo("branding"),
+                audit=audit,
+                clock=clock,
+            ),
+            devices=DeviceRegistryUseCase(
+                devices=repo("devices"),
+                # Aktiv mağaza siyahısı YALNIZ avtomatik təsdiq üçün lazımdır
+                # (`DEVICE_APPROVAL_REQUIRED = 0` + tək mağaza şərti) —
+                # bax `device_registry.py` başlığı.
+                stores=repo("active_stores"),
+                audit=audit,
+                clock=clock,
+                # `MAX_REGISTERED_DEVICES`, `DEVICE_APPROVAL_REQUIRED`,
+                # `DEVICE_INACTIVITY_DAYS`.
+                limits=repo("limits"),
+                notifier=notifier,
             ),
             setup=FirstRunSetupUseCase(
                 employees=uow.employees,

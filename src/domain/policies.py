@@ -409,6 +409,17 @@ class SystemLimitKey(str, Enum):
     # bu açardan ASILI DEYİL və söndürülə bilməz: susdurula bilən şey yalnız
     # xəbərdarlığın çatdırılmasıdır, faktın qeydə alınması yox.
     LOCAL_CLOCK_MANIPULATION_NOTIFY = "LOCAL_CLOCK_MANIPULATION_NOTIFY"
+    # Cihaz qeydiyyatı (DEVICE-1). `INFRA_LIMIT_BOUNDS`-a YAZILMIR: onlar
+    # `src/infrastructure/` modul sabitləridir, bunlar isə use case-in biznes
+    # qərarlarıdır (lisenziya həddi, təsdiq siyasəti) və `SystemLimits` portu
+    # ilə oxunur — `MONTHLY_LEAVE_MINUTES_LIMIT` ilə eyni kateqoriya.
+    MAX_REGISTERED_DEVICES = "MAX_REGISTERED_DEVICES"
+    # Təsdiq məcburiliyi (1/0). Root söndürsə yeni cihaz DƏRHAL aktiv olur —
+    # kiçik müştəri üçün nəzərdə tutulub. Söndürmə RETROAKTİV DEYİL: artıq
+    # gözləyən cihazlar avtomatik təsdiqlənmir, çünki onların hansı filiala
+    # aid olduğunu sistem BİLMİR (filialı yalnız adam təyin edə bilər).
+    DEVICE_APPROVAL_REQUIRED = "DEVICE_APPROVAL_REQUIRED"
+    DEVICE_INACTIVITY_DAYS = "DEVICE_INACTIVITY_DAYS"
     # 1C: ad uyğunlaşmasının qərarsızlıq marjası, sinxronizasiya paralelliyi,
     # dövr başına səhifə tavanı, HTTP taymautu və təkrar cəhd sayı.
     ERP_MATCH_AMBIGUITY_MARGIN = "ERP_MATCH_AMBIGUITY_MARGIN"
@@ -1125,6 +1136,13 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.SERVER_TIME_MAX_OFFLINE_TRUST_SECONDS: "14400",
     SystemLimitKey.LOCAL_CLOCK_MANIPULATION_THRESHOLD_SECONDS: "60",
     SystemLimitKey.LOCAL_CLOCK_MANIPULATION_NOTIFY: "1",
+    # `use_cases/device_registry.py`: 25 cihaz həddi, təsdiq MƏCBURİ, 90 gün
+    # passivlik. 25 NİYƏ: orta müştəridə (10-15 mağaza × 1-2 PC) rahat yer
+    # qoyur, lakin limitsiz deyil — limitsiz dəyər sayğacı mənasız edərdi və
+    # lisenziya söhbətini yalnız fakturada üzə çıxarardı.
+    SystemLimitKey.MAX_REGISTERED_DEVICES: "25",
+    SystemLimitKey.DEVICE_APPROVAL_REQUIRED: "1",
+    SystemLimitKey.DEVICE_INACTIVITY_DAYS: "90",
     # `erp/matching.py`, `erp/sync_worker.py`, `erp/one_c_connector.py`.
     SystemLimitKey.ERP_MATCH_AMBIGUITY_MARGIN: "0.05",
     SystemLimitKey.ERP_SYNC_MAX_PARALLEL_SERVERS: "4",

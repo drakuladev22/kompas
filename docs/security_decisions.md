@@ -749,6 +749,43 @@ yalnız qeyddir — uğursuzluğu xəbərdarlıqdır.
 
 ---
 
+## SEC-022 — Vendor Konsolu tenant-ın OPERATİV datasını GÖRMÜR
+
+**Qərar:** Vendor Konsolu (Developer Paneli) hər kirayəçi üçün YALNIZ
+aqreqasiya edilmiş metadata göstərir: şirkət adı, `tenant_id`, Supabase
+referansı, ödəniş statusu, aktiv istifadəçi/mağaza/server/cihaz SAYI, açıq
+konflikt sayı, son sinxronizasiya anı. İşçi adı, e-poçtu, cərimə sətri,
+davamiyyət qeydi — HEÇ BİRİ oxunmur.
+
+**Səbəb:** Vendor bir təchizatçıdır, müştərinin HR şöbəsi deyil. Operativ
+dataya çıxış texniki olaraq asandır (bağlantı onsuz da var), lakin o çıxış
+bir dəfə açılsa, «dəstək üçün baxdım» ilə «rəqibin məlumatını oxudum»
+arasındakı sərhəd yalnız etibar üzərində qalardı. Sərhəd KODDA olmalıdır.
+
+Qapı `DeveloperTenantDirectory.tenant_telemetry()`-nin sorğusundadır: hər
+sütun `COUNT(*)` və ya `MAX(timestamp)`-dır. Bir dənə `full_name` sütunu bu
+funksiyanı müqavilə pozuntusuna çevirir (bax `docs/contract_notes.md`).
+
+**«Tenant-a qoşul və dəstək göstər» funksiyası İNDİ TİKİLMİR.**
+
+TENANT-1 Faza 3 bu qeydi açıq şəkildə tələb edir. Belə bir funksiya gələcəkdə
+lazım olarsa, o, AYRI mexanizm olmalıdır və üç şərti EYNİ ANDA ödəməlidir:
+
+1. **Müştərinin razılığı** — sessiya müştəri tərəfindən AÇIQ başladılır
+   (məs. birdəfəlik kod), vendor onu təkbaşına aça bilmir;
+2. **Vaxt məhdudiyyəti** — sessiya avtomatik bağlanır, «həmişəlik açıq»
+   vəziyyət yoxdur;
+3. **Tam audit** — sessiya ərzində oxunan HƏR sətir müştərinin öz
+   `audit_logs` cədvəlinə yazılır, yəni müştəri sonradan nəyə baxıldığını
+   özü görə bilir.
+
+Bu üç şərtdən biri olmadan funksiya SEC-022-nin özünü ləğv edərdi.
+
+**Tətbiq:** `infrastructure/licensing/developer_directory.py`
+(`TenantTelemetry`, `tenant_telemetry`), `tests/unit/test_tenant_isolation.py`.
+
+---
+
 ## Açıq qalan (Faza 3-də bağlanır)
 
 | # | Məsələ | Faza |

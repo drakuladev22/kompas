@@ -486,6 +486,9 @@ class PostgresUnitOfWork:
         from src.infrastructure.persistence.benchmark_repository import (  # noqa: PLC0415
             PostgresMultiStoreBenchmarkRepository,
         )
+        from src.infrastructure.persistence.branding_repository import (  # noqa: PLC0415
+            PostgresBrandingRepository,
+        )
         from src.infrastructure.persistence.break_usage_repository import (  # noqa: PLC0415
             PostgresDailyBreakUsageRepository,
         )
@@ -509,6 +512,10 @@ class PostgresUnitOfWork:
             PostgresStoreWriter,
             PostgresSystemLimits,
             PostgresTenantProvisioning,
+        )
+        from src.infrastructure.persistence.device_repository import (  # noqa: PLC0415
+            PostgresActiveStoreLookup,
+            PostgresDeviceRegistry,
         )
         from src.infrastructure.persistence.employee_document_repository import (  # noqa: PLC0415
             PostgresEmployeeDocumentRepository,
@@ -661,6 +668,19 @@ class PostgresUnitOfWork:
             "report_facts": PostgresReportFactProvider(conn, self._context),
             "support": PostgresSupportTicketRepository(conn, self._context),
             "sync_conflicts": PostgresSyncConflictRepository(conn, self._context),
+            # --- Cihaz qeydiyyatı (DEVICE-1) ----------------------------------
+            # Cihaz reyestri və aktiv mağaza siyahısı EYNİ bağlantıdadır:
+            # avtomatik təsdiq mağaza SAYINI oxuyub cihazı həmin mağazaya
+            # bağlayır və ikisi bir tranzaksiyada görünməlidir — əks halda
+            # paralel yaradılan mağaza «tək mağaza» şərtini görünməz şəkildə
+            # pozar və cihaz səhv filiala təyin olunardı.
+            "devices": PostgresDeviceRegistry(conn, self._context),
+            # --- Tenant brendinqi (TENANT-1) ----------------------------------
+            # Brendinq AÇILIŞ yolunda oxunur (başlıq zolağı, splash) —
+            # sessiyanın ilk sorğularından biridir və ayrı bağlantı açmaq
+            # açılışa ikinci gediş-dönüş əlavə edərdi.
+            "branding": PostgresBrandingRepository(conn, self._context),
+            "active_stores": PostgresActiveStoreLookup(conn, self._context),
             # --- Vahid İstisna Motoru (#9) ------------------------------------
             # Jurnal və mənbə kataloqu EYNİ bağlantıdadır: motor istisnanı
             # yazarkən mənbənin `is_active`/`default_severity` dəyərini oxuyur

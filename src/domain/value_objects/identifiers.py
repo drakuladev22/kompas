@@ -136,6 +136,10 @@ RedemptionId = NewType("RedemptionId", uuid.UUID)
 ErpServerId = NewType("ErpServerId", uuid.UUID)
 SessionId = NewType("SessionId", uuid.UUID)
 PluginId = NewType("PluginId", uuid.UUID)
+#: Qeydiyyatdan keçmiş PC (DEVICE-1). Ayrıca tip: cihaz identifikatoru
+#: `StoreId` ilə YAN-YANA gəzir (cihaz filiala təyin olunur) və birini
+#: digərinin yerinə ötürmək bütün bir filialı bloklamaq demək olardı.
+DeviceId = NewType("DeviceId", uuid.UUID)
 
 
 def new_employee_id() -> EmployeeId:
@@ -148,6 +152,10 @@ def new_tenant_id() -> TenantId:
 
 def new_store_id() -> StoreId:
     return StoreId(uuid.uuid4())
+
+
+def new_device_id() -> DeviceId:
+    return DeviceId(uuid.uuid4())
 
 
 def new_position_id() -> PositionId:
@@ -278,6 +286,7 @@ __all__ = [
     "AttendanceRecordId",
     "BulkImportLogId",
     "DailySheetId",
+    "DeviceId",
     "EmployeeDocumentId",
     "EmployeeId",
     "ErpServerId",
@@ -318,6 +327,7 @@ __all__ = [
     "new_attendance_record_id",
     "new_bulk_import_log_id",
     "new_daily_sheet_id",
+    "new_device_id",
     "new_employee_document_id",
     "new_employee_id",
     "new_exception_id",

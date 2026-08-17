@@ -195,6 +195,10 @@ class TenantTelemetry:
     active_users: int
     active_servers: int
     active_stores: int
+    #: Təsdiqlənmiş və AKTİV cihaz sayı (DEVICE-1 Faza 5). Lisenziya
+    #: ölçüsüdür: gələcək cihaz-əsaslı qiymətləndirmənin əsası budur.
+    #: Gözləyən/bloklanmış cihazlar SAYILMIR — onlar yer tutmur.
+    active_devices: int
     open_conflicts: int
     recent_crashes: int
     last_sync_at: datetime | None = None
@@ -208,7 +212,7 @@ class TenantTelemetry:
     def summary_az(self) -> str:
         return (
             f"{self.active_users} istifadəçi · {self.active_stores} mağaza · "
-            f"{self.active_servers} server"
+            f"{self.active_servers} server · {self.active_devices} cihaz"
         )
 
 
@@ -598,6 +602,11 @@ class DeveloperTenantDirectory:
                      WHERE s.tenant_id = t.tenant_id AND s.status = 'ACTIVE') AS active_servers,
                    (SELECT count(*) FROM stores st
                      WHERE st.tenant_id = t.tenant_id AND st.is_active)    AS active_stores,
+                   -- DEVICE-1: qeydiyyatlı AKTİV cihazlar. `PENDING_APPROVAL`
+                   -- sayılmır — o, lisenziya yeri tutmur və sayılsaydı sayğac
+                   -- təsdiqlənməmiş qeydiyyatlarla şişirdilə bilərdi.
+                   (SELECT count(*) FROM registered_devices d
+                     WHERE d.tenant_id = t.tenant_id AND d.status = 'ACTIVE') AS active_devices,
                    (SELECT count(*) FROM sync_conflicts c
                      WHERE c.tenant_id = t.tenant_id AND c.resolved_at IS NULL)
                                                                            AS open_conflicts,
@@ -619,6 +628,7 @@ class DeveloperTenantDirectory:
                 active_users=int(row["active_users"] or 0),
                 active_servers=int(row["active_servers"] or 0),
                 active_stores=int(row["active_stores"] or 0),
+                active_devices=int(row["active_devices"] or 0),
                 open_conflicts=int(row["open_conflicts"] or 0),
                 recent_crashes=int(row["recent_crashes"] or 0),
                 last_sync_at=_as_datetime(row["last_sync_at"]),

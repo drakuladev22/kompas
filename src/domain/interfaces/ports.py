@@ -32,12 +32,14 @@ from src.domain.entities.open_shift import OpenShiftPosting, OpenShiftSlot
 from src.domain.entities.performance_review import PerformanceReview
 from src.domain.entities.pos_threshold import POSPermissionThreshold
 from src.domain.entities.position import Position
+from src.domain.entities.registered_device import RegisteredDevice
 from src.domain.entities.sales_points import PointsEntry, RewardRedemption
 from src.domain.entities.shift import ShiftAssignment, ShiftSwapRequest
 from src.domain.entities.task import Task
 from src.domain.policies import BreakKind
 from src.domain.value_objects.authorization import PermissionFlag
 from src.domain.value_objects.behavior_signals import BehaviorBaseline, CheckInObservation
+from src.domain.value_objects.branding import TenantBranding
 from src.domain.value_objects.catalogs import FineType, LeaveType, WorkMode
 from src.domain.value_objects.credentials import Username
 from src.domain.value_objects.erp import (
@@ -77,6 +79,7 @@ from src.domain.value_objects.identifiers import (
     AppealId,
     AttendanceRecordId,
     BulkImportLogId,
+    DeviceId,
     EmployeeDocumentId,
     EmployeeId,
     ErpServerId,
@@ -429,6 +432,73 @@ class EventPublisher(Protocol):
 # --------------------------------------------------------------------------- #
 # Repository-lər
 # --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class BrandingRepository(Protocol):
+    """Kirayəçinin vizual kimliyi (TENANT-1 Faza 2).
+
+    `get()` HEÇ VAXT `None` qaytarmır — sətir yoxdursa `DEFAULT_BRANDING`
+    verilir. Səbəb: brendinq oxunuşu tətbiqin AÇILIŞ yolundadır və hər
+    çağıran tərəfin `None` yoxlaması yazması tələb olunsaydı, biri unudulanda
+    başlıq zolağı boş qalardı. Defolt dəyər «brendinq təyin edilməyib»
+    halının DÜZGÜN cavabıdır, boşluq deyil.
+    """
+
+    def get(self, tenant_id: TenantId) -> TenantBranding: ...
+
+    def save(
+        self, tenant_id: TenantId, branding: TenantBranding, *, updated_by: EmployeeId
+    ) -> None:
+        """`updated_by` MƏCBURİDİR — «kim dəyişdi» sualı cavablanmalıdır."""
+        ...
+
+
+@runtime_checkable
+class ActiveStoreLookup(Protocol):
+    """Kirayəçinin aktiv mağazalarının identifikatorları.
+
+    DAR PORT — tam `StoreRepository` DEYİL. Layihədə belə bir port heç vaxt
+    olmayıb: mağaza sətirləri hər yerdə konkret sorğularla oxunur
+    (`benchmark_repository`, `field_report_repositories`). Geniş port əlavə
+    etmək mövcud olmayan bir abstraksiyanı vəd etmək olardı; bura yalnız
+    FAKTİKİ ehtiyac yazılıb — «kirayəçidə neçə mağaza var və hansılar».
+    """
+
+    def list_active(self, tenant_id: TenantId) -> list[StoreId]: ...
+
+
+@runtime_checkable
+class DeviceRegistry(Protocol):
+    """Qeydiyyatdan keçmiş cihazlar (DEVICE-1).
+
+    `count_active()` AYRICA metoddur, `len(list_by_status(ACTIVE))` DEYİL:
+    lisenziya sayğacı hər açılışda oxunur və minlərlə sətri gətirib saymaq
+    şəbəkə/yaddaş qiymətini heç nə üçün ödəmək olardı. Sayğac `COUNT(*)`
+    ilə bazada hesablanır.
+    """
+
+    def get(self, device_id: DeviceId) -> RegisteredDevice | None: ...
+
+    def find_by_short_code(self, tenant_id: TenantId, short_code: str) -> RegisteredDevice | None:
+        """Admin telefonla söylənilən kodla cihazı tapır."""
+        ...
+
+    def short_code_exists(self, tenant_id: TenantId, short_code: str) -> bool:
+        """Kod artıq işlədilirmi — təkrar yaratma dövrəsi üçün."""
+        ...
+
+    def list_by_status(
+        self, tenant_id: TenantId, status: str, *, limit: int
+    ) -> list[RegisteredDevice]: ...
+
+    def list_all(self, tenant_id: TenantId, *, limit: int) -> list[RegisteredDevice]: ...
+
+    def count_active(self, tenant_id: TenantId) -> int: ...
+
+    def count_pending(self, tenant_id: TenantId) -> int: ...
+
+    def save(self, device: RegisteredDevice) -> None: ...
 
 
 @runtime_checkable

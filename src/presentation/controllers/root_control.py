@@ -175,6 +175,11 @@ class RootControlController:
         screen.face_scope_changed.connect(
             lambda store_id, active: self._on_face_scope_changed(screen, store_id, active=active)
         )
+        # TENANT-1 Faza 2 — brendinq də `applied` sözlüyündən AYRI gedir
+        # (bax `RootControlScreen.branding_changed` şərhi).
+        screen.branding_changed.connect(
+            lambda payload: self._on_branding_changed(screen, payload)
+        )
         self.refresh(screen)
 
     def refresh(self, screen: RootControlScreen) -> None:
@@ -253,6 +258,18 @@ class RootControlController:
         screen.set_face_scope(face_scope_rows(session))
         screen.set_face_tolerance(face_tolerance_row(session))
 
+        # TENANT-1 Faza 2. Oxunuş İCAZƏ TƏLƏB ETMİR (bax `tenant_branding.py`
+        # başlığı) — lakin bu panelə onsuz da yalnız Root çıxır. Xəbərdarlıq
+        # BURADA da hesablanır: uyğunsuz rəng əvvəlki sessiyada yazılmış ola
+        # bilər və panel onu yenidən açanda yenə görünməlidir.
+        branding = session.branding.current(tenant_id)
+        screen.set_branding(
+            company_name=branding.company_name,
+            accent_color=branding.accent_color or "",
+            warning=branding.accessibility_warning(),
+        )
+        screen.set_branding_status("")
+
     # ------------------------------ yazı yolu -------------------------------- #
 
     def _on_applied(self, screen: RootControlScreen, payload: Any) -> None:
@@ -327,6 +344,54 @@ class RootControlController:
                 title="Modul dəyişdirilmədi",
                 message="Dəyişiklik saxlanmadı. Yenidən cəhd edin.",
             )
+
+    def _on_branding_changed(self, screen: RootControlScreen, payload: object) -> None:
+        """Şirkət kimliyi (TENANT-1 Faza 2) — use case YAZIR, kontroller körpüdür.
+
+        `face_scope` naxışından FƏRQİ: orada hazır use case yox idi və
+        kontroller səlahiyyəti özü yoxlayırdı. Burada `TenantBrandingUseCase`
+        VAR və qapı ONUN içindədir (`_require`) — kontrollerin ikinci yoxlama
+        yazması qaydanı iki yerə bölərdi və biri dəyişəndə digəri köhnələrdi.
+
+        Uyğun olmayan rəng RƏDD EDİLMİR: use case onu saxlayır və xəbərdarlıq
+        qaytarır; ekran həmin mətni göstərir (bax `value_objects/branding.py`).
+        """
+        if not isinstance(payload, dict):  # pragma: no cover - tip qoruyucusu
+            return
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                result = session.branding.update(
+                    tenant_id=session.tenant_id,
+                    actor=self._actor,
+                    company_name=str(payload.get("company_name", "")),
+                    accent_color=_optional_text(payload.get("accent_color")),
+                    clear_accent=bool(payload.get("clear_accent")),
+                )
+                session.commit()
+        except KompasOSError as error:
+            screen.show_error(title="Şirkət kimliyi yazılmadı", message=error.user_message)
+            return
+        except Exception:
+            _error_log.exception("TENANT_BRANDING_WRITE_FAILED")
+            screen.show_error(
+                title="Şirkət kimliyi yazılmadı",
+                message="Dəyər saxlanmadı. Yenidən cəhd edin.",
+            )
+            return
+
+        screen.set_branding(
+            company_name=result.branding.company_name,
+            accent_color=result.branding.accent_color or "",
+            warning=result.warning,
+        )
+        # Başlıq zolağı DƏRHAL yenilənmir və bu, qəsdəndir: ad pəncərənin
+        # ömrü boyu bir dəfə tətbiq olunur (`app._apply_tenant_branding`) və
+        # onu iş vaxtı dəyişdirmək açıq ekranların başlığı ilə pəncərə adını
+        # bir-birindən ayıra bilərdi. Dəyişiklik növbəti açılışda görünür.
+        screen.set_branding_status(
+            "Şirkət kimliyi yadda saxlanıldı. Başlıq zolağı proqramın növbəti "
+            "açılışında yenilənəcək."
+        )
 
     def _on_face_scope_changed(
         self, screen: RootControlScreen, store_id: str, *, active: bool
@@ -564,6 +629,19 @@ def limit_row(
     low = min(minimum, maximum, number)
     high = max(minimum, maximum, number)
     return (key.value, label, number, low, high, suffix)
+
+
+def _optional_text(value: object) -> str | None:
+    """Siqnal sözlüyündən gələn dəyəri `str | None`-a gətirir.
+
+    Qt siqnalı `dict[str, object]` daşıyır və tip zəmanəti orada itir. Dəyəri
+    `str()`-ə basmaq `None`-u «None» sətrinə çevirərdi — use case isə `None`-u
+    «dəyişmə» kimi oxuyur, yəni fərq DAVRANIŞ fərqidir.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _store_id_or_none(value: str) -> StoreId | None:

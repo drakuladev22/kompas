@@ -240,6 +240,9 @@ sonra əlavə olunur:
 | `_DAYS_PER_MONTH = 30` | `attrition_repository.py` | Domendəki eyni təxminin güzgüsü — ikisi birlikdə dəyişməlidir |
 | `RESET_MONTHS = (1, 7)` | `gamification.py` | Mühasibatlıq yarımillikləri — təqvim faktı |
 | `FRESHNESS_INTERVAL_MULTIPLIER = 2.0` | `server_time.py` | Sinxronizasiya intervalının NƏTİCƏSİ, ayrıca siyasət deyil: bir buraxılmış dövr hələ nasazlıq deyil, ikisi artıq nasazlıqdır. Root-a verilsəydi interval ilə ziddiyyətli qoşa dəyər yaranardı |
+| `SHORT_CODE_LENGTH = 6`, `SHORT_CODE_ALPHABET` | `devices.py` | İnsan erqonomikasının ölçüsü: kod TELEFONLA söylənilir. Root onu 3-ə endirsəydi toqquşma real olardı, 20-yə qaldırsaydı kodun bütün mənası itərdi |
+| `SHORT_CODE_ATTEMPTS = 5` | `device_registry.py` | Riyazi zərurət, siyasət deyil — sonsuz dövrədən qoruyan tavan |
+| `WMI_TIMEOUT_SECONDS = 5.0` | `device_identity.py` | Tətbiqin AÇILIŞ yolundadır: Root dəyərini oxumaq üçün baza lazımdır, baza isə hələ açılmayıb — dövri asılılıq |
 
 Bu sabitlər üçün şərh şablonu FƏRQLİDİR: «fallback» yazılmır, **niyə Root
 parametri olmadığı** yazılır.
@@ -373,10 +376,14 @@ qalmır, qərara çevrilir.
 
 | Nə | Harada |
 |---|---|
-| İcazə flag kataloqu — **50 flag** (36 `schema.sql`-də: 34 spesifikasiyadan + `can_publish_fines`, `can_manage_drive_connection`; qalan 14 miqrasiyalarda: 021 +6, 038 +6, 047 +1, 056 +1) | `database/schema.sql` §22 + miqrasiyalar |
+| İcazə flag kataloqu — **51 flag** (36 `schema.sql`-də: 34 spesifikasiyadan + `can_publish_fines`, `can_manage_drive_connection`; qalan 15 miqrasiyalarda: 021 +6, 038 +6, 047 +1, 056 +1, 063 +1 `can_manage_devices`) | `database/schema.sql` §22 + miqrasiyalar |
 | Miqrasiya icraçısı və reyestri | `scripts/apply_migrations.py`, `migrations/061` |
 | Server-lövbərli vaxt + manipulyasiya aşkarlaması | `src/infrastructure/timekeeping/server_time.py`, `migrations/062` |
 | Vaxt etibarlılıq səviyyəsi (domen) | `src/domain/value_objects/time_integrity.py` |
+| Cihaz qeydiyyatı (filial tanıma) | `src/application/use_cases/device_registry.py`, `migrations/063` |
+| Cihaz kimliyi faylı + aparat izi | `src/infrastructure/config/device_identity.py` |
+| Tenant brendinqi (ad/loqo/rəng) | `src/application/use_cases/tenant_branding.py`, `migrations/064` |
+| Yeni müştəri quraşdırması | `scripts/onboard_new_tenant.py` (`.exe`-yə DÜŞMÜR) |
 | Hardlock/anti-fraud qaydaları | `src/domain/value_objects/authorization.py` |
 | Menyu maddələri + flag bağlantısı | `src/presentation/shell/menu.py` |
 | Sistem limitləri & Feature Toggle açarları | `src/domain/policies.py` |
@@ -403,6 +410,7 @@ açarın məcburi olduğunu oradan öyrənir.
 | `KOMPASOS_EVIDENCE_QUEUE_PATH`, `KOMPASOS_SQLITE_PATH` | ✅ | Defolt `%LOCALAPPDATA%\KompasOS\data\` — CWD-yə nisbi YOX, çünki paketlənmiş `.exe` ixtiyari qovluqdan işə düşür |
 | `KOMPASOS_PRIVATE_SERVER_DSN` | ✅ | Boşdursa baza keçidi işləmir, aydın səbəb qaytarılır |
 | `KOMPASOS_TENANT_ID`, `KOMPASOS_INSTALLATION_PATH` | ✅ | Boş = ilk quraşdırma: kimlik `installation.json`-da yaranır və sihirbaz açılır (SEC-021) |
+| `KOMPASOS_DEVICE_FILE` | ✅ | Defolt `%PROGRAMDATA%\KompasOS\device.json`. Faylda yalnız `device_id` var və şifrələnmir — sirr deyil (DEVICE-1). Silinsə cihaz YENİ qeydiyyat yaradır |
 | `KOMPASOS_PLUGIN_TRUSTED_PUBLISHERS` | ✅ | Boş = fail-closed, heç bir plugin quraşdırılmır |
 | `KOMPASOS_PLUGIN_PYTHON` | ✅ | Paketlənmiş mühitdə plugin sandbox-u üçün interpretator; tapılmasa plugin icra olunmur |
 

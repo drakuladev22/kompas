@@ -509,6 +509,11 @@ def _root_control(screen: group_d.RootControlScreen) -> None:
     # face_scope_rows` / `face_tolerance_row` ilə EYNİDİR (CLAUDE.md §6).
     screen.set_face_scope([dict(store) for store in data.FACE_STORE_SCOPE])
     screen.set_face_tolerance(dict(data.FACE_TOLERANCE))
+    # TENANT-1 Faza 2. Maket CANLI yolun defoltunu göstərir: rəng sahəsi BOŞ,
+    # ad isə nümunə. Boş rəng «defolt Amber» deməkdir və maketdə də məhz o
+    # görünməlidir — burada `#F5A623` yazsaydıq, maket «rəng təyin edilib»
+    # təəssüratı yaradar və Root paneli açan adam onu silməyə çalışardı.
+    screen.set_branding(company_name="Yataş Group", accent_color="")
 
 
 def _settings(screen: group_d.SettingsScreen) -> None:

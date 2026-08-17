@@ -525,12 +525,16 @@ class DeviceRegisteredEvent(DomainEvent):
 
 @dataclass(frozen=True, kw_only=True)
 class DeviceApprovedEvent(DomainEvent):
-    """Admin cihazı təsdiqlədi və filiala təyin etdi (DEVICE-1)."""
+    """Cihaz təsdiqləndi və filiala təyin edildi (DEVICE-1)."""
 
     device_id: str
     store_id: str
     device_type: str
-    approved_by: str
+    #: `None` = AVTOMATİK təsdiq (`DEVICE_APPROVAL_REQUIRED = 0` + tək mağaza).
+    #: Süni bir istifadəçi identifikatoru uydurmaq audit izini YALANLAŞDIRARDI:
+    #: «kim təsdiqlədi?» sualının doğru cavabı «heç kim, sistem» ola bilər və
+    #: tip bunu ifadə edə bilməlidir.
+    approved_by: str | None
 
 
 @dataclass(frozen=True, kw_only=True)

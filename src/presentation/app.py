@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from src.infrastructure.persistence.mappers import Credentials
     from src.presentation.composition import ApplicationContext, StartupFailureKind
     from src.presentation.controllers.auth import AuthController
+    from src.presentation.controllers.devices import DevicePendingController
     from src.presentation.controllers.fine_entry import FineEntryController
     from src.presentation.controllers.kiosk import KioskController, KioskOutcome
     from src.presentation.controllers.sales_review import SalesReviewController
@@ -851,6 +852,9 @@ class KompasApplication:
         from src.presentation.screens.bulk_operations import (  # noqa: PLC0415
             BulkOperationsScreen,
         )
+        from src.presentation.screens.devices import (  # noqa: PLC0415
+            DeviceAdminScreen,
+        )
         from src.presentation.screens.face_control import (  # noqa: PLC0415
             FaceEnrollmentScreen,
             FaceExemptionScreen,
@@ -941,6 +945,9 @@ class KompasApplication:
             # HƏM yazır və hər qərardan sonra siyahını yenidən oxuyur (bax
             # `controllers/sync_conflicts.py` başlığı).
             (SyncConflictScreen, self._attach_sync_conflicts),
+            # DEVICE-1: təsdiq/blok/köçürmə — hər yazıdan sonra siyahı VƏ
+            # lisenziya sayğacı yenidən oxunur (bax `controllers/devices.py`).
+            (DeviceAdminScreen, self._attach_devices),
             (group_g.ProfileScreen, self._attach_profile),
             # Faza 3 yekunu: ERP, ehtiyat nüsxə, baza keçidi və diaqnostika.
             # Tapşırıq lövhəsi: «Nəzərdən Keçirilir» sütunundakı təsdiq/rədd
@@ -1243,6 +1250,24 @@ class KompasApplication:
         if not isinstance(screen, SyncConflictScreen):  # pragma: no cover - tip qoruyucusu
             return
         SyncConflictController(self._context, self._current_employee).attach(screen)
+
+    def _attach_devices(self, screen: QWidget) -> None:
+        """«Cihazlar» ekranını `DeviceRegistryUseCase`-ə bağlayır (DEVICE-1).
+
+        Menyu `can_manage_devices` ilə qapılıdır, lakin FAKTİKİ qapı use
+        case-dədir (`DeviceRegistryUseCase._require`) — menyunun görünməsi
+        əməliyyat icazəsi DEYİL (bax `menu.py` başlığı).
+        """
+        from src.presentation.controllers.devices import (  # noqa: PLC0415
+            DeviceAdminController,
+        )
+        from src.presentation.screens.devices import DeviceAdminScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, DeviceAdminScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        DeviceAdminController(self._context, self._current_employee).attach(screen)
 
     def _attach_field_reports(self, key: str, screen: QWidget) -> None:
         """Sahə hesabatı formasını `FieldReportUseCase`-ə bağlayır (#26+#27).
@@ -1607,6 +1632,7 @@ class KompasApplication:
         from src.presentation.screens.bulk_operations import (  # noqa: PLC0415
             BulkOperationsScreen,
         )
+        from src.presentation.screens.devices import DeviceAdminScreen  # noqa: PLC0415
         from src.presentation.screens.face_control import (  # noqa: PLC0415
             FaceEnrollmentScreen,
             FaceExemptionScreen,
@@ -1730,6 +1756,9 @@ class KompasApplication:
             "attrition_risk": lambda: AttritionRiskScreen(theme),
             # G-1 (bölmə 5) — «Sistem Sağlamlığı» xəbərdarlığının GEDƏCƏYİ yer.
             "sync_conflicts": lambda: SyncConflictScreen(theme),
+            # DEVICE-1: hansı PC hansı filiala aiddir. Ekran HƏM oxuyur,
+            # HƏM yazır — ona görə öz kontrolleri var (`_attach_devices`).
+            "devices": lambda: DeviceAdminScreen(theme),
             "annual_leave": lambda: AnnualLeaveInboxScreen(theme),
             # Face Control (facecontrol.md Faza 4) — hər ikisi ÖZ kontrollerinə
             # bağlıdır (bax `_attach_write_controller` cədvəli).
@@ -1767,6 +1796,7 @@ class KompasApplication:
             "performance_reviews": "Dövri qiymətləndirmə · KPI + qeyd",
             "attrition_risk": "Gecəlik hesablanır · yalnız məsləhət xarakterlidir",
             "sync_conflicts": "Offline rejimin izi · hər iki versiya saxlanılır",
+            "devices": "Təsdiqlənmiş cihaz lisenziya yeri tutur",
             "annual_leave": "İllik haqq · gündaxili icazədən AYRI mexanizm",
             "face_enrollment": "Nəzarətli proses · foto saxlanmır, yalnız riyazi təmsil",
             "face_exemptions": "PIN-only istisnası · məcburi ikinci təsdiqlə əvəzlənir",
@@ -2385,7 +2415,14 @@ def run(
 
     application = KompasApplication(app, preview=preview, theme_preference=theme, context=context)
 
-    if startup_error:
+    device_gate = _device_gate(application, context) if context is not None else None
+
+    if device_gate is not None:
+        # Cihaz təsdiqlənməyib/bloklanıb — tətbiq İŞLƏMİR (DEVICE-1 Faza 2.2).
+        # Login ekranı belə açılmır: filialını bilməyən cihazda kim isə giriş
+        # edərsə, onun yazdığı cərimə/tabel SƏHV mağazaya düşərdi.
+        pass
+    elif startup_error:
         # Kiosk rejimində belə fatal ekran göstərilir: mağaza işçisi "proqram
         # açılmır" deyib zəng etməkdənsə ekranda əlaqə ünvanını görməlidir.
         if startup_failure_kind is not None and rebuild_context is not None:
@@ -2419,6 +2456,7 @@ def run(
         context.start_time_sync()
         app.aboutToQuit.connect(context.stop_time_sync)
         _attach_live_clock(app, application, context)
+        _apply_tenant_branding(application, context)
 
         # KAMERA TUTACAĞI BAĞLANIŞDA BURAXILIR (`facecontrol.md` Faza 3).
         # `OpenCvCameraCapture` cihazı AÇIQ saxlayır (hər doğrulamada bir
@@ -2430,6 +2468,91 @@ def run(
 
     _log.info("GUI_STARTED", extra={"preview": preview, "kiosk": kiosk})
     return app.exec()
+
+
+def _apply_tenant_branding(
+    application: KompasApplication, context: ApplicationContext
+) -> None:
+    """Şirkət adını başlıq zolağına və pəncərə adına yazır (TENANT-1 Faza 2).
+
+    ──────────────────────────────────────────────────────────────────────────
+    OXUMAQ ÜÇÜN GİRİŞ GÖZLƏNİLMİR
+    ──────────────────────────────────────────────────────────────────────────
+    `TenantBrandingUseCase.current()` icazə tələb etmir (bax use case başlığı):
+    ad İSTİFADƏÇİ SEÇİLMƏMİŞDƏN ƏVVƏL, giriş ekranında görünməlidir. Girişdən
+    sonra tətbiq etsəydik, müştəri öz brendini yalnız içəri girdikdən sonra
+    görərdi — halbuki «bu, mənim sistemimdir» siqnalı məhz açılışda lazımdır.
+
+    Uğursuzluq DAYANDIRICI DEYİL: `tenant_branding` cədvəli YENİDİR
+    (migrations/064) və miqrasiya tətbiq olunmamış quraşdırmada sorğu xəta
+    verər. Həmin halda defolt «KompasOS» qalır — tətbiqin açılmaması
+    brendsiz başlıqdan qat-qat pis nəticədir.
+    """
+    try:
+        with context.session() as session:
+            branding = session.branding.current(session.tenant_id)
+    except Exception:
+        _log.warning("TENANT_BRANDING_NOT_APPLIED", exc_info=True)
+        return
+
+    title = branding.window_title()
+    window = application.window()
+    window.setWindowTitle(title)
+    title_bar = window.title_bar()
+    if title_bar is not None:
+        title_bar.set_title(title)
+
+
+def _device_gate(
+    application: KompasApplication, context: ApplicationContext
+) -> DevicePendingController | None:
+    """Cihaz qeydiyyatı qapısı — təsdiqlənməmiş cihaz işləmir (DEVICE-1).
+
+    ──────────────────────────────────────────────────────────────────────────
+    QEYDİYYAT UĞURSUZ OLARSA TƏTBİQ DAYANMIR — VƏ BU, QƏSDƏNDİR
+    ──────────────────────────────────────────────────────────────────────────
+    `registered_devices` cədvəli YENİDİR (migrations/063). Miqrasiya hələ
+    tətbiq olunmamış bir quraşdırmada sorğu xəta verəcək. Həmin halda qapını
+    «bağlı» saysaydıq, buraxılışın yayılması BÜTÜN mağazalar üçün kəsintiyə
+    çevrilərdi — halbuki qüsur cihazda deyil, miqrasiya sırasındadır.
+
+    Ona görə qapı YALNIZ cavab ALINDIQDA hökm verir: cihaz oxundu və
+    `is_operational` deyilsə ekran göstərilir. Oxuna bilmədisə jurnal yazılır
+    və tətbiq davam edir (DB-4-ün «graceful failure» prinsipi ilə eyni).
+
+    Returns:
+        Gözləmə ekranının kontrolleri — cihaz işləyə bilmirsə; əks halda
+        `None` (tətbiq normal açılır).
+    """
+    from src.presentation.controllers.devices import (  # noqa: PLC0415
+        DevicePendingController,
+    )
+    from src.presentation.screens.devices import DevicePendingScreen  # noqa: PLC0415
+
+    controller = DevicePendingController(context)
+    try:
+        device = controller.register()
+    except Exception:
+        _log.exception("DEVICE_GATE_SKIPPED")
+        return None
+
+    if device.is_operational:
+        return None
+
+    screen = DevicePendingScreen(application.theme())
+    screen.set_device(
+        short_code=device.short_code,
+        machine_name=device.machine_name,
+        status=device.status,
+    )
+    controller.attach(screen)
+    application.window().set_content(screen)
+    application.window().show()
+    _log.warning(
+        "DEVICE_NOT_APPROVED",
+        extra={"status": device.status.value, "short_code": device.short_code},
+    )
+    return controller
 
 
 def _attach_live_clock(
