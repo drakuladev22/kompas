@@ -1085,7 +1085,6 @@ class RoleCreateDialog(QDialog):
 
         self._name = FormField(
             "Vəzifə adı",
-            placeholder="Məsələn: Anbar Nəzarətçisi",
             hint="İcazələr rol yaradıldıqdan sonra matrisdən verilir.",
         )
         card.add(self._name)
@@ -1442,7 +1441,6 @@ class PosThresholdDialog(QDialog):
 
         self._pct = FormField(
             "Maksimum endirim faizi (%)",
-            placeholder="məsələn 15",
             hint=f"0–{ceiling_pct} arası (Root həddi: {ceiling_pct}%).",
         )
         self._pct.set_text(max_discount_pct)
@@ -1462,10 +1460,13 @@ class PosThresholdDialog(QDialog):
         note_layout.setSpacing(8)
         note_layout.addWidget(field_label("Qeyd (səbəb)"))
         self._note = QPlainTextEdit()
-        self._note.setPlainText(note)
+        # GÖSTƏRİŞDİR, NÜMUNƏ DEYİL — ona görə nümunə mətnlərin təmizlənməsində
+        # SAXLANILIR: sahə boş qalır, mətn isə NƏ YAZILACAĞINI deyir. Səbəb
+        # mübahisə halında həddin müdafiəsidir (`pos_threshold.py` başlığı).
         self._note.setPlaceholderText(
             "Bu səlahiyyət niyə verilir? Səbəbsiz hədd mübahisədə müdafiə olunmur."
         )
+        self._note.setPlainText(note)
         self._note.setFixedHeight(80)
         note_layout.addWidget(self._note)
         card.add(note_box)
@@ -1612,16 +1613,19 @@ class EmployeeDocumentDialog(QDialog):
         card.add(Divider())
         card.add(body_label("Yeni sənəd əlavə et", size=13))
 
-        self._doc_type = FormField("Sənəd növü", placeholder="məsələn MUQAVILE, SANITAR_KITABCA")
+        self._doc_type = FormField("Sənəd növü")
         card.add(self._doc_type)
 
         self._doc_number = FormField("Sənəd nömrəsi (könüllü)")
         card.add(self._doc_number)
 
+        # Format göstərişi `hint`-dədir, placeholder-də YOX: hint sahənin
+        # ALTINDA yazılır və qutunu dolu göstərmir. Formatsız qalsaydı sahə
+        # cavabsız olardı — «12.08.2026» ilə «2026-08-12» arasında seçimi
+        # istifadəçi bilməzdi və səhv dəyər sükutla rədd edilərdi.
         self._expiry = FormField(
             "Bitmə tarixi",
-            placeholder="YYYY-AA-GG",
-            hint="Boş buraxılsa sənəd müddətsiz sayılır.",
+            hint="İL-AY-GÜN formatında. Boş buraxılsa sənəd müddətsiz sayılır.",
         )
         card.add(self._expiry)
 

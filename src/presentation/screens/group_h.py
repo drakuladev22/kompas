@@ -236,7 +236,7 @@ class CatalogEntryDialog(QDialog):
         card.add(title_label(title, size=19))
         card.add(Divider())
 
-        self._name = FormField("Ad", placeholder="Məsələn: Nahar Fasiləsi")
+        self._name = FormField("Ad")
         self._name.set_text(name)
         card.add(self._name)
 
@@ -566,10 +566,12 @@ class ReportExportScreen(Screen):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        self._range_start = FormField(
-            "Başlanğıc", placeholder="2026-08-01", hint="İL-AY-GÜN formatında."
-        )
-        self._range_end = FormField("Bitmə", placeholder="2026-08-15")
+        # Format göstərişi HƏR İKİ sahədə təkrarlanır. Yalnız birində
+        # qalsaydı iki fərqli səbəbdən pis olardı: sətir iki sütunludur və
+        # tək hint-li sahə digərindən HÜNDÜR görünür, üstəlik göstəriş
+        # yalnız «Başlanğıc»a aidmiş kimi oxunardı.
+        self._range_start = FormField("Başlanğıc", hint="İL-AY-GÜN formatında.")
+        self._range_end = FormField("Bitmə", hint="İL-AY-GÜN formatında.")
         layout.addWidget(self._range_start, 1)
         layout.addWidget(self._range_end, 1)
 
@@ -1106,7 +1108,6 @@ class ExportCorrectionDialog(QDialog):
 
         self._date = FormField(
             "Tarix",
-            placeholder="2026-08-13",
             hint="Düzəlişin aid olduğu təqvim günü (İL-AY-GÜN).",
         )
         self._date.set_text(default_date)

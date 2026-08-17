@@ -31,8 +31,7 @@ class PostgresBrandingRepository(_BaseRepository):
 
     def get(self, tenant_id: TenantId) -> TenantBranding:
         row = self._fetch_one(
-            "SELECT company_name, logo_png, accent_color FROM tenant_branding "
-            "WHERE tenant_id = %s",
+            "SELECT company_name, logo_png, accent_color FROM tenant_branding WHERE tenant_id = %s",
             (str(tenant_id),),
         )
         if row is None:

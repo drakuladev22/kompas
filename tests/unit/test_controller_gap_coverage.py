@@ -725,9 +725,7 @@ class _RootScreen:
     def reject_face_scope_change(self, store_id: str) -> None:
         self.face_rejected.append(store_id)
 
-    def set_branding(
-        self, *, company_name: str, accent_color: str, warning: str = ""
-    ) -> None:
+    def set_branding(self, *, company_name: str, accent_color: str, warning: str = "") -> None:
         self.branding = (company_name, accent_color, warning)
 
     def set_branding_status(self, message: str) -> None:

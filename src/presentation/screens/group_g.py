@@ -465,7 +465,7 @@ class ProfileScreen(Screen):
         self._username.input_widget().setEnabled(False)
         card.add(self._username)
 
-        self._phone = FormField("Telefon", placeholder="+994 50 000 00 00")
+        self._phone = FormField("Telefon")
         card.add(self._phone)
 
         self._email = FormField("E-poçt (qeydiyyat)")

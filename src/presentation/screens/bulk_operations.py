@@ -447,7 +447,7 @@ class StoreTemplateCaptureDialog(QDialog):
         )
         card.add(Divider())
 
-        self._name = FormField("Şablon adı", placeholder="Məsələn: Standart Supermarket")
+        self._name = FormField("Şablon adı")
         card.add(self._name)
 
         self._store_combo = QComboBox()
@@ -539,11 +539,11 @@ class StoreTemplateApplyDialog(QDialog):
         card.add(warning)
         card.add(Divider())
 
-        self._code = FormField("Mağaza kodu", placeholder="Məsələn: BEL-29")
+        self._code = FormField("Mağaza kodu")
         card.add(self._code)
-        self._name = FormField("Mağaza adı", placeholder="Məsələn: Bellona 29 May")
+        self._name = FormField("Mağaza adı")
         card.add(self._name)
-        self._brand = FormField("Brend", placeholder="Məsələn: Bellona")
+        self._brand = FormField("Brend")
         card.add(self._brand)
         self._address = FormField("Ünvan (könüllü)")
         card.add(self._address)

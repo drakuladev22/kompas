@@ -17,6 +17,7 @@ Admin yeniləyir (`can_reset_password`).
 
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -60,15 +61,17 @@ LOGIN_CARD_WIDTH: Final = 420
 WIZARD_STEP_PANEL_WIDTH: Final = 300
 
 
-def _field_text(owner: object, attribute: str) -> str:
-    """Sehrbaz sahəsinin mətni — sahə hələ qurulmayıbsa boş sətir.
-
-    Sahələr addım açılanda yaradılır (`_apply_step` → `_build_*_fields`), ona
-    görə keçilmiş addımın sahəsi ÜMUMİYYƏTLƏ mövcud olmur. `getattr` ilə
-    yoxlamaq `hasattr` şəlaləsindən qısa və hər sahə üçün eynidir.
-    """
-    field = getattr(owner, attribute, None)
-    return field.text().strip() if field is not None else ""
+# `_field_text()` SİLİNDİ — ŞƏRHİ YANLIŞ İDİ VƏ QÜSURU GİZLƏDİRDİ
+#
+# O, belə yazırdı: «keçilmiş addımın sahəsi ÜMUMİYYƏTLƏ mövcud olmur, ona görə
+# `getattr` ilə yoxlamaq kifayətdir». Bu, doğru deyildi: `clear_layout()`
+# `deleteLater()` çağırır, yəni C++ obyekti ölür, PYTHON ATRİBUTU İSƏ QALIR.
+# `getattr(...) is not None` yoxlaması ondan keçir və `field.text()`
+# `RuntimeError` atır. İstisna Qt slot-unda udulduğu üçün düymə basılır,
+# heç nə baş vermir — «Keç» və «Davam Et» məhz belə ölmüşdü.
+#
+# İndi dəyərlər `SetupWizardScreen._answers` sözlüyündədir və `_answer()`
+# metodu ilə oxunur; həmin sözlük widget-lərdən uzun yaşayır.
 
 
 def _split_full_name(full_name: str) -> tuple[str, str]:
@@ -298,7 +301,7 @@ class AdminLoginScreen(QWidget):
         card.add(heading_box)
 
         # ------------------------------ sahələr ----------------------------- #
-        self._username = FormField("İstifadəçi adı", placeholder="r.mammadov")
+        self._username = FormField("İstifadəçi adı")
         card.add(self._username)
 
         self._password = FormField("Şifrə", password=True)
@@ -494,10 +497,36 @@ class FirstRunWizard(QWidget):
     #: Bu indeksdən başlayaraq addımlar keçilə bilər (1C server, HR dəvəti).
     FIRST_OPTIONAL_STEP: Final = 2
 
+    #: Addım → həmin addımın sahə açarları.
+    #:
+    #: TƏK MƏNBƏ: `collected()`, `_capture_current()` və «Keç» hər üçü bunu
+    #: oxuyur. Siyahı üç yerdə saxlansaydı, yeni sahə birində unudular və
+    #: nəticə sükutlu olardı — məsələn «Keç» onu təmizləməz, yarımçıq dəyər
+    #: quraşdırmaya düşərdi.
+    STEP_FIELDS: Final[tuple[tuple[str, ...], ...]] = (
+        ("_full_name", "_email", "_username", "_password", "_password_repeat"),
+        ("_store_name", "_store_brand", "_store_address"),
+        ("_server_name", "_server_host", "_server_user", "_server_password"),
+        ("_invite_full_name", "_invite_username", "_invite_password", "_invite_email"),
+    )
+
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._theme = theme
         self._index = 0
+        # ──────────────────────────────────────────────────────────────────
+        # VƏZİYYƏT WIDGET-LƏRDƏN UZUN YAŞAYIR
+        # ──────────────────────────────────────────────────────────────────
+        # Hər addım açılanda `_apply_step()` `clear_layout()` çağırır, o isə
+        # `widget.deleteLater()` edir — yəni ƏVVƏLKİ addımın `FormField`
+        # obyektləri SİLİNİR. Python atributu (`self._full_name`) qalır,
+        # arxasındaki C++ obyekti isə yox: `field.text()` `RuntimeError`
+        # atır. Qt slot-un içindəki istisna udulur, ona görə düymə basılır və
+        # HEÇ NƏ BAŞ VERMİR — «Keç» və «Davam Et» məhz belə ölmüşdü.
+        #
+        # Ona görə mətnlər addım dəyişməzdən ƏVVƏL bura köçürülür və
+        # `collected()` YALNIZ buradan oxuyur.
+        self._answers: dict[str, str] = {}
         set_surface_color(self, theme.color("--color-content-bg"))
 
         layout = QHBoxLayout(self)
@@ -589,7 +618,7 @@ class FirstRunWizard(QWidget):
         footer_layout.addWidget(self._back)
 
         self._skip = secondary_button("Keç")
-        self._skip.clicked.connect(self._on_next)
+        self._skip.clicked.connect(self._on_skip)
         footer_layout.addWidget(self._skip)
 
         self._next = action_button("Davam Et")
@@ -628,17 +657,58 @@ class FirstRunWizard(QWidget):
         self._skip.setVisible(self._index >= self.FIRST_OPTIONAL_STEP)
         self._next.setText("Tamamla" if self._index == len(self.STEPS) - 1 else "Davam Et")
 
+    def _field(self, key: str, label: str, *, password: bool = False) -> FormField:
+        """Sahəni qurur və ƏVVƏL yazılmış dəyəri BƏRPA edir.
+
+        Bərpa olmadan «Geri» düyməsi istifadəçinin yazdığını silərdi: widget
+        yenidən yaradılır, köhnəsi isə artıq məhv edilib.
+
+        `placeholder` QƏSDƏN VERİLMİR — bax sinif docstring-i.
+        """
+        field = FormField(label, password=password)
+        field.set_text(self._answers.get(key, ""))
+        return field
+
+    def _answer(self, key: str) -> str:
+        """Toplanmış cavab — sahə heç açılmayıbsa boş sətir."""
+        return self._answers.get(key, "")
+
+    def _capture_current(self) -> None:
+        """Cari addımın mətnlərini `_answers`-ə köçürür və atributları boşaldır.
+
+        Atributun `None`-a qoyulması MƏCBURİDİR: silinmiş widget-ə istinad
+        qalsaydı, sonrakı hər oxunuş `RuntimeError` riski daşıyardı və o,
+        Qt slot-unda sükutla udulardı.
+        """
+        for key in self.STEP_FIELDS[self._index]:
+            field = getattr(self, key, None)
+            if field is None:
+                continue
+            with suppress(RuntimeError):
+                self._answers[key] = field.text().strip()
+            setattr(self, key, None)
+
+    def _discard_current(self) -> None:
+        """«Keç» — bu addımın cavabları SİLİNİR.
+
+        Keçilmiş addım quraşdırmaya DÜŞMƏMƏLİDİR. Yalnız validasiyanı yan
+        keçsəydik, yarımçıq yazılmış server/dəvət məlumatı sükutla yazılardı.
+        """
+        for key in self.STEP_FIELDS[self._index]:
+            self._answers.pop(key, None)
+            setattr(self, key, None)
+
     def _build_admin_fields(self) -> None:
         self._heading.setText("İlk Admin Hesabı")
         self._description.setText(
             "Sistemə tam səlahiyyətli bir hesab yaradın. E-poçt yalnız "
             "qeydiyyat üçündür — sonrakı girişlər istifadəçi adı ilə olur."
         )
-        self._full_name = FormField("Ad, Soyad", placeholder="Rəşad Məmmədov")
-        self._email = FormField("E-poçt", placeholder="admin@kompas.az")
-        self._username = FormField("İstifadəçi adı", placeholder="r.mammadov")
-        self._password = FormField("Şifrə", password=True)
-        self._password_repeat = FormField("Şifrənin Təkrarı", password=True)
+        self._full_name = self._field("_full_name", "Ad, Soyad")
+        self._email = self._field("_email", "E-poçt")
+        self._username = self._field("_username", "İstifadəçi adı")
+        self._password = self._field("_password", "Şifrə", password=True)
+        self._password_repeat = self._field("_password_repeat", "Şifrənin Təkrarı", password=True)
         for field in (
             self._full_name,
             self._email,
@@ -653,9 +723,9 @@ class FirstRunWizard(QWidget):
         self._description.setText(
             "Ən azı bir mağaza tələb olunur — işçilər və növbələr mağazaya bağlanır."
         )
-        self._store_name = FormField("Mağaza adı", placeholder="28 May")
-        self._store_brand = FormField("Brend", placeholder="Bellona")
-        self._store_address = FormField("Ünvan", placeholder="Bakı, Nizami küç. 1")
+        self._store_name = self._field("_store_name", "Mağaza adı")
+        self._store_brand = self._field("_store_brand", "Brend")
+        self._store_address = self._field("_store_address", "Ünvan")
         for field in (self._store_name, self._store_brand, self._store_address):
             self._fields_layout.addWidget(field)
 
@@ -665,10 +735,10 @@ class FirstRunWizard(QWidget):
             "Satış məlumatları bu serverdən oxunur. İndi keçsəniz, sonradan "
             "«ERP / 1C Serverləri» bölməsindən əlavə edə bilərsiniz."
         )
-        self._server_name = FormField("Server adı", placeholder="1C-BAKI-01")
-        self._server_host = FormField("Ünvan", placeholder="192.168.1.10:1541")
-        self._server_user = FormField("İstifadəçi", placeholder="kompas_sync")
-        self._server_password = FormField("Şifrə", password=True)
+        self._server_name = self._field("_server_name", "Server adı")
+        self._server_host = self._field("_server_host", "Ünvan")
+        self._server_user = self._field("_server_user", "İstifadəçi")
+        self._server_password = self._field("_server_password", "Şifrə", password=True)
         for field in (
             self._server_name,
             self._server_host,
@@ -690,10 +760,10 @@ class FirstRunWizard(QWidget):
             "deyə bu tövsiyə olunur — indi keçsəniz, sonradan «İstifadəçilər» "
             "bölməsindən əlavə edə bilərsiniz."
         )
-        self._invite_full_name = FormField("Ad, Soyad", placeholder="Aysel Quliyeva")
-        self._invite_username = FormField("İstifadəçi adı", placeholder="a.quliyeva")
-        self._invite_password = FormField("Müvəqqəti şifrə", password=True)
-        self._invite_email = FormField("E-poçt (istəyə görə)", placeholder="hr@kompas.az")
+        self._invite_full_name = self._field("_invite_full_name", "Ad, Soyad")
+        self._invite_username = self._field("_invite_username", "İstifadəçi adı")
+        self._invite_password = self._field("_invite_password", "Müvəqqəti şifrə", password=True)
+        self._invite_email = self._field("_invite_email", "E-poçt (istəyə görə)")
         for field in (
             self._invite_full_name,
             self._invite_username,
@@ -708,13 +778,35 @@ class FirstRunWizard(QWidget):
         if self._index == 0:
             self.cancelled.emit()
             return
+        self._capture_current()
         self._index -= 1
         self._apply_step()
 
     def _on_next(self) -> None:
+        """«Davam Et» — validasiya, tutma, sonra irəliləmə.
+
+        TUTMA İNDEKS DƏYİŞMƏZDƏN ƏVVƏLDİR: `_capture_current()`
+        `self._index`-ə baxır, ona görə artırmadan sonra çağırılsaydı NÖVBƏTİ
+        addımın (hələ qurulmamış) sahələrini oxumağa çalışardı.
+        """
+        if not self._validate_current():
+            return
+        self._capture_current()
         if self._index < len(self.STEPS) - 1:
-            if not self._validate_current():
-                return
+            self._index += 1
+            self._apply_step()
+            return
+        self.completed.emit(self.collected())
+
+    def _on_skip(self) -> None:
+        """«Keç» — validasiya YOX, cavablar SİLİNİR.
+
+        Əvvəl bu düymə `_on_next`-ə bağlı idi, yəni «Davam Et»in eynisi idi:
+        validasiyadan keçirdi və keçilən addımın yarımçıq dəyərlərini
+        saxlayırdı. «Keç» sözü hər iki davranışın əksini vəd edir.
+        """
+        self._discard_current()
+        if self._index < len(self.STEPS) - 1:
             self._index += 1
             self._apply_step()
             return
@@ -755,20 +847,20 @@ class FirstRunWizard(QWidget):
         (`Username.parse`, `EmailAddress.parse`) və validasiya kompozisiya
         kökündədir — ekran domen tiplərini tanımır.
         """
-        first_name, last_name = _split_full_name(_field_text(self, "_full_name"))
+        first_name, last_name = _split_full_name(self._answer("_full_name"))
         payload: dict[str, object] = {
             "root": {
                 "first_name": first_name,
                 "last_name": last_name,
-                "email": _field_text(self, "_email"),
-                "username": _field_text(self, "_username"),
-                "password": _field_text(self, "_password"),
+                "email": self._answer("_email"),
+                "username": self._answer("_username"),
+                "password": self._answer("_password"),
             },
             "stores": [],
             "invites": [],
         }
 
-        store_name = _field_text(self, "_store_name")
+        store_name = self._answer("_store_name")
         if store_name:
             payload["stores"] = [
                 {
@@ -777,13 +869,13 @@ class FirstRunWizard(QWidget):
                     # uzadardı (spesifikasiya yalnız ad/brend/ünvan deyir).
                     "code": _store_code(store_name),
                     "name": store_name,
-                    "brand": _field_text(self, "_store_brand"),
-                    "address": _field_text(self, "_store_address"),
+                    "brand": self._answer("_store_brand"),
+                    "address": self._answer("_store_address"),
                 }
             ]
 
-        invite_name = _field_text(self, "_invite_full_name")
-        invite_username = _field_text(self, "_invite_username")
+        invite_name = self._answer("_invite_full_name")
+        invite_username = self._answer("_invite_username")
         if invite_name and invite_username:
             invite_first, invite_last = _split_full_name(invite_name)
             payload["invites"] = [
@@ -792,18 +884,18 @@ class FirstRunWizard(QWidget):
                     "last_name": invite_last,
                     "username": invite_username,
                     "role_code": self.INVITE_ROLE_CODE,
-                    "temporary_password": _field_text(self, "_invite_password"),
-                    "email": _field_text(self, "_invite_email"),
+                    "temporary_password": self._answer("_invite_password"),
+                    "email": self._answer("_invite_email"),
                 }
             ]
 
-        server_host = _field_text(self, "_server_host")
+        server_host = self._answer("_server_host")
         if server_host:
             payload["server"] = {
-                "name": _field_text(self, "_server_name"),
+                "name": self._answer("_server_name"),
                 "host": server_host,
-                "username": _field_text(self, "_server_user"),
-                "password": _field_text(self, "_server_password"),
+                "username": self._answer("_server_user"),
+                "password": self._answer("_server_password"),
             }
         return payload
 
@@ -1020,12 +1112,10 @@ class ConnectionSettingsScreen(QWidget):
         intro.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
         card.add(intro)
 
-        self._host = FormField(
-            "Server ünvanı", placeholder="aws-0-eu-central-1.pooler.supabase.com"
-        )
-        self._port = FormField("Port", placeholder="5432")
-        self._database = FormField("Baza adı", placeholder="postgres")
-        self._username = FormField("İstifadəçi adı", placeholder="postgres.abcdefgh")
+        self._host = FormField("Server ünvanı")
+        self._port = FormField("Port")
+        self._database = FormField("Baza adı")
+        self._username = FormField("İstifadəçi adı")
         self._password = FormField("Parol", password=True)
         for field in (self._host, self._port, self._database, self._username, self._password):
             card.add(field)

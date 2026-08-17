@@ -278,7 +278,7 @@ class FieldReportScreen(Screen):
         )
         card.add(Divider())
 
-        self._item_text = FormField("Bənd mətni", placeholder="məsələn: Soyuducunun temperaturu")
+        self._item_text = FormField("Bənd mətni")
         card.add(self._item_text)
         self._item_blocking = QCheckBox("Bloklayıcı bənddir (uğursuzluq düzəliş tapşırığı yaradır)")
         card.add(self._item_blocking)

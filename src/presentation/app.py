@@ -115,6 +115,46 @@ FALLBACK_SCHEDULER_POLL_INTERVAL_MS: Final = (
 ICON_RELATIVE_PATH: Final = "assets/kompasos.ico"
 
 
+#: Windows Taskbar-ın tətbiqi tanıdığı kimlik.
+#:
+#: DƏYƏR SABİT QALMALIDIR: istifadəçi tətbiqi Taskbar-a sancanda Windows məhz
+#: bu sətri yadda saxlayır. Versiyada dəyişsək, sancılmış nişan «başqa proqram»
+#: sayılar və köhnəsi ölü qalar. Ona görə versiya nömrəsi BURAYA yazılmır.
+APP_USER_MODEL_ID: Final = "KompasOS.Desktop.1"
+
+
+def _set_app_user_model_id() -> None:
+    r"""Taskbar ikonunu düzəldir — `setWindowIcon` TƏK BAŞINA KİFAYƏT ETMİR.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ İKON GÖRÜNMÜRDÜ
+    ──────────────────────────────────────────────────────────────────────────
+    `setWindowIcon()` PƏNCƏRƏNİN ikonunu verir (başlıq, Alt-Tab). Taskbar isə
+    düymələri **AppUserModelID** üzrə qruplaşdırır və ikonu həmin kimliyə
+    bağlı qeyddən götürür. Kimlik AÇIQ təyin edilməyəndə Windows onu İCRA
+    OLUNAN FAYLIN yolundan çıxarır — paketlənmiş `onefile` `.exe`-də isə
+    faktiki proses `%TEMP%\_MEIxxxxx\` altından işə düşür və həmin yol hər
+    açılışda DƏYİŞİR. Nəticədə Windows tətbiqi tanımır və ümumi ikon göstərir.
+
+    Ona görə kimlik BURADA, ilk pəncərə yaranmazdan ƏVVƏL təyin olunur.
+    Sonra çağırılsa təsir etmir: Windows kimliyi pəncərə yaradılan anda oxuyur.
+
+    YALNIZ WINDOWS: `shell32` digər platformalarda yoxdur və olmaması nasazlıq
+    deyil — Linux/macOS Taskbar-ı `.desktop`/bundle metadatasından oxuyur.
+    Uğursuzluq da udulur: ikon problemi tətbiqi dayandırmamalıdır.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes  # noqa: PLC0415
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+    except Exception:
+        _log.warning("APP_USER_MODEL_ID_NOT_SET", exc_info=True)
+    else:
+        _log.debug("APP_USER_MODEL_ID_SET", extra={"app_id": APP_USER_MODEL_ID})
+
+
 def _apply_window_icon(app: QApplication) -> None:
     """Tətbiq ikonunu təyin edir — paketlənmiş və mənbə rejimində.
 
@@ -2404,6 +2444,11 @@ def run(
             ayarlar ekranı ONA bağlıdır; ötürülməzsə düymələr göstərilmir,
             çünki basılanda edəcəkləri heç nə olmazdı.
     """
+    # Taskbar kimliyi İLK PƏNCƏRƏDƏN ƏVVƏL təyin olunmalıdır (bax funksiya
+    # başlığı) — `QApplication` qurulduqdan sonra da olar, lakin pəncərə
+    # yaranmazdan əvvəl. Ən erkən nöqtə burasıdır.
+    _set_app_user_model_id()
+
     existing = QApplication.instance()
     # `instance()` bazis tip qaytarır; GUI üçün məhz `QApplication` lazımdır.
     app = existing if isinstance(existing, QApplication) else QApplication(sys.argv)
@@ -2470,9 +2515,22 @@ def run(
     return app.exec()
 
 
-def _apply_tenant_branding(
-    application: KompasApplication, context: ApplicationContext
-) -> None:
+def _has_other_active_device(context: ApplicationContext) -> bool:
+    """Kirayəçidə TƏSDİQLƏNMİŞ cihaz varmı — kilidlənmə qoruyucusu üçün.
+
+    Uğursuzluqda `False` qaytarır, yəni qapı AÇIQ qalır. Səbəb eynidir: sayğac
+    oxuna bilmirsə, «bloklayaq» qərarı istifadəçini heç kimin aça bilmədiyi
+    ekranda saxlayardı — halbuki problem cihazda deyil, sorğudadır.
+    """
+    try:
+        with context.session() as session:
+            return session.devices.license_usage(session.tenant_id).active > 0
+    except Exception:
+        _log.warning("DEVICE_ACTIVE_COUNT_UNAVAILABLE", exc_info=True)
+        return False
+
+
+def _apply_tenant_branding(application: KompasApplication, context: ApplicationContext) -> None:
     """Şirkət adını başlıq zolağına və pəncərə adına yazır (TENANT-1 Faza 2).
 
     ──────────────────────────────────────────────────────────────────────────
@@ -2520,10 +2578,41 @@ def _device_gate(
     `is_operational` deyilsə ekran göstərilir. Oxuna bilmədisə jurnal yazılır
     və tətbiq davam edir (DB-4-ün «graceful failure» prinsipi ilə eyni).
 
+    ──────────────────────────────────────────────────────────────────────────
+    İLK QURAŞDIRMA — TENANT SƏTRİ HƏLƏ YOXDUR (paketlənmiş `.exe` tapdı)
+    ──────────────────────────────────────────────────────────────────────────
+    SEC-021-ə görə boş `KOMPASOS_TENANT_ID` XƏTA DEYİL: kimlik yerli faylda
+    YARADILIR və `license_tenants` sətrini İlk Quraşdırma Sihirbazı yazır.
+    Yəni ilk açılışda tenant sətri MÖVCUD DEYİL və cihaz qeydiyyatı xarici
+    açar pozuntusu ilə dayanır.
+
+    Bu, `.exe`-ni FAKTİKİ işə salmaqla tapıldı — nə lint, nə də 5076 test onu
+    göstərmirdi, çünki hamısı tenant-ı hazır fərz edir. `ForeignKeyViolation`
+    indi AYRICA tutulur və ERROR deyil, INFO kimi yazılır: bu, gözlənilən ilk
+    açılış vəziyyətidir, nasazlıq deyil. Cihaz sihirbaz bitəndən sonrakı
+    açılışda qeydiyyatdan keçir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    KİLİDLƏNMƏ QORUYUCUSU — İLK CİHAZ BLOKLANMIR
+    ──────────────────────────────────────────────────────────────────────────
+    Sihirbaz bitəndən sonrakı açılışda tenant artıq var və cihaz
+    `PENDING_APPROVAL` yazılır. Qapı onu bloklasaydı, nəticə ÇIXIŞSIZ DÖVRƏ
+    olardı: təsdiqi verəcək admin məhz bloklanmış cihazın arxasındadır.
+
+    Ona görə qapı YALNIZ kirayəçidə ƏN AZI BİR aktiv cihaz olduqda bloklayır.
+    Aktiv cihaz varsa, təsdiq verə biləcək iş yeri MÖVCUDDUR və yeni cihazın
+    gözləməsi mənalıdır. Yoxdursa, birinci cihaz buraxılır — onsuz da hələ
+    heç bir məlumat yoxdur və istifadəçi yenə də ad/şifrə ilə giriş etməlidir.
+
+    Bu, DEVICE-1-in qoruma məqsədini zəiflətmir: hücumçu üçün maraqlı olan
+    MƏLUMATLI quraşdırmadır və orada aktiv cihaz onsuz da var.
+
     Returns:
         Gözləmə ekranının kontrolleri — cihaz işləyə bilmirsə; əks halda
         `None` (tətbiq normal açılır).
     """
+    import psycopg  # noqa: PLC0415
+
     from src.presentation.controllers.devices import (  # noqa: PLC0415
         DevicePendingController,
     )
@@ -2532,11 +2621,28 @@ def _device_gate(
     controller = DevicePendingController(context)
     try:
         device = controller.register()
+    except psycopg.errors.ForeignKeyViolation:
+        # Tenant sətri hələ yoxdur — sihirbaz onu yaradacaq (bax yuxarı).
+        _log.info(
+            "DEVICE_GATE_DEFERRED",
+            extra={"reason": "license_tenants sətri hələ yoxdur — ilk quraşdırma"},
+        )
+        return None
     except Exception:
         _log.exception("DEVICE_GATE_SKIPPED")
         return None
 
     if device.is_operational:
+        return None
+
+    if not _has_other_active_device(context):
+        _log.warning(
+            "DEVICE_GATE_OPEN_FIRST_DEVICE",
+            extra={
+                "short_code": device.short_code,
+                "reason": "kirayəçidə aktiv cihaz yoxdur — bloklamaq çıxışsız dövrə olardı",
+            },
+        )
         return None
 
     screen = DevicePendingScreen(application.theme())

@@ -510,3 +510,60 @@ def test_auto_approval_records_no_human_approver() -> None:
     approved = [e for e in events if type(e).__name__ == "DeviceApprovedEvent"]
     assert approved, "təsdiq hadisəsi yaranmadı"
     assert approved[0].approved_by is None, "hadisə «None» sətri daşıyır"
+
+
+# --------------------------------------------------------------------------- #
+# 8. Açılış qapısının iki sərhəd halı (paketlənmiş `.exe` tapdı)
+# --------------------------------------------------------------------------- #
+
+
+def test_the_gate_helpers_exist_and_are_wired() -> None:
+    """`app.py`-dakı qapı İKİ sərhəd halını AÇIQ idarə etməlidir.
+
+    ────────────────────────────────────────────────────────────────────────
+    HƏR İKİSİ FAKTİKİ `.exe` İCRASINDA TAPILDI
+    ────────────────────────────────────────────────────────────────────────
+    1. İLK QURAŞDIRMA: SEC-021-ə görə tenant kimliyi yerli faylda YARADILIR,
+       `license_tenants` sətrini isə sihirbaz yazır. Yəni ilk açılışda cihaz
+       qeydiyyatı `ForeignKeyViolation` ilə dayanır. Əvvəl bu, ümumi
+       `except`-ə düşür və hər açılışda ERROR yazırdı — halbuki vəziyyət
+       gözləniləndir.
+    2. KİLİDLƏNMƏ: sihirbazdan sonrakı açılışda cihaz `PENDING` olur. Qapı
+       onu bloklasaydı, təsdiqi verəcək admin məhz bloklanmış cihazın
+       arxasında qalardı — çıxışsız dövrə.
+
+    Qapı `app.py`-dadır (Qt tələb edir), ona görə burada onun QURULUŞU
+    yoxlanılır: hər iki hal üçün ayrıca yol var və səbəb sənədləşib.
+    5076 test bunların heç birini göstərmirdi, çünki hamısı tenant-ı hazır
+    fərz edir.
+    """
+    from pathlib import Path as _Path
+
+    source = (_Path(__file__).resolve().parents[2] / "src" / "presentation" / "app.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ForeignKeyViolation" in source, (
+        "ilk quraşdırma halı ayrıca tutulmur — hər açılışda ERROR yazılacaq"
+    )
+    assert "DEVICE_GATE_DEFERRED" in source, "təxirə salınma jurnal açarı yoxdur"
+    assert "_has_other_active_device" in source, "kilidlənmə qoruyucusu yoxdur"
+    assert "DEVICE_GATE_OPEN_FIRST_DEVICE" in source, "ilk cihaz üçün jurnal açarı yoxdur"
+
+
+def test_license_usage_answers_the_deadlock_question() -> None:
+    """Qoruyucunun soruşduğu sual: «təsdiq verə biləcək iş yeri VARMI?».
+
+    Cavab `license_usage().active` ilə verilir — `PENDING`/`BLOCKED` cihaz
+    təsdiq verə bilməz, ona görə onlar sayılmamalıdır.
+    """
+    use_case, registry, _, _ = _build()
+    registry.save(_device(status=DeviceStatus.PENDING_APPROVAL, short_code="PEND01"))
+    registry.save(_device(status=DeviceStatus.BLOCKED, store_id=STORE_A, short_code="BLK001"))
+
+    assert use_case.license_usage(TENANT).active == 0, (
+        "gözləyən/bloklanmış cihaz «təsdiq verə bilən iş yeri» sayılır"
+    )
+
+    registry.save(_device(status=DeviceStatus.ACTIVE, store_id=STORE_A, short_code="ACT001"))
+    assert use_case.license_usage(TENANT).active == 1

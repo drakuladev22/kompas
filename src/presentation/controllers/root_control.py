@@ -60,8 +60,7 @@ FACE_SCOPE_FLAG = "can_manage_system_limits"
 #: və istifadəçini «panel açılmadı» ekranına atmaq həmin bölmələri də əlçatmaz
 #: edərdi. Registry bölməsi ilə eyni qərar — bax `_fill`.
 BRANDING_UNAVAILABLE = (
-    "Şirkət kimliyi oxunmadı — bu bölmə müvəqqəti əlçatmazdır. "
-    "Panelin qalan hissəsi işləyir."
+    "Şirkət kimliyi oxunmadı — bu bölmə müvəqqəti əlçatmazdır. Panelin qalan hissəsi işləyir."
 )
 
 
@@ -187,9 +186,7 @@ class RootControlController:
         )
         # TENANT-1 Faza 2 — brendinq də `applied` sözlüyündən AYRI gedir
         # (bax `RootControlScreen.branding_changed` şərhi).
-        screen.branding_changed.connect(
-            lambda payload: self._on_branding_changed(screen, payload)
-        )
+        screen.branding_changed.connect(lambda payload: self._on_branding_changed(screen, payload))
         self.refresh(screen)
 
     def refresh(self, screen: RootControlScreen) -> None:

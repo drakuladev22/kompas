@@ -101,9 +101,7 @@ class PerformanceReviewScreen(Screen):
         employee_combo.currentIndexChanged.connect(self._on_employee_changed)
         card.add(self._employee)
 
-        self._period = FormField(
-            "Dövr", placeholder="2026-08", hint="Format: YYYY, YYYY-MM və ya YYYY-Qn"
-        )
+        self._period = FormField("Dövr", hint="Format: YYYY, YYYY-MM və ya YYYY-Qn")
         card.add(self._period)
 
         card.add(field_label("Göstəricilər (KPI)"))

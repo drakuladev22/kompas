@@ -417,7 +417,6 @@ class DeviceAdminScreen(Screen):
 
         form.addWidget(field_label("Ad"))
         name_input = QLineEdit()
-        name_input.setPlaceholderText("məs. Yataş Babək — Kassa 1")
         name_input.setText(str(device.get("machine_name", "")))
         form.addWidget(name_input, 2)
 

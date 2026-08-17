@@ -254,7 +254,6 @@ class FaceEnrollmentScreen(Screen):
         re_layout.addWidget(field_label("Yenidən qeydiyyatın səbəbi"))
         self._reason = QLineEdit()
         self._reason.setProperty("variant", "form")
-        self._reason.setPlaceholderText("Məsələn: eynək dəyişib, üz tanınmır")
         re_layout.addWidget(self._reason)
         card.add(self._re_enroll_box)
 

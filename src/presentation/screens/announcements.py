@@ -194,7 +194,7 @@ class AnnouncementComposeDialog(QDialog):
         card.add(title_label("Yeni Elan", size=19))
         card.add(Divider())
 
-        self._title = FormField("Başlıq", placeholder="Məsələn: Bayram iş qrafiki")
+        self._title = FormField("Başlıq")
         card.add(self._title)
 
         card.add(field_label("Mətn"))

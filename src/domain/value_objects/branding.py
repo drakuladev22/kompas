@@ -91,9 +91,7 @@ def relative_luminance(hex_color: str) -> float:
 
     channels = [int(hex_color[i : i + 2], 16) / 255.0 for i in (1, 3, 5)]
     linear = [_to_linear(channel) for channel in channels]
-    return (
-        _LUMINANCE_RED * linear[0] + _LUMINANCE_GREEN * linear[1] + _LUMINANCE_BLUE * linear[2]
-    )
+    return _LUMINANCE_RED * linear[0] + _LUMINANCE_GREEN * linear[1] + _LUMINANCE_BLUE * linear[2]
 
 
 def _to_linear(srgb: float) -> float:

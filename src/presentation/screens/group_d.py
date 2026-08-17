@@ -617,7 +617,7 @@ class ServerConnectionWizard(QDialog):
         card.add(self._type_notice)
 
         # --- ortaq sahələr ---------------------------------------------------- #
-        self._name = FormField("Server adı", placeholder="1C-BAKI-03")
+        self._name = FormField("Server adı")
         card.add(self._name)
 
         # --- 2-ci addım: növə xas sahələr (yumşaq keçidlə) -------------------- #
@@ -771,9 +771,9 @@ class ServerConnectionWizard(QDialog):
         onun ətrafına növ seçimi əlavə olunur (1c.md QIRMIZI XƏTT).
         """
         panel, layout = self._new_panel()
-        self._host = FormField(ConnectorType.HTTP.address_label_az, placeholder="10.20.1.16:1541")
-        self._database = FormField("Baza (infobase)", placeholder="kompas_prod")
-        self._username = FormField("İstifadəçi", placeholder="kompas_sync")
+        self._host = FormField(ConnectorType.HTTP.address_label_az)
+        self._database = FormField("Baza (infobase)")
+        self._username = FormField("İstifadəçi")
         self._password = FormField("Şifrə", password=True)
         for field in (self._host, self._database, self._username, self._password):
             layout.addWidget(field)
@@ -791,11 +791,9 @@ class ServerConnectionWizard(QDialog):
         yalnız formadakı açarları üzərinə yazır (bax sinif başlığı).
         """
         panel, layout = self._new_panel()
-        address = FormField(
-            ConnectorType.COM.address_label_az, placeholder="1C-SERVER və ya C:\\Bazalar\\Ticaret"
-        )
-        self._com_infobase = FormField("Baza adı (Ref)", placeholder="ticaret")
-        self._com_username = FormField("İstifadəçi", placeholder="kompas_sync")
+        address = FormField(ConnectorType.COM.address_label_az)
+        self._com_infobase = FormField("Baza adı (Ref)")
+        self._com_username = FormField("İstifadəçi")
         self._com_password = FormField("Şifrə", password=True)
         for field in (address, self._com_infobase, self._com_username, self._com_password):
             layout.addWidget(field)
@@ -806,7 +804,7 @@ class ServerConnectionWizard(QDialog):
         language = QComboBox()
         language.setProperty("variant", "form")
         language.addItems(["RU", "EN"])
-        query_source = FormField("Sənəd növü", placeholder="Документ.РеализацияТоваровУслуг")
+        query_source = FormField("Sənəd növü")
         layout.addWidget(FormField("Baza rejimi", widget=file_mode))
         layout.addWidget(
             FormField(
@@ -835,7 +833,6 @@ class ServerConnectionWizard(QDialog):
         panel, layout = self._new_panel()
         address = FormField(
             ConnectorType.FILE_EXCHANGE.address_label_az,
-            placeholder="\\\\anbar\\1c_exchange",
         )
         layout.addWidget(address)
 
@@ -845,19 +842,17 @@ class ServerConnectionWizard(QDialog):
         layout.addWidget(FormField("Fayl formatı", widget=file_format))
 
         text_fields: dict[str, FormField] = {
-            "file_pattern": FormField("Fayl şablonu", placeholder="*.csv"),
-            "encoding": FormField("Kodlaşdırma", placeholder="utf-8-sig"),
-            "delimiter": FormField("Ayırıcı (CSV)", placeholder=";"),
-            "record_tag": FormField("Sənəd elementi (XML)", placeholder="Документ"),
-            "date_format": FormField("Tarix şablonu", placeholder="%d.%m.%Y %H:%M:%S"),
-            "document_id_column": FormField("Sənəd ID sütunu", placeholder="Номер"),
-            "date_column": FormField("Tarix sütunu", placeholder="Дата"),
-            "seller_column": FormField("Satıcı sütunu", placeholder="Продавец"),
-            "store_column": FormField("Mağaza sütunu", placeholder="Склад"),
-            "amount_column": FormField("Məbləğ sütunu", placeholder="Сумма"),
-            "seller_name_column": FormField(
-                "Satıcı adı sütunu", placeholder="ПродавецНаименование"
-            ),
+            "file_pattern": FormField("Fayl şablonu"),
+            "encoding": FormField("Kodlaşdırma"),
+            "delimiter": FormField("Ayırıcı (CSV)"),
+            "record_tag": FormField("Sənəd elementi (XML)"),
+            "date_format": FormField("Tarix şablonu"),
+            "document_id_column": FormField("Sənəd ID sütunu"),
+            "date_column": FormField("Tarix sütunu"),
+            "seller_column": FormField("Satıcı sütunu"),
+            "store_column": FormField("Mağaza sütunu"),
+            "amount_column": FormField("Məbləğ sütunu"),
+            "seller_name_column": FormField("Satıcı adı sütunu"),
         }
         for field in text_fields.values():
             layout.addWidget(field)
@@ -1573,7 +1568,12 @@ class AuditScreen(Screen):
         filters_layout.addWidget(self._search, 2)
 
         self._range = QLineEdit()
-        self._range.setPlaceholderText("01.08.2026 — 12.08.2026")
+        # GÖSTƏRİŞDİR, NÜMUNƏ DEYİL. Əvvəlki mətn («01.08.2026 — 12.08.2026»)
+        # qutunu DOLU göstərirdi; bu isə yalnız qutunun NƏ olduğunu deyir.
+        # Etiketsiz buraxıla bilməzdi: yanındakı axtarış qutusunun göstərişi
+        # var və filtr sırasında adsız qalan tək qutu «nə üçündür?» sualını
+        # doğurur — sətir etiketi yoxdur, qutunun özü etiketdir.
+        self._range.setPlaceholderText("Tarix aralığı")
         self._range.setProperty("variant", "form")
         filters_layout.addWidget(self._range, 1)
 
@@ -2452,14 +2452,12 @@ class RootControlScreen(Screen):
             )
         )
         self._branding_name = QLineEdit()
-        self._branding_name.setPlaceholderText("məs. Yataş Group")
         card.add(self._branding_name)
 
         card.add(Divider())
         card.add(plain_label("Vurğu rəngi"))
         card.add(muted_label("`#RRGGBB` formatında. Boş buraxılsa defolt Amber işlədilir."))
         self._branding_accent = QLineEdit()
-        self._branding_accent.setPlaceholderText("#F5A623")
         card.add(self._branding_accent)
 
         self._branding_warning = body_label("", size=13)
@@ -2623,11 +2621,13 @@ class RootControlScreen(Screen):
         create_layout.setContentsMargins(0, 0, 0, 0)
         create_layout.setSpacing(12)
 
-        # Yer tutucu `can_` ilə başlayır, çünki `PermissionFlag` bu prefiksi
-        # TƏLƏB EDİR (bax `authorization.PermissionFlag.__post_init__`).
-        # Əvvəlki "module.action_name" nümunəsi yaradılan kimi rədd edilirdi.
+        # Göstəriş `can_` prefiksini ADLANDIRIR, çünki `PermissionFlag` onu
+        # TƏLƏB EDİR (bax `authorization.PermissionFlag.__post_init__`) —
+        # prefiksiz yazılan açar yaradılan kimi rədd edilirdi. Bu, nümunə
+        # dəyər deyil: qaydanın özüdür və qutunu dolu göstərmir. Etiketsiz
+        # buraxıla bilməzdi — yanındakı «Kateqoriya» qutusunun göstərişi var.
         self._new_flag = QLineEdit()
-        self._new_flag.setPlaceholderText("can_module_action")
+        self._new_flag.setPlaceholderText("İcazə açarı — `can_` ilə başlamalıdır")
         self._new_flag.setProperty("variant", "form")
         create_layout.addWidget(self._new_flag, 1)
 
