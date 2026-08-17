@@ -219,8 +219,11 @@ KompasOS/
 │                            #    + private `app-updates` bucket-i
 ├── scripts/
 │   ├── check_contrast.py    # ✅ WCAG AA yoxlayıcısı (CI-da işləyir)
-│   └── generate_placeholder_icon.ps1
-├── assets/kompasos.ico      # ⚠️ placeholder — real loqo ilə əvəzlənməlidir
+│   ├── build_icon.py        # ✅ assets/logo/64.png → kompasos.ico
+│   └── generate_placeholder_icon.ps1  # ⚠️ KÖHNƏLİB — real loqonu əvəz edər
+├── assets/
+│   ├── kompasos.ico         # ✅ real loqo; TÖRƏMƏ fayl — build_icon.py qurur
+│   └── logo/                # ✅ 8 PNG: başlıq işarəsi, rozet, splash lockup
 ├── tests/
 │   ├── unit/                # ✅ domen/shared/security/infrastruktur testləri
 │   ├── integration/         # ✅ DB + Drive (DATABASE_URL yoxdursa skip)
@@ -374,10 +377,25 @@ adlanırdı və iki maddə saxlayırdı. Faza 4 çoxdan ✅ Tamamlandı sayılı
 başlıq keçmiş bir tarixə istinad edirdi. İkinci maddə isə tamamilə köhnəlmişdi
 — aşağıya baxın.**)**
 
-- **`assets/kompasos.ico`** — hazırda avtomatik yaradılmış placeholder
-  (Deep Navy + Amber "K", 4 ölçü). Heç bir texniki qapını bloklamır, lakin
-  imzalanmış `production` buraxılışı müştəriyə verilməzdən əvvəl onun real
-  loqosu ilə əvəzlənməlidir (bax [`assets/README.md`](assets/README.md)).
+- **`assets/logo/` üçün 256×256 (və arzuolunan 48×48) ixracı** — `.ico` hazırda
+  16/24/32/48/64 pillələrini daşıyır və hamısı `logo/64.png`-dən (64×64)
+  KİÇİLDİLƏRƏK alınır. **256 pilləsi ümumiyyətlə YOXDUR** və qəsdən yoxdur:
+  64-ü 256-ya böyütmək bulanıq nəticə verərdi, ona görə Windows-un «Böyük
+  ikonlar» görünüşü 64-ü özü miqyaslayır. 48 isə VAR, lakin 64→48 tam olmayan
+  nisbətlə kiçildilir — həmin ölçüyə ayrıca ixrac daha kəskin olardı. Heç bir
+  texniki qapını bloklamır (`test_the_missing_large_tier_is_documented` pillənin
+  yoxluğunu unutqanlıq deyil, QƏRAR kimi qeyd edir), lakin imzalanmış `production`
+  buraxılışı müştəriyə verilməzdən əvvəl həmin ölçülər dizayndan ayrıca ixrac
+  edilib `scripts/build_icon.py` yenidən işlədilməlidir
+  (bax [`assets/README.md`](assets/README.md)).
+
+**(İKİNCİ ÇATIŞMAZLIQ DÜZƏLİŞİ — `assets/kompasos.ico`:** burada əvvəllər
+«hazırda avtomatik yaradılmış placeholder (Deep Navy + Amber "K", 4 ölçü) …
+real loqosu ilə əvəzlənməlidir» yazılırdı. Bu, `3ae2484` commit-indən sonra
+YANLIŞDIR — real pərgar loqosu gətirilib, `.ico` ondan qurulur, splash və
+başlıq zolağı da həmin fayl dəstini işlədir. Həmin commit README-yə toxunmadığı
+üçün sənəd görülmüş bir işi hələ də görüləsi kimi göstərirdi. Maddədən qalan
+YEGANƏ həqiqi qalıq yuxarıdakı ölçü ixracıdır.**)**
 
 **Bu siyahıdan ÇIXARILAN maddə — `src/presentation/theme/tokens.py`:** əvvəlki
 mətn «dizayn tokenləri Faza 4-də YARANIR; yarandığı an `check_contrast.py`
