@@ -58,7 +58,7 @@ Hər dəyişiklikdən sonra HAMISI keçməlidir:
 .venv/Scripts/python.exe -m ruff check src/ tests/ scripts/
 .venv/Scripts/python.exe -m ruff format src/ tests/ scripts/
 .venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (320 fayl)
-QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 5010 test, 54 skip
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 5309 test, 48 skip
 .venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast
 ```
 
@@ -77,7 +77,7 @@ yeni rəng cütü və ya yeni QSS selektoru əlavə edən skriptin son sətrind�
 cari sayı oxuyub bu bəndi yeniləməlidir (eyni köhnəlmə riski
 `.design-sync/NOTES.md`-dədir).
 
-Domen coverage qapısı **85%** (hazırda 94.35%):
+Domen coverage qapısı **85%** (hazırda 94.15%):
 
 ```bash
 .venv/Scripts/python.exe -m pytest tests/unit \
@@ -376,7 +376,7 @@ qalmır, qərara çevrilir.
 
 | Nə | Harada |
 |---|---|
-| İcazə flag kataloqu — **51 flag** (36 `schema.sql`-də: 34 spesifikasiyadan + `can_publish_fines`, `can_manage_drive_connection`; qalan 15 miqrasiyalarda: 021 +6, 038 +6, 047 +1, 056 +1, 063 +1 `can_manage_devices`) | `database/schema.sql` §22 + miqrasiyalar |
+| İcazə flag kataloqu — **54 flag** (36 `schema.sql`-də: 34 spesifikasiyadan + `can_publish_fines`, `can_manage_drive_connection`; qalan 18 miqrasiyalarda: 021 +6, 038 +6, 047 +1, 056 +1, 063 +1 `can_manage_devices`, 068 +3 dəstək kanalları) | `database/schema.sql` §22 + miqrasiyalar |
 | Miqrasiya icraçısı və reyestri | `scripts/apply_migrations.py`, `migrations/061` |
 | Özünə-host lisenziya sətri (SEC-023) | `migrations/065`, `tests/unit/test_license_bootstrap_privilege.py` |
 | Server-lövbərli vaxt + manipulyasiya aşkarlaması | `src/infrastructure/timekeeping/server_time.py`, `migrations/062` |
@@ -396,6 +396,11 @@ qalmır, qərara çevrilir.
 | Üz qeydiyyatı qapısı (ilk giriş + CEO bootstrap) | `src/presentation/controllers/face_setup.py`, `use_cases/face_control.py` (`enroll_first_account`, SEC-025) |
 | Panel girişində «Üzlə daxil ol» | `src/presentation/controllers/face_login.py` (SEC-026) |
 | Gizli bərpa konsolu (`Ctrl+Shift+K`) | `presentation/screens/recovery_console.py`, `controllers/recovery_console.py` (RECOVERY-1) |
+| İki-kanallı dəstək (daxili / texniki) | `domain/value_objects/support.py`, `use_cases/support_chat.py`, `migrations/068` (CHAT-1) |
+| Dəstək gələnlər qutusu (İKİ bölmə, BİR ekran) | `presentation/screens/support_inbox.py`, `controllers/support_inbox.py` |
+| Müraciət statusu (Açıq/Gözləmədə/Həll olundu/Bağlandı) | `SupportTicketStatus` (`value_objects/support.py`) — nişan YALNIZ `OPEN` sayır |
+| Telegram bot konfiqurasiyası (şifrəli token) | `use_cases/telegram_config.py`, `persistence/telegram_repositories.py` |
+| Telegram şlüzü + `#msg_XXXX` cavab yönləndirməsi | `infrastructure/notifications/telegram.py` |
 | Avtomatik baza quruluşu (paketlənmiş sxem + miqrasiyalar) | `infrastructure/persistence/provisioning.py` |
 | Setup quraşdırıcısı və buraxılış ardıcıllığı | `installer/KompasOS.iss`, `docs/build_and_release.md` (SETUP-1) |
 | Drive razılığı (OAuth) | `src/infrastructure/storage/oauth_flow.py` |

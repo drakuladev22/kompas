@@ -137,9 +137,13 @@ if TYPE_CHECKING:
         ShiftSwapUseCase,
     )
     from src.application.use_cases.staffing_pattern import StaffingPatternUseCase
-    from src.application.use_cases.support_chat import SupportChatUseCase
+    from src.application.use_cases.support_chat import (
+        SupportChatUseCase,
+        SupportInboxUseCase,
+    )
     from src.application.use_cases.sync_conflicts import SyncConflictUseCase
     from src.application.use_cases.task_workflow import TaskWorkflowUseCase
+    from src.application.use_cases.telegram_config import TelegramConfigUseCase
     from src.application.use_cases.tenant_branding import TenantBrandingUseCase
     from src.application.use_cases.user_management import EmployeeDraft, UserManagementUseCase
     from src.domain.entities.employee import Employee
@@ -539,6 +543,10 @@ class Session:
     users: UserManagementUseCase
     positions: PositionManagementUseCase
     support: SupportChatUseCase
+    # CHAT-1: eyni cədvəlin CAVABLAYAN ucu — «Daxili Müraciətlər» və
+    # «Texniki Dəstək» bölmələri. İki bölmə, TƏK use case (kanal arqumentdir).
+    support_inbox: SupportInboxUseCase
+    telegram_config: TelegramConfigUseCase
     sync_conflicts: SyncConflictUseCase
     devices: DeviceRegistryUseCase
     branding: TenantBrandingUseCase
@@ -1256,7 +1264,32 @@ class ApplicationContext:
         if owner_type == UploadOwnerType.FIELD_REPORT.value:
             self._attach_field_report_evidence(owner_id, reference)
             return
+        if owner_type == UploadOwnerType.SUPPORT_MESSAGE.value:
+            self._attach_support_message_evidence(owner_id, reference)
+            return
         self._attach_fine_evidence(owner_id, reference)
+
+    def _attach_support_message_evidence(self, message_id: str, reference: Any) -> None:
+        """`support_messages.attachment_ref`-i yeniləyir (CHAT-1 Faza 6).
+
+        `str(reference)` YAZILIR — `employee_documents.file_ref` ilə EYNİ
+        format (provider + bağlantı + fayl ID-si bir mətndə), yəni ekran
+        tərəfində ikinci oxucu yazılmır.
+
+        AKTOR YOXDUR: geri-çağırış fon işçisindən gəlir və orada sessiya
+        istifadəçisi mövcud deyil (eyni qərar üç qonşu metoddadır).
+        """
+        import uuid  # noqa: PLC0415
+
+        from src.domain.value_objects.identifiers import SupportMessageId  # noqa: PLC0415
+
+        with self.session() as session:
+            session.uow.repository("support").attach_file(
+                SupportMessageId(uuid.UUID(message_id)),
+                reference=str(reference),
+                filename=getattr(reference, "filename", "") or "",
+            )
+            session.commit()
 
     def _attach_fine_evidence(self, fine_id: str, reference: Any) -> None:
         """`fines` sətrini yeniləyir — köçürmədən ƏVVƏLKİ `_attach_evidence`-in ÖZÜ."""
@@ -1733,6 +1766,23 @@ class ApplicationContext:
                 JobCadence.DAILY,
                 JobWeight.LIGHT,
             ),
+            # CHAT-1 (tg1.md Faza 6) — «Həll olundu → Bağlandı» avtomatik
+            # keçidi və «Gözləmədə» xatırlatması. YENİ cron/taymer YAZILMIR:
+            # mövcud planlayıcıya BİR sətir qeydiyyat.
+            #
+            # `DAILY`, `HOURLY` DEYİL: hər iki müddət GÜN vahidlidir
+            # (`SUPPORT_AUTO_CLOSE_DAYS`, `SUPPORT_WAITING_REMINDER_DAYS`) və
+            # saatlıq icra eyni sətirləri 24 dəfə yoxlayardı — nəticə eyni,
+            # yük iyirmi dörd qat.
+            #
+            # `LIGHT`: iş iki indeksli sorğu + tapılan sətir qədər UPDATE-dir.
+            # Praktikada gündə bir neçə sətir olur.
+            (
+                "SUPPORT_STATUS_MAINTENANCE",
+                self._job_support_status_maintenance,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
             # `facecontrol.md` bənd 14 — istisnaların müddət-bitməsi. SIRA
             # TƏSADÜFİ DEYİL: `EXCEPTION_ENGINE_RUN`-dan SONRA, çünki bitmiş
             # istisna motorun tapıntılarına təsir etmir, lakin `BEHAVIOR_
@@ -1988,6 +2038,23 @@ class ApplicationContext:
             result = session.field_reports.notify_overdue_audits(context.tenant_id)
             session.commit()
         return f"{result.checked} filialdan {result.overdue_count}-i audit intervalını keçib"
+
+    def _job_support_status_maintenance(self, context: Any) -> str:
+        """CHAT-1 — «Həll olundu» müraciətlərin bağlanması + xatırlatmalar.
+
+        `context.now` PLANLAYICIDAN gəlir: gecikmiş icrada (kompüter gecə
+        söndürülüb) hesablama FAKTİKİ ana görə aparılır və `datetime.now()`
+        heç yerdə çağırılmır — eyni qərar `_job_annual_leave_rollover`-dədir.
+        """
+        with self.session() as session:
+            result = session.support_inbox.run_maintenance(
+                tenant_id=context.tenant_id, now=context.now
+            )
+            session.commit()
+        return (
+            f"{result['closed']} müraciət avtomatik bağlandı, "
+            f"{result['reminded']} xatırlatma göndərildi"
+        )
 
     def _job_annual_leave_rollover(self, context: Any) -> str:
         """#28 — illik haqq, köçürmə və "istifadə et ya itir" son tarixi.
@@ -2248,12 +2315,18 @@ class ApplicationContext:
         from src.application.use_cases.staffing_pattern import (  # noqa: PLC0415
             StaffingPatternUseCase,
         )
-        from src.application.use_cases.support_chat import SupportChatUseCase  # noqa: PLC0415
+        from src.application.use_cases.support_chat import (  # noqa: PLC0415
+            SupportChatUseCase,
+            SupportInboxUseCase,
+        )
         from src.application.use_cases.sync_conflicts import (  # noqa: PLC0415
             SyncConflictUseCase,
         )
         from src.application.use_cases.task_workflow import (  # noqa: PLC0415
             TaskWorkflowUseCase,
+        )
+        from src.application.use_cases.telegram_config import (  # noqa: PLC0415
+            TelegramConfigUseCase,
         )
         from src.application.use_cases.tenant_branding import (  # noqa: PLC0415
             TenantBrandingUseCase,
@@ -2274,6 +2347,9 @@ class ApplicationContext:
             PostgresStoreServerMappingRepository,
         )
         from src.infrastructure.notifications.notifier import PostgresNotifier  # noqa: PLC0415
+        from src.infrastructure.notifications.telegram import (  # noqa: PLC0415
+            TelegramSupportGateway,
+        )
         from src.infrastructure.plugins.signature import (  # noqa: PLC0415
             PluginSignatureVerifier,
             trust_store_from_env,
@@ -2295,6 +2371,23 @@ class ApplicationContext:
         # oxuyur — `_RootLimitReader` hər oxu üçün ikinci bağlantı açardı və
         # bu, hər ekran əməliyyatında təkrarlanardı (bax modul başlığı).
         session_limits = InfrastructureLimits(limits=repo("limits"), tenant_id=self._tenant_id)
+
+        # ─────────────────────────────────────────────────────────────────────
+        # TELEGRAM ŞLÜZÜ — AYARLARI HƏR ÇAĞIRIŞDA REPO-DAN OXUYUR
+        # ─────────────────────────────────────────────────────────────────────
+        # `settings_provider` use case-i DEYİL, REPOZİTORİYANI çağırır: use
+        # case şlüzü `probe` kimi saxlayır və tərsinə asılılıq dövrə yaradardı.
+        # Repo isə heç kimi tanımır — dövrə qapanmır.
+        #
+        # Vaxt `clock.now`-dandır (`datetime.now()` YOX): `telegram_sent_at`
+        # server-lövbərli vaxtdan gəlməlidir (TIME-1), əks halda Windows saatı
+        # sürüşdükdə mesaj sırası pozulardı.
+        telegram_repository = repo("telegram_config")
+        telegram_gateway = TelegramSupportGateway(
+            settings_provider=lambda: telegram_repository.load(self._tenant_id),
+            limits=session_limits,
+            now=clock.now,
+        )
         notifier = PostgresNotifier(self._database, limits=session_limits)
         # Üz təsdiqi adapterləri TƏNBƏL proxy ilə ötürülür: `face_engine()`
         # BURADA çağırılsaydı, `import face_recognition` (ölçülmüş ~1.0 s +
@@ -2744,6 +2837,25 @@ class ApplicationContext:
                 clock=clock,
                 # `SUPPORT_THREAD_PAGE_SIZE` — mesaj lentinin uzunluğu.
                 limits=repo("limits"),
+                telegram=telegram_gateway,
+            ),
+            support_inbox=SupportInboxUseCase(
+                tickets=repo("support"),
+                toggles=repo("toggles"),
+                clock=clock,
+                audit=audit,
+                limits=repo("limits"),
+                telegram=telegram_gateway,
+                # «Gözləmədə» xatırlatması işçiyə TƏTBİQ-DAXİLİ bildirişlə
+                # gedir (tg1.md Faza 6): e-poçt məcburi deyil, çünki işçinin
+                # e-poçtu boş ola bilər (`.env.example`: yalnız bildiriş üçün).
+                notifier=notifier,
+            ),
+            telegram_config=TelegramConfigUseCase(
+                repository=repo("telegram_config"),
+                audit=audit,
+                clock=clock,
+                probe=telegram_gateway,
             ),
             sync_conflicts=SyncConflictUseCase(
                 repository=repo("sync_conflicts"),

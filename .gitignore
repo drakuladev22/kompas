@@ -60,3 +60,27 @@ desktop.ini
 
 # design-sync ixracı — `scripts/build_design_bundle.py` ilə yenidən qurulur
 ds-bundle/
+
+# --- Spesifikasiya sənədləri (CLAUDE.md §0) ---------------------------------
+# Bu fayllar repozitoriyadan QƏSDƏN çıxarılıb: mətn git tarixçəsindədir, işçi
+# ağacında isə yalnız müvəqqəti nüsxə kimi görünür. Adbaad sadalanır, `*.md`
+# şablonu YOX — `README.md`, `CLAUDE.md` və `docs/` repozitoriyanın hissəsidir.
+kompasos.md
+kompas1.md
+kompasos11.md
+uxui.md
+facecontrol.md
+nahar.md
+Rootpanel.md
+audit.md
+1c.md
+design.md
+test.md
+config.md
+db1.md
+installerrrrr.md
+navbar.md
+navbar.jpg
+tg_Bot.md
+tg1.md
+dbtest/

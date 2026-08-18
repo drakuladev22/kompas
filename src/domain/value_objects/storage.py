@@ -75,6 +75,10 @@ class ImageSize(str, Enum):
     FULL = "FULL"
 
 
+#: `cache_key` hissələrinin sayı — `provider:connection:file_id`.
+_CACHE_KEY_PARTS = 3
+
+
 @dataclass(frozen=True)
 class StorageReference:
     """Bir sübut şəklinin ünvanı.
@@ -126,6 +130,36 @@ class StorageReference:
 
     def __str__(self) -> str:
         return self.cache_key
+
+    @classmethod
+    def from_cache_key(cls, raw: str) -> StorageReference:
+        """`cache_key`-in TƏRSİ — mətn sütunundan istinadı bərpa edir.
+
+        NİYƏ LAZIMDIR: bəzi cədvəllər üç sütun (`fines`) əvəzinə TƏK mətn
+        sahəsi saxlayır (`employee_documents.file_ref`,
+        `support_messages.attachment_ref`) — orada `str(reference)` yazılır
+        və oxuyan tərəf onu geri çevirməlidir.
+
+        `file_id` DAXİLİNDƏ İKİ NÖQTƏ OLA BİLƏR: Drive identifikatoru
+        ixtiyari base64-vari sətirdir. Ona görə bölgü SOLDAN İKİ dəfə
+        aparılır (`split(":", 2)`) və qalan hissə bütünlüklə `file_id`
+        sayılır — sadə `split(":")` uzun ID-ni sükutla kəsərdi.
+        """
+        parts = raw.split(":", 2)
+        if len(parts) != _CACHE_KEY_PARTS:
+            raise StorageError("İstinad formatı tanınmadı", context={"raw": raw})
+        provider_value, connection, file_id = parts
+        try:
+            provider = StorageProviderKind(provider_value)
+        except ValueError as error:
+            raise StorageError(
+                "Naməlum saxlama provideri", context={"provider": provider_value}
+            ) from error
+        return cls(
+            provider=provider,
+            file_id=file_id,
+            connection_id=None if connection == "-" else UUID(connection),
+        )
 
 
 @dataclass(frozen=True)

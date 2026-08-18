@@ -345,7 +345,16 @@ class _Tickets:
         self.messages: list[str] = []
         self.open_ticket_id: Any = None
 
-    def open_ticket(self, *, ticket_id: Any, tenant_id: Any, opened_by: Any, subject: str) -> None:
+    def open_ticket(
+        self,
+        *,
+        ticket_id: Any,
+        tenant_id: Any,
+        opened_by: Any,
+        subject: str,
+        channel: Any = None,
+        is_urgent: bool = False,
+    ) -> None:
         self.open_ticket_id = ticket_id
         self.threads[ticket_id] = SupportThread(
             ticket_id=ticket_id,
@@ -353,15 +362,16 @@ class _Tickets:
             status="OPEN",
             created_at=NOW,
             messages=[],
+            opened_by=opened_by,
         )
 
     def get_thread(self, ticket_id: Any) -> SupportThread | None:
         return self.threads.get(ticket_id)
 
-    def list_threads(self, tenant_id: Any, *, limit: int = 20) -> list[SupportThread]:
+    def list_threads(self, tenant_id: Any, *, limit: int = 20, **_: Any) -> list[SupportThread]:
         return list(self.threads.values())
 
-    def find_open_ticket(self, tenant_id: Any) -> Any:
+    def find_open_ticket(self, tenant_id: Any, **_: Any) -> Any:
         return self.open_ticket_id
 
     def append_message(
@@ -372,6 +382,8 @@ class _Tickets:
         sender_id: Any,
         body: str,
         is_from_developer: bool,
+        from_telegram: bool = False,
+        attachment_name: str = "",
     ) -> None:
         self.messages.append(body)
 

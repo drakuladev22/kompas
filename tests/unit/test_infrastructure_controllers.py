@@ -23,6 +23,7 @@ from typing import Any, Final
 import pytest
 
 from src.domain.value_objects.identifiers import EmployeeId, TenantId
+from src.presentation.background_task import InlineExecutor
 from src.presentation.controllers.backup_admin import BackupAdminController
 from src.presentation.controllers.infrastructure import InfrastructureController
 from src.shared.exceptions import KompasOSError
@@ -147,7 +148,15 @@ def _backup_controller(
     use_case: _BackupUseCase,
 ) -> tuple[BackupAdminController, _BackupSession]:
     session = _BackupSession(use_case)
-    return (BackupAdminController(_Context(session), _actor()), session)  # type: ignore[arg-type]
+    # `InlineExecutor`: bu testlər MƏNTİQİ ölçür, sapı yox — nəticə dərhal
+    # çatdırılır və hadisə dövrəsi gözləməsi lazım olmur (sap davranışı
+    # `test_background_job_funnel.py`-dadır).
+    controller = BackupAdminController(
+        _Context(session),  # type: ignore[arg-type]
+        _actor(),
+        executor=InlineExecutor(),
+    )
+    return (controller, session)
 
 
 def test_restore_request_only_opens_the_confirmation_dialog(monkeypatch: Any) -> None:

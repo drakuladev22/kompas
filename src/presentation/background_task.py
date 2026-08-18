@@ -146,7 +146,7 @@ başqa ekrana yazılmasın.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 
@@ -429,10 +429,56 @@ def _capture(job: Callable[[], object], signals: _TaskSignals, token: int) -> Ca
     return _run
 
 
+def run_job(
+    job: Callable[[], object],
+    *,
+    on_success: Callable[[Any], None],
+    on_failure: Callable[[BaseException], None],
+    owner: QObject | None = None,
+    name: str = "",
+    executor: TaskExecutor | None = None,
+) -> BackgroundTask:
+    """Bir uzun əməliyyatı fona buraxır — ORTAQ giriş nöqtəsi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AYRICA FUNKSİYA — HƏR KONTROLLER ÖZÜ QURA BİLƏRDİ
+    ──────────────────────────────────────────────────────────────────────────
+    `BackgroundTask` üç sətirlə qurulur, lakin həmin üç sətrin BİRİ unudulanda
+    nəticə SÜKUTLA itir: işçiyə istinad saxlanmazsa Python onu nəticə gəlməmiş
+    toplayır və heç bir siqnal yayılmır. Qüsur nə testdə, nə lint-də görünür —
+    yalnız «düyməni basdım, heç nə olmadı» şikayətində.
+
+    Ona görə qurulum BİR yerdədir və qaytarılan işçi ÇAĞIRANA verilir:
+    çağıran onu `self._task`-da saxlayır (valideyn verilibsə Qt ömrü də idarə
+    edir).
+
+    Args:
+        owner: Qt valideyni — adətən ekran. Valideyn öləndə gec gələn nəticə
+            avtomatik atılır (bax modul başlığı).
+        executor: Testlərdə `InlineExecutor` — nəticə DƏRHAL çatdırılır və
+            hadisə dövrəsi gözləməsi lazım olmur.
+    """
+    # VALİDEYN YALNIZ HƏQİQİ `QObject` OLDUQDA VERİLİR.
+    #
+    # Tip imzası onsuz da `QObject | None`-dur və mypy istehsalat kodunda onu
+    # məcbur edir. Runtime yoxlaması TESTLƏR üçündür: onlar ekran əvəzinə
+    # yüngül sahtə obyekt ötürür və `QObject.__init__` belə valideynlə
+    # `TypeError` atırdı. Valideynin olmaması yalnız bir şeyi dəyişir — gec
+    # gələn nəticə avtomatik atılmır; testdə isə gec nəticə anlayışı yoxdur,
+    # çünki `InlineExecutor` sinxrondur.
+    parent = owner if isinstance(owner, QObject) else None
+    task = BackgroundTask(parent=parent, name=name, executor=executor)
+    task.succeeded.connect(on_success)
+    task.failed.connect(on_failure)
+    task.run(job)
+    return task
+
+
 __all__ = [
     "BackgroundTask",
     "InlineExecutor",
     "QtPoolExecutor",
     "TaskExecutor",
     "TaskOutcome",
+    "run_job",
 ]

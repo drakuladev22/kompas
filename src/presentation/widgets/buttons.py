@@ -29,11 +29,12 @@ from PySide6.QtWidgets import QPushButton, QSizePolicy, QWidget
 from src.presentation.theme.manager import refresh_widget_style
 from src.presentation.theme.tokens import ThemeMode, theme_tokens
 from src.presentation.widgets import icons, metrics
+from src.presentation.widgets.primitives import plain_label
 from src.presentation.widgets.safe_text import plain_tooltip
 
 if TYPE_CHECKING:
     from PySide6.QtCore import QEvent
-    from PySide6.QtGui import QEnterEvent, QFocusEvent
+    from PySide6.QtGui import QEnterEvent, QFocusEvent, QResizeEvent
 
 
 def _apply_font(button: QPushButton, *, size: int, weight: QFont.Weight) -> None:
@@ -130,6 +131,13 @@ def icon_button(
     return button
 
 
+#: Nişanda göstərilən ən böyük dəqiq rəqəm — üstü «99+» olur.
+#:
+#: ROOT PARAMETRİ DEYİL: bu, siyasət deyil, 64px-lik nişan sahəsinin
+#: ölçüsüdür — üç rəqəmli dəyər menyu mətninin üstünə çıxır.
+MAX_BADGE_COUNT = 99
+
+
 class NavButton(QPushButton):
     """Sol paneldəki naviqasiya sətri — 40px, ikon + mətn, aktiv vəziyyət.
 
@@ -199,6 +207,71 @@ class NavButton(QPushButton):
         self.setIconSize(QSize(icons.DEFAULT_SIZE, icons.DEFAULT_SIZE))
         self._refresh_icon()
 
+        # Sayğac düymənin ÜSTÜNDƏ üzür (layout-da yer tutmur): `QPushButton`
+        # mətn + ikon üçün öz daxili tərtibatını qurur və ora üçüncü element
+        # əlavə etmək mətnin kəsilmə nöqtəsini dəyişərdi.
+        # `plain_label` — xam Qt etiketi YOX: mətn rejimi (`PlainText`) bir
+        # yerdə mərkəzləşdirilib (`primitives.py`) və sayğac rəqəmi də ondan
+        # kənarda qalmamalıdır. Qayda `test_security_hardening.py::
+        # test_no_screen_creates_a_bare_qlabel` ilə bağlanıb — həmin qapı
+        # MƏNBƏ MƏTNİNİ oxuyur, yəni şərhdə də xam sinif adı yazılmır.
+        self._badge = plain_label(parent=self)
+        self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._badge.setVisible(False)
+        self._badge_count = 0
+        self._apply_badge_style()
+
+    # -------------------------------- sayğac -------------------------------- #
+
+    def set_badge(self, count: int) -> None:
+        """Oxunmamış sayını göstərir. `0` → nişan gizlənir.
+
+        99-dan çoxu «99+» kimi göstərilir: üç rəqəmli nişan menyu mətninin
+        üstünə çıxardı və «Performans Qiymətləndirmələri» kimi uzun başlıq
+        artıq kəsilmiş vəziyyətdədir.
+        """
+        self._badge_count = max(0, count)
+        if self._badge_count == 0:
+            self._badge.setVisible(False)
+            return
+        self._badge.setText(
+            f"{MAX_BADGE_COUNT}+" if self._badge_count > MAX_BADGE_COUNT else str(self._badge_count)
+        )
+        self._badge.adjustSize()
+        self._badge.setVisible(True)
+        self._position_badge()
+
+    def badge_count(self) -> int:
+        """Testlər və örtük üçün — hazırkı say."""
+        return self._badge_count
+
+    def _apply_badge_style(self) -> None:
+        # Amber fon + navy mətn — `PageHeader` bildiriş nişanı ilə EYNİ cüt.
+        # İkinci rəng cütü yaratmaq eyni mənanı iki fərqli rənglə göstərərdi.
+        #
+        # `ThemeMode.LIGHT`-dan oxunur, çünki BRAND rəngləri hər iki temada
+        # eynidir (`tokens.py`: `BRAND_NAVY`/`BRAND_AMBER` sabitləri) — tema
+        # dəyişəndə nişanı yenidən rəngləməyə ehtiyac yoxdur.
+        palette = theme_tokens(ThemeMode.LIGHT)
+        self._badge.setStyleSheet(
+            f"background-color: {palette['--color-brand-amber']};"
+            f"color: {palette['--color-brand-navy']};"
+            "border-radius: 8px; padding: 0 5px; font-size: 10px; font-weight: 600;"
+        )
+        self._badge.setMinimumSize(16, 16)
+
+    def _position_badge(self) -> None:
+        margin = 12
+        self._badge.move(
+            max(0, self.width() - self._badge.width() - margin),
+            (self.height() - self._badge.height()) // 2,
+        )
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 — Qt API
+        super().resizeEvent(event)
+        if self._badge.isVisible():
+            self._position_badge()
+
     # ------------------------------- vəziyyət ------------------------------- #
 
     @property
@@ -249,6 +322,10 @@ class NavButton(QPushButton):
         # qalmalıdır. Yalnız `compact` xüsusiyyəti qoyulur və QSS onu
         # mərkəzləmə üçün oxuyur.
         self.setProperty("compact", "true" if compact else "false")
+        # Daraldılmış paneldə nişan ikonun sağ-üst küncünə sıxılır: mətn
+        # yoxdur, yəni sağ kənarda 12px boşluq da yoxdur.
+        if self._badge_count:
+            self._position_badge()
         refresh_widget_style(self)
 
     def _refresh_icon(self) -> None:

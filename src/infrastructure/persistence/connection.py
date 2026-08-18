@@ -587,6 +587,9 @@ class PostgresUnitOfWork:
         from src.infrastructure.persistence.sync_conflict_repository import (  # noqa: PLC0415
             PostgresSyncConflictRepository,
         )
+        from src.infrastructure.persistence.telegram_repositories import (  # noqa: PLC0415
+            PostgresTelegramConfigRepository,
+        )
         from src.infrastructure.persistence.workflow_repositories import (  # noqa: PLC0415
             PostgresAttendanceFactProvider,
             PostgresDailyAttendanceSheetRepository,
@@ -667,6 +670,12 @@ class PostgresUnitOfWork:
             "preferences": PostgresUserPreferences(conn, self._context),
             "report_facts": PostgresReportFactProvider(conn, self._context),
             "support": PostgresSupportTicketRepository(conn, self._context),
+            # CHAT-1: bot token ŞİFRƏLİ sütundadır və şifrələmə
+            # repo-nun içindədir (`face_embeddings` ilə eyni naxış) —
+            # tətbiq qatı açıq token ilə işləyir, bazaya token yazılmır.
+            "telegram_config": PostgresTelegramConfigRepository(
+                conn, self._context, encryption=EncryptionService()
+            ),
             "sync_conflicts": PostgresSyncConflictRepository(conn, self._context),
             # --- Cihaz qeydiyyatı (DEVICE-1) ----------------------------------
             # Cihaz reyestri və aktiv mağaza siyahısı EYNİ bağlantıdadır:

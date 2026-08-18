@@ -165,6 +165,24 @@ class Sidebar(QWidget):
         """Panelin hazırda göstərdiyi açarlar — testlər üçün."""
         return tuple(self._buttons)
 
+    def set_badge(self, key: str, count: int) -> None:
+        """Maddənin oxunmamış sayğacını qurur (CHAT-1 Faza 6).
+
+        NAMƏLUM AÇAR SÜKUTLA BURAXILIR: sayğacı yeniləyən kontroller
+        səlahiyyəti olmayan istifadəçidə də işləyə bilər və o halda maddə
+        panelə heç vaxt əlavə olunmur. İstisna atsaydıq, «GÖRMƏK =
+        SƏLAHİYYƏTİN OLMASI» prinsipinin normal nəticəsi çökmə kimi
+        görünərdi.
+        """
+        button = self._buttons.get(key)
+        if button is not None:
+            button.set_badge(count)
+
+    def badge_count(self, key: str) -> int:
+        """Maddənin sayğacı — testlər üçün. Maddə yoxdursa `0`."""
+        button = self._buttons.get(key)
+        return button.badge_count() if button is not None else 0
+
     def _clear(self) -> None:
         for button in self._buttons.values():
             self._layout.removeWidget(button)

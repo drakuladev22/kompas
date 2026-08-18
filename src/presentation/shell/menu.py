@@ -59,6 +59,7 @@ MODULE_FINES: Final = FeatureModule.FINE_MODULE.value
 MODULE_TASKS: Final = FeatureModule.TASK_ENGINE.value
 MODULE_SALES: Final = FeatureModule.SALES_POINTS.value
 MODULE_DASHBOARD_BUILDER: Final = FeatureModule.DASHBOARD_BUILDER.value
+MODULE_SUPPORT: Final = FeatureModule.SUPPORT_CHAT.value
 
 # NİYƏ BƏZİ MADDƏLƏR TOGGLE-SIZDIR (`feature_module=None`)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -531,6 +532,30 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         order=176,
         icon="dashboard",
     ),
+    # ------------------------------------------------------------------- #
+    # CHAT-1: İKİ DƏSTƏK QUTUSU — AYRI FLAG, AYRI AUDİTORİYA
+    # ------------------------------------------------------------------- #
+    # İkisi YAN-YANA dayanır, çünki eyni komponentdən qurulur və eyni sualın
+    # («kimsə yazıb, cavab gözləyir») iki ünvanıdır. Praktikada bir
+    # istifadəçi adətən yalnız BİRİNİ görür: CEO/Admin/HR daxilini, Root
+    # texnikini. Root hər ikisini görür — və məhz ona görə qonşuluq vacibdir:
+    # onun üçün bu, tək bir «gələnlər» zonasıdır.
+    MenuEntry(
+        key="internal_requests",
+        title_az="Daxili Müraciətlər",
+        required_flag="can_view_internal_requests",
+        feature_module=MODULE_SUPPORT,
+        order=186,
+        icon="chat",
+    ),
+    MenuEntry(
+        key="technical_support",
+        title_az="Texniki Dəstək",
+        required_flag="can_view_technical_support",
+        feature_module=MODULE_SUPPORT,
+        order=188,
+        icon="help",
+    ),
     MenuEntry(
         key="help",
         title_az="Yardım Mərkəzi",
@@ -574,6 +599,7 @@ __all__ = [
     "MODULE_FINES",
     "MODULE_SALES",
     "MODULE_SHIFT_SWAP",
+    "MODULE_SUPPORT",
     "MODULE_TASKS",
     "build_default_registry",
 ]

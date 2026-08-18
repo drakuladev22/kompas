@@ -146,7 +146,11 @@ BEGIN
 
     -- Dəstək ticket statusu (bölmə 8)
     IF to_regtype('ticket_status') IS NULL THEN
-        CREATE TYPE ticket_status AS ENUM ('OPEN', 'IN_PROGRESS', 'WAITING_CUSTOMER', 'CLOSED');
+        -- `RESOLVED` CHAT-1 ilə əlavə olundu (migrations/068):
+        -- «həll etdim, təsdiq gözləyirəm» vəziyyəti `CLOSED`-dan
+        -- FƏRQLİDİR — işçinin etiraz pəncərəsi açıq qalır.
+        CREATE TYPE ticket_status AS ENUM
+            ('OPEN', 'IN_PROGRESS', 'WAITING_CUSTOMER', 'RESOLVED', 'CLOSED');
     END IF;
 
     -- ERP server statusu (bölmə 7)

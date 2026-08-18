@@ -72,11 +72,17 @@ _KIND_TEXT: dict[str, str] = {
 class BackupAdminController:
     """Ehtiyat nüsxə ekranını `BackupAccessUseCase`-ə bağlayır."""
 
-    def __init__(self, context: ApplicationContext, actor: Employee) -> None:
+    def __init__(
+        self, context: ApplicationContext, actor: Employee, *, executor: Any = None
+    ) -> None:
         self._context = context
         self._actor = actor
         #: cədvəldəki tarix mətni → `BackupRecord` (ekran yalnız MƏTN yayır).
         self._points: dict[str, Any] = {}
+        #: Fon icraçısı — istehsalatda Qt hovuzu, testlərdə `InlineExecutor`.
+        self._executor = executor
+        #: Qaçan işə istinad: nəticə gəlməmiş toplanarsa siqnal itərdi.
+        self._task: Any = None
 
     # ------------------------------- qoşulma --------------------------------- #
 
@@ -128,23 +134,28 @@ class BackupAdminController:
     # ------------------------------ yazı yolu -------------------------------- #
 
     def _on_create(self, screen: BackupScreen) -> None:
-        """«İndi Ehtiyat Nüsxə Al» — planlaşdırılmış gecə nüsxəsindən ƏLAVƏ."""
-        try:
+        """«İndi Ehtiyat Nüsxə Al» — planlaşdırılmış gecə nüsxəsindən ƏLAVƏ.
+
+        İŞ FON SAPINDADIR: `create_now` `pg_dump` prosesini işə salır və o,
+        baza həcmindən asılı olaraq DƏQİQƏLƏRLƏ çəkir. GUI sapında icra
+        olunanda pəncərə həmin müddət boyu «Cavab vermir» olurdu və admin
+        proqramı bağlamağa çalışırdı — məhz nüsxə yazılarkən.
+        """
+
+        def job() -> object:
             with self._context.session(user_id=self._actor.id) as session:
                 session.backups.create_now(tenant_id=session.tenant_id, actor=self._actor)
                 session.commit()
-        except KompasOSError as error:
-            screen.show_error(title="Nüsxə yaradılmadı", message=error.user_message)
-            return
-        except Exception:
-            _error_log.exception("BACKUP_CREATE_FAILED")
-            screen.show_error(
-                title="Nüsxə yaradılmadı",
-                message="Ehtiyat nüsxə alınmadı. `pg_dump` mövcudluğunu yoxlayın.",
-            )
-            return
+            return None
 
-        self.refresh(screen)
+        self._run(
+            screen,
+            job,
+            name="BACKUP_CREATE",
+            title="Nüsxə yaradılmadı",
+            fallback="Ehtiyat nüsxə alınmadı. `pg_dump` mövcudluğunu yoxlayın.",
+            log_key="BACKUP_CREATE_FAILED",
+        )
 
     def _on_restore_requested(self, screen: BackupScreen, date_text: str) -> None:
         """İNSAN QAPISI — dialoq açılır, bərpa HƏLƏ BAŞLAMIR (bax modul başlığı)."""
@@ -182,7 +193,7 @@ class BackupAdminController:
             )
             return
 
-        try:
+        def job() -> object:
             with self._context.session(user_id=self._actor.id) as session:
                 session.backups.restore(
                     tenant_id=session.tenant_id,
@@ -194,18 +205,52 @@ class BackupAdminController:
                     confirmation=RESTORE_CONFIRMATION,
                 )
                 session.commit()
-        except KompasOSError as error:
-            screen.show_error(title="Bərpa tamamlanmadı", message=error.user_message)
-            return
-        except Exception:
-            _error_log.exception("BACKUP_RESTORE_FAILED")
-            screen.show_error(
-                title="Bərpa tamamlanmadı",
-                message="Bərpa icra edilmədi. Jurnalı yoxlayın və dəstəklə əlaqə saxlayın.",
-            )
-            return
+            return None
 
-        self.refresh(screen)
+        # Bərpa nüsxə almaqdan da uzundur (`pg_restore` + indekslərin yenidən
+        # qurulması) — fon sapı burada daha da vacibdir.
+        self._run(
+            screen,
+            job,
+            name="BACKUP_RESTORE",
+            title="Bərpa tamamlanmadı",
+            fallback="Bərpa icra edilmədi. Jurnalı yoxlayın və dəstəklə əlaqə saxlayın.",
+            log_key="BACKUP_RESTORE_FAILED",
+        )
+
+    def _run(
+        self,
+        screen: BackupScreen,
+        job: Any,
+        *,
+        name: str,
+        title: str,
+        fallback: str,
+        log_key: str,
+    ) -> None:
+        """Ortaq icra qabığı — iş fonda, nəticə GUI sapında.
+
+        Uğurda siyahı YENİDƏN oxunur: nüsxə/bərpa `backup_records` sətrini
+        dəyişir və köhnə cədvəl istifadəçini «heç nə olmadı» qənaətinə
+        gətirərdi.
+        """
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        def failed(error: BaseException) -> None:
+            if isinstance(error, KompasOSError):
+                screen.show_error(title=title, message=error.user_message)
+                return
+            _error_log.error(log_key, exc_info=error)
+            screen.show_error(title=title, message=fallback)
+
+        self._task = run_job(
+            job,
+            on_success=lambda _result: self.refresh(screen),
+            on_failure=failed,
+            owner=screen,
+            name=name,
+            executor=self._executor,
+        )
 
 
 # --------------------------------------------------------------------------- #

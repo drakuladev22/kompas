@@ -9,19 +9,23 @@ Maket: "KompasOS - Qrup E.dc.html", ekranlar 21–23.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QCheckBox,
     QHBoxLayout,
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from src.domain.value_objects.support import SupportChannel
 from src.presentation.theme.manager import set_surface_color
 from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.primitives import (
@@ -114,6 +118,8 @@ class SupportChatWidget(QWidget):
     message_sent = Signal(str)
     opened = Signal()
     closed = Signal()
+    #: İşçi kanalı seçdi — dəyər `SupportChannel` sətridir (Faza 1).
+    channel_selected = Signal(str)
 
     #: Kənarlardan məsafə (maketdə `right: 28px; bottom: 28px`).
     MARGIN: Final = 28
@@ -127,6 +133,16 @@ class SupportChatWidget(QWidget):
         super().__init__(parent)
         self._theme = theme
         self._is_open = False
+        # `None` = hələ seçilməyib. Defolt kanal QOYULMUR: «Texniki» defolt
+        # olsaydı, tələsik yazan işçinin kadr sualı hazırlayıcıya gedərdi və
+        # o, seçim ekranını heç görməzdi (Faza 1-in bütün mənası budur).
+        self._channel: SupportChannel | None = None
+        # Seçilmiş, LAKİN hələ göndərilməmiş şəkil: `(ad, baytlar)`.
+        #
+        # Baytlar YADDAŞDA saxlanılır, fayl YOLU yox: istifadəçi şəkli seçib
+        # sonra onu masaüstündən silə bilər və göndərmə anında yol boşa
+        # çıxardı. 5 MB hədd (`MAX_UPLOAD_BYTES`) bunu təhlükəsiz edir.
+        self._attachment: tuple[str, bytes] | None = None
 
         self._panel = self._build_panel()
         self._panel.setParent(self)
@@ -196,11 +212,23 @@ class SupportChatWidget(QWidget):
         identity_layout.setContentsMargins(0, 0, 0, 0)
         identity_layout.setSpacing(4)
         identity_layout.addWidget(title_label("KompasOS Dəstək", size=15))
-        status = muted_label("Onlayn · adətən 10 dəq içində")
-        status.setStyleSheet(f"color: {self._theme.color('--color-success')};")
-        identity_layout.addWidget(status)
+        # Başlıqdakı ikinci sətir SEÇİLMİŞ KANALI göstərir. Əvvəl burada
+        # «Onlayn · adətən 10 dəq içində» yazırdı — o, uydurma vəd idi
+        # (heç bir yerdə ölçülmürdü) və indi onun yerini işçinin FAKTİKİ
+        # seçimi tutur: mesajın hara getdiyi vədədən vacibdir.
+        self._channel_label = muted_label("")
+        identity_layout.addWidget(self._channel_label)
         header_layout.addWidget(identity)
         header_layout.addWidget(stretch())
+
+        self._back = QPushButton("‹")
+        self._back.setProperty("variant", "window")
+        self._back.setFixedSize(28, 28)
+        self._back.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._back.setToolTip("Kanal seçiminə qayıt")
+        self._back.setVisible(False)
+        self._back.clicked.connect(self.reset_channel)
+        header_layout.addWidget(self._back)
 
         close = QPushButton("×")
         close.setProperty("variant", "window")
@@ -222,9 +250,53 @@ class SupportChatWidget(QWidget):
         self._messages_layout.setSpacing(16)
         self._messages_layout.addStretch(1)
         self._scroll.setWidget(self._messages_host)
-        panel.body().addWidget(self._scroll, 1)
 
-        panel.add(Divider())
+        # İKİ SƏHİFƏ, BİR PANEL: seçim və söhbət eyni yeri paylaşır.
+        # Seçimi ayrıca dialoqda göstərmək «kiçik, nəzakətli» panelin
+        # (bölmə 8) üstünə modal açardı və diskretliyi pozardı.
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self._build_chooser())
+        self._stack.addWidget(self._build_chat_page())
+        panel.body().addWidget(self._stack, 1)
+        return panel
+
+    def _build_chooser(self) -> QWidget:
+        """«Kimə yazırsınız?» — iki kart, uzun izahat YOX (Faza 1)."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(18, 20, 18, 20)
+        layout.setSpacing(12)
+        layout.addWidget(title_label("Kimə yazırsınız?", size=14))
+        for channel in (SupportChannel.INTERNAL, SupportChannel.TECHNICAL):
+            layout.addWidget(self._channel_card(channel))
+        layout.addStretch(1)
+        return page
+
+    def _channel_card(self, channel: SupportChannel) -> QWidget:
+        card = QPushButton()
+        card.setCursor(Qt.CursorShape.PointingHandCursor)
+        card.setMinimumHeight(64)
+        card.setStyleSheet(
+            f"QPushButton {{ background-color: {self._theme.color('--color-neutral-bg')};"
+            f"border: 1px solid {self._theme.color('--color-card-border')};"
+            "border-radius: 10px; text-align: left; padding: 12px 14px; }"
+            f"QPushButton:hover {{ border-color: {self._theme.color('--color-brand-amber')}; }}"
+        )
+        inner = QVBoxLayout(card)
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.setSpacing(4)
+        inner.addWidget(title_label(channel.label_az, size=13))
+        inner.addWidget(muted_label(channel.hint_az))
+        card.clicked.connect(lambda _=False, value=channel: self.select_channel(value))
+        return card
+
+    def _build_chat_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._scroll, 1)
+        layout.addWidget(Divider())
 
         # ------------------------------- giriş ------------------------------ #
         composer = QWidget()
@@ -239,6 +311,16 @@ class SupportChatWidget(QWidget):
         self._input.returnPressed.connect(self._on_send)
         composer_layout.addWidget(self._input, 1)
 
+        attach = QPushButton()
+        attach.setFixedSize(40, 40)
+        attach.setCursor(Qt.CursorShape.PointingHandCursor)
+        attach.setToolTip("Şəkil əlavə et")
+        attach.setIcon(
+            icons.icon("file", self._theme.color("--color-text-muted"), size=17, stroke_width=1.6)
+        )
+        attach.clicked.connect(self._on_attach)
+        composer_layout.addWidget(attach)
+
         send = QPushButton()
         send.setFixedSize(40, 40)
         send.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -252,8 +334,26 @@ class SupportChatWidget(QWidget):
         send.clicked.connect(self._on_send)
         composer_layout.addWidget(send)
 
-        panel.add(composer)
-        return panel
+        # «Təcili» YALNIZ texniki kanalda görünür: daxili müraciətdə onun
+        # heç bir nəticəsi olmazdı (Telegram rejimi yalnız texnikiyə baxır)
+        # və mənasız işarə qutusu istifadəçini yanıldardı.
+        self._urgent = QCheckBox("Təcili")
+        self._urgent.setVisible(False)
+        urgent_row = QWidget()
+        urgent_layout = QHBoxLayout(urgent_row)
+        urgent_layout.setContentsMargins(16, 0, 16, 10)
+        urgent_layout.setSpacing(8)
+        urgent_layout.addWidget(self._urgent)
+        # Seçilmiş faylın adı — «əlavə etdimmi?» sualının YEGANƏ cavabı:
+        # fayl dialoqu bağlandıqdan sonra panel heç bir iz göstərməsəydi,
+        # istifadəçi şəkli iki dəfə seçərdi.
+        self._attachment_label = muted_label("")
+        urgent_layout.addWidget(self._attachment_label)
+        urgent_layout.addStretch(1)
+
+        layout.addWidget(composer)
+        layout.addWidget(urgent_row)
+        return page
 
     # ------------------------------- mesajlar -------------------------------- #
 
@@ -294,9 +394,89 @@ class SupportChatWidget(QWidget):
         text = self._input.text().strip()
         if not text:
             return
+        # Kanal seçilməyibsə göndərmə YOXDUR: `_on_send` yalnız söhbət
+        # səhifəsindən çağırıla bilər, lakin klaviatura ilə (Enter) səhv
+        # vaxtda tetiklənməsi mümkündür və mesaj təyinatsız qalardı.
+        if self._channel is None:
+            return
         self.add_message(text, outgoing=True)
+        if self._attachment is not None:
+            self.add_attachment(self._attachment[0])
         self._input.clear()
         self.message_sent.emit(text)
+        # Əlavə GÖNDƏRİŞDƏN SONRA təmizlənir: qalsaydı, növbəti mesaj eyni
+        # şəkli İKİNCİ dəfə yükləyərdi və işçi bunu görməzdi.
+        self._attachment = None
+        self._attachment_label.setText("")
+
+    def _on_attach(self) -> None:
+        """Şəkil seçimi — fayl YOLU deyil, BAYTLAR götürülür (bax `__init__`).
+
+        Oxu uğursuzluğu (fayl silinib, icazə yoxdur) söhbətin İÇİNDƏ
+        göstərilir: modal açmaq kiçik, diskret panelin xarakterini pozardı
+        (eyni qərar `controllers/support_chat.py` başlığındadır).
+        """
+        from PySide6.QtWidgets import QFileDialog  # noqa: PLC0415
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Şəkil seçin", "", "Şəkillər (*.jpg *.jpeg *.png *.webp)"
+        )
+        if not path:
+            return
+        file = Path(path)
+        try:
+            content = file.read_bytes()
+        except OSError:
+            self.add_message("⚠ Şəkil oxunmadı — faylı yenidən seçin.")
+            return
+        self._attachment = (file.name, content)
+        self._attachment_label.setText(f"📎 {file.name}")
+
+    def pending_attachment(self) -> tuple[str, bytes] | None:
+        """Göndəriləcək şəkil — kontroller onu `send()`-ə ötürür."""
+        return self._attachment
+
+    # -------------------------------- kanal ---------------------------------- #
+
+    def select_channel(self, channel: SupportChannel) -> None:
+        """Kanalı seçir və söhbət səhifəsinə keçir."""
+        self._channel = channel
+        self._channel_label.setText(channel.label_az)
+        self._urgent.setVisible(channel.notifies_telegram)
+        self._urgent.setChecked(False)
+        self._back.setVisible(True)
+        self._stack.setCurrentIndex(1)
+        self._input.setFocus()
+        self.channel_selected.emit(channel.value)
+
+    def reset_channel(self) -> None:
+        """Seçim ekranına qayıdır və söhbəti təmizləyir.
+
+        Söhbət TƏMİZLƏNİR, çünki digər kanalın tarixçəsi AYRIdır: köhnə
+        balonlar qalsaydı, işçi daxili müraciətinin cavabını texniki
+        söhbətdə görərdi.
+        """
+        self._channel = None
+        self._channel_label.setText("")
+        self._attachment = None
+        self._attachment_label.setText("")
+        self._urgent.setVisible(False)
+        self._back.setVisible(False)
+        self.clear_messages()
+        self._stack.setCurrentIndex(0)
+
+    def clear_messages(self) -> None:
+        while self._messages_layout.count() > 1:
+            item = self._messages_layout.takeAt(0)
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                widget.deleteLater()
+
+    def selected_channel(self) -> SupportChannel | None:
+        return self._channel
+
+    def is_urgent(self) -> bool:
+        return bool(self._urgent.isChecked())
 
     # ------------------------------- vəziyyət -------------------------------- #
 
@@ -310,7 +490,13 @@ class SupportChatWidget(QWidget):
         self._is_open = True
         self._panel.setVisible(True)
         self._dot.setVisible(False)
-        self._input.setFocus()
+        # Kanal seçilməyibsə fokus GİRİŞ SAHƏSİNƏ verilmir: o, gizli
+        # səhifədədir və fokusun görünməyən sahədə olması klaviatura ilə
+        # işləyəni «yazıram, görünmür» vəziyyətinə salardı.
+        if self._channel is None:
+            self._stack.setCurrentIndex(0)
+        else:
+            self._input.setFocus()
         self.opened.emit()
 
     def close_panel(self) -> None:

@@ -645,6 +645,87 @@ def _performance_reviews(screen: Any) -> None:
     screen.set_history(list(data.PERFORMANCE_REVIEW_HISTORY))
 
 
+def _support_inbox(screen: Any) -> None:
+    """CHAT-1 dəstək qutuları — açarlar `controllers/support_inbox.py::_row`
+    və `_detail` ilə EYNİDİR (CLAUDE.md §6).
+
+    STATUS DƏYƏRLƏRİ `SupportTicketStatus`-dan GƏLİR, maketdə uydurulmur:
+    ekran onları `parse()` ilə oxuyur və yazı səhvi sükutla `OPEN`-a
+    düşərdi — yəni maket bütün söhbətləri «Açıq» göstərər, canlı yol isə
+    dörd fərqli status göstərərdi (eyni qərar `_fine_review`-də).
+
+    İKİ AÇAR, BİR FUNKSİYA: bölmələr eyni sinifdəndir, fərq yalnız ekranın
+    öz `channel` sahəsindədir — maket də həmin sahəyə baxır və Telegram
+    göstəricisini yalnız texniki bölmədə çəkir.
+    """
+    from src.domain.value_objects.support import SupportTicketStatus  # noqa: PLC0415
+
+    rows = [
+        {
+            "ticket_id": "11111111-1111-1111-1111-111111111111",
+            "sender_name": "Murad Bayramov",
+            "sender_position": "Mağaza Meneceri",
+            "store_name": "Yataş Babək",
+            "preview": "Kiosk PC açılmır, PIN ekranı gəlmir.",
+            "time": "18:42",
+            "unread": True,
+            "status": SupportTicketStatus.OPEN.value,
+            "is_urgent": True,
+        },
+        {
+            "ticket_id": "22222222-2222-2222-2222-222222222222",
+            "sender_name": "Aysel Quliyeva",
+            "sender_position": "Satıcı",
+            "store_name": "Yataş Mərkəzi",
+            "preview": "Ekranın şəklini göndərdim.",
+            "time": "16:05",
+            "unread": False,
+            "status": SupportTicketStatus.WAITING.value,
+            "is_urgent": False,
+        },
+    ]
+    screen.set_stores([("s1", "Yataş Babək"), ("s2", "Yataş Mərkəzi")])
+    screen.set_positions([("SELLER", "Satıcı"), ("STORE_MANAGER", "Mağaza Meneceri")])
+    screen.set_status_counts(
+        {
+            SupportTicketStatus.OPEN: 1,
+            SupportTicketStatus.WAITING: 1,
+            SupportTicketStatus.RESOLVED: 0,
+            SupportTicketStatus.CLOSED: 7,
+        }
+    )
+    screen.set_threads(rows)
+    screen.set_thread(
+        {
+            "ticket_id": rows[0]["ticket_id"],
+            "subject": "Kiosk PC açılmır",
+            "sender_name": rows[0]["sender_name"],
+            "sender_position": rows[0]["sender_position"],
+            "store_name": rows[0]["store_name"],
+            "status": SupportTicketStatus.OPEN.value,
+            "is_urgent": True,
+            "messages": [
+                {
+                    "body": "Kiosk PC açılmır, PIN ekranı gəlmir.",
+                    "outgoing": False,
+                    "telegram_sent_at": "18:42",
+                    "from_telegram": False,
+                    "attachment_ref": "",
+                    "attachment_name": "",
+                },
+                {
+                    "body": "Kabeli çıxarıb yenidən taxın, nəticəni yazın.",
+                    "outgoing": True,
+                    "telegram_sent_at": "18:47",
+                    "from_telegram": True,
+                    "attachment_ref": "",
+                    "attachment_name": "",
+                },
+            ],
+        }
+    )
+
+
 def _annual_leave(screen: Any) -> None:
     """#28 (kompas1.md Faza 4) — açarlar `controllers/annual_leave.py::
     _to_inbox_row` ilə EYNİDİR (CLAUDE.md §6)."""
@@ -845,6 +926,8 @@ def _dashboard_builder(screen: Any) -> None:
 #: təmin olunur: açar həmin ekranı quran fabrikanın açarı ilə eynidir.
 _POPULATORS: dict[str, Callable[[Any], None]] = {
     "dashboard": _dashboard,
+    "internal_requests": _support_inbox,
+    "technical_support": _support_inbox,
     "live_queue": _live_queue,
     "daily_roster": _daily_roster,
     "shift_planning": _shift_planning,

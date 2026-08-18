@@ -918,6 +918,7 @@ class KompasApplication:
         self._window.set_content(shell)
         self._install_overlays(shell)
         self._refresh_context_subtitles(shell, now=now)
+        self._refresh_support_badges(shell)
 
         # İlk açılan ekran — menyuda görünən ilk maddə. Sabit "dashboard"
         # yazmaq olmazdı: icazəsi olmayan istifadəçidə boş ekran qalardı.
@@ -942,6 +943,45 @@ class KompasApplication:
         if screen is None:  # pragma: no cover - siqnal yalnız qurulmuş ekran üçün yayılır
             return
         self._binder.populate(key, screen)
+
+    def _refresh_support_badges(self, shell: AdminShell) -> None:
+        """Sol paneldəki dəstək sayğaclarını doldurur (CHAT-1 Faza 6).
+
+        SAY YALNIZ `🔴 Açıq` STATUSDUR (tg1.md Faza 6), oxunmamış deyil:
+        nişan «məndə iş qalıb» deməkdir. Söhbəti açıb cavab yazmayan Root
+        üçün oxunmamış say sıfıra düşərdi — yəni gözdən keçirmək işi
+        bitirmiş kimi görünərdi.
+
+        SƏLAHİYYƏTİ OLMAYAN İSTİFADƏÇİDƏ SORĞU DA GETMİR: `actionable_count`
+        `can_view` yoxlamasından keçir və sıfır qaytarır, `Sidebar.set_badge`
+        isə naməlum açarı sükutla buraxır (maddə onsuz da panelə düşməyib).
+
+        UĞURSUZLUQ SƏSSİZDİR: sayğac köməkçi məlumatdır — onun oxunmaması
+        girişi dayandırmamalıdır.
+        """
+        from src.domain.value_objects.support import SupportChannel  # noqa: PLC0415
+
+        if self._context is None or self._current_employee is None:
+            return
+        keys = {
+            SupportChannel.INTERNAL: "internal_requests",
+            SupportChannel.TECHNICAL: "technical_support",
+        }
+        try:
+            with self._context.session(user_id=self._current_employee.id) as session:
+                counts = {
+                    key: session.support_inbox.actionable_count(
+                        tenant_id=session.tenant_id,
+                        actor=self._current_employee,
+                        channel=channel,
+                    )
+                    for channel, key in keys.items()
+                }
+        except Exception:
+            _log.exception("SUPPORT_BADGE_REFRESH_FAILED")
+            return
+        for key, count in counts.items():
+            shell.sidebar().set_badge(key, count)
 
     def _refresh_context_subtitles(self, shell: AdminShell, *, now: datetime) -> None:
         """Başlıqdakı say/tarix mətnlərini CANLI məlumatdan doldurur.
@@ -1410,6 +1450,9 @@ class KompasApplication:
         from src.presentation.screens.performance_review import (  # noqa: PLC0415
             PerformanceReviewScreen,
         )
+        from src.presentation.screens.support_inbox import (  # noqa: PLC0415
+            SupportInboxScreen,
+        )
         from src.presentation.screens.sync_conflicts import (  # noqa: PLC0415
             SyncConflictScreen,
         )
@@ -1490,6 +1533,9 @@ class KompasApplication:
             # DEVICE-1: təsdiq/blok/köçürmə — hər yazıdan sonra siyahı VƏ
             # lisenziya sayğacı yenidən oxunur (bax `controllers/devices.py`).
             (DeviceAdminScreen, self._attach_devices),
+            # CHAT-1: hər iki dəstək bölməsi EYNİ sinifdəndir və EYNİ
+            # kontrollerə bağlanır — kanal ekranın öz sahəsindədir.
+            (SupportInboxScreen, self._attach_support_inbox),
             (group_g.ProfileScreen, self._attach_profile),
             # Faza 3 yekunu: ERP, ehtiyat nüsxə, baza keçidi və diaqnostika.
             # Tapşırıq lövhəsi: «Nəzərdən Keçirilir» sütunundakı təsdiq/rədd
@@ -1717,6 +1763,86 @@ class KompasApplication:
         if not isinstance(screen, AnnualLeaveInboxScreen):  # pragma: no cover - tip qoruyucusu
             return
         AnnualLeaveInboxController(self._context, self._current_employee).attach(screen)
+
+    def _attach_support_inbox(self, screen: QWidget) -> None:
+        """Dəstək gələnlər qutusunu `SupportInboxUseCase`-ə bağlayır (CHAT-1).
+
+        TELEGRAM SORĞUSU YALNIZ TEXNİKİ BÖLMƏDƏ İŞƏ DÜŞÜR və orada da yalnız
+        bot qurulubsa. Səbəb `infrastructure/notifications/telegram.py`
+        başlığındadır: `getUpdates` bir yeniliyi TƏK dəfə verir, yəni sorğunu
+        birdən çox yerdə aparmaq cavabların bir hissəsini itirərdi.
+        """
+        from src.presentation.controllers.support_inbox import (  # noqa: PLC0415
+            SupportInboxController,
+        )
+        from src.presentation.screens.support_inbox import (  # noqa: PLC0415
+            SupportInboxScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, SupportInboxScreen):  # pragma: no cover - tip qoruyucusu
+            return
+
+        poller = None
+        interval_ms = 0
+        if screen.channel.notifies_telegram:
+            poller, interval_ms = self._build_telegram_poller()
+        shell = self._shell
+        SupportInboxController(
+            self._context,
+            self._current_employee,
+            poller=poller,
+            poll_interval_ms=interval_ms,
+            on_counts_changed=(
+                (lambda: self._refresh_support_badges(shell)) if shell is not None else None
+            ),
+        ).attach(screen)
+
+    def _build_telegram_poller(self) -> tuple[object, int]:
+        """Telegram sorğu obyektini və intervalını qurur.
+
+        Uğursuzluq EKRANI DAYANDIRMIR: bot qurulmayıbsa və ya ayarlar
+        oxunmursa bölmə tam işləyir, sadəcə xarici cavab gəlmir — Telegram
+        bu bölmənin ƏLAVƏSİdir, şərti deyil.
+        """
+        from src.application.root_limits import limit_int  # noqa: PLC0415
+        from src.application.use_cases.telegram_config import (  # noqa: PLC0415
+            TelegramSettings,
+        )
+        from src.domain.policies import SystemLimitKey  # noqa: PLC0415
+        from src.infrastructure.notifications.telegram import (  # noqa: PLC0415
+            TelegramReplyPoller,
+        )
+
+        context = self._context
+        actor = self._current_employee
+        if context is None or actor is None:  # pragma: no cover - çağırış yeri qoruyur
+            return None, 0
+        try:
+            with context.session(user_id=actor.id) as session:
+                settings = session.telegram_config.settings_for_gateway(session.tenant_id)
+                seconds = limit_int(
+                    session.uow.repository("limits"),
+                    session.tenant_id,
+                    SystemLimitKey.TELEGRAM_POLL_INTERVAL_SECONDS,
+                )
+        except Exception:
+            _log.exception("TELEGRAM_POLLER_SETUP_FAILED")
+            return None, 0
+        if settings is None:
+            return None, 0
+
+        def provider() -> TelegramSettings | None:
+            """Ayarlar HƏR sorğuda yenidən oxunur — Root botu dəyişə bilər."""
+            try:
+                with context.session(user_id=actor.id) as inner:
+                    return inner.telegram_config.settings_for_gateway(inner.tenant_id)
+            except Exception:
+                _log.exception("TELEGRAM_SETTINGS_READ_FAILED")
+                return None
+
+        return TelegramReplyPoller(settings_provider=provider), max(1, seconds) * 1000
 
     def _attach_face_enrollment(self, screen: QWidget) -> None:
         """«Üz Qeydiyyatı» ekranını `FaceEnrollmentUseCase`-ə bağlayır (bənd 1, 2).
@@ -2153,6 +2279,7 @@ class KompasApplication:
         Ekranlar burada QURULMUR — yalnız necə qurulacağı yazılır. Faktiki
         qurulma ilk açılışda baş verir (bax `AdminShell.show_screen`).
         """
+        from src.domain.value_objects.support import SupportChannel  # noqa: PLC0415
         from src.presentation.screens import (  # noqa: PLC0415
             group_b,
             group_c,
@@ -2187,6 +2314,9 @@ class KompasApplication:
         )
         from src.presentation.screens.performance_review import (  # noqa: PLC0415
             PerformanceReviewScreen,
+        )
+        from src.presentation.screens.support_inbox import (  # noqa: PLC0415
+            SupportInboxScreen,
         )
         from src.presentation.screens.sync_conflicts import (  # noqa: PLC0415
             SyncConflictScreen,
@@ -2302,6 +2432,14 @@ class KompasApplication:
             # HƏM yazır — ona görə öz kontrolleri var (`_attach_devices`).
             "devices": lambda: DeviceAdminScreen(theme),
             "annual_leave": lambda: AnnualLeaveInboxScreen(theme),
+            # CHAT-1: İKİ AÇAR, BİR SİNİF — fərq yalnız `channel` arqumentidir
+            # (bax `screens/support_inbox.py` başlığı). `_attach_write_
+            # controller` ikisini `isinstance` ilə ayırd edə bilmir, ona görə
+            # kontroller kanalı EKRANDAN oxuyur (`screen.channel`), açardan yox.
+            "internal_requests": lambda: SupportInboxScreen(theme, channel=SupportChannel.INTERNAL),
+            "technical_support": lambda: SupportInboxScreen(
+                theme, channel=SupportChannel.TECHNICAL
+            ),
             # Face Control (facecontrol.md Faza 4) — hər ikisi ÖZ kontrollerinə
             # bağlıdır (bax `_attach_write_controller` cədvəli).
             "face_enrollment": lambda: FaceEnrollmentScreen(theme),
@@ -2353,6 +2491,8 @@ class KompasApplication:
             "sync_conflicts": "Offline rejimin izi · hər iki versiya saxlanılır",
             "devices": "Təsdiqlənmiş cihaz lisenziya yeri tutur",
             "annual_leave": "İllik haqq · gündaxili icazədən AYRI mexanizm",
+            "internal_requests": "Şirkətin öz növbəsi · Telegram-a GETMİR",
+            "technical_support": "Hazırlayıcıya gedir · Telegram sinxronlaşdırılır",
             "face_enrollment": "Nəzarətli proses · foto saxlanmır, yalnız riyazi təmsil",
             "face_exemptions": "PIN-only istisnası · məcburi ikinci təsdiqlə əvəzlənir",
         }

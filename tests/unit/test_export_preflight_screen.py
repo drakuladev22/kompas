@@ -56,6 +56,7 @@ from src.domain.value_objects.identifiers import (
     new_employee_id,
 )
 from src.presentation import preview_data
+from src.presentation.background_task import InlineExecutor
 from src.presentation.controllers.report_export import (
     ReportExportController,
     _comparison_caption,
@@ -442,7 +443,13 @@ class _ScreenStub:
 
 
 def _controller(session: _Session, actor: Employee | None = None) -> ReportExportController:
-    return ReportExportController(_Context(session), actor or _hr_admin())  # type: ignore[arg-type]
+    # `InlineExecutor`: bu testlər MƏNTİQİ ölçür, sapı yox — nəticə dərhal
+    # çatdırılır (sap davranışı `test_background_job_funnel.py`-dadır).
+    return ReportExportController(
+        _Context(session),  # type: ignore[arg-type]
+        actor or _hr_admin(),
+        executor=InlineExecutor(),
+    )
 
 
 # --------------------------------------------------------------------------- #

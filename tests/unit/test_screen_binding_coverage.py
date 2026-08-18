@@ -104,6 +104,14 @@ CONTROLLER_BOUND: Final[dict[str, str]] = {
     # sayğac yenilənməsəydi, admin ardıcıl iki cihaz təsdiqləyəndə ikincidə
     # gözlənilməz «limit doldu» xətası görərdi (bax `controllers/devices.py`).
     "devices": "_attach_devices",
+    # CHAT-1 dəstək gələnlər qutuları — İKİ AÇAR, BİR EKRAN SİNFİ və BİR
+    # `_attach_*` metodu (üç kataloq ekranı ilə eyni naxış). Fərq ekranın öz
+    # `channel` sahəsindədir, açarda deyil — kontroller onu oradan oxuyur.
+    # Hər ikisi HƏM oxuyur (söhbət siyahısı), HƏM yazır (cavab, bağla/aç) və
+    # hər yazıdan sonra siyahı yenidən oxunur: cavab verilmiş söhbət
+    # «Cavablanmamış» süzgəcindən çıxır.
+    "internal_requests": "_attach_support_inbox",
+    "technical_support": "_attach_support_inbox",
     # Aylıq Cərimə İcmalı (miqrasiya 003) — HƏM oxuyur (dövrlər + nəşr
     # gözləyən sətirlər), HƏM yazır (`publish_batch`). Nəşr olunmuş cərimə
     # `PENDING_REVIEW`-dan çıxır, yəni siyahı hər göndərmədən sonra yenidən

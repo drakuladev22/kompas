@@ -984,6 +984,70 @@ verməsi vendorun öz sənədində yazılı olmalıdır — bu qərar ölçülm�
 
 ---
 
+## SEC-028 — Daxili müraciət hazırlayıcının Telegram-ına DÜŞMÜR
+
+**Qərar:** Dəstək chat-i iki kanala bölünür (`support_tickets.channel`) və
+Telegram-a YALNIZ `TECHNICAL` kanalı çıxır.
+
+**Səbəb — bu, funksional seçim deyil, MƏLUMAT SIZMASININ qapadılmasıdır.**
+Əvvəlki quruluşda dəstək chat-inin tək ünvanı vardı: hazırlayıcı. Nəticədə
+«məzuniyyətim təsdiqlənmir», «cəriməmi haqsız yazıblar» kimi mesajlar —
+şirkətin DAXİLİ kadr yazışması — kənar tərəfin qutusuna düşürdü. Telegram
+əlavə olunsaydı, həmin mətn üstəlik kənar şəxsin TELEFONUNDA olardı.
+
+**Qayda İKİ yerdədir** (CLAUDE.md §5):
+
+| Yer | Nə edir |
+|---|---|
+| `SupportChannel.notifies_telegram` | Tərif — yalnız `TECHNICAL` `True` qaytarır |
+| `_SupportBase._should_notify` | Tətbiq — şlüzə çağırış bu qapıdan keçir |
+
+Üçüncü qat kimi `SupportInboxUseCase.deliver_telegram_reply` GƏLƏN cavabı da
+yoxlayır: daxili kanalın söhbətinə Telegram-dan yazılan cavab RƏDD edilir,
+çünki belə bir istinad yalnız səhv və ya uydurma ola bilər.
+
+**Kanal AVTOMATİK təyin edilmir.** Açar sözlə təsnifat («cərimə» → daxili)
+rədd edildi: səhv təsnifat mesajı yanlış auditoriyaya çatdırardı və işçi
+bunu görməzdi. Seçim işçinin bir klikidir (`value_objects/support.py`).
+
+**Tətbiq:** `migrations/068`, `src/domain/value_objects/support.py`,
+`src/application/use_cases/support_chat.py`.
+
+---
+
+## SEC-029 — Telegram bot token bazadadır, `.env`-də DEYİL; ekrana AÇILMIR
+
+**Qərar:** `telegram_config.bot_token_encrypted` — `EncryptionService`
+(AES-256-GCM) ilə, AAD kimi `telegram_config:{tenant_id}` konteksti ilə.
+Ekran yalnız MASKANI görür (`mask_token`, son 4 simvol).
+
+**Niyə `.env` deyil.** Token-i dəyişmək müştəri ofisindəki istifadəçinin
+işidir; o isə `Program Files` altındakı mətn faylını redaktə edə bilmir
+(SETUP-1) və etməli də deyil. Bazadakı dəyər üstəlik AUDİT-lənir — fayl iz
+qoymur. CHAT-1 bunu açıq tələb edir.
+
+**Niyə AAD konteksti.** Kontekstsiz şifrələmə bir kirayəçinin token sətrinin
+digərinin sətrinə köçürülməsini SÜKUTLA qəbul edərdi (baza faylına birbaşa
+çıxışı olan hücumçu üçün mümkün əməliyyat). Kontekstlə deşifrə mərhələsində
+uğursuz olur.
+
+**Niyə ekrana qaytarılmır.** Root paneli demo, ekran-paylaşımı və uzaqdan
+dəstək zamanı açıq olur. Token yalnız YAZILIR («Botu Dəyiş») və yalnız şlüz
+tərəfindən oxunur; audit sətrində də yalnız maska saxlanılır — audit jurnalı
+ixrac edilə bilir və sirri ora yazmaq onu şifrəli sütundan çıxarardı.
+
+**Səlahiyyət qapısı İKİ yerdədir:** `permission_flags.hardlock_level = 1`
+(DB, migrations/068) və `TelegramConfigUseCase.may_manage` (rol yoxlaması) —
+`schema.sql` ilə təmiz quraşdırmada miqrasiya zənciri fərqli ola bilər.
+
+**Köhnə token silinmir, ARXİVLƏNİR** (`telegram_config_history`): «hansı bot
+nə vaxt işləyirdi?» sualı bot dəyişdikdən sonra cavabsız qalmamalıdır.
+
+**Tətbiq:** `migrations/068`, `src/application/use_cases/telegram_config.py`,
+`src/infrastructure/persistence/telegram_repositories.py`.
+
+---
+
 ## Açıq qalan (Faza 3-də bağlanır)
 
 | # | Məsələ | Faza |

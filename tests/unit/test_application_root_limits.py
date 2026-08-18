@@ -97,11 +97,15 @@ TENANT: Final = TenantId(uuid.UUID("22222222-2222-2222-2222-222222222222"))
 STORE: Final = StoreId(uuid.uuid4())
 NOW: Final = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
 
-_MIGRATION: Final[Path] = (
-    Path(__file__).resolve().parents[2]
-    / "database"
-    / "migrations"
-    / "034_application_layer_limits.sql"
+_MIGRATIONS_DIR: Final[Path] = Path(__file__).resolve().parents[2] / "database" / "migrations"
+
+#: Tətbiq qatının limitlərini seed edən BÜTÜN miqrasiyalar.
+#:
+#: Yeni tətbiq açarı gətirən miqrasiya buraya bir sətir əlavə edir (səbəb
+#: `_migration_bounds` docstring-indədir).
+_MIGRATIONS: Final[tuple[Path, ...]] = (
+    _MIGRATIONS_DIR / "034_application_layer_limits.sql",
+    _MIGRATIONS_DIR / "068_support_channels_telegram.sql",
 )
 
 #: Açar → Faza 10.2-nin ikinci dalğasından ƏVVƏL kodda oturan HƏRFİ dəyər.
@@ -152,20 +156,40 @@ def test_default_equals_the_previous_hardcoded_value(key: SystemLimitKey, expect
 
 
 def _migration_bounds() -> dict[str, tuple[str, str]]:
-    """migrations/034-dəki `('KEY', 'val', 'TYPE', 'min', 'max', ...)` sətirləri."""
-    text = _MIGRATION.read_text(encoding="utf-8")
+    """`_MIGRATIONS`-dəki `('KEY', 'val', 'TYPE', 'min', 'max', ...)` sətirləri.
+
+    SİYAHI FAYL DEYİL, DƏSTdir. Əvvəl burada tək 034 vardı və qapı «açar
+    034-dədir?» soruşurdu — sonrakı miqrasiya ilə gələn hər yeni tətbiq
+    açarı qapını POZURDU, halbuki onun qüsuru yox idi. Alternativ (açarı
+    geri 034-ə yazmaq) artıq tətbiq olunmuş miqrasiyanı redaktə etmək
+    deməkdir və `schema_migrations` checksum-u ilə birbaşa ziddiyyətdədir
+    (migrations/061). Eyni düzəliş infrastruktur qapısında artıq tətbiq
+    olunub — bax `test_infrastructure_root_limits._MIGRATIONS`.
+    """
     pattern = re.compile(
         r"'(?P<key>[A-Z0-9_]+)',\s*'[^']*',\s*'(?:INTEGER|DECIMAL)',\s*"
         r"'(?P<low>-?[0-9.]+)',\s*'(?P<high>-?[0-9.]+)'"
     )
-    return {m.group("key"): (m.group("low"), m.group("high")) for m in pattern.finditer(text)}
+    found: dict[str, tuple[str, str]] = {}
+    for path in _MIGRATIONS:
+        text = path.read_text(encoding="utf-8")
+        for match in pattern.finditer(text):
+            key = match.group("key")
+            bounds = (match.group("low"), match.group("high"))
+            # Eyni açarın iki miqrasiyada fərqli hüdudu tətbiq SIRASINDAN
+            # asılı davranış yaradardı — hansının qüvvədə olduğu bilinməzdi.
+            assert found.get(key, bounds) == bounds, (
+                f"«{key}» iki miqrasiyada fərqli hüdudlarla seed edilir"
+            )
+            found[key] = bounds
+    return found
 
 
 def test_code_bounds_match_the_migration_bounds() -> None:
     """İki mənbənin ayrılması "ekranda qəbul edilir, kodda kəsilir" deməkdir."""
     from_sql = _migration_bounds()
     for key, (low, high) in APP_LIMIT_BOUNDS.items():
-        assert key.value in from_sql, f"«{key.value}» migrations/034-də aralıqsızdır"
+        assert key.value in from_sql, f"«{key.value}» heç bir seed miqrasiyasında aralıqsızdır"
         sql_low, sql_high = from_sql[key.value]
         assert Decimal(sql_low) == low, f"«{key.value}» aşağı hüdudu fərqlənir"
         assert Decimal(sql_high) == high, f"«{key.value}» yuxarı hüdudu fərqlənir"
@@ -486,7 +510,7 @@ class _Tickets:
     def __init__(self) -> None:
         self.seen: list[int] = []
 
-    def list_threads(self, tenant_id: TenantId, *, limit: int = 20) -> list[Any]:
+    def list_threads(self, tenant_id: TenantId, *, limit: int = 20, **_: Any) -> list[Any]:
         self.seen.append(limit)
         return []
 

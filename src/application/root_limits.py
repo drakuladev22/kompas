@@ -72,6 +72,18 @@ APP_LIMIT_BOUNDS: Final[dict[SystemLimitKey, tuple[Decimal, Decimal]]] = {
     # və vəziyyət `ON_TRACK`-dən birbaşa `BREACHED`-ə keçərdi — xəbərdarlıq
     # mərhələsi faktiki söndürülərdi.
     SystemLimitKey.SUPPORT_SLA_AT_RISK_RATIO: (Decimal("0.10"), Decimal("0.99")),
+    # Aşağı hüdud 5 san.: daha qısası mobil şəbəkədə HƏMİŞƏ taymauta
+    # düşərdi və bildiriş heç vaxt getməzdi. Yuxarı hüdud 120 san.:
+    # daha uzunu fon sapını lazımsız yerə saxlayardı.
+    SystemLimitKey.TELEGRAM_REQUEST_TIMEOUT_SECONDS: (Decimal(5), Decimal(120)),
+    # Aşağı hüdud 5 san.: Telegram sorğu həddi (rate limit) daha
+    # sıx yoxlamada botu müvəqqəti bloklayır.
+    SystemLimitKey.TELEGRAM_POLL_INTERVAL_SECONDS: (Decimal(5), Decimal(3600)),
+    # Aşağı hüdud 1 gün: sıfır «dərhal bağla» demək olardı və işçinin
+    # etiraz pəncərəsini tamamilə kəsərdi. Yuxarı hüdud 90 gün —
+    # ondan uzunu praktikada «heç vaxt bağlanmır» deməkdir.
+    SystemLimitKey.SUPPORT_AUTO_CLOSE_DAYS: (Decimal(1), Decimal(90)),
+    SystemLimitKey.SUPPORT_WAITING_REMINDER_DAYS: (Decimal(1), Decimal(90)),
     # Aşağı hüdud 2: 1 yazılsaydı HƏR çökmə "kütləvi" görünərdi.
     SystemLimitKey.CRASH_WIDESPREAD_INSTALLATION_THRESHOLD: (Decimal(2), Decimal(1000)),
     SystemLimitKey.CRASH_DASHBOARD_TOP_LIMIT: (Decimal(1), Decimal(500)),
@@ -174,6 +186,17 @@ def _clamp(key: SystemLimitKey, value: Decimal) -> Decimal:
     return value
 
 
+def limit_str(limits: SystemLimits | None, tenant_id: TenantId, key: SystemLimitKey) -> str:
+    """Mətn dəyərli ROOT parametri (məs. `TELEGRAM_NOTIFY_MODE`).
+
+    `_clamp` TƏTBİQ OLUNMUR: min/max hüdudları ədədi diapazon üçündür və
+    mətnə mənası yoxdur. İcazəli dəyərlər siyahısını çağıran tərəf yoxlayır
+    (`TelegramNotifyMode.from_value`) — belə bir siyahını bura köçürsəydik,
+    hər yeni mətn parametri bu faylın dəyişməsini tələb edərdi.
+    """
+    return _raw(limits, tenant_id, key).strip()
+
+
 def _decimal_of(limits: SystemLimits | None, tenant_id: TenantId, key: SystemLimitKey) -> Decimal:
     raw = _raw(limits, tenant_id, key)
     try:
@@ -208,4 +231,5 @@ __all__ = [
     "limit_decimal",
     "limit_int",
     "limit_int_tuple",
+    "limit_str",
 ]

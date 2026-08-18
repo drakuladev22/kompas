@@ -549,6 +549,19 @@ class SystemLimitKey(str, Enum):
     BACKUP_HISTORY_PAGE_SIZE = "BACKUP_HISTORY_PAGE_SIZE"
     ANNOUNCEMENT_LIST_PAGE_SIZE = "ANNOUNCEMENT_LIST_PAGE_SIZE"
     SUPPORT_THREAD_PAGE_SIZE = "SUPPORT_THREAD_PAGE_SIZE"
+    #: Telegram bildiriş rejimi — `TelegramNotifyMode` dəyərlərindən biri.
+    #:
+    #: SƏHİFƏ ÖLÇÜSÜ DEYİL, DAVRANIŞ AÇARIDIR: bu siyahıdakı yeganə mətn
+    #: dəyərlərindən biridir və qəsdən buradadır — Root onu digər limitlərlə
+    #: EYNİ ekranda görməlidir. Ayrıca «Telegram parametrləri» sahəsinə
+    #: qoysaydıq, bot konfiqurasiyası (token/chat) ilə bildiriş SİYASƏTİ
+    #: qarışardı: birincisi bağlantıdır, ikincisi seçimdir.
+    TELEGRAM_NOTIFY_MODE = "TELEGRAM_NOTIFY_MODE"
+    TELEGRAM_REQUEST_TIMEOUT_SECONDS = "TELEGRAM_REQUEST_TIMEOUT_SECONDS"
+    TELEGRAM_POLL_INTERVAL_SECONDS = "TELEGRAM_POLL_INTERVAL_SECONDS"
+    #: Status avtomatikası (tg1.md Faza 6) — ikisi də GÜN ölçüsündədir.
+    SUPPORT_AUTO_CLOSE_DAYS = "SUPPORT_AUTO_CLOSE_DAYS"
+    SUPPORT_WAITING_REMINDER_DAYS = "SUPPORT_WAITING_REMINDER_DAYS"
     SYNC_CONFLICT_PAGE_SIZE = "SYNC_CONFLICT_PAGE_SIZE"
     # DB-2 hardcode auditinin tapdığı İKİ sabit (`workflow_repositories.py`).
     #
@@ -1239,6 +1252,22 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.BACKUP_HISTORY_PAGE_SIZE: "60",
     SystemLimitKey.ANNOUNCEMENT_LIST_PAGE_SIZE: "50",
     SystemLimitKey.SUPPORT_THREAD_PAGE_SIZE: "20",
+    # Defolt `HAMISI`: bot yeni qoşulanda susmaq ən pis başlanğıcdır —
+    # hazırlayıcı bildirişin gəlmədiyini yalnız gecikmiş şikayətdən bilərdi.
+    SystemLimitKey.TELEGRAM_NOTIFY_MODE: "HAMISI",
+    # Mağaza internetinin zəif olduğu hallar üçün geniş, lakin sonsuz
+    # olmayan pəncərə: bildiriş göndərmək işçinin gözlədiyi əməliyyat
+    # DEYİL, ona görə 15 saniyə mesajın yazılmasını gecikdirmir.
+    SystemLimitKey.TELEGRAM_REQUEST_TIMEOUT_SECONDS: "15",
+    # Cavab yoxlaması: 20 saniyə insan söhbətində hiss olunmur,
+    # Telegram-ın sorğu həddindən isə çox uzaqdır.
+    SystemLimitKey.TELEGRAM_POLL_INTERVAL_SECONDS: "20",
+    # 3 gün: iş həftəsinin içində işçinin etiraz etməyə imkanı olur,
+    # növbə isə həll olunmuş müraciətlərlə dolub qalmır.
+    SystemLimitKey.SUPPORT_AUTO_CLOSE_DAYS: "3",
+    # 2 gün: bir iş günü + ehtiyat. Daha qısası növbətçi olmayan
+    # işçini istirahət günündə xatırlatma ilə narahat edərdi.
+    SystemLimitKey.SUPPORT_WAITING_REMINDER_DAYS: "2",
     SystemLimitKey.SYNC_CONFLICT_PAGE_SIZE: "100",
     # Defolt dəyər KÖÇÜRMƏDƏN ƏVVƏLKİ sabitlə eynidir (50): köçürmə davranışı
     # dəyişdirmir, yalnız dəyəri Root-un əli çatan yerə gətirir.
@@ -1884,6 +1913,37 @@ FACE_EXEMPTION_COMPENSATING_MODULE: Final[FeatureModule] = FeatureModule.DUAL_CO
 # --------------------------------------------------------------------------- #
 
 
+class TelegramNotifyMode(str, Enum):
+    """`SystemLimitKey.TELEGRAM_NOTIFY_MODE` dəyərləri (CHAT-1 Faza 7).
+
+    YALNIZ TELEGRAM-A TƏSİR EDİR. Proqramdakı «Texniki Dəstək» bölməsinə
+    müraciət HƏR rejimdə düşür — bu parametr mesajı SİLMİR, yalnız telefona
+    zəngin gedib-getməyəcəyini təyin edir. Fərq vacibdir: `DEAKTİV` seçən
+    Root mesajları itirmir, sadəcə onları proqramdan oxuyur.
+    """
+
+    #: Hər texniki mesaj Telegram-a düşür.
+    ALL = "HAMISI"
+    #: Yalnız işçinin AÇIQ təcili işarələdiyi müraciətlər
+    #: (`support_tickets.is_urgent`, migrations/068).
+    URGENT_ONLY = "YALNIZ TƏCİLİ"
+    #: Telegram-a heç nə getmir.
+    DISABLED = "DEAKTİV"
+
+    @classmethod
+    def from_value(cls, raw: str) -> TelegramNotifyMode:
+        """Naməlum/səhv dəyər → `ALL`.
+
+        `DISABLED`-a düşmək DAHA TƏHLÜKƏLİ olardı: səhv yazılmış bir limit
+        sətri bütün bildirişləri sükutla kəsər və nasazlıq yalnız «niyə
+        cavab vermirsiniz?» sualı ilə üzə çıxardı.
+        """
+        try:
+            return cls(raw.strip().upper())
+        except ValueError:
+            return cls.ALL
+
+
 class PerformanceReviewPeriodType(str, Enum):
     """`SystemLimitKey.PERFORMANCE_REVIEW_PERIOD_TYPE` dəyərləri.
 
@@ -1930,5 +1990,6 @@ __all__ = [
     "LeaveAllowanceSource",
     "PerformanceReviewPeriodType",
     "SystemLimitKey",
+    "TelegramNotifyMode",
     "ordinal_az",
 ]

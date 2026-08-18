@@ -783,21 +783,35 @@ class _Tickets:
         self.threads_by_id: dict[SupportTicketId, SupportThread] = {}
 
     def open_ticket(
-        self, *, ticket_id: SupportTicketId, tenant_id: TenantId, opened_by: Any, subject: str
+        self,
+        *,
+        ticket_id: SupportTicketId,
+        tenant_id: TenantId,
+        opened_by: Any,
+        subject: str,
+        channel: Any = None,
+        is_urgent: bool = False,
     ) -> None:
         self.opened.append((ticket_id, subject))
         self.open_ticket_id = ticket_id
         self.threads_by_id[ticket_id] = SupportThread(
-            ticket_id=ticket_id, subject=subject, status="OPEN", created_at=NOW, messages=[]
+            ticket_id=ticket_id,
+            subject=subject,
+            status="OPEN",
+            created_at=NOW,
+            messages=[],
+            opened_by=opened_by,
         )
 
-    def find_open_ticket(self, tenant_id: TenantId) -> SupportTicketId | None:
+    def find_open_ticket(self, tenant_id: TenantId, **_: Any) -> SupportTicketId | None:
         return self.open_ticket_id
 
     def get_thread(self, ticket_id: SupportTicketId) -> SupportThread | None:
         return self.threads_by_id.get(ticket_id)
 
-    def list_threads(self, tenant_id: TenantId, *, limit: int = 20) -> list[SupportThread]:
+    def list_threads(
+        self, tenant_id: TenantId, *, limit: int = 20, **_: Any
+    ) -> list[SupportThread]:
         return list(self.threads_by_id.values())
 
     def append_message(
@@ -808,6 +822,8 @@ class _Tickets:
         sender_id: Any,
         body: str,
         is_from_developer: bool,
+        from_telegram: bool = False,
+        attachment_name: str = "",
     ) -> None:
         self.messages.append({"ticket_id": ticket_id, "body": body})
         thread = self.threads_by_id.get(ticket_id)

@@ -186,6 +186,14 @@ SUPPORT_PANEL_WIDTH: Final = 372
 SUPPORT_PANEL_HEIGHT: Final = 486
 #: Dəstək düyməsi (FAB) `54×54`.
 SUPPORT_FAB_SIZE: Final = 54
+#: Dəstək gələnlər qutusunun sol siyahısı (CHAT-1 Faza 6).
+#:
+#: Ekranın YARISINI tutmur: söhbətin özü (sağ panel) uzun mətn daşıyır və
+#: oxunaqlıq sətir uzunluğundan asılıdır. `NOTIFICATION_PANEL_WIDTH`-dən
+#: (420) dar seçilib, çünki bu panel ekranın İÇİNDƏDİR, üzən deyil.
+SUPPORT_INBOX_LIST_WIDTH: Final = 340
+#: Siyahı sətri: üç sətir mətn (ad, filial·vəzifə, önizləmə) + daxili boşluq.
+SUPPORT_ROW_HEIGHT: Final = 76
 #: Detal paneli (developer, ERP) `width: 400px`.
 DETAIL_PANEL_WIDTH: Final = 400
 

@@ -2233,6 +2233,19 @@ class RootControlScreen(Screen):
     #: sətri DEYİL — ayrıca `tenant_branding` cədvəlidir (migrations/064).
     #: `face_scope_changed` ilə eyni qərar.
     branding_changed = Signal(dict)
+    #: Telegram bot konfiqurasiyası (CHAT-1 Faza 3) — `dict` (`bot_token`,
+    #: `chat_id`).
+    #:
+    #: `applied` SÖZLÜYÜNƏ QOŞULMADI — `face_scope_changed` və
+    #: `branding_changed` ilə eyni səbəb: `collected()["limits"]` yalnız
+    #: `SystemLimitKey` dəyərlərini daşıyır, Telegram ayarları isə ayrıca
+    #: `telegram_config` cədvəlidir (migrations/068). Üstəlik burada SİRR var:
+    #: token-i ümumi «Tətbiq Et» sözlüyünə qatmaq onu hər tətbiq
+    #: əməliyyatında ötürərdi.
+    telegram_saved = Signal(dict)
+    #: Aktiv/Deaktiv keçidi — token TOXUNULMUR (bax use case).
+    telegram_active_changed = Signal(bool)
+    telegram_test_requested = Signal()
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(theme, parent=parent)
@@ -2281,6 +2294,7 @@ class RootControlScreen(Screen):
         self.add(self._build_break_card())
         self.add(self._build_face_card())
         self.add(self._build_branding_card())
+        self.add(self._build_telegram_card())
 
         self._modules = Card(padding=20, spacing=12)
         self._modules.add(title_label("Modul açarları", size=15))
@@ -2358,6 +2372,130 @@ class RootControlScreen(Screen):
 
     def _collected_breaks(self) -> dict[str, int | str]:
         return {key: spin.value() for key, spin in self._break_inputs.items()}
+
+    # ---------------------- Telegram bildirişləri (CHAT-1) ------------------- #
+
+    def _build_telegram_card(self) -> Card:
+        """«Telegram Bildirişləri» — bot token, chat ID, aktivlik, test.
+
+        ──────────────────────────────────────────────────────────────────────
+        TOKEN SAHƏSİ BOŞ BAŞLAYIR VƏ CARİ DƏYƏRİ GÖSTƏRMİR
+        ──────────────────────────────────────────────────────────────────────
+        Yanındakı etiket yalnız MASKANI göstərir (`••••1234`). Sahəni cari
+        token ilə doldurmaq onu ekran-paylaşımında və skrinşotda ifşa edərdi,
+        halbuki Root-un ona baxmağa ehtiyacı yoxdur — o, ya botu DƏYİŞİR,
+        ya da toxunmur.
+
+        Nəticə: boş sahə «dəyişmə» deməkdir; `[Botu Dəyiş]` isə yeni token
+        TƏLƏB EDİR (use case 40 simvoldan qısasını rədd edir).
+
+        ──────────────────────────────────────────────────────────────────────
+        AKTİVLİK AÇARI «TƏTBİQ ET» GÖZLƏMİR
+        ──────────────────────────────────────────────────────────────────────
+        `face_scope_changed` ilə eyni qərar: aç/bağla xarakterli seçim toplu
+        tətbiq addımından sonra göstərilsəydi, Root botun FAKTİKİ vəziyyətini
+        ekranda görməzdi.
+        """
+        card = Card(padding=20, spacing=12)
+        card.add(title_label("Telegram Bildirişləri", size=15))
+        card.add(
+            muted_label(
+                "YALNIZ «Texniki Dəstək» mesajları Telegram-a düşür. «Daxili Müraciət» "
+                "şirkətin öz növbəsindədir və kənara ÇIXMIR."
+            )
+        )
+
+        self._telegram_state = muted_label("Bot qurulmayıb.")
+        card.add(self._telegram_state)
+        card.add(Divider())
+
+        self._telegram_token = QLineEdit()
+        self._telegram_token.setPlaceholderText("Yeni bot token (dəyişmirsinizsə boş buraxın)")
+        self._telegram_token.setProperty("variant", "form")
+        # Token yazılarkən də görünmür: Root onu adətən yanında adam olan
+        # kompüterdə yapışdırır.
+        self._telegram_token.setEchoMode(QLineEdit.EchoMode.Password)
+        card.add(field_label("Bot Token"))
+        card.add(self._telegram_token)
+
+        self._telegram_chat = QLineEdit()
+        self._telegram_chat.setPlaceholderText("Qrupun və ya kanalın chat ID-si")
+        self._telegram_chat.setProperty("variant", "form")
+        card.add(field_label("Chat ID"))
+        card.add(self._telegram_chat)
+
+        active_row = QWidget()
+        active_layout = QHBoxLayout(active_row)
+        active_layout.setContentsMargins(0, 0, 0, 0)
+        active_layout.setSpacing(12)
+        active_layout.addWidget(plain_label("Aktiv"))
+        active_layout.addWidget(stretch())
+        self._telegram_active = ToggleSwitch(self._theme)
+        self._telegram_active.toggled.connect(self.telegram_active_changed)
+        active_layout.addWidget(self._telegram_active)
+        card.add(active_row)
+
+        buttons = QWidget()
+        button_layout = QHBoxLayout(buttons)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(12)
+        button_layout.addWidget(stretch())
+        test = secondary_button("Test Mesajı Göndər")
+        test.clicked.connect(self.telegram_test_requested)
+        button_layout.addWidget(test)
+        replace = action_button("Botu Dəyiş")
+        replace.clicked.connect(self._on_telegram_save)
+        button_layout.addWidget(replace)
+        card.add(buttons)
+
+        self._telegram_message = muted_label("")
+        self._telegram_message.setWordWrap(True)
+        card.add(self._telegram_message)
+        return card
+
+    def _on_telegram_save(self) -> None:
+        self.telegram_saved.emit(
+            {
+                "bot_token": self._telegram_token.text().strip(),
+                "chat_id": self._telegram_chat.text().strip(),
+            }
+        )
+
+    def set_telegram(self, config: dict[str, object]) -> None:
+        """Cari konfiqurasiyanı göstərir (token MASKALANMIŞ).
+
+        Token sahəsi TƏMİZLƏNİR: yazılmış yeni token uğurla saxlandıqdan
+        sonra ekranda qalsaydı, növbəti «Botu Dəyiş» onu təkrar göndərərdi.
+        """
+        masked = str(config.get("masked_token") or "")
+        chat_id = str(config.get("chat_id") or "")
+        is_active = bool(config.get("is_active"))
+        updated = str(config.get("updated_at") or "")
+        by = str(config.get("updated_by_name") or "")
+
+        if masked:
+            suffix = f" · son dəyişiklik: {updated} {by}".rstrip() if updated or by else ""
+            self._telegram_state.setText(f"Bot: {masked} · Chat: {chat_id or '—'}{suffix}")
+        else:
+            self._telegram_state.setText("Bot qurulmayıb.")
+        self._telegram_token.clear()
+        self._telegram_chat.setText(chat_id)
+        self._telegram_active.blockSignals(True)
+        self._telegram_active.setChecked(is_active)
+        self._telegram_active.blockSignals(False)
+
+    def set_telegram_message(self, text: str, *, error: bool = False) -> None:
+        self._telegram_message.setText(text)
+        colour = "--color-danger" if error else "--color-text-muted"
+        self._telegram_message.setStyleSheet(f"color: {self._theme.color(colour)};")
+
+    def telegram_inputs(self) -> dict[str, object]:
+        """Sahələrin cari məzmunu — testlər və kontroller üçün."""
+        return {
+            "bot_token": self._telegram_token.text().strip(),
+            "chat_id": self._telegram_chat.text().strip(),
+            "is_active": self._telegram_active.isChecked(),
+        }
 
     # ------------------------ Face Control (bənd 15, 7 + 12) ----------------- #
 

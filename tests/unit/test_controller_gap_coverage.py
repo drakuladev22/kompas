@@ -1283,6 +1283,17 @@ class _ChatWidget:
     def set_unread(self, has_unread: bool) -> None:
         self.unread = has_unread
 
+    def selected_channel(self) -> Any:
+        from src.domain.value_objects.support import SupportChannel
+
+        return SupportChannel.TECHNICAL
+
+    def is_urgent(self) -> bool:
+        return False
+
+    def pending_attachment(self) -> tuple[str, bytes] | None:
+        return None
+
 
 class _Message:
     def __init__(self, body: str, *, from_developer: bool) -> None:
@@ -1320,12 +1331,17 @@ class _Support:
     def is_available(self, *, tenant_id: Any, actor: Any) -> bool:
         return self._available
 
-    def threads(self, *, tenant_id: Any, actor: Any) -> list[_Thread]:
+    def threads(self, *, tenant_id: Any, actor: Any, channel: Any = None) -> list[_Thread]:
         if self._load_error is not None:
             raise self._load_error
         return list(self._threads)
 
     def unread_count(self, *, tenant_id: Any, actor: Any) -> int:
+        # Nişan oxunuşu da EYNİ bağlantıdan keçir — «yükləmə uğursuzdur»
+        # ssenarisi hər iki yolu bağlamalıdır, əks halda test yalnız
+        # yarısını yoxlayardı.
+        if self._load_error is not None:
+            raise self._load_error
         return self._unread
 
     def mark_read(self, *, tenant_id: Any, actor: Any, ticket_id: Any) -> None:
@@ -1370,7 +1386,10 @@ def test_the_open_thread_is_drawn_with_the_correct_bubble_direction() -> None:
     controller, _ = _chat(_Support(threads=[thread], unread=2))
     widget = _ChatWidget()
 
-    controller.refresh(widget)  # type: ignore[arg-type]
+    # CHAT-1: söhbət KANAL SEÇİLƏNDƏN sonra çəkilir; nişan isə seçimdən
+    # ƏVVƏL, panel açılmamış da qoyulur (bax `controllers/support_chat.py`).
+    controller.refresh_badge(widget)  # type: ignore[arg-type]
+    controller.open_channel(widget, "TECHNICAL")  # type: ignore[arg-type]
 
     assert widget.messages == [
         ("Sumqayıt serveri cavab vermir", True),
@@ -1385,7 +1404,8 @@ def test_a_closed_thread_is_not_drawn() -> None:
     controller, _ = _chat(_Support(threads=[closed]))
     widget = _ChatWidget()
 
-    controller.refresh(widget)  # type: ignore[arg-type]
+    controller.refresh_badge(widget)  # type: ignore[arg-type]
+    controller.open_channel(widget, "TECHNICAL")  # type: ignore[arg-type]
 
     assert widget.messages == []
     assert widget.unread is False
@@ -1396,7 +1416,7 @@ def test_an_unavailable_support_module_leaves_the_panel_untouched() -> None:
     controller, _ = _chat(_Support(available=False, unread=5))
     widget = _ChatWidget()
 
-    controller.refresh(widget)  # type: ignore[arg-type]
+    controller.refresh_badge(widget)  # type: ignore[arg-type]
 
     assert widget.messages == []
     assert widget.unread is None, "Əlçatmaz modul nişanı da təyin etməməlidir"
@@ -1406,7 +1426,7 @@ def test_a_failed_thread_load_never_crashes_the_overlay() -> None:
     controller, _ = _chat(_Support(load_error=RuntimeError("bağlantı yoxdur")))
     widget = _ChatWidget()
 
-    controller.refresh(widget)  # type: ignore[arg-type]
+    controller.refresh_badge(widget)  # type: ignore[arg-type]
 
     assert widget.messages == []
     assert widget.unread is None

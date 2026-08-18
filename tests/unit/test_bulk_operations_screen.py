@@ -56,6 +56,7 @@ from src.domain.value_objects.identifiers import (
 )
 from src.domain.value_objects.store_templates import StoreTemplate
 from src.presentation import preview_data
+from src.presentation.background_task import InlineExecutor
 from src.presentation.controllers.bulk_operations import (
     BulkOperationsController,
     _capture_snapshot,
@@ -318,7 +319,13 @@ class _ScreenStub:
 
 
 def _controller(session: _Session, actor: Employee | None = None) -> BulkOperationsController:
-    return BulkOperationsController(_Context(session), actor or _hr_admin())  # type: ignore[arg-type]
+    # `InlineExecutor`: bu testlər MƏNTİQİ ölçür, sapı yox — nəticə dərhal
+    # çatdırılır (sap davranışı `test_background_job_funnel.py`-dadır).
+    return BulkOperationsController(
+        _Context(session),  # type: ignore[arg-type]
+        actor or _hr_admin(),
+        executor=InlineExecutor(),
+    )
 
 
 def _template(

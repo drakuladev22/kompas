@@ -21,6 +21,7 @@ from typing import Any, Final
 import pytest
 
 from src.domain.value_objects.identifiers import EmployeeId, TenantId
+from src.domain.value_objects.support import SupportChannel
 from src.presentation.controllers.support_chat import (
     FAILURE_PREFIX,
     SupportChatController,
@@ -33,11 +34,13 @@ TENANT: Final = TenantId(uuid.uuid4())
 
 
 class _Widget:
-    """`SupportChatWidget` əvəzi — kontrollerin toxunduğu üç metod."""
+    """`SupportChatWidget` əvəzi — kontrollerin toxunduğu metodlar."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, channel: SupportChannel | None = SupportChannel.TECHNICAL) -> None:
         self.messages: list[tuple[str, bool]] = []
         self.unread: bool | None = None
+        self.channel = channel
+        self.urgent = False
 
     def add_message(self, text: str, *, outgoing: bool = False) -> None:
         self.messages.append((text, outgoing))
@@ -45,25 +48,49 @@ class _Widget:
     def set_unread(self, has_unread: bool) -> None:
         self.unread = has_unread
 
+    def selected_channel(self) -> SupportChannel | None:
+        return self.channel
+
+    def is_urgent(self) -> bool:
+        return self.urgent
+
+    def pending_attachment(self) -> tuple[str, bytes] | None:
+        return None
+
 
 class _SupportUseCase:
     def __init__(self, *, error: Exception | None = None) -> None:
         self.sent: list[str] = []
+        self.channels: list[SupportChannel] = []
         self.error = error
 
     def is_available(self, *, tenant_id: TenantId, actor: Any) -> bool:
         return True
 
-    def threads(self, *, tenant_id: TenantId, actor: Any) -> list[Any]:
+    def threads(
+        self, *, tenant_id: TenantId, actor: Any, channel: SupportChannel | None = None
+    ) -> list[Any]:
         return []
 
     def unread_count(self, *, tenant_id: TenantId, actor: Any) -> int:
         return 0
 
-    def send(self, *, tenant_id: TenantId, actor: Any, body: str, subject: str = "") -> Any:
+    def send(
+        self,
+        *,
+        tenant_id: TenantId,
+        actor: Any,
+        body: str,
+        channel: SupportChannel = SupportChannel.TECHNICAL,
+        subject: str = "",
+        urgent: bool = False,
+        attachment: bytes | None = None,
+        attachment_name: str = "",
+    ) -> Any:
         if self.error is not None:
             raise self.error
         self.sent.append(body)
+        self.channels.append(channel)
         return None
 
 

@@ -125,9 +125,15 @@ _GENERIC_ERROR = "Əməliyyat tamamlanmadı. Yenidən cəhd edin."
 class ReportExportController:
     """ "Aylıq Hesabatlar" ekranını export use case-lərinə bağlayır."""
 
-    def __init__(self, context: ApplicationContext, actor: Employee) -> None:
+    def __init__(
+        self, context: ApplicationContext, actor: Employee, *, executor: Any = None
+    ) -> None:
         self._context = context
         self._actor = actor
+        #: Fon icraçısı — istehsalatda Qt hovuzu, testlərdə `InlineExecutor`.
+        self._executor = executor
+        #: Qaçan işə istinad: nəticə gəlməmiş toplanarsa siqnal itərdi.
+        self._task: Any = None
 
     # ------------------------------- qoşulma --------------------------------- #
 
@@ -158,9 +164,12 @@ class ReportExportController:
     def _load_role_options(self, screen: ReportExportScreen) -> None:
         """Rol seçimlərini KATALOQDAN doldurur — sabit siyahı YOXDUR."""
         selected = screen.selected_role()
+        start_text, end_text = screen.selected_range()
         try:
             with self._context.session(user_id=self._actor.id) as session:
-                report_range = self._resolve_range(screen, session)
+                report_range = self._resolve_range(
+                    session, start_text=start_text, end_text=end_text
+                )
                 roster = session.export_roster.roster_status(
                     session.tenant_id, start=report_range.start, end=report_range.end
                 )
@@ -214,20 +223,40 @@ class ReportExportController:
     # --------------------------- doğrulama (A/E/F/G) -------------------------- #
 
     def _on_preflight(self, screen: ReportExportScreen, report_key: str) -> None:
-        prepared = self._build_review(screen, report_key)
-        if prepared is None:
-            return
-        _render(screen, prepared.review)
+        """Doğrulama — FON SAPINDA.
 
-    def _resolve_range(self, screen: ReportExportScreen, session: Session) -> ReportRange:
+        Sətirlər iki dövr üçün oxunur (cari + əvvəlki müqayisə üçün); böyük
+        şəbəkədə bu, saniyələrlə çəkir və GUI sapında pəncərəni dondururdu.
+        """
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        inputs = self._capture(screen)
+
+        def succeeded(prepared: Any) -> None:
+            screen.set_range_message("")
+            _render(screen, prepared.review)
+
+        self._task = run_job(
+            lambda: self._build_review(inputs, report_key),
+            on_success=succeeded,
+            on_failure=lambda error: self._review_failed(screen, error),
+            owner=screen,
+            name="EXPORT_PREFLIGHT",
+            executor=self._executor,
+        )
+
+    def _resolve_range(self, session: Session, *, start_text: str, end_text: str) -> ReportRange:
         """Ekranın seçimini `ReportRange`-ə çevirir — bax modul başlığı.
 
         `[Tam Ay]` yolu `resolve_range()`-dən KEÇMİR və bu, qəsdəndir:
         `MonthlyReportUseCase.resolve_month` başlığı bunu açıq yazır — Root
         həddi 15 günə salınsa belə oktyabrın TAM hesabatı çıxarıla bilməlidir.
         Hədd `[Xüsusi Aralıq]` seçiminin performans qoruyucusudur.
+
+        SƏTİRLƏR ARQUMENT KİMİ GƏLİR, EKRAN YOX: bu metod artıq FON SAPINDA
+        çağırılır və Qt widget-ini oradan oxumaq sap-təhlükəsiz deyil. Oxunuş
+        `_capture` ilə GUI sapında edilir.
         """
-        start_text, end_text = screen.selected_range()
         if not start_text and not end_text:
             today = date.today()  # noqa: DTZ011 — dövr İSTİFADƏÇİNİN təqvimi ilə ölçülür
             return session.reports.resolve_month(year=today.year, month=today.month)
@@ -244,7 +273,21 @@ class ReportExportController:
             ) from error
         return session.reports.resolve_range(tenant_id=session.tenant_id, start=start, end=end)
 
-    def _build_review(self, screen: ReportExportScreen, report_key: str) -> _PreparedExport | None:
+    def _capture(self, screen: ReportExportScreen) -> dict[str, str]:
+        """Ekran dəyərlərini GUI sapında oxuyur — fon işi üçün.
+
+        Qt widget-ləri sap-təhlükəsiz deyil; fon işinə widget ötürsəydik,
+        oxunuş nadir hallarda çökmə və ya köhnə dəyər verərdi — yəni qüsur
+        yalnız yüklü maşında, təkrarlanmayan şəkildə görünərdi.
+        """
+        start_text, end_text = screen.selected_range()
+        return {
+            "start": start_text,
+            "end": end_text,
+            "role": screen.selected_role(),
+        }
+
+    def _build_review(self, inputs: dict[str, str], report_key: str) -> _PreparedExport:
         """Sətirləri qurur və `ExportPreflightUseCase.review()`-i çağırır.
 
         Nəticə `review` İLƏ BİRLİKDƏ seçilmiş aralığı daşıyır: `_on_export`
@@ -252,39 +295,48 @@ class ReportExportController:
         Aralığı ikinci dəfə hesablasaydıq, gecə yarısı işləyən export tarix
         keçidində fərqli dövr açarı yaza bilərdi.
 
-        `None` qaytarmaq = xəta ekranda GÖSTƏRİLDİ (sükutla udulmadı).
+        İSTİSNA UDULMUR: bu metod artıq FON SAPINDA icra olunur və xəta
+        `run_job`-un `on_failure` yolu ilə GUI sapına qayıdır. Əvvəl burada
+        `except` blokları vardı və onlar ekrana yazırdı — fon sapından widget-ə
+        toxunmaq sap-təhlükəsiz deyil.
         """
-        try:
-            with self._context.session(user_id=self._actor.id) as session:
-                report_range = self._resolve_range(screen, session)
-                review = session.export_preflight.review(
-                    tenant_id=session.tenant_id,
-                    actor=self._actor,
-                    rows=_attendance_rows(session, self._actor, report_range),
-                    report_range=report_range,
-                    previous_rows=_attendance_rows(
-                        session,
-                        self._actor,
-                        session.export_preflight.previous_range(report_range),
-                    ),
-                    role_code=screen.selected_role(),
-                    export_type=_export_type_for(report_key),
-                )
-                session.commit()
-        except ReportPeriodError as error:
+        with self._context.session(user_id=self._actor.id) as session:
+            report_range = self._resolve_range(
+                session, start_text=inputs["start"], end_text=inputs["end"]
+            )
+            review = session.export_preflight.review(
+                tenant_id=session.tenant_id,
+                actor=self._actor,
+                rows=_attendance_rows(session, self._actor, report_range),
+                report_range=report_range,
+                previous_rows=_attendance_rows(
+                    session,
+                    self._actor,
+                    session.export_preflight.previous_range(report_range),
+                ),
+                role_code=inputs["role"],
+                export_type=_export_type_for(report_key),
+            )
+            session.commit()
+        return _PreparedExport(review=review, report_range=report_range)
+
+    def _review_failed(self, screen: ReportExportScreen, error: BaseException) -> None:
+        """Doğrulama xətası — mesaj DÜZƏLİŞİN EDİLƏCƏYİ yerdə göstərilir.
+
+        `ReportPeriodError` ayrıca tutulur, çünki onun səbəbi tarix
+        seçicisindədir və mesaj məhz orada oxunmalıdır; ümumi xəta isə
+        doğrulama bölməsinə düşür.
+        """
+        if isinstance(error, ReportPeriodError):
             screen.set_range_message(error.user_message, error=True)
-            return None
-        except KompasOSError as error:
+            return
+        if isinstance(error, KompasOSError):
             screen.set_preflight_message(error.user_message, error=True)
             screen.show_preflight_section()
-            return None
-        except Exception:
-            _error_log.exception("EXPORT_PREFLIGHT_FAILED")
-            screen.set_preflight_message(_GENERIC_ERROR, error=True)
-            screen.show_preflight_section()
-            return None
-        screen.set_range_message("")
-        return _PreparedExport(review=review, report_range=report_range)
+            return
+        _error_log.error("EXPORT_PREFLIGHT_FAILED", exc_info=error)
+        screen.set_preflight_message(_GENERIC_ERROR, error=True)
+        screen.show_preflight_section()
 
     # ------------------------------- export ----------------------------------- #
 
@@ -293,45 +345,95 @@ class ReportExportController:
 
         Sətirlər YENİDƏN hesablanır (bax modul başlığı: keş yoxdur), yəni
         faylda göründüyü rəqəm doğrulama anındakı ilə eyni MƏNBƏDƏNDİR.
+
+        ──────────────────────────────────────────────────────────────────────
+        ÜÇ ADDIM, İKİSİ FON SAPINDA
+        ──────────────────────────────────────────────────────────────────────
+            1. doğrulama  — FON  (iki dövrün sətirləri oxunur);
+            2. qovluq     — GUI  (`QFileDialog` yalnız GUI sapında açılır);
+            3. fayl yazısı — FON  (Excel generasiyası, minlərlə sətir).
+
+        Sıra qəsdən dəyişdirilmir: əvvəl qovluq soruşub sonra doğrulasaydıq,
+        istifadəçi qovluq seçdikdən SONRA «hesabat qurula bilmədi» görərdi.
         """
-        prepared = self._build_review(screen, report_key)
-        if prepared is None:
-            return
+        from src.presentation.background_task import run_job  # noqa: PLC0415
 
-        directory = self._choose_output_dir(screen)
-        if directory is None:
-            screen.set_preflight_message("Export ləğv edildi — qovluq seçilmədi.")
-            return
+        inputs = self._capture(screen)
 
-        try:
-            if report_key == "bonus_penalty":
-                path, extra = self._write_bonus_penalty(screen, prepared, directory=directory)
-            else:
-                path = _write_attendance(prepared, directory=directory)
-                extra = ""
-        except KompasOSError as error:
-            screen.set_preflight_message(error.user_message, error=True)
-            return
-        except Exception:
-            _error_log.exception("EXPORT_FILE_WRITE_FAILED")
-            screen.set_preflight_message(_GENERIC_ERROR, error=True)
-            return
+        def prepared_ready(prepared: Any) -> None:
+            screen.set_range_message("")
+            directory = self._choose_output_dir(screen)
+            if directory is None:
+                screen.set_preflight_message("Export ləğv edildi — qovluq seçilmədi.")
+                return
+            self._write_export(screen, prepared, report_key=report_key, directory=directory)
 
-        review = prepared.review
-        title = _REPORT_TITLES.get(report_key, "Hesabat")
-        screen.set_preflight_message(
-            f"{title} ({prepared.report_range.label_az()}) yazıldı: {path}. "
-            f"{len(review.rows)} sətir, {len(review.findings)} xəbərdarlıq, "
-            f"{len(review.corrections)} manual düzəliş.{extra}"
+        self._task = run_job(
+            lambda: self._build_review(inputs, report_key),
+            on_success=prepared_ready,
+            on_failure=lambda error: self._review_failed(screen, error),
+            owner=screen,
+            name="EXPORT_REVIEW",
+            executor=self._executor,
         )
 
-    def _write_bonus_penalty(
+    def _write_export(
         self,
         screen: ReportExportScreen,
         prepared: _PreparedExport,
         *,
+        report_key: str,
         directory: Path,
-    ) -> tuple[Path, str]:
+    ) -> None:
+        """Faylı FON SAPINDA yazır və nəticəni GUI sapında göstərir."""
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        role_code = self._capture(screen)["role"]
+
+        def job() -> object:
+            if report_key == "bonus_penalty":
+                return self._write_bonus_penalty(prepared, directory=directory, role_code=role_code)
+            return (_write_attendance(prepared, directory=directory), "", None)
+
+        def succeeded(result: Any) -> None:
+            path, extra, summary = result
+            if summary is not None:
+                screen.set_lock_summary(
+                    summary.deferred,
+                    already_exported=summary.already_exported,
+                    overlap_notice=summary.overlap_notice,
+                )
+            review = prepared.review
+            title = _REPORT_TITLES.get(report_key, "Hesabat")
+            screen.set_preflight_message(
+                f"{title} ({prepared.report_range.label_az()}) yazıldı: {path}. "
+                f"{len(review.rows)} sətir, {len(review.findings)} xəbərdarlıq, "
+                f"{len(review.corrections)} manual düzəliş.{extra}"
+            )
+
+        def failed(error: BaseException) -> None:
+            if isinstance(error, KompasOSError):
+                screen.set_preflight_message(error.user_message, error=True)
+                return
+            _error_log.error("EXPORT_FILE_WRITE_FAILED", exc_info=error)
+            screen.set_preflight_message(_GENERIC_ERROR, error=True)
+
+        self._task = run_job(
+            job,
+            on_success=succeeded,
+            on_failure=failed,
+            owner=screen,
+            name="EXPORT_WRITE",
+            executor=self._executor,
+        )
+
+    def _write_bonus_penalty(
+        self,
+        prepared: _PreparedExport,
+        *,
+        directory: Path,
+        role_code: str,
+    ) -> tuple[Path, str, _LockSummary]:
         """FAYL 2 — LOCK MEXANİZMİ ilə (bax modul başlığı).
 
         Sıra: namizədləri oxu → `build_bonus_penalty` (LOCK burada qərar
@@ -346,7 +448,7 @@ class ReportExportController:
         """
         report_range = prepared.report_range
         with self._context.session(user_id=self._actor.id) as session:
-            facts = _sales_facts(session, report_range, role_code=screen.selected_role())
+            facts = _sales_facts(session, report_range, role_code=role_code)
             fines = session.uow.fines.list_in_range(
                 session.tenant_id, start=report_range.start, end=report_range.end
             )
@@ -360,12 +462,14 @@ class ReportExportController:
 
         # LOCK vəziyyəti export-dan SONRA da göstərilir: HR faylda niyə az
         # cərimə olduğunu dərhal görməlidir (bölmə 6-nın açıq tələbi).
-        screen.set_lock_summary(
-            selection.deferred_fine_count,
+        # Ekrana YAZILMIR — bu metod fon sapındadır; xülasə NƏTİCƏ kimi
+        # qaytarılır və çağıran onu GUI sapında göstərir.
+        summary = _LockSummary(
+            deferred=selection.deferred_fine_count,
             already_exported=selection.already_exported_count,
             overlap_notice=selection.overlap_notice_az() or "",
         )
-        return path, _lock_suffix(selection)
+        return path, _lock_suffix(selection), summary
 
     def _choose_output_dir(self, screen: ReportExportScreen) -> Path | None:
         """Qovluq seçimi — AYRICA metod ki, test onu Qt-siz əvəz edə bilsin."""
@@ -383,11 +487,28 @@ class ReportExportController:
         filtri aktivdirsə, siyahıdan kənar bir işçiyə düzəliş yazmaq həmin
         düzəlişi GÖRÜNMƏZ edərdi (fayla düşməzdi, ekranda da olmazdı).
         """
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        inputs = self._capture(screen)
+        report_key = screen.active_report()
+
+        # Doğrulama FON SAPINDADIR — dialoq isə nəticə gələndən sonra, GUI
+        # sapında açılır (`QDialog.exec()` yalnız orada təhlükəsizdir).
+        self._task = run_job(
+            lambda: self._build_review(inputs, report_key),
+            on_success=lambda prepared: self._open_correction_dialog(screen, prepared),
+            on_failure=lambda error: self._review_failed(screen, error),
+            owner=screen,
+            name="EXPORT_CORRECTION_REVIEW",
+            executor=self._executor,
+        )
+
+    def _open_correction_dialog(
+        self, screen: ReportExportScreen, prepared: _PreparedExport
+    ) -> None:
+        """Düzəliş dialoqu — GUI sapında (bax `_on_correction`)."""
         from src.presentation.screens.group_h import ExportCorrectionDialog  # noqa: PLC0415
 
-        prepared = self._build_review(screen, screen.active_report())
-        if prepared is None:
-            return
         employees = [(str(row.employee_id), row.full_name) for row in prepared.review.rows]
         if not employees:
             screen.set_preflight_message(
@@ -476,6 +597,19 @@ class ReportExportController:
 # --------------------------------------------------------------------------- #
 # Köməkçilər — Qt TƏLƏB ETMİR, birbaşa test oluna bilir
 # --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class _LockSummary:
+    """LOCK vəziyyəti — fon sapından GUI sapına daşınan NƏTİCƏ.
+
+    Ekrana birbaşa yazmaq əvəzinə dəyər qaytarılır, çünki `_write_bonus_penalty`
+    fon sapında icra olunur və Qt widget-ləri sap-təhlükəsiz deyil.
+    """
+
+    deferred: int
+    already_exported: int
+    overlap_notice: str
 
 
 @dataclass(frozen=True)

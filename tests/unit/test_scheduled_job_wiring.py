@@ -74,6 +74,9 @@ EXPECTED_JOBS: Final = (
     # BÜTÜN İL üçün itərdi. Gündəlik icra zərərsizdir, çünki iş
     # İDEMPOTENTDİR (haqq TƏYİN edilir, artırılmır).
     ("ANNUAL_LEAVE_YEAR_ROLLOVER", JobCadence.DAILY, JobWeight.LIGHT),
+    # CHAT-1 (tg1.md Faza 6) — «Həll olundu → Bağlandı» keçidi və
+    # «Gözləmədə» xatırlatması. Müddətlər GÜN vahidlidir, ona görə `DAILY`.
+    ("SUPPORT_STATUS_MAINTENANCE", JobCadence.DAILY, JobWeight.LIGHT),
     # `facecontrol.md` bənd 14 — Face Control istisnalarının müddət-bitməsi.
     # `DAILY`: müddət GÜN vahidlidir; `LIGHT`: bir indeksli sorğu + bitən sətir
     # qədər UPDATE. GECİKMƏ BOŞLUQ YARATMIR — `FaceExemption.is_active_at()`
@@ -189,6 +192,11 @@ class _AnnualLeave(_RecordingUseCase):
         return self._record("annual_leave.run_year_rollover", tenant_id=tenant_id, now=now)
 
 
+class _SupportInbox(_RecordingUseCase):
+    def run_maintenance(self, *, tenant_id: TenantId, now: datetime) -> Any:
+        return self._record("support_inbox.run_maintenance", tenant_id=tenant_id, now=now)
+
+
 class _ExecutiveDigest(_RecordingUseCase):
     def run(self, *, tenant_id: TenantId, now: datetime, scheduled_for: datetime) -> Any:
         return self._record(
@@ -261,6 +269,9 @@ class _FakeSession:
                 forfeited_days=Decimal("18.00"),
             ),
         )
+        # CHAT-1 — iş `closed`/`reminded` açarlarını oxuyur, ona görə
+        # nəticə SÖZLÜKdür (`_Report` deyil).
+        self.support_inbox = _SupportInbox(calls, result={"closed": 2, "reminded": 1})
         self.executive_digest = _ExecutiveDigest(calls, result=_Report(evaluated=3, sent=2))
         # Face Control (facecontrol.md Faza 2) — hər ikisi SADƏ ədəd qaytarır
         # (bitən istisna sayı / silinən jurnal sətri), ona görə `_Report`
@@ -522,6 +533,7 @@ def test_the_runner_is_a_single_instance_per_context() -> None:
         ("EMPLOYEE_DOCUMENT_EXPIRY_NOTICE", "employee_documents.notify_expiring_documents"),
         ("ATTRITION_RISK_RECALC", "attrition_risk.recalculate_all"),
         ("ANNUAL_LEAVE_YEAR_ROLLOVER", "annual_leave.run_year_rollover"),
+        ("SUPPORT_STATUS_MAINTENANCE", "support_inbox.run_maintenance"),
         ("FINE_EXPIRE_STALE", "fine_appeals.expire_stale"),
         ("DUAL_CONTROL_OVERRIDE_TIMEOUT", "leave_verification.expire_pending_overrides"),
         ("EXECUTIVE_DIGEST_RUN", "executive_digest.run"),

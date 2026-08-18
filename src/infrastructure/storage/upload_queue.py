@@ -220,6 +220,15 @@ class UploadOwnerType(str, Enum):
     #: geri-çağırışını və miqrasiya tarixçəsini ikiqat artırardı — halbuki
     #: hər ikisinin FORMAT qaydası və saxlanma yolu EYNİDİR.
     FIELD_REPORT = "FIELD_REPORT"
+    #: `support_messages.id` — dəstək söhbətinə əlavə edilən şəkil
+    #: (CHAT-1 Faza 6).
+    #:
+    #: NİYƏ MÖVCUD NÖVBƏYƏ QOŞULUR, AYRI MEXANİZM YAZILMIR: şəkil eyni
+    #: problemləri daşıyır — mağazada internet kəsilir, Drive tokeni bitir,
+    #: fayl yararsız ola bilər. Bunların hamısı burada artıq həll olunub
+    #: (spool, backoff, `REJECTED` ayrımı). İkinci mexanizm eyni qüsurları
+    #: sıfırdan təkrarlamalı olardı.
+    SUPPORT_MESSAGE = "SUPPORT_MESSAGE"
 
 
 @dataclass(frozen=True)

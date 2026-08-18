@@ -187,6 +187,13 @@ class RootControlController:
         # TENANT-1 Faza 2 — brendinq də `applied` sözlüyündən AYRI gedir
         # (bax `RootControlScreen.branding_changed` şərhi).
         screen.branding_changed.connect(lambda payload: self._on_branding_changed(screen, payload))
+        # CHAT-1 Faza 3 — Telegram ayarları da `applied` sözlüyündən AYRI
+        # gedir (bax `RootControlScreen.telegram_saved` şərhi: token SİRRdir).
+        screen.telegram_saved.connect(lambda payload: self._on_telegram_saved(screen, payload))
+        screen.telegram_active_changed.connect(
+            lambda active: self._on_telegram_active(screen, active=active)
+        )
+        screen.telegram_test_requested.connect(lambda: self._on_telegram_test(screen))
         self.refresh(screen)
 
     def refresh(self, screen: RootControlScreen) -> None:
@@ -288,6 +295,16 @@ class RootControlController:
             warning=branding.accessibility_warning(),
         )
         screen.set_branding_status("")
+
+        # TELEGRAM KARTI SONDA: brendinq bölməsi ilə eyni qərar — bir kartın
+        # oxunmaması qalan bölmələri görünməz etməməlidir.
+        try:
+            self._fill_telegram(session, screen)
+        except Exception:
+            _error_log.exception("ROOT_TELEGRAM_SECTION_UNAVAILABLE")
+            screen.set_telegram_message(
+                "Telegram ayarları oxunmadı — digər bölmələr işləyir.", error=True
+            )
 
     # ------------------------------ yazı yolu -------------------------------- #
 
@@ -411,6 +428,126 @@ class RootControlController:
             "Şirkət kimliyi yadda saxlanıldı. Başlıq zolağı proqramın növbəti "
             "açılışında yenilənəcək."
         )
+
+    def _fill_telegram(self, session: Session, screen: RootControlScreen) -> None:
+        """Telegram bölməsini doldurur — SƏLAHİYYƏTSİZ İSTİFADƏÇİDƏ BOŞ QALIR.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ ÖZ İSTİSNASINI UDUR
+        ──────────────────────────────────────────────────────────────────────
+        Bu, ROOT panelinin BİR kartıdır. İstisna yuxarı qalxsaydı, `refresh`
+        onu tutar və bütün panel «açıla bilmədi» xəbəri ilə BOŞ qalardı —
+        yəni Telegram konfiqurasiyasının oxunmaması limitləri, modul
+        açarlarını və icazə registrini də görünməz edərdi.
+
+        `may_manage` isə istisnadan ƏVVƏL yoxlanılır: `current()` Root
+        olmayan aktora istisna atır və hər açılışda jurnal doldurardı.
+        Faktiki qapı yenə də use case-dədir (yazı yolu `_require`-dan keçir);
+        buradakı yoxlama YALNIZ göstərmə qərarıdır.
+        """
+        if not session.telegram_config.may_manage(self._actor):
+            return
+        view = session.telegram_config.current(tenant_id=session.tenant_id, actor=self._actor)
+        screen.set_telegram(
+            {
+                "masked_token": view.masked_token,
+                "chat_id": view.chat_id,
+                "is_active": view.is_active,
+                "updated_at": (
+                    view.updated_at.strftime("%d.%m.%Y %H:%M")
+                    if view.updated_at is not None
+                    else ""
+                ),
+                "updated_by_name": view.updated_by_name,
+            }
+        )
+
+    def _on_telegram_saved(self, screen: RootControlScreen, payload: object) -> None:
+        """«Botu Dəyiş» — köhnə sətir ARXİVLƏNİR, yenisi yazılır."""
+        if not isinstance(payload, dict):  # pragma: no cover - tip qoruyucusu
+            return
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                view = session.telegram_config.save(
+                    tenant_id=session.tenant_id,
+                    actor=self._actor,
+                    bot_token=str(payload.get("bot_token", "")),
+                    chat_id=str(payload.get("chat_id", "")),
+                )
+                session.commit()
+        except KompasOSError as error:
+            screen.set_telegram_message(error.user_message, error=True)
+            return
+        except Exception:
+            _error_log.exception("TELEGRAM_CONFIG_WRITE_FAILED")
+            screen.set_telegram_message(
+                "Telegram ayarları saxlanmadı. Yenidən cəhd edin.", error=True
+            )
+            return
+        screen.set_telegram(
+            {
+                "masked_token": view.masked_token,
+                "chat_id": view.chat_id,
+                "is_active": view.is_active,
+                "updated_at": (
+                    view.updated_at.strftime("%d.%m.%Y %H:%M")
+                    if view.updated_at is not None
+                    else ""
+                ),
+                "updated_by_name": view.updated_by_name,
+            }
+        )
+        screen.set_telegram_message(
+            "Bot yeniləndi. Köhnə token arxivləndi — «Test Mesajı Göndər» ilə yoxlayın."
+        )
+
+    def _on_telegram_active(self, screen: RootControlScreen, *, active: bool) -> None:
+        """Aktiv/Deaktiv — token TOXUNULMUR (bax use case başlığı)."""
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                session.telegram_config.set_active(
+                    tenant_id=session.tenant_id, actor=self._actor, is_active=active
+                )
+                session.commit()
+        except KompasOSError as error:
+            screen.set_telegram_message(error.user_message, error=True)
+            return
+        except Exception:
+            _error_log.exception("TELEGRAM_CONFIG_ACTIVATION_FAILED")
+            screen.set_telegram_message("Vəziyyət dəyişmədi. Yenidən cəhd edin.", error=True)
+            return
+        screen.set_telegram_message(
+            "Telegram bildirişləri aktivdir."
+            if active
+            else "Telegram bildirişləri dayandırıldı — mesajlar proqramda qalır."
+        )
+
+    def _on_telegram_test(self, screen: RootControlScreen) -> None:
+        """`[Test Mesajı Göndər]` — nəticə AÇIQ göstərilir.
+
+        «Göndərilmədi» cavabı da nəticədir: səbəbi jurnalda, faktı isə
+        ekranda olmalıdır, əks halda Root düyməni basıb heç nə görməzdi.
+        """
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                delivered = session.telegram_config.send_test_message(
+                    tenant_id=session.tenant_id, actor=self._actor
+                )
+                session.commit()
+        except KompasOSError as error:
+            screen.set_telegram_message(error.user_message, error=True)
+            return
+        except Exception:
+            _error_log.exception("TELEGRAM_TEST_FAILED")
+            screen.set_telegram_message("Test mesajı göndərilmədi.", error=True)
+            return
+        if delivered:
+            screen.set_telegram_message("Test mesajı göndərildi — Telegram qrupunu yoxlayın.")
+        else:
+            screen.set_telegram_message(
+                "Test mesajı çatmadı. Token, chat ID və internet bağlantısını yoxlayın.",
+                error=True,
+            )
 
     def _on_face_scope_changed(
         self, screen: RootControlScreen, store_id: str, *, active: bool

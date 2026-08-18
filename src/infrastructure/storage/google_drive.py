@@ -91,6 +91,7 @@ FALLBACK_JPEG_QUALITY: Final[int] = fallback_int(SystemLimitKey.EVIDENCE_JPEG_QU
 FINE_OWNER_TYPE: Final[str] = "FINE"
 EMPLOYEE_DOCUMENT_OWNER_TYPE: Final[str] = "EMPLOYEE_DOCUMENT"
 FIELD_REPORT_OWNER_TYPE: Final[str] = "FIELD_REPORT"
+SUPPORT_MESSAGE_OWNER_TYPE: Final[str] = "SUPPORT_MESSAGE"
 
 PDF_EXTENSION: Final[str] = ".pdf"
 PDF_MIME_TYPE: Final[str] = "application/pdf"
@@ -132,6 +133,10 @@ ALLOWED_EXTENSIONS: Final[frozenset[str]] = IMAGE_EXTENSIONS
 #:     Qeyd olmasaydı, növbəti oxucu "unudulub?" deyə düşünərdi.
 _ALLOWED_BY_OWNER: Final[dict[str, frozenset[str]]] = {
     FINE_OWNER_TYPE: IMAGE_EXTENSIONS,
+    # Dəstək əlavəsi YALNIZ ŞƏKİLdir: PDF-i də açsaydıq, işçi «logu göndər»
+    # tapşırığını ixtiyari sənədlə əvəz edə bilərdi və faylın imza
+    # yoxlaması (`_looks_like_image`) yan keçilərdi.
+    SUPPORT_MESSAGE_OWNER_TYPE: IMAGE_EXTENSIONS,
     EMPLOYEE_DOCUMENT_OWNER_TYPE: DOCUMENT_EXTENSIONS,
     FIELD_REPORT_OWNER_TYPE: IMAGE_EXTENSIONS,
 }
@@ -143,6 +148,7 @@ _FORMAT_MESSAGES: Final[dict[str, str]] = {
     FINE_OWNER_TYPE: "Yalnız .jpg, .png və .webp formatları qəbul olunur.",
     EMPLOYEE_DOCUMENT_OWNER_TYPE: "Yalnız .jpg, .png, .webp və .pdf formatları qəbul olunur.",
     FIELD_REPORT_OWNER_TYPE: "Yalnız .jpg, .png və .webp formatları qəbul olunur.",
+    SUPPORT_MESSAGE_OWNER_TYPE: "Yalnız .jpg, .png və .webp formatları qəbul olunur.",
 }
 #: Bölmə 6: maksimum 5 MB — DEFOLT dəyər.
 #:

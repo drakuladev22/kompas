@@ -79,9 +79,15 @@ class BulkOperationsController:
     """ "Toplu Əməliyyatlar" ekranını `BulkEmployeeImportUseCase` və
     `StoreTemplateUseCase`-ə bağlayır."""
 
-    def __init__(self, context: ApplicationContext, actor: Employee) -> None:
+    def __init__(
+        self, context: ApplicationContext, actor: Employee, *, executor: Any = None
+    ) -> None:
         self._context = context
         self._actor = actor
+        #: Fon icraçısı — istehsalatda Qt hovuzu, testlərdə `InlineExecutor`.
+        self._executor = executor
+        #: Qaçan işə istinad: nəticə gəlməmiş toplanarsa siqnal itərdi.
+        self._task: Any = None
 
     def attach(self, screen: BulkOperationsScreen) -> None:
         screen.preview_requested.connect(lambda path: self._on_preview(screen, path))
@@ -117,37 +123,53 @@ class BulkOperationsController:
     # -------------------------------- CSV idxalı ------------------------------- #
 
     def _on_preview(self, screen: BulkOperationsScreen, file_path: str) -> None:
+        """CSV önizləməsi — FON SAPINDA.
+
+        Fayl minlərlə sətir ola bilər və hər sətir üçün doğrulama işləyir;
+        GUI sapında bu, saniyələrlə donma deməkdir.
+        """
         content = self._read_file(screen, file_path)
         if content is None:
             return
-        try:
+
+        def job() -> object:
             with self._context.session(user_id=self._actor.id) as session:
                 preview = session.bulk_employee_import.preview_csv(
                     tenant_id=session.tenant_id, actor=self._actor, csv_bytes=content
                 )
                 session.commit()
-        except KompasOSError as error:
-            screen.set_import_message(error.user_message, error=True)
-            return
-        except Exception:
-            _error_log.exception("BULK_IMPORT_PREVIEW_FAILED")
-            screen.set_import_message("Fayl önizlənmədi. Yenidən cəhd edin.", error=True)
-            return
+            return _preview_payload(preview)
 
-        payload = _preview_payload(preview)
-        screen.set_preview(
-            total_rows=payload.total_rows,
-            valid_count=payload.valid_count,
-            error_count=payload.error_count,
-            errors=payload.errors,
-            truncated_extra=payload.truncated_extra,
+        def succeeded(payload: Any) -> None:
+            screen.set_preview(
+                total_rows=payload.total_rows,
+                valid_count=payload.valid_count,
+                error_count=payload.error_count,
+                errors=payload.errors,
+                truncated_extra=payload.truncated_extra,
+            )
+
+        self._run(
+            screen,
+            job,
+            on_success=succeeded,
+            name="BULK_PREVIEW",
+            fallback="Fayl önizlənmədi. Yenidən cəhd edin.",
+            log_key="BULK_IMPORT_PREVIEW_FAILED",
         )
 
     def _on_import(self, screen: BulkOperationsScreen, file_path: str) -> None:
+        """CSV idxalı — FON SAPINDA (ən uzun əməliyyat).
+
+        Hər sətir üçün ayrıca yazı və commit gedir (bax modul başlığı), yəni
+        min sətirlik fayl dəqiqələrlə çəkə bilər. Nəticə dialoqu isə GUI
+        sapında açılır — Qt dialoqu yalnız orada təhlükəsizdir.
+        """
         content = self._read_file(screen, file_path)
         if content is None:
             return
-        try:
+
+        def job() -> object:
             with self._context.session(user_id=self._actor.id) as session:
                 report = session.bulk_employee_import.import_employees(
                     tenant_id=session.tenant_id,
@@ -165,18 +187,52 @@ class BulkOperationsController:
                         int(DEFAULT_LIMITS[SystemLimitKey.BULK_IMPORT_PREVIEW_ERROR_LIMIT]),
                     )
                 )
-        except KompasOSError as error:
-            screen.set_import_message(error.user_message, error=True)
-            return
-        except Exception:
-            _error_log.exception("BULK_IMPORT_FAILED")
-            screen.set_import_message(_GENERIC_IMPORT_ERROR, error=True)
-            return
+            return (report, limit)
 
-        self._show_result(screen, report, preview_error_limit=limit)
-        # İdxal BİTİB — növbəti yükləmə üçün formanı TAM sıfırlayır (bax
-        # `screens/bulk_operations.py::clear_preview`).
-        screen.clear_preview()
+        def succeeded(result: Any) -> None:
+            report, limit = result
+            self._show_result(screen, report, preview_error_limit=limit)
+            # İdxal BİTİB — növbəti yükləmə üçün formanı TAM sıfırlayır (bax
+            # `screens/bulk_operations.py::clear_preview`).
+            screen.clear_preview()
+
+        self._run(
+            screen,
+            job,
+            on_success=succeeded,
+            name="BULK_IMPORT",
+            fallback=_GENERIC_IMPORT_ERROR,
+            log_key="BULK_IMPORT_FAILED",
+        )
+
+    def _run(
+        self,
+        screen: BulkOperationsScreen,
+        job: Any,
+        *,
+        on_success: Any,
+        name: str,
+        fallback: str,
+        log_key: str,
+    ) -> None:
+        """Ortaq icra qabığı — iş fonda, nəticə və xəta GUI sapında."""
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        def failed(error: BaseException) -> None:
+            if isinstance(error, KompasOSError):
+                screen.set_import_message(error.user_message, error=True)
+                return
+            _error_log.error(log_key, exc_info=error)
+            screen.set_import_message(fallback, error=True)
+
+        self._task = run_job(
+            job,
+            on_success=on_success,
+            on_failure=failed,
+            owner=screen,
+            name=name,
+            executor=self._executor,
+        )
 
     def _show_result(
         self,
