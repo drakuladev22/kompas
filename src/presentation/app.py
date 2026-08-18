@@ -18,8 +18,9 @@ orada admin ekranlarının açılması təhlükəsizlik problemi olardı.
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from enum import Enum
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from src import __version__
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
+from src.presentation.controllers.ui_feedback import flush_ui
 from src.presentation.plugin_surface import register_plugin_pages
 from src.presentation.shell.admin_shell import AdminShell
 from src.presentation.shell.kiosk import KioskWindow
@@ -38,7 +40,7 @@ from src.presentation.theme.transition import animate_theme_change
 from src.shared.logger import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
     from datetime import datetime
 
     from PySide6.QtGui import QResizeEvent
@@ -393,7 +395,7 @@ class KompasApplication:
         dilində qaytarır, yəni mətn müqayisəsi lokalizasiyaya bağlı olardı.
 
         Naməlum xətada GİRİŞ seçilir: sihirbazı SƏHVƏN açmaq mövcud
-        quraşdırmanı "boş" göstərər və ilk Root hesabı üzərinə yazmağa
+        quraşdırmanı "boş" göstərər və ilk `CEO` hesabı üzərinə yazmağa
         çalışardı; giriş ekranı isə ən pis halda "giriş alınmadı" deyir və
         geri qaytarıla bilən vəziyyətdir.
         """
@@ -628,6 +630,9 @@ class KompasApplication:
         )
 
         self._login.set_busy(True)
+        # «Yoxlanılır…» vəziyyəti DƏRHAL çəkilməlidir (UX-1): kamera çəkilişi
+        # və 1:1 doğrulama saniyələr çəkir və o müddətdə ekran donmuş görünürdü.
+        flush_ui()
         try:
             outcome = FaceLoginController(self._context).authenticate(username)
         finally:
@@ -694,6 +699,15 @@ class KompasApplication:
         assert self._auth is not None
 
         self._login.set_busy(True)
+        # ──────────────────────────────────────────────────────────────────
+        # DÜYMƏNİN VƏZİYYƏTİ SORĞUDAN ƏVVƏL GÖRÜNMƏLİDİR (UX-1)
+        # ──────────────────────────────────────────────────────────────────
+        # `set_busy(True)` düyməni söndürür və mətnini dəyişir, lakin Qt onu
+        # yalnız hadisə dövrəsinə qayıdanda çəkir — bloklayan giriş sorğusu
+        # isə həmin qayıdışdan ƏVVƏL başlayır. Nəticədə istifadəçi bir neçə
+        # saniyə HEÇ BİR dəyişiklik görmürdü və proqram «cavab vermir» kimi
+        # görünürdü (bildirilən «button late reply»).
+        flush_ui()
         try:
             outcome = self._auth.authenticate(Username(username), password)
         finally:
@@ -2765,9 +2779,13 @@ class KompasApplication:
             # Pəncərə düymələrinin İKONLARI QSS ilə boyanmır (piksel şəklidir)
             # — onlar temadan sonra ayrıca yenidən çəkilməlidir, əks halda
             # tünd temada işıqlı ikonlar qalırdı.
+            #
+            # ÖRTÜK AYRICA ÇAĞIRILMIR (THEME-1): `FramelessWindow.apply_theme` cari
+            # məzmun widget-inə — örtüyə, sihirbaza, giriş və ya bağlantı
+            # ekranına — özü ötürür. Əvvəl burada YALNIZ örtük çağırılırdı və
+            # giriş-öncəsi ekranlar sətir-içi rənglərini köhnə temada saxlayır,
+            # yəni ağ qutu üzərində ağ mətn qalırdı.
             self._window.apply_theme(self._theme)
-            if self._shell is not None:
-                self._shell.apply_theme()
 
         animate_theme_change(self._window, apply)
         _log.info("THEME_CHANGED", extra={"preference": preference.value})
@@ -3520,6 +3538,8 @@ def _build_auth_controller(context: ApplicationContext) -> AuthController:
         credentials=bridge,
         employees=bridge,
         tenant_id=context.tenant_id,
+        # Üç oxunu BİR tranzaksiyada saxlayır (PERF-2) — bax `AttemptScope`.
+        scope=bridge,
     )
 
 
@@ -3532,18 +3552,56 @@ class _SessionScopedLogin:
 
     def __init__(self, context: ApplicationContext) -> None:
         self._context = context
+        #: Cari cəhdin PAYLAŞILAN sessiyası — `attempt()` sərhədi arasında.
+        self._shared: Any | None = None
+
+    # --- AttemptScope ------------------------------------------------------- #
+
+    @contextmanager
+    def attempt(self) -> Iterator[None]:
+        """Bir giriş cəhdi = BİR sessiya (PERF-2).
+
+        Sinif başlığındakı vəd — «ayrı-ayrı olsaydılar bir giriş cəhdi üç
+        ardıcıl tranzaksiya açardı» — FAKTİKİ olaraq yerinə yetirilmirdi:
+        üç metodun hər biri öz `context.session()`-unu açırdı. Uzaq bazada
+        bu, cəhd başına ~2 saniyə artıq gözləmə demək idi.
+
+        Sessiya BURADA açılır və `finally` ilə HƏR halda buraxılır: cəhd
+        istisna ilə bitsə belə paylaşılan istinad qalsaydı, növbəti cəhd
+        ARTIQ BAĞLANMIŞ tranzaksiyaya yazmağa çalışardı.
+        """
+        with self._context.session() as session:
+            self._shared = session
+            try:
+                yield
+            finally:
+                self._shared = None
+
+    @contextmanager
+    def _session(self) -> Iterator[Any]:
+        """Paylaşılan sessiya varsa onu, yoxsa yenisini verir.
+
+        Fallback QALIR: körpü `attempt()`-siz də çağırıla bilər (məsələn
+        gələcək bir axın yalnız `credentials_for`-a ehtiyac duyar) və həmin
+        halda sessiyasız qalmaq sükutlu nasazlıq olardı.
+        """
+        if self._shared is not None:
+            yield self._shared
+            return
+        with self._context.session() as session:
+            yield session
 
     # --- EmployeeLookup ---------------------------------------------------- #
 
     def get_by_username(self, tenant_id: TenantId, username: Username) -> Employee | None:
-        with self._context.session() as session:
+        with self._session() as session:
             employee: Employee | None = session.uow.employees.get_by_username(tenant_id, username)
             return employee
 
     # --- CredentialSource -------------------------------------------------- #
 
     def credentials_for(self, employee_id: EmployeeId) -> Credentials | None:
-        with self._context.session() as session:
+        with self._session() as session:
             credentials: Credentials | None = session.uow.employees.credentials_for(employee_id)
             return credentials
 
@@ -3564,7 +3622,7 @@ class _SessionScopedLogin:
         from src.infrastructure.security.hashing import HashingService  # noqa: PLC0415
         from src.infrastructure.timekeeping.clock import SystemClock  # noqa: PLC0415
 
-        with self._context.session() as session:
+        with self._session() as session:
             use_case = AdminLoginUseCase(
                 employees=session.uow.employees,
                 # `limits`: şifrə siyasətinin minimum uzunluğu

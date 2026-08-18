@@ -1057,7 +1057,7 @@ class ApplicationContext:
 
         # 1C server addımı QƏSDƏN quraşdırma tranzaksiyasından KƏNARDADIR:
         # sihirbazın 3-cü addımı keçilə bilər (bölmə 7) və serverin qeydi
-        # uğursuz olarsa artıq yaradılmış Root hesabı geri qaytarılmamalıdır —
+        # uğursuz olarsa artıq yaradılmış `CEO` hesabı geri qaytarılmamalıdır —
         # əks halda istifadəçi yanlış server ünvanına görə bütün quraşdırmanı
         # itirərdi. Uğursuzluq yalnız jurnala düşür, sonradan «ERP / 1C
         # Serverləri» ekranından əlavə edilə bilər.
@@ -3202,7 +3202,7 @@ def build_context(
     Quraşdırma Sihirbazı isə məhz həmin xəta ucbatından heç vaxt açılmırdı.
 
     İndi kimlik `shared/installation.py`-da həll olunur (mühit → yerli fayl →
-    yeni UUID) və "Root hesabı varmı?" sualı BAZAYA verilir — yəni ilk açılış
+    yeni UUID) və "ən üst hesab varmı?" sualı BAZAYA verilir — yəni ilk açılış
     sihirbaza, ikinci açılış girişə gedir.
 
     Raises:

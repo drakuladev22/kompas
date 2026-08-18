@@ -3,7 +3,7 @@
 ──────────────────────────────────────────────────────────────────────────────
 NİYƏ FAYL — NİYƏ SİHİRBAZIN SAHƏSİ DEYİL
 ──────────────────────────────────────────────────────────────────────────────
-İlk Quraşdırma Sihirbazı Root hesabını BAZAYA yazır. Yəni sihirbaz işə düşmək
+İlk Quraşdırma Sihirbazı `CEO` hesabını BAZAYA yazır. Yəni sihirbaz işə düşmək
 üçün DSN-i ARTIQ bilməlidir — DSN-i onun içində soruşmaq onu özündən əvvəl
 işləməyə məcbur edərdi (toyuq-yumurta).
 
@@ -262,6 +262,11 @@ def save_settings(settings: ConnectionSettings, path: Path | None = None) -> Pat
     Atomiklik səbəbi `installation.json` ilə eynidir: yazı ortasında kəsilən
     proses yarımçıq JSON qoyar və növbəti açılış onu «korlanmış» sayardı.
     """
+    # AÇAR İLK YAZIDA YARADILIR (SETUP-2). Bu sətir olmasaydı, təmiz
+    # quraşdırmada ekran «Yadda saxla» düyməsində `EncryptionKeyError` ilə
+    # dayanardı — bax `encryption.ensure_machine_key` başlığı.
+    _ensure_key()
+
     target = path or connection_file_path()
     payload = {
         "version": FORMAT_VERSION,
@@ -302,6 +307,15 @@ def save_settings(settings: ConnectionSettings, path: Path | None = None) -> Pat
 #: Şifrələmə konteksti (AAD): token başqa sahəyə köçürülüb istifadə edilə
 #: bilməsin deyə. `erp_server:<id>` naxışı ilə eynidir.
 _CONTEXT: Final[str] = "connection_file:password"
+
+
+def _ensure_key() -> None:
+    """Maşın-əhatəli DPAPI açarını (yoxdursa) yaradır — YALNIZ yazı yolunda."""
+    from src.infrastructure.security.encryption import (  # noqa: PLC0415
+        ensure_machine_key,
+    )
+
+    ensure_machine_key()
 
 
 def _cipher() -> EncryptionService:

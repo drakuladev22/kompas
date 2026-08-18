@@ -26,10 +26,27 @@ yalnız ERP bağlantılarının yenidən daxil edilməsini tələb edir.
 
 1. **`KOMPASOS_FERNET_KEY`** mühit dəyişəni — CI/CD (GitHub Secrets) və server mühiti
 2. **Windows DPAPI blobu** — mağaza kiosk PC-ləri
-   (`%LOCALAPPDATA%\KompasOS\kompasos.key`, cari Windows istifadəçisinə bağlı)
+   (`%LOCALAPPDATA%\KompasOS\kompasos.key`, cari Windows istifadəçisinə bağlı;
+   bağlantı parolu üçün isə MAŞIN əhatəli `%PROGRAMDATA%\KompasOS\kompasos.key`)
 
 Heç biri tapılmasa tətbiq `EncryptionKeyError` ilə dayanır — **plaintext
 fallback YOXDUR**, bu qəsdəndir.
+
+### Maşın əhatəli blob AVTOMATİK yaranır (SETUP-2)
+
+Təmiz quraşdırmada nə mühit açarı var (paketə `.env` düşmür), nə də blob.
+Əvvəl bu, «Bağlantı Ayarları» ekranını işləməz edirdi: `save_settings()`
+`EncryptionKeyError` atırdı, kontroller isə onu tutmurdu — istifadəçi düyməni
+basır və HEÇ NƏ baş vermirdi.
+
+İndi `connection_file.save_settings()` yazıdan ƏVVƏL
+`encryption.ensure_machine_key()` çağırır: açar yoxdursa təsadüfi açar
+yaradılır və DPAPI ilə `%PROGRAMDATA%`-ya yazılır. Funksiya **idempotentdir**
+və mühit açarı varsa HEÇ NƏ etmir.
+
+**YALNIZ YAZI YOLUNDA.** Oxuma zamanı açar yaradılmır: blob itibsə (disk
+dəyişdi, profil köçürüldü) yeni açar köhnə şifrəli dəyəri sükutla oxunmaz
+edərdi. Oxu yolu olduğu kimi qalır — «parolu yenidən daxil edin».
 
 ---
 
@@ -42,6 +59,10 @@ python -c "from src.infrastructure.security.encryption import generate_key; prin
 44 simvolluq base64 sətir alacaqsınız (32 bayt açar materialı).
 
 ### Windows kiosk PC-də DPAPI ilə saxlamaq
+
+**Bağlantı parolu üçün BU ADDIM LAZIM DEYİL** — maşın əhatəli açar ilk yadda
+saxlamada avtomatik yaranır (yuxarıya bax). Aşağıdakı snippet İSTİFADƏÇİ
+əhatəli blob (`%LOCALAPPDATA%`) və ya ROTASİYA üçündür:
 
 ```python
 from src.infrastructure.security.encryption import (

@@ -37,7 +37,7 @@ from src.domain.entities.sales_points import PointsEntry, RewardRedemption
 from src.domain.entities.shift import ShiftAssignment, ShiftSwapRequest
 from src.domain.entities.task import Task
 from src.domain.policies import BreakKind
-from src.domain.value_objects.authorization import PermissionFlag
+from src.domain.value_objects.authorization import PermissionFlag, RolePriority
 from src.domain.value_objects.behavior_signals import BehaviorBaseline, CheckInObservation
 from src.domain.value_objects.branding import TenantBranding
 from src.domain.value_objects.catalogs import FineType, LeaveType, WorkMode
@@ -541,6 +541,22 @@ class EmployeeRepository(Protocol):
 
     def count_active_with_flag(self, tenant_id: TenantId, flag_code: str) -> int:
         """Dual-Control Deadlock Guard üçün (bölmə 3)."""
+        ...
+
+    def count_active_ranked_at_or_above(self, tenant_id: TenantId, priority: RolePriority) -> int:
+        """Verilən pillədə və ondan YUXARIDA olan aktiv işçilərin sayı.
+
+        DİQQƏT: `RolePriority`-də KİÇİK rəqəm DAHA YÜKSƏK səlahiyyətdir, yəni
+        şərt `<=`-dir — «`EXECUTIVE` və ondan yuxarı» = `Root` + `CEO`.
+
+        NİYƏ FLAG-LA SAYMAQ KİFAYƏT ETMİR (SETUP-3): «tenant-da ən üst hesab
+        varmı?» sualı əvvəl `can_manage_license` flag-i ilə cavablanırdı,
+        halbuki həmin flag səviyyə-1 hardlock daşıyır və YALNIZ `Root`-a
+        verilir. Sihirbaz isə `CEO` yaradır — nəticədə hesab yarandıqdan
+        SONRA da sayğac 0 qalırdı və sihirbaz hər açılışda yenidən çıxırdı.
+        İyerarxiya pilləsi bu sualın TƏBİİ ölçüsüdür: custom rol da düzgün
+        sayılır, çünki onun da prioriteti var.
+        """
         ...
 
 

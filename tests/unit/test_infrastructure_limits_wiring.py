@@ -546,6 +546,16 @@ class _AdminCountSpy:
     def count_active_with_flag(self, tenant_id: TenantId, flag: str) -> int:
         return self._count
 
+    def count_active_ranked_at_or_above(self, tenant_id: TenantId, priority: Any) -> int:
+        """Sihirbaz artıq PİLLƏ ilə sayır (SETUP-3).
+
+        AÇIQ yazılır: `__getattr__` ehtiyatı hər naməlum adı `None` qaytaran
+        funksiyaya çevirir və sayğac `None` olanda müqayisə `TypeError` ilə
+        çökür — yəni ehtiyat yol burada qüsuru GİZLƏTMİR, sadəcə səbəbi
+        anlaşılmaz edir.
+        """
+        return self._count
+
     def __getattr__(self, name: str) -> Any:
         return lambda *args, **kwargs: None
 

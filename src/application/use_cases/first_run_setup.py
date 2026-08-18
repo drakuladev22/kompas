@@ -46,7 +46,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from src.application.root_limits import fallback_int, limit_int
 from src.domain.entities.employee import Employee
 from src.domain.policies import SystemLimitKey
-from src.domain.value_objects.authorization import SystemRole
+from src.domain.value_objects.authorization import RolePriority, SystemRole
 from src.domain.value_objects.identifiers import new_employee_id, new_store_id
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
@@ -105,7 +105,15 @@ class StoreDraft:
 
 @dataclass(frozen=True)
 class RootAccountDraft:
-    """Sihirbazın 1-ci addımı — ilk Root/CEO hesabı (SEC-016)."""
+    """Sihirbazın 1-ci addımı — müştərinin ən üst hesabı, yəni `CEO` (SEC-016).
+
+    SİNİF ADI TARİXİDİR. Sihirbaz bir vaxtlar `Root` yaradırdı; SEC-024 bunu
+    `CEO`-ya dəyişdi (səbəb `complete()`-dədir), ad isə dəyişmədi — o, ekran
+    kontrollerindən tutmuş testlərədək bir neçə yerdə işlənir və yeni adın
+    faydası köçürmə riskindən azdır. Məzmun HƏMİŞƏ `CEO` hesabıdır;
+    təchizatçının `Root` hesabı bu yolla ÜMUMİYYƏTLƏ yaradılmır (bax
+    `scripts/create_root_account.py`).
+    """
 
     first_name: str
     last_name: str
@@ -303,8 +311,9 @@ class FirstRunSetupUseCase:
         #      sualı auditdə ayrıla bilmirdi.
         #
         # `Root` rolu SİLİNMİR — o, `seed_tenant_defaults()` ilə yaradılır və
-        # boş qalır. Təchizatçı öz hesabını `scripts/onboard_new_tenant.py`
-        # ilə açır; müştəri sihirbazından belə bir yol YOXDUR.
+        # boş qalır. Təchizatçı öz hesabını `scripts/create_root_account.py`
+        # ilə açır (əmr sətri, `.exe`-yə düşmür); müştəri sihirbazından belə
+        # bir yol YOXDUR və olmamalıdır.
         executive_position = self._require_position(tenant_id, SystemRole.CEO.value)
 
         # 1. Mağazalar — işçi onlara bağlanacağı üçün ƏVVƏLCƏ yaradılır.
@@ -335,7 +344,7 @@ class FirstRunSetupUseCase:
             username=root.username,
             notification_email=root.recovery_email,
             has_password=True,
-            # İLK Root hesabı istisnadır: şifrəni ÖZÜ təyin edir, ona görə
+            # İLK hesab (CEO) istisnadır: şifrəni ÖZÜ təyin edir, ona görə
             # məcburi dəyişmə YOXDUR. Sonrakı bütün hesablarda admin təyin
             # etdiyi üçün `must_change_password=True` qalır.
             must_change_password=False,
@@ -392,7 +401,7 @@ class FirstRunSetupUseCase:
             # Müvəqqəti şifrə — ilk girişdə MƏCBURİ dəyişdirilir (bölmə 2).
             must_change_password=True,
         )
-        # Root hesabı ilə eyni səbəb: dəvət olunan işçi də YENİ sətirdir.
+        # `CEO` hesabı ilə eyni səbəb: dəvət olunan işçi də YENİ sətirdir.
         # `must_change_password=True` entity-dədir və `create()` onu yazır.
         self._employees.create(employee, raw_password=invite.temporary_password)
         self._audit.record(
@@ -419,14 +428,29 @@ class FirstRunSetupUseCase:
         )
 
     def _admin_count(self, tenant_id: TenantId) -> int:
-        """Aktiv Root/CEO sayı.
+        """Aktiv `Root` + `CEO` sayı — İYERARXİYA PİLLƏSİ ilə.
 
-        Sayğac `can_manage_license` flag-i ilə hesablanır: həmin flag
-        səviyyə-1 hardlock-dur, yəni YALNIZ `Root`-da (və defolt olaraq
-        CEO-ya verilmir) ola bilər — beləliklə "admin var?" sualı rol adına
-        deyil, struktur zəmanətə bağlanır.
+        ──────────────────────────────────────────────────────────────────────
+        SETUP-3: NİYƏ FLAG SAYĞACI SƏHV İDİ
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəl sayğac `can_manage_license` flag-i ilə işləyirdi və izahı belə
+        idi: «flag səviyyə-1 hardlock-dur, yəni yalnız `Root`-da ola bilər».
+        İzah DOĞRU idi, nəticə isə qüsurlu: bu metodun cavab verdiyi sual
+        «`Root` varmı?» DEYİL, «tenant sahibsizdirmi?» sualıdır, sihirbaz isə
+        `CEO` yaradır (SEC-024) — `CEO`-ya səviyyə-1 flag QƏSDƏN verilmir.
+
+        Nəticə canlı quraşdırmada göründü: sihirbaz uğurla tamamlanır, hesab
+        yaranır, lakin `is_required()` HƏLƏ DƏ `True` qaytarırdı — proqram hər
+        açılışda yenidən sihirbazı göstərirdi və istifadəçi öz hesabına heç
+        vaxt çata bilmirdi. Eyni səbəbdən `complete()`-dəki təkrar qapısı da
+        işləmirdi: ikinci dəfə keçmək `SetupAlreadyCompletedError` əvəzinə
+        istifadəçi adı toqquşması ilə dayanırdı.
+
+        Pillə ölçüsü sualın TƏBİİ cavabıdır: `EXECUTIVE` və ondan yuxarı
+        (`Root` = 0, `CEO` = 1) hesab varsa, tenant sahibsiz deyil. Root-un
+        flag konfiqurasiyası bu cavaba təsir etmir — etməli də deyil.
         """
-        return self._employees.count_active_with_flag(tenant_id, "can_manage_license")
+        return self._employees.count_active_ranked_at_or_above(tenant_id, RolePriority.EXECUTIVE)
 
     def _provision(
         self,

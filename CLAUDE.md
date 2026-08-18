@@ -58,7 +58,7 @@ Hər dəyişiklikdən sonra HAMISI keçməlidir:
 .venv/Scripts/python.exe -m ruff check src/ tests/ scripts/
 .venv/Scripts/python.exe -m ruff format src/ tests/ scripts/
 .venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (320 fayl)
-QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 5309 test, 48 skip
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 5350 test, 49 skip
 .venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast
 ```
 
@@ -77,7 +77,7 @@ yeni rəng cütü və ya yeni QSS selektoru əlavə edən skriptin son sətrind�
 cari sayı oxuyub bu bəndi yeniləməlidir (eyni köhnəlmə riski
 `.design-sync/NOTES.md`-dədir).
 
-Domen coverage qapısı **85%** (hazırda 94.15%):
+Domen coverage qapısı **85%** (hazırda 94.29%):
 
 ```bash
 .venv/Scripts/python.exe -m pytest tests/unit \
@@ -385,6 +385,7 @@ qalmır, qərara çevrilir.
 | Cihaz kimliyi faylı + aparat izi | `src/infrastructure/config/device_identity.py` |
 | Tenant brendinqi (ad/loqo/rəng) | `src/application/use_cases/tenant_branding.py`, `migrations/064` |
 | Yeni müştəri quraşdırması | `scripts/onboard_new_tenant.py` (`.exe`-yə DÜŞMÜR) |
+| **Təchizatçının `Root` hesabı** (SEC-030) | `scripts/create_root_account.py` (`.exe`-yə DÜŞMÜR; şifrə gizli soruşulur) |
 | Developer Panelinin açılışı | `scripts/dev_panel.py` (`.env` yükləyir; `.exe`-yə DÜŞMÜR) |
 | Hardlock/anti-fraud qaydaları | `src/domain/value_objects/authorization.py` |
 | Menyu maddələri + flag bağlantısı | `src/presentation/shell/menu.py` |
@@ -396,6 +397,10 @@ qalmır, qərara çevrilir.
 | Üz qeydiyyatı qapısı (ilk giriş + CEO bootstrap) | `src/presentation/controllers/face_setup.py`, `use_cases/face_control.py` (`enroll_first_account`, SEC-025) |
 | Panel girişində «Üzlə daxil ol» | `src/presentation/controllers/face_login.py` (SEC-026) |
 | Gizli bərpa konsolu (`Ctrl+Shift+K`) | `presentation/screens/recovery_console.py`, `controllers/recovery_console.py` (RECOVERY-1) |
+| Tema keçidinin giriş-öncəsi ekranlara ötürülməsi (THEME-1) | `presentation/shell/window.py` → məzmunun `apply_theme` metodu |
+| Fokus halqasının giriş modallığı (FOCUS-1) | `presentation/widgets/buttons.py` (`input_modality_tracker`) |
+| Bloklamadan əvvəl ekranı çəkdirmə (UX-1) | `presentation/controllers/ui_feedback.py` (`flush_ui`) |
+| Sessiyanın gediş-gəliş büdcəsi (PERF-1/2) | `docs/performance_notes.md`, `tests/unit/test_session_roundtrips.py` |
 | İki-kanallı dəstək (daxili / texniki) | `domain/value_objects/support.py`, `use_cases/support_chat.py`, `migrations/068` (CHAT-1) |
 | Dəstək gələnlər qutusu (İKİ bölmə, BİR ekran) | `presentation/screens/support_inbox.py`, `controllers/support_inbox.py` |
 | Müraciət statusu (Açıq/Gözləmədə/Həll olundu/Bağlandı) | `SupportTicketStatus` (`value_objects/support.py`) — nişan YALNIZ `OPEN` sayır |

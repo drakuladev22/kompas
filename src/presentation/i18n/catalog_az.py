@@ -53,7 +53,10 @@ CATALOG_AZ: Final[dict[str, str]] = {
     "auth.login.password_required": "Şifrəni daxil edin",
     # --------------------------- ilk quraşdırma ----------------------------- #
     "setup.title": "Quraşdırma",
-    "setup.step.admin": "İlk Admin Hesabı",
+    # Açar adı `admin` qalır (tarixi), MƏTNİ isə CEO-dur — sihirbaz məhz o
+    # rolu yaradır (SEC-024). Açarı dəyişmək kataloqun bütün istinadlarını
+    # sındırardı və heç bir fayda verməzdi: görünən yalnız dəyərdir.
+    "setup.step.admin": "Şirkət Rəhbəri (CEO)",
     "setup.step.admin.hint": "E-poçt, istifadəçi adı, şifrə",
     "setup.step.store": "İlk Mağaza",
     "setup.step.store.hint": "Ad, brend, ünvan",

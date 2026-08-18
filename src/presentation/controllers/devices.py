@@ -37,6 +37,7 @@ from src.domain.value_objects.devices import DeviceStatus, DeviceType
 from src.domain.value_objects.identifiers import DeviceId, StoreId
 from src.infrastructure.config import device_identity
 from src.infrastructure.timekeeping.clock import to_baku
+from src.presentation.controllers.ui_feedback import flush_ui
 from src.presentation.screens.devices import device_type_label, status_label
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
@@ -251,6 +252,8 @@ class DevicePendingController:
             `is_operational` yoxlayaraq ekranı bağlayıb işə davam edir.
         """
         screen.set_busy(True)
+        # Qeydiyyat şəbəkəyə gedir — vəziyyət ƏVVƏLCƏ çəkilməlidir (UX-1).
+        flush_ui()
         try:
             device = self.register()
         except KompasOSError as error:

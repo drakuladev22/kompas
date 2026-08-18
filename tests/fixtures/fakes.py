@@ -16,6 +16,7 @@ from src.domain.entities.employee import Employee
 from src.domain.entities.fine import Fine, FineSource, FineStatus
 from src.domain.entities.leave_request import LeaveRequest, LeaveStatus
 from src.domain.policies import DEFAULT_LIMITS, BreakKind, SystemLimitKey
+from src.domain.value_objects.authorization import RolePriority
 from src.domain.value_objects.identifiers import (
     AttendanceRecordId,
     EmployeeId,
@@ -394,6 +395,17 @@ class InMemoryEmployees:
             1
             for e in self.items.values()
             if e.tenant_id == tenant_id and e.is_active and e.has_permission(flag_code, now=now)
+        )
+
+    def count_active_ranked_at_or_above(self, tenant_id: TenantId, priority: RolePriority) -> int:
+        """SETUP-3 sayğacı — `<=`, çünki KİÇİK rəqəm daha YÜKSƏK pillədir."""
+        return sum(
+            1
+            for e in self.items.values()
+            if e.tenant_id == tenant_id
+            and e.is_active
+            and e.position.is_active
+            and e.position.priority <= priority
         )
 
 

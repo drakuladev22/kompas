@@ -381,6 +381,27 @@ def test_count_active_with_flag_uses_effective_permissions(
         assert count >= 1
 
 
+@requires_db
+def test_rank_counter_sees_the_executive_but_not_the_operational_tier(
+    database: Database, tenant: TenantId, store_id: StoreId
+) -> None:
+    """SETUP-3: sihirbazın bitmə şərti REAL sxemdə də pillə ilə ölçülməlidir.
+
+    Unit testi sahtə üzərində işləyir — bu isə `positions.priority` sütununun
+    seed-də doğru dəyərlərlə dolduğunu təsdiqləyir. İkisi birlikdə lazımdır:
+    sütun səhv seed olunsaydı, sahtə yenə də «keçdi» deyərdi.
+    """
+    make_employee_row(database, tenant, store_id, SystemRole.HR_ADMIN)
+
+    with database.unit_of_work(tenant) as uow:
+        assert uow.employees.count_active_ranked_at_or_above(tenant, RolePriority.EXECUTIVE) == 0
+
+    make_employee_row(database, tenant, store_id, SystemRole.CEO)
+
+    with database.unit_of_work(tenant) as uow:
+        assert uow.employees.count_active_ranked_at_or_above(tenant, RolePriority.EXECUTIVE) == 1
+
+
 # --------------------------------------------------------------------------- #
 # LeaveRequest repository
 # --------------------------------------------------------------------------- #

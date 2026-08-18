@@ -325,8 +325,8 @@ Skript **idempotentdir** — təkrar icra oluna bilər. İstehsalatda
 ```powershell
 ruff check src tests           # lint
 ruff format --check src tests  # format
-mypy src                       # 100% tip yoxlaması (strict) — 200 fayl
-pytest tests/ -q               # 1363 test (43 skip: DB tələb edənlər)
+mypy src                       # 100% tip yoxlaması (strict) — 357 fayl
+pytest tests/ -q               # 5350 test (49 skip: DB tələb edənlər)
 pytest tests/unit --cov=src/domain --cov=src/shared --cov-fail-under=85
 pytest tests/e2e -m e2e        # pytest-qt karkası
 python scripts/check_contrast.py --include-high-contrast  # WCAG AA

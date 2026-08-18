@@ -295,18 +295,19 @@ class AdminLoginScreen(QWidget):
         # konteyneri onu fondan ayırır. Boyanmır — rozetin daxili kontrastı
         # (tünd konteyner + açıq teal işarə) hər iki temada işləyir.
         rosette = brand_assets.logo_pixmap(brand_assets.APP_MARK, height=52)
+        #: Çəkilən loqo YALNIZ fayl tapılmadıqda qurulur — tema keçidində
+        #: `None` yoxlaması ona görə lazımdır (bax `apply_theme`).
+        self._fallback_logo: CompassLogo | None = None
         if rosette is not None:
             heading_layout.addWidget(image_label(rosette), alignment=Qt.AlignmentFlag.AlignHCenter)
         else:
             # Fayl yoxdursa çəkilən loqo QALIR — giriş ekranı loqosuz açılmır.
-            heading_layout.addWidget(
-                CompassLogo(
-                    size=52,
-                    background=theme.color("--color-brand-navy"),
-                    mark=theme.color("--color-brand-amber"),
-                ),
-                alignment=Qt.AlignmentFlag.AlignHCenter,
+            self._fallback_logo = CompassLogo(
+                size=52,
+                background=theme.color("--color-brand-navy"),
+                mark=theme.color("--color-brand-amber"),
             )
+            heading_layout.addWidget(self._fallback_logo, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         heading = plain_label("Hesabınıza Daxil Olun")
         heading_font = heading.font()
@@ -339,6 +340,8 @@ class AdminLoginScreen(QWidget):
         footer = body_label("Şifrənizi unutmusunuz?\nAdmininizlə əlaqə saxlayın.", size=13)
         footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         footer.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
+        # İstinad tema keçidi üçün saxlanılır (bax `apply_theme`).
+        self._footer = footer
         card.add(footer)
 
         outer.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -359,6 +362,23 @@ class AdminLoginScreen(QWidget):
         QWidget.setTabOrder(self._username.input_widget(), self._password.input_widget())
         QWidget.setTabOrder(self._password.input_widget(), self._submit)
         QWidget.setTabOrder(self._submit, self._face)
+
+    def apply_theme(self, theme: ThemeManager) -> None:
+        """Tema keçidində sətir-içi rəngləri yenidən hesablayır (THEME-1).
+
+        QSS kart, sahə və düymələri özü boyayır; burada yalnız Python
+        tərəfdən verilən üç dəyər qalır — səth fonu, altlıq mətni və üz
+        düyməsinin ikonu (ikon piksel şəklidir, QSS onu boyamır).
+        """
+        self._theme = theme
+        set_surface_color(self, theme.color("--color-content-bg"))
+        self._footer.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
+        self._face.setIcon(icons.icon("face_scan", theme.color("--color-text-secondary")))
+        if self._fallback_logo is not None:
+            self._fallback_logo.set_colors(
+                background=theme.color("--color-brand-navy"),
+                mark=theme.color("--color-brand-amber"),
+            )
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 - Qt adlandırması
         """Ekran görünəndə fokus istifadəçi adı sahəsinə qoyulur.
@@ -513,10 +533,20 @@ class _WizardStep(QWidget):
         layout.addWidget(text_box)
         layout.addWidget(stretch())
 
-        self.set_state("upcoming")
+        #: Cari vəziyyət — tema keçidində rəngləri YENİDƏN hesablamaq üçün
+        #: saxlanılır (`apply_theme`). Onsuz keçid addımı «upcoming»-ə
+        #: sıfırlayardı və istifadəçi hansı addımda olduğunu itirərdi.
+        self._state = "upcoming"
+        self.set_state(self._state)
+
+    def apply_theme(self, theme: ThemeManager) -> None:
+        """Nişanın fon/mətn rəngi tema ilə birlikdə dəyişir."""
+        self._theme = theme
+        self.set_state(self._state)
 
     def set_state(self, state: str) -> None:
         """`done` / `current` / `upcoming` — nömrə dairəsinin görünüşü."""
+        self._state = state
         theme = self._theme
         if state == "current":
             background = theme.color("--color-action-bg")
@@ -558,8 +588,14 @@ class FirstRunWizard(QWidget):
     cancelled = Signal()
 
     #: Maketdəki addım tərifləri.
+    #:
+    #: BİRİNCİ ADDIMIN ADI «Admin» DEYİL, «CEO»-dur (SEC-024). Sihirbaz
+    #: `SystemRole.CEO` yaradır — müştərinin ƏN ÜST hesabını. `ADMIN` isə
+    #: ayrıca, ondan bir pillə aşağı sistem roludur və maketdəki köhnə ad
+    #: istifadəçini «hansı hesabı yaratdım?» sualı ilə qoyurdu. `Root`
+    #: (təchizatçı) burada ÜMUMİYYƏTLƏ yaradılmır.
     STEPS: Final = (
-        ("İlk Admin Hesabı", "E-poçt, istifadəçi adı, şifrə"),
+        ("Şirkət Rəhbəri (CEO)", "E-poçt, istifadəçi adı, şifrə"),
         ("İlk Mağaza", "Ad, brend, ünvan"),
         ("1C Server", "İstəyə görə keçilə bilər"),
         ("HR_Admin Dəvəti", "İstəyə görə keçilə bilər"),
@@ -617,10 +653,9 @@ class FirstRunWizard(QWidget):
     def _build_step_panel(self) -> QWidget:
         panel = QWidget()
         panel.setFixedWidth(WIZARD_STEP_PANEL_WIDTH)
-        panel.setStyleSheet(
-            f"background-color: {self._theme.color('--color-sidebar-bg')};"
-            f"border-right: 1px solid {self._theme.color('--color-sidebar-border')};"
-        )
+        # İstinad tema keçidi üçün saxlanılır (bax `apply_theme`).
+        self._panel = panel
+        self._paint_step_panel()
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(28, 32, 28, 32)
@@ -641,14 +676,27 @@ class FirstRunWizard(QWidget):
         note = Card(padding=16, spacing=8)
         note.add(
             body_label(
-                "Bu hesab sistemin ilk Admin-i olacaq. Sonradan yalnız Admin "
-                "yeni istifadəçi yarada bilər.",
+                "Bu hesab şirkətinizin ƏN YÜKSƏK hesabı (CEO) olacaq. "
+                "Sonrakı istifadəçiləri yalnız o və ya onun səlahiyyət verdiyi "
+                "Admin yarada bilər.",
                 size=12,
             )
         )
         layout.addWidget(note)
 
         return panel
+
+    def _paint_step_panel(self) -> None:
+        """Sol panelin fonu və sərhədi — QSS-də DEYİL, çünki bu ekrana xasdır.
+
+        Qlobal selektor yazmaq üçün panelə ayrıca `objectName` və qayda
+        lazım gələrdi; hər ikisi QSS-i sihirbazın daxili quruluşuna
+        bağlayardı. Sətir-içi qalır, lakin tema keçidində YENİDƏN çağırılır.
+        """
+        self._panel.setStyleSheet(
+            f"background-color: {self._theme.color('--color-sidebar-bg')};"
+            f"border-right: 1px solid {self._theme.color('--color-sidebar-border')};"
+        )
 
     # ------------------------------ sağ panel -------------------------------- #
 
@@ -666,7 +714,6 @@ class FirstRunWizard(QWidget):
         layout.addWidget(self._heading)
 
         self._description = body_label("", size=13)
-        self._description.setStyleSheet(f"color: {self._theme.color('--color-text-secondary')};")
         layout.addWidget(self._description)
 
         # ------------------------------------------------------------------
@@ -685,12 +732,9 @@ class FirstRunWizard(QWidget):
         self._error = body_label("", size=13)
         self._error.setWordWrap(True)
         self._error.setVisible(False)
-        self._error.setStyleSheet(
-            f"background-color: {self._theme.color('--color-danger-bg')};"
-            f"color: {self._theme.color('--color-danger')};"
-            "border-radius: 12px; padding: 12px 14px;"
-        )
         layout.addWidget(self._error)
+
+        self._paint_form_texts()
 
         self._fields_host = QWidget()
         self._fields_layout = QVBoxLayout(self._fields_host)
@@ -724,6 +768,30 @@ class FirstRunWizard(QWidget):
 
         layout.addWidget(footer)
         return panel
+
+    def _paint_form_texts(self) -> None:
+        """İzah və xəta zolağının rəngləri — tema keçidində təkrar çağırılır."""
+        self._description.setStyleSheet(f"color: {self._theme.color('--color-text-secondary')};")
+        self._error.setStyleSheet(
+            f"background-color: {self._theme.color('--color-danger-bg')};"
+            f"color: {self._theme.color('--color-danger')};"
+            "border-radius: 12px; padding: 12px 14px;"
+        )
+
+    def apply_theme(self, theme: ThemeManager) -> None:
+        """Sihirbazın BÜTÜN sətir-içi rəngləri yenidən hesablanır (THEME-1).
+
+        Bu ekranda qüsur ən görünən şəkildə üzə çıxırdı: sol panel, izah
+        mətni, xəta zolağı və addım nişanları — dördü də `setStyleSheet` ilə
+        qurulur. Tema keçidində yalnız QSS yenilənəndə fon işıqlı, mətn isə
+        işıqlı qalırdı, yəni yazı görünmürdü.
+        """
+        self._theme = theme
+        set_surface_color(self, theme.color("--color-content-bg"))
+        self._paint_step_panel()
+        self._paint_form_texts()
+        for step in self._steps:
+            step.apply_theme(theme)
 
     # ------------------------------ addımlar --------------------------------- #
 
@@ -830,10 +898,10 @@ class FirstRunWizard(QWidget):
             setattr(self, key, None)
 
     def _build_admin_fields(self) -> None:
-        self._heading.setText("İlk Admin Hesabı")
+        self._heading.setText("Şirkət Rəhbəri (CEO) Hesabı")
         self._description.setText(
-            "Sistemə tam səlahiyyətli bir hesab yaradın. E-poçt yalnız "
-            "qeydiyyat üçündür — sonrakı girişlər istifadəçi adı ilə olur."
+            "Şirkətinizin ən yüksək hesabını yaradın. E-poçt yalnız qeydiyyat "
+            "üçündür — sonrakı girişlər istifadəçi adı ilə olur."
         )
         self._full_name = self._field("_full_name", "Ad, Soyad")
         self._email = self._field("_email", "E-poçt")
@@ -1098,6 +1166,7 @@ class FatalStartupScreen(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self._theme = theme
         set_surface_color(self, theme.color("--color-content-bg"))
 
         outer = QVBoxLayout(self)
@@ -1119,6 +1188,8 @@ class FatalStartupScreen(QWidget):
         detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
         detail.setMaximumWidth(440)
         detail.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
+        # İstinad tema keçidi üçün saxlanılır (bax `apply_theme`).
+        self._detail = detail
         card.body().addWidget(detail, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self._retry_button: QPushButton | None = None
@@ -1149,6 +1220,17 @@ class FatalStartupScreen(QWidget):
 
         outer.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
 
+    def apply_theme(self, theme: ThemeManager) -> None:
+        """Fatal ekran da tema düyməsinə tabedir (THEME-1).
+
+        Ekran çıxılmaz vəziyyətdədir, lakin istifadəçi hələ də başlıq
+        zolağındakı düyməni basa bilir — mesaj oxunmaz qalsaydı, «işə düşə
+        bilmədi» səbəbi də görünməzdi.
+        """
+        self._theme = theme
+        set_surface_color(self, theme.color("--color-content-bg"))
+        self._detail.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
+
 
 # --------------------------------------------------------------------------- #
 # 05 — Bağlantı Ayarları (DB-4 Faza 4)
@@ -1161,7 +1243,7 @@ class ConnectionSettingsScreen(QWidget):
     ──────────────────────────────────────────────────────────────────────────
     NİYƏ BU EKRAN SİHİRBAZIN İÇİNDƏ DEYİL
     ──────────────────────────────────────────────────────────────────────────
-    İlk Quraşdırma Sihirbazı Root hesabını BAZAYA yazır — yəni işləmək üçün
+    İlk Quraşdırma Sihirbazı `CEO` hesabını BAZAYA yazır — yəni işləmək üçün
     bağlantı ARTIQ lazımdır. DSN-i onun içində soruşmaq sihirbazı özündən əvvəl
     işləməyə məcbur edərdi (bax `infrastructure/config/connection_file.py`).
 
@@ -1235,6 +1317,8 @@ class ConnectionSettingsScreen(QWidget):
             size=13,
         )
         intro.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
+        # İstinad tema keçidi üçün saxlanılır (bax `apply_theme`).
+        self._intro = intro
         card.add(intro)
 
         self._host = FormField("Server ünvanı")
@@ -1247,6 +1331,9 @@ class ConnectionSettingsScreen(QWidget):
 
         self._status = muted_label("")
         self._status.setWordWrap(True)
+        #: Status mətni XƏTAdırmı — rəngi tema keçidində bərpa etmək üçün
+        #: saxlanılır (bax `_paint_status`).
+        self._status_is_error = False
         card.add(self._status)
 
         # DİAQNOSTİKA — bax `controllers/connection_settings.diagnostic_paths`.
@@ -1308,13 +1395,31 @@ class ConnectionSettingsScreen(QWidget):
         self._database.set_text(str(settings.get("database", "")))
         self._username.set_text(str(settings.get("username", "")))
 
+    def apply_theme(self, theme: ThemeManager) -> None:
+        """Tema keçidi (THEME-1) — status sətri ÖZ vəziyyətini saxlayır.
+
+        Status ya xəta (qırmızı), ya da neytral olur; hansı olduğu yalnız bu
+        ekranda bilinir. Keçiddə onu sıfırlasaydıq, «bağlantı alınmadı»
+        mesajı sükutla adi mətnə çevrilər və problem həll olunmuş görünərdi.
+        """
+        self._theme = theme
+        set_surface_color(self, theme.color("--color-content-bg"))
+        self._intro.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
+        self._paint_status()
+
+    def _paint_status(self) -> None:
+        token = "--color-danger" if self._status_is_error else "--color-text-secondary"
+        self._status.setStyleSheet(f"color: {self._theme.color(token)};")
+
     def set_error(self, message: str) -> None:
         self._status.setText(message)
-        self._status.setStyleSheet(f"color: {self._theme.color('--color-danger')};")
+        self._status_is_error = True
+        self._paint_status()
 
     def set_status(self, message: str) -> None:
         self._status.setText(message)
-        self._status.setStyleSheet(f"color: {self._theme.color('--color-text-secondary')};")
+        self._status_is_error = False
+        self._paint_status()
 
     def set_busy(self, busy: bool) -> None:
         """Sınaq gedərkən düymə bloklanır — ikiqat sorğu şəbəkəni gözlədir."""

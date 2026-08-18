@@ -82,6 +82,10 @@ class _Employees:
     def count_active_with_flag(self, tenant_id: TenantId, flag: str) -> int:
         return 0
 
+    def count_active_ranked_at_or_above(self, tenant_id: TenantId, priority: Any) -> int:
+        """Boş tenant — sihirbaz PİLLƏ sayğacı ilə işləyir (SETUP-3)."""
+        return 0
+
     def save(self, employee: Any) -> None:
         self.saved.append(employee)
 

@@ -614,6 +614,10 @@ class _Employees:
     def count_active_with_flag(self, tenant_id: TenantId, flag: str) -> int:
         return self._count
 
+    def count_active_ranked_at_or_above(self, tenant_id: TenantId, priority: object) -> int:
+        """Sihirbaz artıq PİLLƏ ilə sayır (SETUP-3) — sahtə eyni dəyəri verir."""
+        return self._count
+
 
 def test_recommended_admin_count_follows_the_root_value() -> None:
     """İki admin defoltda kifayətdir; Root üç tələb edəndə xəbərdarlıq qayıdır."""

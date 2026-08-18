@@ -571,6 +571,7 @@ class LicenseInactiveScreen(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self._theme = theme
         set_surface_color(self, theme.color("--color-content-bg"))
 
         outer = QVBoxLayout(self)
@@ -581,8 +582,9 @@ class LicenseInactiveScreen(QWidget):
         card.setFixedWidth(620)
         card.body().setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        icon_box = StateIconBox("lock", theme, tone="danger", box_size=62, icon_size=28)
-        card.body().addWidget(icon_box, alignment=Qt.AlignmentFlag.AlignHCenter)
+        # İstinad tema keçidi üçün saxlanılır (bax `apply_theme`).
+        self._icon_box = StateIconBox("lock", theme, tone="danger", box_size=62, icon_size=28)
+        card.body().addWidget(self._icon_box, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         heading = plain_label("Lisenziya aktiv deyil")
         heading_font = heading.font()
@@ -600,6 +602,7 @@ class LicenseInactiveScreen(QWidget):
         message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         message.setMaximumWidth(440)
         message.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
+        self._message = message
         card.body().addWidget(message, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         details = Card(padding=0, spacing=0)
@@ -634,6 +637,17 @@ class LicenseInactiveScreen(QWidget):
         card.body().addWidget(contact, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         outer.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
+
+    def apply_theme(self, theme: ThemeManager) -> None:
+        """Bloklama ekranı da tema düyməsinə tabedir (THEME-1).
+
+        Ekran çıxışsızdır, lakin başlıq zolağı görünür və düymə işləkdir —
+        mətn oxunmaz qalsaydı, istifadəçi bloklamanın SƏBƏBİNİ də görməzdi.
+        """
+        self._theme = theme
+        set_surface_color(self, theme.color("--color-content-bg"))
+        self._message.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
+        self._icon_box.apply_theme(theme)
 
 
 __all__ = [

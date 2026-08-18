@@ -35,6 +35,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from src.domain.value_objects.authorization import SystemRole
+from src.presentation.controllers.ui_feedback import flush_ui
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
@@ -141,6 +142,9 @@ class FaceSetupController:
             return
 
         screen.set_busy(True)
+        # Üz emalı bir neçə saniyə çəkir — «gözləyin» vəziyyəti
+        # bloklamadan ƏVVƏL görünməlidir (UX-1).
+        flush_ui()
         try:
             with self._context.session(user_id=admin.id) as session:
                 session.face_enrollment.enroll(
@@ -173,6 +177,9 @@ class FaceSetupController:
         köçürsəydik, ekranı yan keçən hər yol onu itirərdi.
         """
         screen.set_busy(True)
+        # Üz emalı bir neçə saniyə çəkir — «gözləyin» vəziyyəti
+        # bloklamadan ƏVVƏL görünməlidir (UX-1).
+        flush_ui()
         try:
             with self._context.session(user_id=self._subject.id) as session:
                 session.face_enrollment.enroll_first_account(

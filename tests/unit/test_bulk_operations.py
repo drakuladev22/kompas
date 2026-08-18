@@ -180,6 +180,14 @@ class FakeEmployees:
             if e.tenant_id == tenant_id and e.is_active and e.has_permission(flag_code, now=NOW)
         )
 
+    def count_active_ranked_at_or_above(self, tenant_id: TenantId, priority: Any) -> int:
+        """İyerarxiya pilləsinə görə sayğac (SETUP-3) — `<=`, 0 ən yüksəkdir."""
+        return sum(
+            1
+            for e in self.items.values()
+            if e.tenant_id == tenant_id and e.is_active and e.position.priority <= priority
+        )
+
 
 class FakeCredentials:
     def __init__(self) -> None:

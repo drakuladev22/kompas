@@ -82,29 +82,42 @@ class StateIconBox(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        background_token, border_token, icon_token = _TONE_TOKENS[tone]
+        self._tokens = _TONE_TOKENS[tone]
+        self._icon_name = icon_name
+        self._icon_size = icon_size
 
         self.setFixedSize(box_size, box_size)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._glyph = plain_label()
+        self._glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._glyph.setStyleSheet("border: none; background: transparent;")
+        layout.addWidget(self._glyph)
+
+        self.apply_theme(theme)
+
+    def apply_theme(self, theme: ThemeManager) -> None:
+        """Fon, sərhəd və ikon rəngini yenidən hesablayır (THEME-1).
+
+        Rənglər QURULMA ANINDA yandırılsaydı, tema keçidindən sonra qutu
+        köhnə palitrada qalardı — ikon isə piksel şəklidir, yəni QSS onu
+        onsuz da boyaya bilmir və yenidən ÇƏKİLMƏLİDİR.
+        """
+        background_token, border_token, icon_token = self._tokens
         self.setStyleSheet(
             f"background-color: {theme.color(background_token)};"
             f"border: 1px solid {theme.color(border_token)};"
             f"border-radius: {metrics.STATE_ICON_BOX_RADIUS}px;"
         )
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        glyph = plain_label()
-        glyph.setPixmap(
+        self._glyph.setPixmap(
             icons.render(
-                icon_name,
+                self._icon_name,
                 theme.color(icon_token),
-                size=icon_size,
+                size=self._icon_size,
                 stroke_width=1.2,
             )
         )
-        glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        glyph.setStyleSheet("border: none; background: transparent;")
-        layout.addWidget(glyph)
 
 
 class EmptyState(QWidget):

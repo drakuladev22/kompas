@@ -98,6 +98,14 @@ class _Employees:
             if employee.is_active and employee.has_permission(flag_code, now=NOW)
         )
 
+    def count_active_ranked_at_or_above(self, tenant_id: TenantId, priority: Any) -> int:
+        """İyerarxiya pilləsinə görə sayğac (SETUP-3) — `<=`, 0 ən yüksəkdir."""
+        return sum(
+            1
+            for employee in self.items.values()
+            if employee.is_active and employee.position.priority <= priority
+        )
+
     def save(self, employee: Employee) -> None:
         self.items[employee.id] = employee
         self.saved.append(employee)

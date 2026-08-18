@@ -20,9 +20,9 @@ konstruktorda verilən cütdən götürərək.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Final
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QSize, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QPushButton, QSizePolicy, QWidget
 
@@ -33,7 +33,6 @@ from src.presentation.widgets.primitives import plain_label
 from src.presentation.widgets.safe_text import plain_tooltip
 
 if TYPE_CHECKING:
-    from PySide6.QtCore import QEvent
     from PySide6.QtGui import QEnterEvent, QFocusEvent, QResizeEvent
 
 
@@ -338,6 +337,86 @@ class NavButton(QPushButton):
         return handle.devicePixelRatio() if handle is not None else 1.0
 
 
+#: Tətbiq obyektinə bağlanan izləyicinin adı — ikinci nüsxə qurulmasın deyə.
+_INPUT_TRACKER_NAME: Final = "kompasos.input_modality"
+
+
+class _InputModalityTracker(QObject):
+    """Sonuncu istifadəçi girişi KLAVİATURADAN idimi — `:focus-visible` ekvivalenti.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ FOKUS SƏBƏBİ TƏK BAŞINA KİFAYƏT ETMİR (FOCUS-1)
+    ──────────────────────────────────────────────────────────────────────────
+    Qt fokuslu widget-i SÖNDÜRƏNDƏ (`setEnabled(False)`) fokusu zəncirin
+    növbəti elementinə `focusNextPrevChild()` ilə ötürür və o, səbəb kimi
+    `TabFocusReason` yazır — yəni HƏQİQİ `Tab` basılışı ilə fərqlənmir.
+
+    Bu, layihədə real nasazlıq idi: istifadəçi «Daxil Ol» düyməsini SİÇANLA
+    basır, `set_busy(True)` düyməni söndürür, fokus başlıq zolağındakı tema
+    düyməsinə sıçrayır və orada portağal halqa yanır. Eyni hadisə ekran
+    əvəzlənməsində də baş verirdi — o hal `FramelessWindow.set_content`-də
+    ƏLLƏ təmizlənirdi, lakin siyahı uzanırdı: hər yeni `setEnabled(False)`
+    çağırışı üçün ayrıca təmizləmə yazmaq lazım gələcəkdi.
+
+    Ona görə sual DƏYİŞDİRİLİR: «fokus necə gəldi?» əvəzinə «istifadəçi son
+    olaraq nə ilə işləyirdi?». Brauzerlərin `:focus-visible` qaydası da
+    məhz bunu edir. Nəticədə hər söndürmə/əvəzlənmə halı BİR yerdə həll
+    olunur.
+
+    Başlanğıc dəyər `True`-dur: hələ heç bir giriş hadisəsi olmayıb, yəni
+    modallıq NAMƏLUMDUR. Belə halda halqanı GÖSTƏRMƏK seçilir — klaviatura
+    istifadəçisi üçün görünməyən fokus, siçan istifadəçisi üçün artıq
+    halqadan pis nasazlıqdır.
+    """
+
+    _KEYBOARD_EVENTS: ClassVar[frozenset[QEvent.Type]] = frozenset(
+        {QEvent.Type.KeyPress, QEvent.Type.ShortcutOverride}
+    )
+    _POINTER_EVENTS: ClassVar[frozenset[QEvent.Type]] = frozenset(
+        {
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonDblClick,
+            QEvent.Type.TouchBegin,
+            QEvent.Type.Wheel,
+        }
+    )
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.keyboard = True
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt adı
+        """Hadisəni YALNIZ QEYD EDİR — heç birini udmur (`False` qaytarır)."""
+        kind = event.type()
+        if kind in self._KEYBOARD_EVENTS:
+            self.keyboard = True
+        elif kind in self._POINTER_EVENTS:
+            self.keyboard = False
+        return False
+
+
+def input_modality_tracker() -> _InputModalityTracker | None:
+    """Tətbiqə bağlı izləyici — ilk çağırışda qurulur.
+
+    Quraşdırma başlanğıc kodunda DEYİL, burada olur: `QApplication` bəzi
+    testlərdə və dizayn önizləməsində fərqli yollarla yaradılır, izləyicini
+    isə fokus halqasını işlədən HƏR yol tələb edir. `findChild` ikinci nüsxənin
+    qarşısını alır və valideynlik obyektin ömrünü tətbiqə bağlayır.
+
+    `None` qaytarır: `QApplication` yoxdursa (yalnız domen testləri) fokus
+    modallığı sualının mənası da yoxdur.
+    """
+    app = QCoreApplication.instance()
+    if app is None:
+        return None
+    tracker = app.findChild(_InputModalityTracker, _INPUT_TRACKER_NAME)
+    if tracker is None:
+        tracker = _InputModalityTracker(app)
+        tracker.setObjectName(_INPUT_TRACKER_NAME)
+        app.installEventFilter(tracker)
+    return tracker
+
+
 class KeyFocusRingMixin:
     """Fokus halqasını YALNIZ klaviatura fokusunda göstərən davranış.
 
@@ -358,6 +437,20 @@ class KeyFocusRingMixin:
     saxlanılır.
     """
 
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        """İzləyicini QURULMA ANINDA quraşdırır — ilk klikdən ÇOX ƏVVƏL.
+
+        Tənbəl qurma (yalnız `focusInEvent`-də) kifayət etmirdi: izləyici o
+        vaxta qədər mövcud olmur, yəni istifadəçinin BİRİNCİ siçan basılışı
+        qeydə düşmür və elə həmin basılışın yaratdığı fokus sıçrayışı
+        «klaviatura» sayılırdı. Halqa məhz ilk dəfə görünürdü.
+
+        Bu sinifdən törəyən düymələr pəncərə örtüyü ilə birlikdə qurulur,
+        yəni quraşdırma nöqtəsi kifayət qədər erkəndir.
+        """
+        super().__init__(*args, **kwargs)
+        input_modality_tracker()
+
     #: Fokusun KLAVİATURADAN gəldiyini bildirən səbəblər.
     KEYBOARD_FOCUS_REASONS: ClassVar[frozenset[Qt.FocusReason]] = frozenset(
         {
@@ -373,10 +466,20 @@ class KeyFocusRingMixin:
         `ActiveWindow` səbəbi MÖVCUD vəziyyəti saxlayır: istifadəçi `Tab`-la bu
         düyməyə çatıb `Alt`+`Tab` ilə başqa proqrama keçib qayıdarsa, halqa
         yerində qalmalıdır — həmin halda fokus həqiqətən klaviaturadadır.
+
+        Səbəbdən ƏLAVƏ giriş modallığı da yoxlanılır (FOCUS-1) — səbəbin özü
+        siçanla yaranan sıçrayışı `Tab`-dan ayıra bilmir; izahı
+        `_InputModalityTracker`-dədir.
         """
         if event.reason() is not Qt.FocusReason.ActiveWindowFocusReason:
-            self._set_key_focus(event.reason() in self.KEYBOARD_FOCUS_REASONS)
+            self._set_key_focus(self._reason_is_keyboard(event.reason()))
         super().focusInEvent(event)  # type: ignore[misc]
+
+    def _reason_is_keyboard(self, reason: Qt.FocusReason) -> bool:
+        if reason not in self.KEYBOARD_FOCUS_REASONS:
+            return False
+        tracker = input_modality_tracker()
+        return tracker is None or tracker.keyboard
 
     def focusOutEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt adlandırması
         """Fokus getdi — halqa da getməlidir.

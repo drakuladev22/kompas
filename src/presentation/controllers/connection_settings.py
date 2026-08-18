@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from src.presentation.controllers.ui_feedback import flush_ui
+from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
@@ -127,7 +129,6 @@ class ConnectionSettingsController:
 
     def _on_submit(self, screen: ConnectionSettingsScreen, payload: dict[str, Any]) -> None:
         from src.infrastructure.config.connection_file import (  # noqa: PLC0415
-            ConnectionFileError,
             ConnectionSettings,
             save_settings,
         )
@@ -163,13 +164,22 @@ class ConnectionSettingsController:
         # qurulmayıb, arxa fonda dayandırılası iş yoxdur).
         # `processEvents` isə MƏCBURİDİR: onsuz «Yoxlanılır…» yazısı bloklama
         # bitənə qədər çəkilmir və istifadəçi düymənin işlədiyini görmür.
-        self._flush_ui()
+        flush_ui()
         try:
             if not self._probe(screen, settings.dsn()):
                 return
             save_settings(settings)
-        except ConnectionFileError as exc:
+        except KompasOSError as exc:
+            # `ConnectionFileError` DEYİL, ÜMUMİ `KompasOSError`: yazı yolu
+            # şifrələmə açarına da toxunur (`EncryptionKeyError`) və dar
+            # tutucu onu buraxırdı. Qt isə siqnal işləyicisindən çıxan
+            # istisnanı yalnız stderr-ə yazır — istifadəçi düyməni basıb
+            # HEÇ NƏ görmürdü (SETUP-2).
             screen.set_error(exc.user_message)
+            return
+        except Exception:
+            _log.exception("CONNECTION_SETTINGS_SAVE_FAILED")
+            screen.set_error("Ayarlar saxlanmadı. Yenidən cəhd edin.")
             return
         finally:
             screen.set_busy(False)
@@ -205,19 +215,6 @@ class ConnectionSettingsController:
             screen.set_error(failure.user_message)
             return False
         return True
-
-    @staticmethod
-    def _flush_ui() -> None:
-        """Gözləyən çəkilişləri icra edir (bax `_on_submit`-dəki şərh).
-
-        `QApplication` yoxdursa (vahid testdə ekran birbaşa qurula bilər)
-        heç nə etmir — sınaq məntiqi Qt dövrəsindən ASILI OLMAMALIDIR.
-        """
-        from PySide6.QtWidgets import QApplication  # noqa: PLC0415
-
-        app = QApplication.instance()
-        if app is not None:
-            app.processEvents()
 
     @staticmethod
     def _existing_password() -> str:

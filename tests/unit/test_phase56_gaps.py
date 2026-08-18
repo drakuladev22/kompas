@@ -696,6 +696,10 @@ class _SetupEmployees:
     def count_active_with_flag(self, tenant_id: TenantId, flag_code: str) -> int:
         return self._admin_count
 
+    def count_active_ranked_at_or_above(self, tenant_id: TenantId, priority: object) -> int:
+        """`is_required()` və təkrar qapısı BU sayğacı işlədir (SETUP-3)."""
+        return self._admin_count
+
     def save(self, employee: Employee) -> None:
         self.saved.append(employee)
         self._admin_count += 1

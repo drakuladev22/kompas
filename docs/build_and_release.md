@@ -143,7 +143,8 @@ qovluğundan işə düşür və hüquqlar fərqlidir):
       açılır. Ekranın altındakı Diaqnostika sətrində üç yol görünür.
 - [ ] **Config yazılması** — ekrandan yadda saxlayın; fayl
       `C:\ProgramData\KompasOS\connection.json`-da yaranmalıdır (`.exe`-nin
-      yanında YOX).
+      yanında YOX). Yanında `kompasos.key` də yaranır — şifrələmə açarı ilk
+      yazıda avtomatik qurulur (SETUP-2, `docs/key_rotation.md`).
 - [ ] **Əl ilə köçürmə (dəstək axını)** — hazır `connection.json`-u
       `C:\Program Files\KompasOS\` qovluğuna (`.exe`-nin yanına) qoyun;
       OXU sırasında o, BİRİNCİDİR və dərhal qüvvəyə minir. `ProgramData`
@@ -159,6 +160,35 @@ qovluğundan işə düşür və hüquqlar fərqlidir):
       `C:\ProgramData\KompasOS\` QALIR.
 - [ ] **Smart App Control** — imzasız buraxılışda proqram ÜMUMİYYƏTLƏ
       açılmaya bilər (SEC-027). Bu, quraşdırma qüsuru DEYİL.
+- [ ] **Sihirbaz BİR DƏFƏ çıxır** — quraşdırmanı tamamlayın, proqramı bağlayıb
+      yenidən açın: bu dəfə GİRİŞ ekranı gəlməlidir. Sihirbaz təkrar çıxırsa,
+      bu, SETUP-3 reqressiyasıdır (bax `docs/security_decisions.md`, SEC-024
+      altındakı «SONRAKI DÜZƏLİŞ» bəndi).
+
+---
+
+## 6.1. Quraşdırmadan SONRA — təchizatçının `Root` hesabı
+
+Setup `Root` hesabı YARATMIR və yaratmamalıdır (SEC-030). Sihirbaz müştərinin
+`CEO` hesabını açır; təchizatçının öz hesabı AYRI addımdır və onsuz ROOT İdarə
+Mərkəzi, «Texniki Dəstək» kanalı, Telegram ayarları və bərpa konsolu əlçatmaz
+qalır.
+
+Müştərinin sihirbazı tamamlandıqdan SONRA, repozitoriya olan maşında:
+
+```bash
+# Nə ediləcəyini göstərir, heç nə yazmır:
+.venv/Scripts/python.exe scripts/create_root_account.py --dry-run
+
+# Yaradır — şifrə GİZLİ soruşulur (əmr sətrində YAZILMIR):
+.venv/Scripts/python.exe scripts/create_root_account.py     --username developer --first-name Texniki --last-name Dəstək
+```
+
+* Skript **birbaşa terminalda** işlədilməlidir (PowerShell / cmd) — boru və ya
+  avtomatlaşdırılmış mühitdə şifrə soruşula bilmir və skript bunu AÇIQ deyir.
+* Kirayəçi kimliyi tətbiqin öz mənbəyindən (`installation.json`) gəlir; bazada
+  birdən çox kirayəçi varsa `--tenant-id` MƏCBURİ olur.
+* Aktiv `Root` artıq varsa skript DAYANIR (`--force` ilə keçilə bilər).
 
 ---
 

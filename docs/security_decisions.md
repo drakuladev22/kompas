@@ -847,8 +847,23 @@ qayda iyerarxiyanın TƏBİİ NƏTİCƏSİDİR, əlavə qapının yan təsiri de
 **Tətbiq:** `application/use_cases/first_run_setup.py` (`SystemRole.CEO`),
 `domain/entities/position.py` (`may_be_edited_by`),
 `application/use_cases/position_management.py`,
+`scripts/create_root_account.py` (təchizatçının hesabını yaradan YEGANƏ yol),
 `tests/unit/test_root_ceo_separation.py`,
 `tests/unit/test_employee_creation_path.py`.
+
+**SONRAKI DÜZƏLİŞ (SETUP-3).** Qərarın bir nəticəsi ilk buraxılışda
+gözdən qaçmışdı: `first_run_setup.is_required()` «tenant sahibsizdirmi?»
+sualını `can_manage_license` flag-ini daşıyan hesabların sayı ilə
+cavablandırırdı. Həmin flag səviyyə-1 hardlock-dur, yəni YALNIZ `Root`-a
+verilir — sihirbaz isə artıq `CEO` yaradırdı. Nəticədə sayğac quraşdırma
+uğurla bitdikdən SONRA da sıfır qalırdı: proqram hər açılışda sihirbazı
+yenidən göstərirdi və istifadəçi öz hesabına heç vaxt çata bilmirdi.
+
+Sayğac indi İYERARXİYA PİLLƏSİ ilə işləyir
+(`EmployeeRepository.count_active_ranked_at_or_above`, `RolePriority.EXECUTIVE`
+və ondan yuxarı). Pillə sualın təbii ölçüsüdür və Root-un flag
+konfiqurasiyasından asılı deyil — custom rol da düzgün sayılır.
+Qapı: `tests/unit/test_setup_completion_gate.py`.
 
 ---
 
@@ -1045,6 +1060,54 @@ nə vaxt işləyirdi?» sualı bot dəyişdikdən sonra cavabsız qalmamalıdır
 
 **Tətbiq:** `migrations/068`, `src/application/use_cases/telegram_config.py`,
 `src/infrastructure/persistence/telegram_repositories.py`.
+
+---
+
+## SEC-030 — Təchizatçının `Root` hesabı YALNIZ əmr sətri aləti ilə yaradılır
+
+**Qərar:** `Root` hesabı `scripts/create_root_account.py` ilə yaradılır. Skript
+`.exe`-yə PAKETLƏNMİR, şifrəni əmr sətri arqumenti kimi QƏBUL ETMİR (gizli
+soruşulur) və mövcud aktiv `Root` varsa `--force` olmadan DAYANIR.
+
+**Səbəb:** SEC-024 `Root` ilə `CEO`-nu ayırdı, lakin `Root`-u YARADAN yol heç
+vaxt yazılmamışdı. `first_run_setup.py` şərhi «təchizatçı öz hesabını
+`scripts/onboard_new_tenant.py` ilə açır» deyirdi — həmin skript isə kimlik,
+sxem və seed qurur, İŞÇİ YARATMIR. Strict Hierarchy Guard-a görə `CEO` özündən
+yuxarı hesab yarada bilmədiyindən panelin içindən də yol yox idi. Nəticədə
+ROOT İdarə Mərkəzi, «Texniki Dəstək» kanalı, Telegram ayarları, bərpa konsolu
+və plugin idarəsi ƏLÇATMAZ qalırdı.
+
+Sihirbaza addım əlavə etmək RƏDD EDİLDİ: sihirbaz müştərinin əlindədir və orada
+`Root` yaratmaq SEC-024-ün ayırdığı iki pilləni yenidən birləşdirərdi.
+
+**Yazma yolu tətbiqin ÖZ yolu ilə eynidir:** skript RLS altında (`kompasos_app`
+rolu ilə) yazır və owner DSN-i qəsdən kənarlaşdırır — əks halda RLS siyasətinin
+həmin sətri qəbul edib-etmədiyi heç vaxt sınanmazdı və qüsur yalnız müştəri
+maşınında üzə çıxardı. Kirayəçi kimliyi `resolve_installation_identity()`-dən
+gəlir, `license_tenants` cədvəlindən DEYİL: həmin cədvəl RLS altında tətbiq
+roluna görünmür və inkişaf maşınındakı `DATABASE_ADMIN_URL` bu fərqi gizlədirdi.
+
+**Tətbiq:** `scripts/create_root_account.py`, `tests/unit/test_packaging_credentials.py`.
+
+---
+
+## SEC-031 — Tema keçidi giriş-ÖNCƏSİ ekranlara da çatmalıdır (THEME-1)
+
+**Qərar:** `FramelessWindow.apply_theme()` cari məzmun widget-inə `apply_theme`
+ötürür. Müqavilə İSTƏYƏ BAĞLIDIR: metod varsa çağırılır.
+
+**Səbəb:** Tema keçidi əvvəl yalnız pəncərə örtüyünə və `AdminShell`-ə çatırdı.
+Sihirbaz, giriş, bağlantı və fatal ekran isə örtükdən KƏNARDA yaşayır və
+rənglərinin bir hissəsini `setStyleSheet` ilə qurulma anında hesablayır.
+Nəticədə QSS-dən gələn fon yeni temaya keçir, sətir-içi mətn rəngi köhnəsində
+qalırdı — istifadəçinin bildirdiyi «boxlar ağarır və fontlar görsənmir».
+
+Rəngləri tamamilə QSS-ə köçürmək rədd edildi: sihirbazın sol paneli və xəta
+zolağı yalnız orada işlənən token cütlərindən qurulub və hər biri üçün qlobal
+selektor yaratmaq QSS-i ekranın daxili quruluşuna bağlayardı.
+
+**Tətbiq:** `presentation/shell/window.py`, `presentation/screens/group_a_entry.py`,
+`presentation/shell/admin_shell.py`, `tests/unit/test_theme_switch_prelogin.py`.
 
 ---
 

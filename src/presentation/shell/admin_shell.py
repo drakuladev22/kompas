@@ -374,8 +374,17 @@ class AdminShell(QWidget):
 
     # -------------------------------- tema ----------------------------------- #
 
-    def apply_theme(self) -> None:
-        """Tema dəyişdikdən sonra QSS-siz elementləri yeniləyir."""
+    def apply_theme(self, theme: ThemeManager | None = None) -> None:
+        """Tema dəyişdikdən sonra QSS-siz elementləri yeniləyir.
+
+        Args:
+            theme: `FramelessWindow.apply_theme` ötürür — pəncərə BÜTÜN məzmun
+                widget-lərini eyni imza ilə çağırır (THEME-1) və örtük onların
+                biridir. Verilibsə saxlanılan istinad da yenilənir: iki
+                mənbə qalsaydı, «hansı doğrudur?» sualı yaranardı.
+        """
+        if theme is not None:
+            self._theme = theme
         theme = self._theme
         self._sidebar.apply_theme(
             idle_icon_color=theme.color("--color-nav-item-icon"),

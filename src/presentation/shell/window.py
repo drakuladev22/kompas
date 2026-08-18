@@ -136,6 +136,8 @@ class FramelessWindow(QWidget):
         self._body_layout = QVBoxLayout(self._body)
         self._body_layout.setContentsMargins(0, 0, 0, 0)
         self._body_layout.setSpacing(0)
+        #: Cari məzmun widget-i — tema keçidində ona `apply_theme` ötürülür.
+        self._content: QWidget | None = None
         self._layout.addWidget(self._body, 1)
 
         self._normal_geometry: QRect | None = None
@@ -171,6 +173,11 @@ class FramelessWindow(QWidget):
         """
         detach_layout(self._body_layout)
         self._body_layout.addWidget(widget)
+        # İstinad TEMA KEÇİDİ ÜÇÜN saxlanılır (bax `apply_theme`) — düzülüşdən
+        # oxumaq olardı, lakin o, "hansı widget məzmundur?" sualına dolayı
+        # cavab verir və gələcəkdə düzülüşə əlavə olunan hər element cavabı
+        # sükutla dəyişərdi.
+        self._content = widget
         if self._title_bar is not None:
             self._title_bar.clear_key_focus_rings()
 
@@ -186,8 +193,28 @@ class FramelessWindow(QWidget):
         QSS fonu və mətn rəngini özü verir, lakin ikon piksel şəklidir və QSS
         onu boyamır (bax `widgets/buttons.py` başlığı) — ona görə rənglər
         Python tərəfdən ötürülür.
+
+        ──────────────────────────────────────────────────────────────────────
+        MƏZMUN DA XƏBƏRDAR EDİLİR — GİRİŞ-ÖNCƏSİ EKRANLAR ÜÇÜN (THEME-1)
+        ──────────────────────────────────────────────────────────────────────
+        Tema keçidi əvvəl yalnız pəncərə örtüyünə və `AdminShell`-ə çatırdı.
+        Halbuki sihirbaz, giriş və bağlantı ekranı örtükdən KƏNARDA yaşayır
+        (`set_content`) və rənglərinin bir hissəsini `setStyleSheet` ilə
+        QURULMA ANINDA hesablayır. Nəticə istifadəçinin gördüyü şəkil idi:
+        QSS-dən gələn hissə dəyişir, sətir-içi hissə köhnə temada qalır —
+        yəni ağ qutular üzərində ağ mətn.
+
+        Rəngləri tamamilə QSS-ə köçürmək DƏ mümkün deyil: sihirbazın sol
+        paneli və xəta zolağı yalnız orada işlənən token cütlərindən
+        qurulub və hər biri üçün qlobal selektor yaratmaq QSS-i ekranın
+        daxili quruluşuna bağlayardı. Ona görə müqavilə sadədir: məzmun
+        widget-i `apply_theme` təqdim edirsə, çağırılır.
         """
         self._theme = theme
+        content = self._content
+        refresh = getattr(content, "apply_theme", None) if content is not None else None
+        if callable(refresh):
+            refresh(theme)
         if self._title_bar is None:
             return
         self._title_bar.apply_theme(

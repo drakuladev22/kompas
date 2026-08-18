@@ -371,6 +371,50 @@ class WindowsDpapiKeyProvider:
         return self._blob_path
 
 
+def ensure_machine_key(provider: WindowsDpapiKeyProvider | None = None) -> bool:
+    """Maşın-əhatəli DPAPI açarı YOXDURSA yaradır. Nəticə: yaradıldımı.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ LAZIMDIR — SETUP-2
+    ──────────────────────────────────────────────────────────────────────────
+    Təmiz quraşdırmada NƏ `KOMPASOS_FERNET_KEY` var (paketə `.env` düşmür),
+    NƏ də DPAPI blobu (onu heç kim yaratmırdı). Nəticədə «Bağlantı Ayarları»
+    ekranından yadda saxlamaq `EncryptionKeyError` ilə dayanırdı — yəni
+    müştəri maşınında proqram HEÇ VAXT konfiqurasiya edilə bilmirdi.
+
+    `docs/key_rotation.md` blobu ƏL İLƏ yaratmağı təsvir edirdi (Python
+    snippet). Paketlənmiş `.exe`-də isə Python konsolu yoxdur — sənəddəki
+    yol quraşdırıcı üçün icra edilə bilməz.
+
+    ──────────────────────────────────────────────────────────────────────────
+    YALNIZ YAZI YOLUNDA ÇAĞIRILIR, OXUDA YOX
+    ──────────────────────────────────────────────────────────────────────────
+    Oxuma zamanı açar yaratmaq ƏN TƏHLÜKƏLİ variantdır: blob itibsə (disk
+    dəyişdi, profil köçürüldü) yeni açar köhnə şifrəli dəyəri OXUNMAZ edər,
+    lakin xəta VERMƏZDİ — istifadəçi «parol səhvdir» əvəzinə səssiz uğursuzluq
+    görərdi. Ona görə oxu yolu olduğu kimi qalır: açar tapılmasa
+    `load()` `None` qaytarır və ekran «parolu yenidən daxil edin» deyir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    MÜHİT AÇARI ÜSTÜNDÜR
+    ──────────────────────────────────────────────────────────────────────────
+    `KOMPASOS_FERNET_KEY` təyin edilibsə blob YARADILMIR: inkişaf maşınında
+    və CI-da açar mənbəyi ODUR, ikinci mənbə yaratmaq «hansı açarla
+    şifrələnib?» sualını doğurardı.
+    """
+    if EnvironmentKeyProvider().load() is not None:
+        return False
+    target = provider or WindowsDpapiKeyProvider(machine_scope=True)
+    if not target.is_supported or target.load() is not None:
+        return False
+    target.store(KeyMaterial(primary=generate_key(), source="dpapi-provisioned"))
+    _log.warning(
+        "ENCRYPTION_KEY_PROVISIONED",
+        extra={"path": str(target.blob_path), "scope": "machine"},
+    )
+    return True
+
+
 class ChainedKeyProvider:
     """Provayderləri sıra ilə yoxlayır, ilk uğurlu nəticəni qaytarır."""
 

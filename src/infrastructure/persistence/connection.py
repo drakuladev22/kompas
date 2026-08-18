@@ -436,7 +436,16 @@ class PostgresUnitOfWork:
         self._entered = True
         self._committed = False
         try:
-            conn.execute("BEGIN")
+            # AÇIQ `BEGIN` YOXDUR — QƏSDƏN (PERF-1).
+            # ------------------------------------------------------------------
+            # Hovuz bağlantıları `autocommit=False` ilə qurulur, yəni psycopg
+            # İLK sorğudan əvvəl tranzaksiyanı ÖZÜ açır. Bizim əlavə `BEGIN`
+            # sətrimiz onun açdığı tranzaksiyanın İÇİNDƏ icra olunurdu:
+            # PostgreSQL «there is already a transaction in progress»
+            # xəbərdarlığı qaytarırdı və bir TAM gediş-gəliş boşa gedirdi.
+            #
+            # Supabase pooler-inə gediş-gəliş bu quraşdırmada ~206 ms-dir
+            # (ölçülüb), yəni hər düymə basılışı 206 ms artıq gözləyirdi.
             self._apply_tenant_context()
             self._build_repositories()
         except Exception:
@@ -454,14 +463,35 @@ class PostgresUnitOfWork:
         self._release(rollback=not self._committed or exc_type is not None)
 
     def _apply_tenant_context(self) -> None:
-        """SEC-008: `SET LOCAL` — pool-da növbəti istifadəçiyə sızmır."""
+        """SEC-008: `SET LOCAL` — pool-da növbəti istifadəçiyə sızmır.
+
+        ──────────────────────────────────────────────────────────────────────
+        HƏR AÇAR ÜÇÜN AYRI SORĞU YOX — BİR İFADƏ (PERF-1)
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəl dövrə hər açar üçün ayrıca `execute()` çağırırdı. `tenant_id` +
+        `user_id` = iki gediş-gəliş, yəni uzaq bazada ~412 ms — və bunu HƏR
+        sessiya ödəyirdi. `set_config()` adi funksiyadır, ona görə bir
+        `SELECT`-in içində istənilən sayda çağırıla bilər və nəticə eynidir.
+
+        `SET LOCAL` parametr bind-i dəstəkləmir, ona görə `set_config()`
+        işlədilir — dəyər hələ də PARAMETRLƏŞDİRİLMİŞDİR (bölmə 2: "100%
+        Parameterized SQL Queries"). Sətirdə birləşdirilən YEGANƏ şey sabit
+        fraqmentin təkrarıdır, istifadəçi məlumatı DEYİL.
+
+        NİYƏ PIPELINE SEÇİLMƏDİ: `conn.pipeline()` kontekst mətnini İLK
+        sorğu ilə birləşdirib daha 206 ms qazandırırdı (ölçülüb: 841 → 631 ms),
+        lakin pipeline rejimində xəta artıq `execute()` anında deyil, sinxron
+        nöqtəsində qalxır. Repozitoriyaların bir qismi `psycopg.errors`-u məhz
+        `execute()` ətrafında tutur (məs. `repositories.save()`-dəki unikal
+        pozuntu emalı) — yəni qazanc bütün yazma yollarının yenidən
+        yoxlanılmasını tələb edərdi. Ayrıca addım kimi qiymətləndirilməlidir.
+        """
         if self._conn is None:  # pragma: no cover - invariant
             raise TenantContextError("Bağlantı yoxdur")
-        for key, value in self._context.as_settings().items():
-            # `SET LOCAL` parametr bind-i dəstəkləmir, ona görə `set_config()`
-            # istifadə olunur — dəyər hələ də PARAMETRLƏŞDİRİLMİŞDİR (bölmə 2:
-            # "100% Parameterized SQL Queries"), sətir birləşdirmə YOXDUR.
-            self._conn.execute("SELECT set_config(%s, %s, true)", (key, value))
+        settings = self._context.as_settings()
+        projection = ", ".join(["set_config(%s, %s, true)"] * len(settings))
+        params = tuple(value for pair in settings.items() for value in pair)
+        self._conn.execute(f"SELECT {projection}", params)
 
     def _build_repositories(self) -> None:
         # Dövri idxaldan qaçmaq üçün yerli idxal (repo-lar bu modulu tanıyır).
@@ -825,7 +855,13 @@ class PostgresUnitOfWork:
         if self._conn is None:
             return
         try:
-            self._conn.execute("ROLLBACK" if rollback else "COMMIT")
+            # psycopg API-si (xam SQL deyil): açıq tranzaksiya YOXDURSA heç bir
+            # sorğu göndərmir. `commit()`-dən sonra dərhal çıxılan sessiyalarda
+            # bu, bir tam gediş-gəlişə qənaətdir (PERF-1).
+            if rollback:
+                self._conn.rollback()
+            else:
+                self._conn.commit()
         except psycopg.Error as exc:  # pragma: no cover - bağlantı qırılıb
             _log.error("UOW_RELEASE_FAILED", extra={"error": str(exc)})
         finally:
@@ -837,20 +873,33 @@ class PostgresUnitOfWork:
     # ------------------------------ tranzaksiya ------------------------------ #
 
     def commit(self) -> None:
-        """Dəyişiklikləri təsdiqləyir. Çağırılmazsa geri qaytarılır."""
+        """Dəyişiklikləri təsdiqləyir. Çağırılmazsa geri qaytarılır.
+
+        ──────────────────────────────────────────────────────────────────────
+        `AND CHAIN` — ÜÇ GEDİŞ-GƏLİŞ ƏVƏZİNƏ İKİ (PERF-1)
+        ──────────────────────────────────────────────────────────────────────
+        Metod `commit()`-dən SONRA da işlək UoW qaytarmalıdır: çağıran eyni
+        sessiyada işini davam etdirə bilər. Əvvəl bu, üç ayrı sorğu idi —
+        `COMMIT`, açıq `BEGIN`, sonra kontekst. Halbuki `BEGIN` psycopg-nin
+        ONSUZ DA açdığı tranzaksiyanın üstünə düşürdü (bax `__enter__`).
+
+        `COMMIT AND CHAIN` (PostgreSQL 12+) təsdiqləyir və EYNİ gediş-gəlişdə
+        yeni tranzaksiya açır. Kontekst YENƏ DƏ tətbiq olunur: `AND CHAIN`
+        yalnız tranzaksiya XARAKTERİSTİKALARINI (izolyasiya səviyyəsi və s.)
+        daşıyır, `SET LOCAL` dəyərləri isə köhnə tranzaksiya ilə birlikdə
+        itir. Bu, SEC-008-in tələbidir və optimallaşdırıla BİLMƏZ — kontekstsiz
+        qalan sessiya RLS altında sükutla BOŞ nəticə qaytarardı.
+        """
         self._require_active()
         assert self._conn is not None
-        self._conn.execute("COMMIT")
-        # Növbəti əməliyyatlar üçün yeni tranzaksiya + kontekst.
-        self._conn.execute("BEGIN")
+        self._conn.execute("COMMIT AND CHAIN")
         self._apply_tenant_context()
         self._committed = True
 
     def rollback(self) -> None:
         self._require_active()
         assert self._conn is not None
-        self._conn.execute("ROLLBACK")
-        self._conn.execute("BEGIN")
+        self._conn.execute("ROLLBACK AND CHAIN")
         self._apply_tenant_context()
         self._committed = False
 

@@ -31,6 +31,7 @@ zərər verir — o, nə qədər gözləməli olduğunu bilməlidir.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Protocol
 
 from src.application.use_cases.authentication import (
@@ -41,6 +42,8 @@ from src.application.use_cases.authentication import (
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
+    from contextlib import AbstractContextManager
+
     from src.application.use_cases.authentication import AdminLoginUseCase, LoginResult
     from src.domain.entities.employee import Employee
     from src.domain.value_objects.credentials import Username
@@ -57,6 +60,26 @@ class CredentialSource(Protocol):
     """Şifrə hash-ını verən mənbə (`PostgresEmployeeRepository` bunu ödəyir)."""
 
     def credentials_for(self, employee_id: EmployeeId) -> Credentials | None: ...
+
+
+class AttemptScope(Protocol):
+    """Bir giriş cəhdinin SƏRHƏDİ — üç oxunun BİR tranzaksiyada qalması üçün.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ LAZIM OLDU (PERF-2)
+    ──────────────────────────────────────────────────────────────────────────
+    Bir giriş cəhdi üç ayrı oxu edir: işçi sətri, şifrə hash-ı, sonra use
+    case-in özü. Hər üçü ayrı sessiya açsaydı — və məhz belə idi — uzaq bazada
+    hər biri təxminən 0.8 saniyə çəkirdi: istifadəçi «Daxil Ol» düyməsindən
+    sonra üç saniyəyə yaxın gözləyirdi. Kod bunu artıq NƏZƏRDƏ TUTMUŞDU (bax
+    `app._SessionScopedLogin` başlığı: «ayrı-ayrı olsaydılar bir giriş cəhdi üç
+    ardıcıl tranzaksiya açardı»), lakin sərhədi işarələyən bir şey yox idi.
+
+    Sərhəd BURADADIR, körpüdə deyil: yalnız kontroller «cəhd nə vaxt başlayıb
+    nə vaxt bitir» sualının cavabını bilir.
+    """
+
+    def attempt(self) -> AbstractContextManager[None]: ...
 
 
 class EmployeeLookup(Protocol):
@@ -103,11 +126,15 @@ class AuthController:
         credentials: CredentialSource,
         employees: EmployeeLookup,
         tenant_id: TenantId,
+        scope: AttemptScope | None = None,
     ) -> None:
         self._login = login_use_case
         self._credentials = credentials
         self._employees = employees
         self._tenant_id = tenant_id
+        #: İSTƏYƏ BAĞLI: verilməzsə hər oxu öz sessiyasını açır — testlərdəki
+        #: yaddaş sahtələri üçün doğru davranış budur (bax `AttemptScope`).
+        self._scope = scope
 
     def authenticate(self, username: Username, password: str) -> AuthOutcome:
         """Giriş cəhdi — heç vaxt istisna atmır.
@@ -115,7 +142,15 @@ class AuthController:
         Ekran nəticəni birbaşa göstərə bilsin deyə hər hal `AuthOutcome`-a
         çevrilir; gözlənilməz istisna da tutulur, çünki giriş ekranında
         çökmək istifadəçini tamamilə bloklayardı.
+
+        Bütün gövdə BİR `attempt()` sərhədindədir (PERF-2): üç oxu eyni
+        tranzaksiyanı paylaşır. Sərhəd `finally` ilə deyil, kontekst meneceri
+        ilə qurulur — istisna halında da bağlanmalıdır.
         """
+        with self._scope.attempt() if self._scope is not None else nullcontext():
+            return self._authenticate(username, password)
+
+    def _authenticate(self, username: Username, password: str) -> AuthOutcome:
         stored_hash, pepper_version = self._lookup_secret(username)
 
         try:
@@ -164,6 +199,7 @@ class AuthController:
 
 __all__ = [
     "GENERIC_FAILURE_MESSAGE",
+    "AttemptScope",
     "AuthController",
     "AuthOutcome",
     "CredentialSource",

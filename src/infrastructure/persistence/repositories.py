@@ -25,6 +25,7 @@ from src.domain.entities.employee import Employee
 from src.domain.entities.fine import EXPORTABLE_STATUSES, Fine, FineStatus
 from src.domain.entities.leave_request import LeaveRequest, LeaveStatus
 from src.domain.entities.position import Position
+from src.domain.value_objects.authorization import RolePriority
 from src.domain.value_objects.credentials import Username
 from src.domain.value_objects.identifiers import (
     AttendanceRecordId,
@@ -266,6 +267,25 @@ class PostgresEmployeeRepository(_BaseRepository):
               AND e.is_active
             """,
             (tenant_id, flag_code),
+        )
+        return int(row["n"]) if row else 0
+
+    def count_active_ranked_at_or_above(self, tenant_id: TenantId, priority: RolePriority) -> int:
+        """İyerarxiya pilləsinə görə sayğac (SETUP-3) — `<=`, çünki 0 ən yüksəkdir.
+
+        `v_effective_permissions` İSTİFADƏ EDİLMİR: sual səlahiyyət haqqında
+        deyil, PİLLƏ haqqındadır. Flag dəsti Root tərəfindən dəyişdirilə bilər,
+        pillə isə rolun tərifidir — «tenant sahibsiz qaldımı?» sualının cavabı
+        konfiqurasiyadan asılı olmamalıdır.
+        """
+        row = self._fetch_one(
+            """
+            SELECT count(*)::int AS n
+            FROM employees e
+            JOIN positions p ON p.id = e.position_id
+            WHERE e.tenant_id = %s AND e.is_active AND p.is_active AND p.priority <= %s
+            """,
+            (tenant_id, int(priority)),
         )
         return int(row["n"]) if row else 0
 
