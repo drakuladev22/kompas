@@ -62,10 +62,12 @@ class AdminShell(QWidget):
 
     Signals:
         theme_toggle_requested: İstifadəçi tema düyməsini basdı.
+        logout_requested: Hesab menyusundan «Çıxış» seçildi (RECOVERY-1).
         screen_changed: Aktiv ekran dəyişdi (`key`).
     """
 
     theme_toggle_requested = Signal()
+    logout_requested = Signal()
     #: Artıq qurulmuş ekrana qayıdış — məlumatın təzələnməsi üçün
     #: (bax `show_screen` içindəki izah).
     screen_revisited = Signal(str)
@@ -126,6 +128,9 @@ class AdminShell(QWidget):
         )
         self._header.theme_toggled.connect(self.theme_toggle_requested)
         self._header.profile_clicked.connect(lambda: self.show_screen("profile"))
+        # Örtük çıxışı ÖZÜ icra etmir — sessiyanı yalnız tətbiq bağlaya bilər
+        # (`KompasApplication.logout`). Örtük burada sadəcə xəbər verir.
+        self._header.logout_requested.connect(self.logout_requested)
         self._header.set_user(employee.full_name)
         right_layout.addWidget(self._header)
 

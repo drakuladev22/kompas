@@ -94,16 +94,53 @@ def test_the_datas_block_only_carries_known_assets() -> None:
     # Loqo PNG-ləri (logo.md): başlıq zolağı və splash onları RUNTIME-da oxuyur,
     # yəni `.ico` tək başına kifayət etmir.
     assert "'assets/logo'" in block
-    # Hər `datas` elementi ya ikon, ya loqo dəsti, ya da üz modelləridir.
+    # Sxem + miqrasiyalar (RECOVERY-1): «Bazanı Avtomatik Qur» proqramın NƏ
+    # quracağını özü ilə daşımasını tələb edir. Bunlar SİRR DEYİL — ona görə
+    # yuxarıdakı `_FORBIDDEN` qapısı pozulmur.
+    assert "_DATABASE_DATAS" in block
+    spec = _spec_text()
+    assert "schema.sql" in spec
+    assert "'database/migrations'" in spec
+    # `vendor/` alt dəsti müştəri paketinə DÜŞMƏMƏLİDİR: o, təchizatçının
+    # mərkəzi bazası üçündür (DB-3). Glob KÖK səviyyəni götürür.
+    assert "'migrations', '[0-9][0-9][0-9]_*.sql'" in spec
+    # Hər `datas` elementi ya ikon, ya loqo, ya üz modeli, ya da sxem dəstidir.
     entries = [line.strip() for line in block.splitlines() if line.strip().startswith(("(", "*"))]
-    assert len(entries) == 3, f"gözlənilməyən `datas` elementləri: {entries}"
-    assert entries[2].startswith("*_FACE_MODEL_DATAS")
+    assert len(entries) == 4, f"gözlənilməyən `datas` elementləri: {entries}"
 
 
 def test_the_test_tree_is_excluded() -> None:
     """`tests` paketə düşmür — hücum səthi və ölçü."""
     text = _spec_text()
-    assert "excludes=['pytest', '_pytest', 'tests']" in text
+    assert "excludes=['pytest', '_pytest', 'tests'," in text
+
+
+def test_unused_qt_modules_are_excluded() -> None:
+    """`QtWebEngine` tək başına ~100 MB-dır və heç yerdə idxal olunmur.
+
+    Kod bazasında YALNIZ `QtWidgets`, `QtCore`, `QtGui`, `QtSvg` işlədilir;
+    PyInstaller-in PySide6 hook-u isə tapdığı hər şeyi yığır. Ölçü həm disk,
+    həm də AÇILMA vaxtıdır — hər fayl işə düşərkən oxunur.
+    """
+    text = _spec_text()
+    assert "_UNUSED_QT_MODULES" in text
+    assert "'PySide6.QtWebEngineCore'," in text
+    # İŞLƏDİLƏN dörd modul siyahıda OLMAMALIDIR — biri səhvən əlavə olunsa,
+    # paket qurulur, proqram isə müştəri maşınında idxal xətası ilə çökərdi.
+    for used in ("'PySide6.QtWidgets'", "'PySide6.QtCore'", "'PySide6.QtGui'", "'PySide6.QtSvg'"):
+        assert used not in text, f"{used} işlədilir, çıxarıla bilməz"
+
+
+def test_the_package_is_built_as_a_directory_not_a_single_file() -> None:
+    """`--onefile` hər açılışda 230 MB-ı `%TEMP%`-ə açırdı (5-15 saniyə).
+
+    `exclude_binaries=True` + `COLLECT` — `--onedir` rejiminin spec qarşılığı.
+    Bunlardan biri itsə paket sükutla `--onefile`-a qayıdar və yavaşlama
+    yalnız müştəri maşınında hiss olunardı.
+    """
+    text = _spec_text()
+    assert "exclude_binaries=True" in text
+    assert "coll = COLLECT(" in text
 
 
 def test_the_bootstrap_script_is_not_bundled() -> None:

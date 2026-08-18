@@ -60,6 +60,7 @@ from src.domain.value_objects.identifiers import (
     new_face_exemption_id,
 )
 from src.presentation import preview_data
+from src.presentation.background_task import InlineExecutor
 from src.presentation.controllers.face_control import (
     CAMERA_READY,
     CAMERA_UNAVAILABLE,
@@ -716,7 +717,11 @@ def test_enrollment_commits_only_when_the_frames_pass() -> None:
 
     accepted = _EnrollmentUseCase(result=_accepted_result(subject))
     session = _FaceSession(enrollment=accepted)
-    controller = FaceEnrollmentController(_FaceContext(session), actor)  # type: ignore[arg-type]
+    controller = FaceEnrollmentController(
+        _FaceContext(session),  # type: ignore[arg-type]
+        actor,
+        executor=InlineExecutor(),
+    )
     screen = _EnrollmentScreen()
     controller._on_capture(screen, str(subject))  # type: ignore[arg-type]
     assert session.commits == 1
@@ -724,7 +729,11 @@ def test_enrollment_commits_only_when_the_frames_pass() -> None:
 
     rejected = _EnrollmentUseCase(result=_rejected_result(subject))
     session = _FaceSession(enrollment=rejected)
-    controller = FaceEnrollmentController(_FaceContext(session), actor)  # type: ignore[arg-type]
+    controller = FaceEnrollmentController(
+        _FaceContext(session),  # type: ignore[arg-type]
+        actor,
+        executor=InlineExecutor(),
+    )
     screen = _EnrollmentScreen()
     controller._on_capture(screen, str(subject))  # type: ignore[arg-type]
     assert session.commits == 0
@@ -735,7 +744,11 @@ def test_the_frame_reasons_reach_the_screen_one_by_one() -> None:
     """«uğursuz» deyil, SƏBƏB: operatorun növbəti addımı ondan asılıdır."""
     subject = EmployeeId(uuid.uuid4())
     session = _FaceSession(enrollment=_EnrollmentUseCase(result=_accepted_result(subject)))
-    controller = FaceEnrollmentController(_FaceContext(session), _hr_admin())  # type: ignore[arg-type]
+    controller = FaceEnrollmentController(
+        _FaceContext(session),  # type: ignore[arg-type]
+        _hr_admin(),
+        executor=InlineExecutor(),
+    )
     screen = _EnrollmentScreen()
 
     controller._on_capture(screen, str(subject))  # type: ignore[arg-type]
@@ -750,7 +763,11 @@ def test_the_screen_is_refreshed_before_the_result_is_written() -> None:
     """SIRA: `refresh()` seçim siqnalını işə salır və nəticəni silərdi."""
     subject = EmployeeId(uuid.uuid4())
     session = _FaceSession(enrollment=_EnrollmentUseCase(result=_accepted_result(subject)))
-    controller = FaceEnrollmentController(_FaceContext(session), _hr_admin())  # type: ignore[arg-type]
+    controller = FaceEnrollmentController(
+        _FaceContext(session),  # type: ignore[arg-type]
+        _hr_admin(),
+        executor=InlineExecutor(),
+    )
     screen = _EnrollmentScreen()
 
     controller._on_capture(screen, str(subject))  # type: ignore[arg-type]
@@ -767,7 +784,11 @@ def test_a_domain_error_reaches_the_operator_as_user_message() -> None:
             error=_DeniedError("öz üzünüzü özünüz qeydiyyata sala bilməzsiniz"),
         )
     )
-    controller = FaceEnrollmentController(_FaceContext(session), _hr_admin())  # type: ignore[arg-type]
+    controller = FaceEnrollmentController(
+        _FaceContext(session),  # type: ignore[arg-type]
+        _hr_admin(),
+        executor=InlineExecutor(),
+    )
     screen = _EnrollmentScreen()
 
     controller._on_capture(screen, str(subject))  # type: ignore[arg-type]
@@ -781,7 +802,11 @@ def test_a_malformed_employee_id_never_opens_a_session() -> None:
         enrollment=_EnrollmentUseCase(result=_accepted_result(EmployeeId(uuid.uuid4())))
     )
     context = _FaceContext(session)
-    controller = FaceEnrollmentController(context, _hr_admin())  # type: ignore[arg-type]
+    controller = FaceEnrollmentController(
+        context,  # type: ignore[arg-type]
+        _hr_admin(),
+        executor=InlineExecutor(),
+    )
     screen = _EnrollmentScreen()
 
     controller._on_capture(screen, "işçi-yox")  # type: ignore[arg-type]
@@ -812,7 +837,11 @@ def test_the_frame_count_comes_from_the_root_parameter() -> None:
     session = _FaceSession(
         enrollment=_EnrollmentUseCase(result=_accepted_result(EmployeeId(uuid.uuid4())))
     )
-    controller = FaceEnrollmentController(_FaceContext(session), _hr_admin())  # type: ignore[arg-type]
+    controller = FaceEnrollmentController(
+        _FaceContext(session),  # type: ignore[arg-type]
+        _hr_admin(),
+        executor=InlineExecutor(),
+    )
     screen = _EnrollmentScreen()
 
     controller.refresh(screen)  # type: ignore[arg-type]
@@ -831,7 +860,11 @@ def test_retake_repeats_the_re_enrollment_when_the_screen_is_in_that_mode() -> N
         enrollment=_EnrollmentUseCase(result=_accepted_result(subject)),
         re_enrollment=re_enrollment,
     )
-    controller = FaceEnrollmentController(_FaceContext(session), _hr_admin())  # type: ignore[arg-type]
+    controller = FaceEnrollmentController(
+        _FaceContext(session),  # type: ignore[arg-type]
+        _hr_admin(),
+        executor=InlineExecutor(),
+    )
     screen = _EnrollmentScreen(mode="RE_ENROLL", reason="Eynək dəyişib, üz tanınmır")
 
     controller._on_retake(screen, str(subject))  # type: ignore[arg-type]

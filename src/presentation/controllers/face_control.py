@@ -50,6 +50,8 @@ from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from src.domain.entities.employee import Employee
     from src.presentation.composition import ApplicationContext, Session
     from src.presentation.screens.face_control import (
@@ -108,12 +110,53 @@ def enrollment_state(enrolled_at: datetime | None, *, now: datetime, reminder_mo
 # --------------------------------------------------------------------------- #
 
 
+def run_enrollment_job(
+    _app: object,
+    job: Callable[[], object],
+    *,
+    on_success: Callable[[Any], None],
+    on_failure: Callable[[BaseException], None],
+    executor: Any = None,
+) -> Any:
+    """Ağır üz emalını FON SAPINA buraxır və nəticəni GUI sapına qaytarır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AYRICA FUNKSİYA — METOD DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Beləliklə icra yeri KONTROLLERDƏN ASILI OLMADAN ölçülə bilir
+    (`test_face_enrollment_threading.py`): test sahtə iş verir və işin HANSI
+    sapda getdiyini yoxlayır. Metod olsaydı, test tam kontroller qrafını
+    (kontekst, aktor, ekran) qurmalı olardı və ölçdüyü şey — sap — həmin
+    quraşdırmanın altında itərdi.
+
+    Qaytarılan `BackgroundTask` çağıranda SAXLANILMALIDIR: nəticə gəlməmiş
+    Python onu topladıqda siqnal sükutla itərdi.
+
+    `executor` verilməzsə Qt sap hovuzu işlədilir. Testlər `InlineExecutor`
+    ötürür: onlar İCRA YERİNİ deyil, MƏNTİQİ ölçür və hadisə dövrəsi
+    gözləməsi qeyri-sabit test yaradardı (bax `background_task` başlığı).
+    """
+    from src.presentation.background_task import BackgroundTask  # noqa: PLC0415
+
+    task = BackgroundTask(name="FACE_ENROLLMENT", executor=executor)
+    task.succeeded.connect(on_success)
+    task.failed.connect(on_failure)
+    task.run(job)
+    return task
+
+
 class FaceEnrollmentController:
     """«Üz Qeydiyyatı» ekranını `FaceEnrollmentUseCase`-ə bağlayır."""
 
-    def __init__(self, context: ApplicationContext, actor: Employee) -> None:
+    def __init__(
+        self, context: ApplicationContext, actor: Employee, *, executor: Any = None
+    ) -> None:
         self._context = context
         self._actor = actor
+        #: Fon icraçısı — istehsalatda Qt hovuzu, testlərdə `InlineExecutor`.
+        self._executor = executor
+        #: Qaçan işə istinad: nəticə gəlməmiş toplanarsa siqnal itərdi.
+        self._task: Any = None
 
     # ------------------------------- qoşulma --------------------------------- #
 
@@ -191,14 +234,28 @@ class FaceEnrollmentController:
         self._on_capture(screen, employee_id)
 
     def _run(self, screen: FaceEnrollmentScreen, action: Any) -> None:
-        """Ortaq icra qabığı — nəticə ekrana, istisna `user_message` kimi.
+        """Ortaq icra qabığı — iş FON SAPINDA, nəticə isə GUI sapında.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ FON SAPI (SETUP-1 Faza 3)
+        ──────────────────────────────────────────────────────────────────────
+        Bu qabığın içindəki iş üç ağır addımdan ibarətdir: kamera kadr çəkir,
+        `dlib` hər kadr üçün 128-ölçülü kodlaşdırma hesablayır, sonra baza
+        yazısı gedir — saniyələrlə çəkən CPU işi. GUI sapında icra olunanda
+        pəncərə həmin müddət boyu «Cavab vermir» olurdu və operator proqramı
+        bağlamağa çalışırdı, məhz üz məlumatı yazılarkən.
 
         SIRA VACİBDİR: əvvəlcə `refresh()` (siyahı və vəziyyət yenilənir),
         SONRA `set_result()`. Tərsinə etsəydik, `refresh()` seçim siqnalını
         yenidən işə salar və nəticə mesajını silərdi — operator «heç nə
         olmadı» görərdi.
+
+        SESSİYA FON SAPINDA AÇILIR: `BackgroundTask` sənədinin tələbi budur —
+        DB bağlantısı sapa bağlıdır və GUI sapında açılan sessiyanı fon
+        sapından işlətmək bağlantını korlayardı.
         """
-        try:
+
+        def job() -> object:
             with self._context.session(user_id=self._actor.id) as session:
                 result = action(session)
                 if result.accepted:
@@ -209,17 +266,23 @@ class FaceEnrollmentController:
                     # izini qoyardı (bax `FaceReEnrollmentUseCase.re_enroll`
                     # sonundakı şərh).
                     session.commit()
-        except KompasOSError as error:
-            self._fail(screen, error.user_message)
-            return
-        except Exception:
-            _error_log.exception("FACE_ENROLLMENT_WRITE_FAILED")
-            self._fail(screen, "Əməliyyat tamamlanmadı. Yenidən cəhd edin.")
-            return
+                return result
 
-        self.refresh(screen)
-        screen.set_result(_result_row(result))
-        screen.set_frames([_frame_row(frame) for frame in result.frames])
+        def succeeded(result: Any) -> None:
+            self.refresh(screen)
+            screen.set_result(_result_row(result))
+            screen.set_frames([_frame_row(frame) for frame in result.frames])
+
+        def failed(error: BaseException) -> None:
+            if isinstance(error, KompasOSError):
+                self._fail(screen, error.user_message)
+                return
+            _error_log.error("FACE_ENROLLMENT_WRITE_FAILED", exc_info=error)
+            self._fail(screen, "Əməliyyat tamamlanmadı. Yenidən cəhd edin.")
+
+        self._task = run_enrollment_job(
+            None, job, on_success=succeeded, on_failure=failed, executor=self._executor
+        )
 
     @staticmethod
     def _fail(screen: FaceEnrollmentScreen, message: str) -> None:

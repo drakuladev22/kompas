@@ -262,16 +262,19 @@ def test_watchdog_command_is_accepted_by_the_argument_parser(
 
 @pytest.fixture
 def user_data_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """İstifadəçi məlumat qovluğunu testin müvəqqəti qovluğuna yönləndirir.
+    """Paylaşılan məlumat qovluğunu testin müvəqqəti qovluğuna yönləndirir.
 
-    Hər iki dəyişən (Windows `LOCALAPPDATA` və POSIX `XDG_DATA_HOME`) EYNİ
-    kökə baxır ki, gözlənilən nəticə işlədiyimiz OS-dən asılı olmasın.
+    `PROGRAMDATA` və POSIX qarşılığı `XDG_DATA_HOME` EYNİ kökə baxır ki,
+    gözlənilən nəticə işlədiyimiz OS-dən asılı olmasın. `LOCALAPPDATA` isə
+    QƏSDƏN AYRI qovluğa yönləndirilir: ikisi eyni yerə baxsaydı, «paylaşılan,
+    yoxsa istifadəçiyə xas?» sualını ölçən test heç nə sübut etməzdi.
     Mövcud `KOMPASOS_*` açarları silinir — testin nəticəsi geliştiricinin
     `.env` faylından asılı OLMAMALIDIR.
     """
-    root = tmp_path / "AppData" / "Local"
+    root = tmp_path / "ProgramData"
     root.mkdir(parents=True)
-    monkeypatch.setenv("LOCALAPPDATA", str(root))
+    monkeypatch.setenv("PROGRAMDATA", str(root))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
     monkeypatch.setenv("XDG_DATA_HOME", str(root))
     monkeypatch.delenv("KOMPASOS_SQLITE_PATH", raising=False)
     monkeypatch.delenv("KOMPASOS_EVIDENCE_QUEUE_PATH", raising=False)
@@ -562,3 +565,103 @@ def test_system_python_is_accepted_when_the_package_has_none(
     monkeypatch.setattr(shutil, "which", lambda _name: system_python)
 
     assert plugin_interpreter() == system_python
+
+
+# --------------------------------------------------------------------------- #
+# Setup ilə quraşdırma: YAZILAN fayllar `Program Files`-a düşməməlidir
+# (SETUP-1 Faza 2)
+#
+# `Setup.exe` proqramı `C:\Program Files\KompasOS\`-a qoyur. Standart
+# istifadəçi ora YAZA BİLMİR, yəni log, SQLite bufer və DPAPI blobu üçün
+# yeganə düzgün yer paylaşılan `%PROGRAMDATA%`-dır. Üstəlik mağaza PC-si
+# PAYLAŞILAN cihazdır: ikinci Windows hesabı EYNİ faylları görməlidir — bu,
+# `connection.json` üçün artıq verilmiş qərarın eynisidir.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.usefixtures("user_data_root")
+def test_the_sqlite_root_is_machine_wide_not_per_user(tmp_path: Path) -> None:
+    """Bufer istifadəçiyə xas olsaydı, ikinci hesab GÖNDƏRİLMƏMİŞ yazıları
+    ümumiyyətlə görməzdi — və onlar sükutla itərdi."""
+    from src.shared.data_paths import default_data_dir
+
+    assert default_data_dir() == tmp_path / "ProgramData" / "KompasOS" / "data"
+
+
+def test_the_log_directory_does_not_depend_on_the_working_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`Path.cwd()/logs` Start menyusundan açılanda `System32\\logs` demək idi.
+
+    Qısayoldan işə düşən `.exe`-nin CWD-si ixtiyaridir; quraşdırma qovluğu
+    isə yazıla bilmir. Hər iki halda ilk log yazısı uğursuz olurdu.
+    """
+    from src.shared.data_paths import default_log_dir
+
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "ProgramData"))
+    monkeypatch.delenv("KOMPASOS_LOG_DIR", raising=False)
+
+    resolved = default_log_dir()
+
+    assert resolved == tmp_path / "ProgramData" / "KompasOS" / "logs"
+    assert Path.cwd() not in resolved.parents
+
+
+def test_an_explicit_log_directory_still_wins(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """MÖVCUD DAVRANIŞ: quraşdırıcının açıq qərarı üstündür."""
+    from src.shared.data_paths import default_log_dir
+
+    monkeypatch.setenv("KOMPASOS_LOG_DIR", str(tmp_path / "xüsusi-log"))
+
+    assert default_log_dir() == tmp_path / "xüsusi-log"
+
+
+def test_a_machine_scoped_dpapi_blob_lives_beside_the_shared_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Blobun yeri açarın ƏHATƏSİ ilə uyğun olmalıdır.
+
+    `connection.json` MAŞIN əhatəli açarla şifrələnir, blob faylı isə
+    istifadəçinin `%LOCALAPPDATA%`-sında idi. Nəticə: ikinci Windows hesabı
+    paylaşılan faylı OXUYUR, lakin açarı TAPMIR və «açar bu kompüterdə
+    dəyişib» xətası alırdı — yəni paylaşılan konfiqurasiyanın bütün mənası
+    itirdi.
+    """
+    from src.infrastructure.security.encryption import DPAPI_BLOB_ENV, WindowsDpapiKeyProvider
+
+    monkeypatch.delenv(DPAPI_BLOB_ENV, raising=False)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+
+    machine = WindowsDpapiKeyProvider(machine_scope=True)
+    user = WindowsDpapiKeyProvider(machine_scope=False)
+
+    assert machine.blob_path.parent == tmp_path / "ProgramData" / "KompasOS"
+    assert user.blob_path.parent == tmp_path / "Local" / "KompasOS"
+
+
+def test_an_existing_user_scoped_blob_is_still_honoured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Köhnə quraşdırmada blob köçürülmür — TANINIR.
+
+    Köçürsəydik, yarımçıq əməliyyat açarı itirər və onunla şifrələnmiş HƏR
+    ŞEY (bağlantı parolu, ERP tokenləri) bərpa edilməz olardı.
+    """
+    from src.infrastructure.security.encryption import (
+        DEFAULT_DPAPI_FILENAME,
+        DPAPI_BLOB_ENV,
+        WindowsDpapiKeyProvider,
+    )
+
+    monkeypatch.delenv(DPAPI_BLOB_ENV, raising=False)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    legacy = tmp_path / "Local" / "KompasOS" / DEFAULT_DPAPI_FILENAME
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes("köhnə blob".encode())
+
+    assert WindowsDpapiKeyProvider(machine_scope=True).blob_path == legacy

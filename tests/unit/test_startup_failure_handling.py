@@ -63,6 +63,59 @@ def test_a_missing_configuration_asks_for_settings() -> None:
     assert failure.kind.is_configuration_problem
 
 
+def test_a_freshly_installed_machine_reaches_the_settings_screen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SETUP-1 Faza 4: Setup ilə quraşdırılmış, config-siz maşın.
+
+    Bu, müştərinin GÖRDÜYÜ İLK vəziyyətdir: `.exe` `Program Files`-dadır,
+    `ProgramData` boşdur, `DATABASE_URL` yoxdur (tətbiq `.env` oxumur).
+    Tələb: proqram ÇÖKMƏMƏLİ, aydın şəkildə «Bağlantı Ayarları» ekranına
+    yönləndirməlidir — və oradan yazılan fayl `ProgramData`-ya düşməlidir.
+    """
+    from src.infrastructure.config.connection_file import (
+        CONNECTION_FILE_ENV,
+        ConnectionSettings,
+        save_settings,
+    )
+    from src.infrastructure.persistence.connection import build_dsn_from_env
+    from src.infrastructure.security.encryption import generate_key
+    from src.shared.exceptions import ConfigurationError
+
+    # Şifrələmə açarı mühitdən gəlir — DPAPI (Windows API) çağırılmır və test
+    # platformadan asılı olmur (`test_connection_file.py`-dakı eyni naxış).
+    monkeypatch.setenv("KOMPASOS_FERNET_KEY", generate_key())
+    program_data = tmp_path / "ProgramData"
+    program_data.mkdir()
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv(CONNECTION_FILE_ENV, raising=False)
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(program_data))
+    monkeypatch.setattr(
+        "src.infrastructure.config.connection_file.deployment_root",
+        lambda: tmp_path / "ProgramFiles",
+    )
+
+    with pytest.raises(ConfigurationError) as raised:
+        build_dsn_from_env()
+
+    assert classify_connection_failure(raised.value).kind.is_configuration_problem
+    assert "Bağlantı Ayarları" in raised.value.user_message
+
+    written = save_settings(
+        ConnectionSettings(
+            host="db.example",
+            port=5432,
+            database="postgres",
+            username="postgres",
+            password="parol",
+        )
+    )
+
+    assert written == program_data / "KompasOS" / "connection.json"
+
+
 def test_a_broken_configuration_file_asks_for_settings() -> None:
     """Fayl var, lakin oxunmur — «konfiqurasiya yoxdur»dan FƏRQLİ haldır."""
     from src.infrastructure.config.connection_file import ConnectionFileError
@@ -206,7 +259,20 @@ def test_a_network_failure_offers_only_retry(qtbot, qt_app) -> None:  # type: ig
 
 
 @requires_qt
-def test_a_configuration_failure_offers_the_settings_screen(qtbot, qt_app) -> None:  # type: ignore[no-untyped-def]
+def test_the_customer_screen_shows_nothing_but_retry(qtbot, qt_app) -> None:  # type: ignore[no-untyped-def]
+    """Görünən ekranda AYARLAR DÜYMƏSİ OLMAMALIDIR (RECOVERY-1 Faza 2).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ DÜYMƏ ÇIXARILDI
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl konfiqurasiya nasazlığında ekran «Bağlantı Ayarları» təklif edirdi.
+    Nəticə: mağaza işçisi problemi ÖZÜ «düzəltməyə» çalışır və İŞLƏK
+    konfiqurasiyanı poza bilir — sonra həm nasazlıq, həm də səbəbi dəyişmiş
+    olur, dəstək isə ikisini birdən araşdırmalı qalır.
+
+    İndi eyni imkan TEXNİKİN əlindədir: `Ctrl+Shift+K` → Bərpa Konsolu
+    (`controllers/recovery_console.may_open` qapısı ilə).
+    """
     from PySide6.QtWidgets import QPushButton
 
     from src.presentation.screens.group_a_entry import FatalStartupScreen
@@ -216,11 +282,11 @@ def test_a_configuration_failure_offers_the_settings_screen(qtbot, qt_app) -> No
     theme = ThemeManager(preference=ThemeMode.LIGHT)
     theme.apply(qt_app)
 
-    screen = FatalStartupScreen(theme, message="xəta", retry=True, configure=True)
+    screen = FatalStartupScreen(theme, message="xəta", retry=True)
     labels = [button.text() for button in screen.findChildren(QPushButton)]
 
-    assert "Bağlantı Ayarları" in labels
-    assert "Yenidən Cəhd Et" in labels
+    assert "Bağlantı Ayarları" not in labels
+    assert labels == ["Yenidən Cəhd Et"]
 
 
 @requires_qt
@@ -444,10 +510,24 @@ def test_an_empty_password_keeps_the_stored_one(  # type: ignore[no-untyped-def]
 # `main` növü ötürməsə, istifadəçi onları HEÇ VAXT görməz.
 
 
-def test_main_passes_the_failure_kind_and_a_rebuild_callable(
+def test_main_does_not_open_the_database_before_the_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`main._run_gui` nasazlıq NÖVÜNÜ və yenidən-qurma çağırışını ötürməlidir."""
+    """`main._run_gui` bazaya TOXUNMUR — kontekst splash arxasında qurulur.
+
+    ──────────────────────────────────────────────────────────────────────────
+    MÜQAVİLƏ NİYƏ KÖÇDÜ
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl `_run_gui` `build_context()`-i ÖZÜ çağırır, `StartupError`-u tutur
+    və nəticəni `run()`-a ötürürdü. Nəticə: server əlçatmaz olan maşında
+    bağlantı taymautu (15 saniyəyədək) PƏNCƏRƏDƏN ƏVVƏL gedirdi və istifadəçi
+    boş ekran görürdü (SETUP-1).
+
+    İndi məsuliyyət `run()`-dadır: splash dərhal göstərilir, kontekst isə fon
+    sapında qurulur. Nasazlığın mətni və NÖVÜ itmir — onu
+    `test_startup_splash_loading.py` ölçür. Burada ölçülən şey budur ki,
+    `_run_gui` bazaya ÜMUMİYYƏTLƏ toxunmur.
+    """
     import argparse
 
     import src.main as main_module
@@ -455,27 +535,29 @@ def test_main_passes_the_failure_kind_and_a_rebuild_callable(
     from src.presentation import composition as composition_module
 
     captured: dict[str, Any] = {}
+    opened: list[str] = []
 
-    def _failing_build(**kwargs: Any) -> Any:
-        raise StartupError(
-            "baza yoxdur",
-            user_message="Bağlantı konfiqurasiya edilməyib.",
-            kind=StartupFailureKind.CREDENTIALS_MISSING,
-        )
+    def _must_not_run(**kwargs: Any) -> Any:  # pragma: no cover - çağırılmamalıdır
+        opened.append("build_context")
+        raise AssertionError("`_run_gui` bazanı pəncərədən əvvəl açdı")
 
     def _fake_run(**kwargs: Any) -> int:
         captured.update(kwargs)
         return 0
 
-    monkeypatch.setattr(composition_module, "build_context", _failing_build)
+    monkeypatch.setattr(composition_module, "build_context", _must_not_run)
     monkeypatch.setattr(app_module, "run", _fake_run)
 
     args = argparse.Namespace(preview=False, kiosk=False, theme="light")
     assert main_module._run_gui(args) == 0
 
-    assert captured["startup_failure_kind"] is StartupFailureKind.CREDENTIALS_MISSING
+    assert opened == [], "kontekst hələ də pəncərədən əvvəl qurulur"
+    assert captured["context"] is None
+    assert captured["startup_error"] == ""
+    assert captured["startup_failure_kind"] is None
+    # «Yenidən cəhd et» və Bağlantı Ayarları ekranı BUNA bağlıdır — ötürülməsə
+    # düymələr ümumiyyətlə göstərilmir (bax `run()` docstring-i).
     assert callable(captured["rebuild_context"])
-    assert captured["startup_error"] == "Bağlantı konfiqurasiya edilməyib."
 
 
 def test_preview_mode_offers_no_retry(monkeypatch: pytest.MonkeyPatch) -> None:

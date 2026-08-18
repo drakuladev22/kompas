@@ -159,9 +159,20 @@ class FramelessWindow(QWidget):
     # ------------------------------- məzmun --------------------------------- #
 
     def set_content(self, widget: QWidget) -> None:
-        """Başlıq zolağının altındakı əsas məzmunu təyin edir."""
+        """Başlıq zolağının altındakı əsas məzmunu təyin edir.
+
+        Köhnə ekran MƏHV olur və fokuslu düyməsi onunla birlikdə gedir. Qt
+        həmin anda fokusu zəncirin növbəti elementinə — başlıq zolağına —
+        `TabFocusReason` ilə ötürür; halqa məntiqi isə bu səbəbi klaviatura
+        fokusu sayır (bax `KeyFocusRingMixin.clear_key_focus_ring`). Nəticədə
+        istifadəçi düyməni SİÇANLA basandan sonra tema düyməsinin
+        işıqlandığını görürdü. Halqa burada söndürülür, çünki keçidin ekran
+        əvəzlənməsi olduğunu YALNIZ bu metod bilir.
+        """
         detach_layout(self._body_layout)
         self._body_layout.addWidget(widget)
+        if self._title_bar is not None:
+            self._title_bar.clear_key_focus_rings()
 
     def title_bar(self) -> TitleBar | None:
         """Başlıq zolağı — adı dəyişmək üçün (`"KompasOS — Master"`)."""

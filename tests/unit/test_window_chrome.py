@@ -191,6 +191,54 @@ def test_opening_the_window_does_not_draw_a_focus_ring(qt_app) -> None:  # type:
 
 
 @requires_qt
+def test_replacing_the_screen_does_not_light_up_the_title_bar(qt_app) -> None:  # type: ignore[no-untyped-def]
+    """Ekran əvəzlənəndə başlıq zolağı SƏBƏBSİZ halqa çəkməməlidir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    FAKTİKİ QÜSUR
+    ──────────────────────────────────────────────────────────────────────────
+    İstifadəçi «Bağlantı qurula bilmədi» ekranında «Yenidən cəhd et» düyməsini
+    SİÇANLA basır. Ekran əvəzlənir, yəni fokuslu düymə MƏHV olur — və Qt
+    fokusu zəncirin növbəti elementinə (başlıq zolağındakı tema düyməsinə)
+    `TabFocusReason` ilə ötürür. Səbəb kodu HƏQİQİ `Tab` basılışı ilə eynidir,
+    ona görə halqa məntiqi onu klaviatura fokusu sanırdı və çərçivə çəkirdi:
+    istifadəçi klaviaturaya toxunmadan tema düyməsinin işıqlandığını görürdü.
+
+    Ölçülən şey siçan/klaviatura fərqi DEYİL, məhz bu keçiddir — klaviatura
+    yolu yuxarıdakı testlə qorunur və pozulmamalıdır.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QPushButton, QVBoxLayout
+
+    from src.presentation.shell.window import FramelessWindow
+
+    theme = _themed(qt_app, ThemeMode.DARK)
+    window = FramelessWindow(theme=theme, title="KompasOS")
+
+    page = QWidget()
+    page_layout = QVBoxLayout(page)
+    retry = QPushButton("Yenidən cəhd et")
+    page_layout.addWidget(retry)
+    window.set_content(page)
+    window.show()
+    qt_app.processEvents()
+
+    retry.setFocus(Qt.FocusReason.MouseFocusReason)
+    qt_app.processEvents()
+
+    window.set_content(QPushButton("yeni ekran"))
+    qt_app.processEvents()
+
+    bar = window.title_bar()
+    assert bar is not None
+    for button in (*bar.buttons(), bar.theme_button()):
+        assert button.property("keyfocus") == "false", (
+            f"{button.accessibleName()!r} ekran əvəzlənəndən sonra halqa çəkir"
+        )
+    window.close()
+
+
+@requires_qt
 def test_activating_the_window_keeps_the_keyboard_ring(qt_app) -> None:  # type: ignore[no-untyped-def]
     """`Alt`+`Tab` ilə qayıdanda klaviatura halqası İTMİR.
 

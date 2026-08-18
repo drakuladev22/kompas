@@ -41,6 +41,38 @@ _log = get_logger(__name__)
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 
 
+def diagnostic_paths() -> list[tuple[str, str]]:
+    """Ekranda göstərilən üç yol — `(etiket, dəyər)` cütləri.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ EKRANDA YAZILIR
+    ──────────────────────────────────────────────────────────────────────────
+    Bu ekran məhz baza əlçatmaz olanda açılır, yəni quraşdırıcı burada dayanıb.
+    `Setup.exe` ilə paylanan quraşdırmada `.exe` `Program Files`-da, konfiqurasiya
+    isə `ProgramData`-dadır — ikisi AYRI yerdədir və heç bir ekranda yazılmırdı.
+    Nəticədə tipik səhv (config faylını `.exe`-nin yanına qoymaq) görünməz
+    qalırdı: proqram onu başqa qovluqda axtarır, quraşdırıcı isə faylın orada
+    olduğuna əmindir.
+
+    Konfiqurasiya sətri iki fərqli sual cavablandırır: fayl VARSA hansı nüsxə
+    işlədilir (üç yer axtarılır — `connection_search_paths`), YOXDURSA yazı
+    hara düşəcək. «Tapılmadı» tək başına quraşdırıcıya heç nə vermir.
+    """
+    from src.infrastructure.config.connection_file import (  # noqa: PLC0415
+        connection_file_path,
+        find_connection_file,
+    )
+    from src.shared.data_paths import default_data_dir, default_log_dir  # noqa: PLC0415
+
+    found = find_connection_file()
+    config = str(found) if found else f"tapılmadı — yazılacaq yer: {connection_file_path()}"
+    return [
+        ("Konfiqurasiya faylı", config),
+        ("Log qovluğu", str(default_log_dir())),
+        ("Yerli məlumat", str(default_data_dir())),
+    ]
+
+
 class ConnectionSettingsController:
     """Ekranı `connection.json` faylına bağlayır.
 
@@ -56,6 +88,7 @@ class ConnectionSettingsController:
     def attach(self, screen: ConnectionSettingsScreen) -> None:
         """Siqnalları bağlayır və mövcud dəyərləri göstərir."""
         screen.submitted.connect(lambda payload: self._on_submit(screen, payload))
+        screen.set_diagnostics(diagnostic_paths())
         self._populate(screen)
 
     def _populate(self, screen: ConnectionSettingsScreen) -> None:

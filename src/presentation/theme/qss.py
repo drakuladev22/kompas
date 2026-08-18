@@ -340,6 +340,35 @@ QComboBox QAbstractItemView {
     selection-color: {{--color-text-on-accent}};
 }
 
+/* Açılan menyu (header-dəki hesab menyusu — RECOVERY-1).
+   Rənglər AÇILAN SİYAHI ilə EYNİDİR və bu, qəsdəndir: ikisi də «üzən
+   səth»dir, fərqli tonda olsaydılar eyni ekranda iki müxtəlif açılan
+   element görünərdi. Stilləşdirilməsəydi Qt sistem palitrasını işlədər və
+   tünd rejimdə ağ menyu çıxardı. */
+QMenu {
+    background-color: {{--color-bg-elevated}};
+    color: {{--color-text-primary}};
+    border: {{--border-width}} solid {{--color-border}};
+    border-radius: {{--radius-sm}};
+    padding: {{--space-xs}};
+}
+
+QMenu::item {
+    padding: {{--space-xs}} {{--space-md}};
+    border-radius: {{--radius-sm}};
+}
+
+QMenu::item:selected {
+    background-color: {{--color-accent}};
+    color: {{--color-text-on-accent}};
+}
+
+QMenu::separator {
+    height: {{--border-width}};
+    background-color: {{--color-border-subtle}};
+    margin: {{--space-xs}} 0;
+}
+
 /* ===================== CƏDVƏLLƏR ===================== */
 QTableWidget, QTableView, QListWidget, QTreeView {
     background-color: {{--color-bg-surface}};

@@ -245,6 +245,16 @@ class TitleBar(QWidget):
         """Tema düyməsi — testlər və örtük üçün."""
         return self._theme_button
 
+    def clear_key_focus_rings(self) -> None:
+        """Zolaqdakı BÜTÜN düymələrin fokus halqasını söndürür.
+
+        Siyahı bir yerdə saxlanılır: gələcəkdə zolağa dördüncü düymə əlavə
+        edən adam onu ayrıca yadda saxlamalı olmasın — səbəb
+        `FramelessWindow.set_content`-dədir.
+        """
+        for button in (*self.buttons(), self._theme_button):
+            button.clear_key_focus_ring()
+
     def set_logo_color(self, color: str) -> None:
         """Başlıq loqosunu verilmiş rənglə yenidən çəkir.
 

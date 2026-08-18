@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import sys
 from enum import Enum
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QWidget
 
 from src import __version__
@@ -58,6 +59,18 @@ if TYPE_CHECKING:
     from src.presentation.widgets.worker_status import WorkerStatus
 
 _log = get_logger(__name__)
+
+
+def _recovery_may_open(*, actor: Employee | None, configured: bool) -> bool:
+    """Bərpa konsolunun qapısı — məntiq kontrollerdədir.
+
+    Ayrıca funksiya ona görə var ki, qərar TƏK yerdən gəlsin: `app.py`
+    şərti təkrar yazsaydı, iki qapı bir gün ayrılardı (CLAUDE.md §5).
+    """
+    from src.presentation.controllers.recovery_console import may_open  # noqa: PLC0415
+
+    return may_open(actor=actor, configured=configured)
+
 
 #: `SQLSTATE 42P01` — «relation does not exist». Sxem heç tətbiq olunmayıb.
 _UNDEFINED_TABLE: Final = "42P01"
@@ -255,6 +268,17 @@ class KompasApplication:
         # başlığında idi, yəni girişdən əvvəl temanı dəyişmək mümkün deyildi
         # və istifadəçi «işıqlı/qaranlıq mod işləmir» kimi görürdü.
         self._window.theme_toggle_requested.connect(self.toggle_theme)
+        # GİZLİ BƏRPA KONSOLU — `Ctrl+Shift+K` (RECOVERY-1 Faza 2).
+        #
+        # Qısayol PƏNCƏRƏYƏ bağlanır, ekrana yox: konsol məhz o hallarda
+        # lazımdır ki, ekranın özü nasazlıq ekranıdır və hansı ekranın açıq
+        # olduğu əvvəlcədən bilinmir. Ekranda HEÇ BİR vizual ipucu yoxdur —
+        # düymə, link və ya tooltip qoysaydıq, «gizli» sözünün mənası qalmazdı
+        # və mağaza işçisi ora təsadüfən düşərdi.
+        self._recovery_shortcut = QShortcut(QKeySequence("Ctrl+Shift+K"), self._window)
+        self._recovery_shortcut.activated.connect(self.open_recovery_console)
+        #: Konsoldan «Yadda Saxla» sonrası yenidən qurma çağırışı (`run()` verir).
+        self._rebuild_context: Callable[[], ApplicationContext] | None = None
         self._shell: AdminShell | None = None
         self._support: QWidget | None = None
         self._notifications: QWidget | None = None
@@ -304,6 +328,29 @@ class KompasApplication:
         self._window.set_content(splash)
         self._window.show()
         splash.finish_after(SPLASH_DURATION_MS)
+
+    def show_loading_splash(self) -> None:
+        """Splash-ı DƏRHAL göstərir — kontekst qurulmamışdan ƏVVƏL.
+
+        `start()`-dakı splash-dan fərqi budur ki, burada bitmə taymeri
+        QURULMUR: ekran ağır işin (baza hovuzu) nə qədər çəkəcəyini bilmir və
+        sabit müddət ya erkən bitər, ya da lazımsız gözlətmə yaradardı.
+        Sonrakı axını `_load_context_behind_splash` idarə edir.
+        """
+        from src.presentation.screens.group_a_entry import SplashScreen  # noqa: PLC0415
+
+        splash = SplashScreen(self._theme, version=__version__)
+        self._window.set_content(splash)
+        self._window.show()
+
+    def set_context(self, context: ApplicationContext | None) -> None:
+        """Kontekst SONRADAN qoşulur (splash arxasında qurulanda).
+
+        Konstruktorda `None` ötürülür, çünki pəncərə kontekstdən ƏVVƏL
+        görünməlidir — əks halda baza əlçatmaz olan maşında istifadəçi
+        taymaut bitənə qədər boş ekran görürdü.
+        """
+        self._context = context
 
     def _after_splash(self) -> None:
         """Splash bitdi — lisenziya qapısı, sonra quraşdırma və ya giriş."""
@@ -738,6 +785,81 @@ class KompasApplication:
 
     # ------------------------------- örtük ----------------------------------- #
 
+    def set_rebuild_context(self, factory: Callable[[], ApplicationContext] | None) -> None:
+        """Bərpa konsolundan sonra kontekstin yenidən qurulma yolu."""
+        self._rebuild_context = factory
+
+    def open_recovery_console(self) -> None:
+        """`Ctrl+Shift+K` — qapıdan keçirsə konsolu açır, keçmirsə SUSUR.
+
+        ──────────────────────────────────────────────────────────────────────
+        RƏDD MESAJI QƏSDƏN YOXDUR
+        ──────────────────────────────────────────────────────────────────────
+        «İcazəniz yoxdur» yazsaydıq, bu, elə ipucunun özü olardı: istifadəçi
+        həmin qısayolun BİR ŞEY açdığını öyrənərdi. Rədd yalnız
+        `security.log`-a düşür (bax `controllers/recovery_console.may_open`).
+        """
+        from src.infrastructure.config.connection_file import (  # noqa: PLC0415
+            find_connection_file,
+        )
+
+        configured = self._context is not None or find_connection_file() is not None
+        if not _recovery_may_open(actor=self._current_employee, configured=configured):
+            return
+        self.show_recovery_console()
+
+    def show_recovery_console(self) -> None:
+        """Bərpa konsolunu açır (qapı ARTIQ yoxlanılıb)."""
+        from src.presentation.controllers.recovery_console import (  # noqa: PLC0415
+            RecoveryConsoleController,
+        )
+        from src.presentation.screens.recovery_console import (  # noqa: PLC0415
+            RecoveryConsoleScreen,
+        )
+
+        screen = RecoveryConsoleScreen(self._theme)
+        controller = RecoveryConsoleController()
+        controller.attach(screen)
+        # Kontrollerə istinad `lambda`-nın bağlamasında yaşayır (CLAUDE.md §6).
+        screen.closed.connect(lambda: self._leave_recovery_console(controller))
+        self._window.set_content(screen)
+        self._window.show()
+        screen.focus_first_field()
+
+    def _leave_recovery_console(self, controller: object) -> None:
+        """Konsol bağlandı — normal axına qayıdılır.
+
+        Kontekst varsa (yəni tətbiq işləkdir) sadəcə girişə qayıdırıq; yoxdursa
+        `rebuild` ilə YENİDƏN cəhd edilir, çünki texnik məhz bağlantını
+        düzəltmək üçün konsola girmişdi.
+        """
+        _ = controller
+        if self._context is None and self._rebuild_context is not None:
+            self._attempt_startup(self._rebuild_context)
+            return
+        self.show_login()
+
+    def logout(self) -> None:
+        """Sessiyanı bağlayır və giriş ekranına qayıdır (RECOVERY-1 Faza 1).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ ÖRTÜK DƏ SİLİNİR — TƏKCƏ EKRAN DƏYİŞMİR
+        ──────────────────────────────────────────────────────────────────────
+        Örtük İSTİFADƏÇİYƏ görə qurulur: menyu maddələri onun icazə
+        flag-lərinə, ekranlar isə onun kimliyinə bağlıdır. Yalnız məzmunu
+        dəyişsəydik, köhnə örtük yaddaşda qalar və növbəti giriş ikinci nüsxə
+        yaradardı — bir müddət sonra eyni siqnal iki dəfə emal olunardı
+        (`screen_revisited` iki örtüyə də çatardı).
+
+        Kiosk rejiminə TOXUNULMUR: orada hər əməliyyatdan sonra PIN ekranına
+        qayıdış onsuz da var (`group_a_kiosk.py`) və oradakı «Çıxış» ayrı
+        axındır.
+        """
+        _log.info("SESSION_LOGOUT", extra={"had_shell": self._shell is not None})
+        self._current_employee = None
+        self._shell = None
+        self.show_login()
+
     def show_admin(self, employee: Employee, *, now: datetime) -> None:
         """Admin örtüyünü qurur və bütün ekranları qeydiyyata alır."""
         self._current_employee = employee
@@ -781,6 +903,7 @@ class KompasApplication:
             enabled_modules=self._enabled_modules(),
         )
         shell.theme_toggle_requested.connect(self.toggle_theme)
+        shell.logout_requested.connect(self.logout)
         # Panelə QAYIDANDA rəqəmlər yenidən oxunur (bax `_on_screen_revisited`).
         shell.screen_revisited.connect(self._on_screen_revisited)
         # TƏRTİBAT REJİMİ: pəncərə ölçür, örtük paylayır (bax
@@ -2414,12 +2537,10 @@ class KompasApplication:
             self._theme,
             message=message,
             retry=True,
-            configure=kind.is_configuration_problem,
         )
         # `lambda` MƏCBURİDİR: PySide6 bağlı metodu ZƏİF saxlayır və ekranla
         # birlikdə yığılan metod siqnalı sükutla kəsərdi (CLAUDE.md §6).
         screen.retry_requested.connect(lambda: self._attempt_startup(rebuild))
-        screen.configure_requested.connect(lambda: self.show_connection_settings(rebuild))
         self._window.set_content(screen)
         self._window.show()
 
@@ -2831,6 +2952,83 @@ class KompasApplication:
         return kiosk
 
 
+def _load_context_behind_splash(
+    app: QApplication,
+    application: KompasApplication,
+    factory: Callable[[], ApplicationContext],
+) -> tuple[ApplicationContext | None, str, StartupFailureKind | None]:
+    """Kontekst qurulur — SPLASH GÖRÜNƏRKƏN və GUI sapından KƏNARDA.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ BU LAZIM OLDU
+    ──────────────────────────────────────────────────────────────────────────
+    `build_context()` baza hovuzunu açır və bağlantı taymautu 15 saniyəyədəkdir.
+    Əvvəl o, `main.py`-da PƏNCƏRƏDƏN ƏVVƏL çağırılırdı: server əlçatmazdırsa
+    (kabel çıxıb, VPN düşüb, DSN səhvdir) istifadəçi həmin müddət boyu HEÇ NƏ
+    görmürdü. Mağaza işçisi üçün bu, «proqram açılmır» deməkdir.
+
+    İki addım BİRLİKDƏ lazımdır və biri digərini əvəz etmir:
+
+        * splash DƏRHAL göstərilir — istifadəçi proqramın işlədiyini görür;
+        * iş FON SAPINDA icra olunur — əks halda splash donar və Windows
+          pəncərəni «Cavab vermir» kimi işarələyərdi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ YERLİ `QEventLoop`
+    ──────────────────────────────────────────────────────────────────────────
+    `run()`-un bütün sonrakı qərarları (cihaz qapısı, kiosk, autentifikasiya)
+    kontekstdən ASILIDIR və onlar `app.exec()`-dən ƏVVƏL qurulur. Nəticəni
+    siqnalla gözləmək üçün burada müvəqqəti hadisə dövrəsi açılır: pəncərə
+    canlı qalır (splash animasiya edir, pəncərə sürüşdürülə bilir), axın isə
+    ardıcıl oxunur. Alternativ — bütün `run()`-u callback zəncirinə çevirmək —
+    kompozisiya kökünü oxunmaz edərdi.
+
+    Returns:
+        `(kontekst, istifadəçi mesajı, nasazlıq növü)`. Uğurda mesaj boşdur.
+    """
+    from PySide6.QtCore import QEventLoop  # noqa: PLC0415
+
+    from src.presentation.background_task import BackgroundTask  # noqa: PLC0415
+    from src.presentation.composition import StartupError  # noqa: PLC0415
+
+    application.show_loading_splash()
+    # Splash-ın FAKTİKİ çəkilməsi üçün: `show()` yalnız növbəyə qoyur.
+    app.processEvents()
+
+    outcome: dict[str, object] = {}
+    loop = QEventLoop()
+    task = BackgroundTask(name="STARTUP_CONTEXT")
+
+    def _succeeded(value: object) -> None:
+        outcome["context"] = value
+        loop.quit()
+
+    def _failed(error: object) -> None:
+        outcome["error"] = error
+        loop.quit()
+
+    task.succeeded.connect(_succeeded)
+    task.failed.connect(_failed)
+    task.run(factory)
+    loop.exec()
+
+    error = outcome.get("error")
+    if error is None:
+        return cast("ApplicationContext", outcome.get("context")), "", None
+
+    if isinstance(error, StartupError):
+        _log.critical("GUI_STARTUP_ERROR", extra=error.to_dict())
+        return None, error.user_message, error.kind
+
+    # GÖZLƏNİLMƏYƏN istisna da BOŞ pəncərəyə çevrilməməlidir: istifadəçi
+    # ekranda səbəb və əlaqə ünvanı görməlidir (bölmə 8). Növ `None` qalır —
+    # «yenidən cəhd et» təklif etmək burada yanlış olardı, çünki səbəb
+    # naməlumdur.
+    unexpected = error if isinstance(error, BaseException) else None
+    _log.critical("GUI_STARTUP_UNEXPECTED", exc_info=unexpected)
+    return None, "KompasOS işə düşə bilmədi. Administratorunuzla əlaqə saxlayın.", None
+
+
 def run(
     *,
     preview: bool = False,
@@ -2870,6 +3068,21 @@ def run(
 
     application = KompasApplication(app, preview=preview, theme_preference=theme, context=context)
 
+    # KONTEKST BURADA QURULUR, `main.py`-da YOX (SETUP-1 Faza 2).
+    #
+    # `main.py` onu pəncərədən əvvəl qururdu və baza əlçatmaz olan maşında
+    # istifadəçi bağlantı taymautu boyu BOŞ EKRAN görürdü. İndi əvvəlcə splash
+    # göstərilir, iş isə fon sapında gedir — bax
+    # `_load_context_behind_splash`. Şərt DAR saxlanılır: önizləmə rejimində
+    # baza ümumiyyətlə lazım deyil, `startup_error` isə artıq verilibsə
+    # yenidən cəhd etmək səhv olardı.
+    if context is None and not preview and not startup_error and rebuild_context is not None:
+        context, startup_error, startup_failure_kind = _load_context_behind_splash(
+            app, application, rebuild_context
+        )
+        application.set_context(context)
+
+    application.set_rebuild_context(rebuild_context)
     device_gate = _device_gate(application, context) if context is not None else None
 
     if device_gate is not None:

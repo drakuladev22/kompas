@@ -61,6 +61,24 @@
 # `tests/unit/test_packaging_credentials.py` bu faylın credentials daşımadığını
 # maşınla yoxlayır — şərh bir gün köhnələ bilər, test yox.
 # =============================================================================
+# =============================================================================
+# SXEM PAKETƏ DAXİLDİR — CREDENTIALS İSƏ YOX (RECOVERY-1 Faza 3)
+# =============================================================================
+# `database/schema.sql` və `database/migrations/NNN_*.sql` ARTIQ paketə düşür.
+# Bu, yuxarıdakı qərarla ziddiyyət DEYİL və fərqi bir cümlə ilə ifadə etmək
+# olar: sxem NƏ QURULACAĞINI, credentials isə HARADA QURULACAĞINI deyir.
+# Birincisi bütün müştərilərdə eynidir və sirr saxlamır (CREATE TABLE,
+# trigger, seed defoltları); ikincisi hər müştəridə fərqlidir və sirrdir.
+#
+# Səbəb: «Bazanı Avtomatik Qur» düyməsi boş Supabase layihəsini bir kliklə
+# qurur. Proqram nə quracağını ÖZÜ İLƏ DAŞIMALIDIR — xarici qovluğa
+# arxalansaydıq, funksiya məhz ona ehtiyac duyulan maşında (yalnız Setup
+# göndərilmiş müştəridə) işləməzdi.
+#
+# `migrations/vendor/` alt dəsti QƏSDƏN GİRMİR: o, təchizatçının mərkəzi
+# bazası üçündür və müştəri bazasında yad cədvəllər yaradardı. Glob (`[0-9]
+# [0-9][0-9]_*.sql`) yalnız kök səviyyəni götürür.
+# =============================================================================
 import os
 
 from PyInstaller.utils.hooks import collect_data_files  # noqa: F821 — spec mühitində mövcuddur
@@ -109,6 +127,76 @@ _FACE_HIDDEN_IMPORTS = [
 # pəncərə sükutla saf-Qt yoluna keçir. Yəni qüsurun simptomu yalnız "snap
 # işləmir"dir: qurma yaşıl, test yaşıl, müştəri isə pəncərəni ekran kənarına
 # sürüşdürəndə heç nə baş vermir. Məhz buna görə siyahı AÇIQ yazılır.
+# =============================================================================
+# İŞLƏDİLMƏYƏN Qt MODULLARI — AÇILMA VAXTI VƏ PAKET ÖLÇÜSÜ ÜÇÜN
+# =============================================================================
+# Kod bazasında YALNIZ dörd PySide6 modulu idxal olunur (ölçülüb):
+#
+#     QtWidgets (72 idxal) · QtCore (53) · QtGui (44) · QtSvg (1)
+#
+# PyInstaller-in PySide6 hook-u isə tapdığı bütün Qt kitabxanalarını yığır və
+# ən ağırı `QtWebEngine`-dir — tək başına ~100 MB, üstəlik yanında ayrıca
+# `QtWebEngineProcess.exe` və resurs faylları gəlir. Onlar paketdə qaldıqca
+# iki qiymət ödənilir: disk/şəbəkə həcmi və açılışda faylların oxunması.
+#
+# SİYAHI QƏSDƏN MÜHAFİZƏKARDIR. `QtNetwork`, `QtOpenGL`, `QtOpenGLWidgets` və
+# `QtDBus` BURADA YOXDUR: onları heç bir modulumuz İDXAL ETMİR, lakin
+# `QtWidgets`/platform plagini onlara dolayı söykənə bilər və çatışmayan DLL
+# özünü yalnız müştəri maşınında, pəncərə ümumiyyətlə açılmayanda göstərərdi —
+# bir neçə meqabayta görə belə risk götürülmür.
+_UNUSED_QT_MODULES = [
+    'PySide6.QtWebEngineCore',
+    'PySide6.QtWebEngineWidgets',
+    'PySide6.QtWebEngineQuick',
+    'PySide6.QtWebChannel',
+    'PySide6.QtWebSockets',
+    'PySide6.QtMultimedia',
+    'PySide6.QtMultimediaWidgets',
+    'PySide6.QtSpatialAudio',
+    'PySide6.QtQml',
+    'PySide6.QtQuick',
+    'PySide6.QtQuick3D',
+    'PySide6.QtQuickControls2',
+    'PySide6.QtQuickWidgets',
+    'PySide6.QtCharts',
+    'PySide6.QtDataVisualization',
+    'PySide6.QtGraphs',
+    'PySide6.Qt3DCore',
+    'PySide6.Qt3DRender',
+    'PySide6.Qt3DInput',
+    'PySide6.Qt3DLogic',
+    'PySide6.Qt3DAnimation',
+    'PySide6.Qt3DExtras',
+    'PySide6.QtBluetooth',
+    'PySide6.QtNfc',
+    'PySide6.QtPositioning',
+    'PySide6.QtLocation',
+    'PySide6.QtSensors',
+    'PySide6.QtSerialPort',
+    'PySide6.QtSerialBus',
+    'PySide6.QtRemoteObjects',
+    'PySide6.QtScxml',
+    'PySide6.QtStateMachine',
+    'PySide6.QtTextToSpeech',
+    'PySide6.QtHelp',
+    'PySide6.QtDesigner',
+    'PySide6.QtUiTools',
+    'PySide6.QtTest',
+    'PySide6.QtSql',
+    'PySide6.QtPdf',
+    'PySide6.QtPdfWidgets',
+    'PySide6.QtNetworkAuth',
+]
+
+# Sxem + miqrasiyalar — «Bazanı Avtomatik Qur» üçün (bax fayl başlığı,
+# «SXEM PAKETƏ DAXİLDİR» bölməsi). Glob yalnız KÖK səviyyədəki `NNN_*.sql`
+# fayllarını götürür, `migrations/vendor/` alt dəsti DÜŞMÜR.
+_DATABASE_DIR = os.path.join(SPECPATH, '..', 'database')  # noqa: F821
+_DATABASE_DATAS = [
+    (os.path.join(_DATABASE_DIR, 'schema.sql'), 'database'),
+    (os.path.join(_DATABASE_DIR, 'migrations', '[0-9][0-9][0-9]_*.sql'), 'database/migrations'),
+]
+
 _WINDOW_CHROME_HIDDEN_IMPORTS = [
     'qframelesswindow',
     'qframelesswindow.windows',
@@ -163,6 +251,7 @@ a = Analysis(
         # maşınında görünərdi.
         (os.path.join(SPECPATH, '..', 'assets', 'logo', '*.png'), 'assets/logo'),  # noqa: F821
         *_FACE_MODEL_DATAS,
+        *_DATABASE_DATAS,
     ],
     hiddenimports=[*_FACE_HIDDEN_IMPORTS, *_WINDOW_CHROME_HIDDEN_IMPORTS],
     hookspath=[],
@@ -177,18 +266,32 @@ a = Analysis(
     # `import pytest` (məs. `pytest.approx` və ya köçürülmüş fixture köməkçisi)
     # bütün test ağacını buraxılış paketinə dartardı. Belə sürüşmə nə testdə,
     # nə də lint-də görünür — yalnız paketin ölçüsündə və hücum səthində.
-    excludes=['pytest', '_pytest', 'tests'],
+    excludes=['pytest', '_pytest', 'tests', *_UNUSED_QT_MODULES],
     noarchive=False,
     optimize=0,
 )
 pyz = PYZ(a.pure)  # noqa: F821
 
+# =============================================================================
+# `--onedir` — NİYƏ `--onefile` DEYİL
+# =============================================================================
+# `--onefile` paketi hər AÇILIŞDA özünü `%TEMP%`-ə açır: 230 MB-lıq arxiv
+# müştəri maşınında 5-15 saniyə çəkirdi və istifadəçi bu müddətdə heç nə
+# görmür — proqram «açılmır» kimi qavranılır. Üstəlik həmin fayllar hər dəfə
+# antivirus tərəfindən yenidən yoxlanılır.
+#
+# `--onedir`-də açılma YOXDUR: `.exe` yanındakı DLL-ləri birbaşa yükləyir.
+# Ödənilən qiymət odur ki, quraşdırma qovluğunda 100+ fayl görünür — lakin
+# onlar `C:\Program Files\KompasOS\` altındadır və istifadəçi ora baxmır
+# (masaüstündə YALNIZ qısayol var).
+#
+# `exclude_binaries=True` + `COLLECT` məhz bu deməkdir: `EXE` yalnız
+# başladıcıdır, kitabxanalar isə yanındakı qovluqdadır.
 exe = EXE(  # noqa: F821
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='KompasOS',
     debug=False,
     bootloader_ignore_signals=False,
@@ -242,4 +345,20 @@ exe = EXE(  # noqa: F821
     # YOX idi: spec ilə qurulan `.exe` PyInstaller-in defolt ikonu ilə çıxırdı
     # və buraxılış paketindən görünüşcə fərqlənirdi.
     icon=os.path.join(SPECPATH, '..', 'assets', 'kompasos.ico'),  # noqa: F821
+)
+
+# `COLLECT` `--onedir` çıxışını yığır: `dist/KompasOS/` qovluğu.
+#
+# ADI `KompasOS`-dur və bu, Inno Setup skriptinin gözlədiyi yoldur
+# (`installer/KompasOS.iss` → `Source: "..\dist\KompasOS\*"`). Adı dəyişdirsək
+# quraşdırıcı sükutla BOŞ paket yığar: `.iss` faylı olmayan qovluğu yalnız
+# `Flags: recursesubdirs` ilə axtarır və tapmadıqda xəta VERMİR.
+coll = COLLECT(  # noqa: F821
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name='KompasOS',
 )

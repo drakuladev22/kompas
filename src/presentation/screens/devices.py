@@ -222,6 +222,8 @@ class DeviceAdminScreen(Screen):
         block_requested: `device_id`.
         reactivate_requested: `device_id`.
         reassign_requested: `dict` (`device_id`, `store_id`).
+        accept_fingerprint_requested: `device_id` — gözləyən aparat izini
+            təsdiqlə (yalnız uyğunsuzluq görülmüş sətirdə çıxır).
         refresh_requested: siyahını təzədən oxu.
     """
 
@@ -229,6 +231,7 @@ class DeviceAdminScreen(Screen):
     block_requested = Signal(str)
     reactivate_requested = Signal(str)
     reassign_requested = Signal(dict)
+    accept_fingerprint_requested = Signal(str)
     refresh_requested = Signal()
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
@@ -327,7 +330,13 @@ class DeviceAdminScreen(Screen):
                 ],
                 # Bloklanmış sətir vurğulanır: admin siyahıya baxanda «niyə
                 # bu mağaza işləmir?» sualının cavabı gözə dəyməlidir.
-                highlighted=status == DeviceStatus.BLOCKED.value,
+                # Aparat izi gözləyən sətir də vurğulanır və eyni səbəbə
+                # görə: o, HƏLL EDİLƏSİ vəziyyətdir — ya təmirdir və
+                # təsdiqlənməlidir, ya köçürmədir və bloklanmalıdır. Vurğusuz
+                # qalsaydı, düymə uzun siyahıda gözdən qaçardı.
+                highlighted=(
+                    status == DeviceStatus.BLOCKED.value or bool(device.get("fingerprint_pending"))
+                ),
             )
         self._empty.setVisible(not devices)
         self._table.setVisible(bool(devices))
@@ -381,6 +390,14 @@ class DeviceAdminScreen(Screen):
             block = secondary_button("Blokla")
             block.clicked.connect(lambda: self.block_requested.emit(device_id))
             layout.addWidget(block)
+
+            # Düymə YALNIZ uyğunsuzluq görülmüş sətirdə çıxır — həmişə
+            # görünsəydi, «qəbul et» adi bir əməliyyat kimi oxunardı,
+            # halbuki o, cihazın aparat lövbərini DƏYİŞİR.
+            if device.get("fingerprint_pending"):
+                accept = action_button("İzi Qəbul Et")
+                accept.clicked.connect(lambda: self.accept_fingerprint_requested.emit(device_id))
+                layout.addWidget(accept)
         elif status == DeviceStatus.BLOCKED.value:
             restore = action_button("Bərpa Et")
             restore.clicked.connect(lambda: self.reactivate_requested.emit(device_id))

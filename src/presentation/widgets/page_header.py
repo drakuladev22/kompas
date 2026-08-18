@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QMenu, QPushButton, QSizePolicy, QWidget
 
 from src.presentation.theme.manager import enable_styled_background
 from src.presentation.widgets import icons, metrics
@@ -135,12 +135,15 @@ class PageHeader(QWidget):
     Signals:
         theme_toggled: Tema düyməsi.
         bell_clicked: Bildiriş zəngi.
-        profile_clicked: İstifadəçi adına/avatarına klik.
+        profile_clicked: Hesab menyusundan «Profil» seçildi.
+        logout_requested: Hesab menyusundan «Çıxış» seçildi — sessiya
+            təmizlənir və giriş ekranına qayıdılır (RECOVERY-1 Faza 1).
     """
 
     theme_toggled = Signal()
     bell_clicked = Signal()
     profile_clicked = Signal()
+    logout_requested = Signal()
 
     def __init__(
         self,
@@ -211,12 +214,37 @@ class PageHeader(QWidget):
         self._avatar = Avatar("", background=avatar_bg, foreground=avatar_fg)
         layout.addWidget(self._avatar)
 
-        self._user_name = plain_label()
-        user_font = self._user_name.font()
+        # ADI DAŞIYAN ELEMENT ETİKET DEYİL, DÜYMƏDİR — VƏ SƏBƏBİ VAR
+        # ---------------------------------------------------------------------
+        # Admin panelində «Çıxış» yolu YOX İDİ (kioskda ilk gündən var).
+        # Paylaşılan mağaza kompüterində növbə dəyişəndə ikinci işçi
+        # birincinin sessiyası ilə işləyir və HƏR əməliyyat SƏHV adama yazılır.
+        #
+        # Etiket klik qəbul etmir və klaviatura ilə seçilə bilmir; `QPushButton`
+        # isə hər ikisini PULSUZ verir (Tab ilə çatılır, Enter/Space açır) və
+        # `variant="ghost"` sayəsində header-də etiket kimi görünür — yəni
+        # görünüş dəyişmir, imkan artır.
+        self._user_button = QPushButton()
+        self._user_button.setProperty("variant", "ghost")
+        self._user_button.setFlat(True)
+        self._user_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._user_button.setAccessibleName("Hesab menyusu")
+        self._user_button.setAccessibleDescription("Profil və çıxış")
+        user_font = self._user_button.font()
         user_font.setPixelSize(13)
         user_font.setWeight(QFont.Weight.DemiBold)
-        self._user_name.setFont(user_font)
-        layout.addWidget(self._user_name)
+        self._user_button.setFont(user_font)
+
+        # Menyu VALİDEYNLƏ qurulur: valideynsiz `QMenu` Qt-də sahibsiz qalır və
+        # header öləndə arxada asılı pəncərə buraxa bilər.
+        self._account_menu = QMenu(self)
+        profile_action = self._account_menu.addAction("Profil")
+        profile_action.triggered.connect(self.profile_clicked)
+        logout_action = self._account_menu.addAction("Çıxış")
+        logout_action.setIcon(icons.icon("logout", icon_color))
+        logout_action.triggered.connect(self.logout_requested)
+        self._user_button.setMenu(self._account_menu)
+        layout.addWidget(self._user_button)
 
         self._icon_color = icon_color
 
@@ -228,13 +256,17 @@ class PageHeader(QWidget):
         self._subtitle.setText(subtitle)
         self._subtitle.setVisible(bool(subtitle))
 
+    def account_menu(self) -> QMenu:
+        """Hesab menyusu — testlər və örtük üçün."""
+        return self._account_menu
+
     def set_user(self, full_name: str) -> None:
-        self._user_name.setText(full_name)
+        self._user_button.setText(full_name)
         self._avatar.set_name(full_name)
 
     def user_name(self) -> str:
         """Hazırda göstərilən istifadəçi adı."""
-        return self._user_name.text()
+        return self._user_button.text()
 
     def set_unread(self, count: int) -> None:
         self._bell.set_count(count)

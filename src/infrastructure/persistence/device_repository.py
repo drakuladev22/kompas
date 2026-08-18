@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 _COLUMNS: Final[str] = (
     "id, tenant_id, hardware_fingerprint, short_code, machine_name, device_name, "
     "store_id, device_type, status, block_reason, registered_at, approved_by, "
-    "approved_at, last_seen_at"
+    "approved_at, last_seen_at, pending_fingerprint"
 )
 
 
@@ -114,10 +114,12 @@ class PostgresDeviceRegistry(_BaseRepository):
             INSERT INTO registered_devices
                 (id, tenant_id, hardware_fingerprint, short_code, machine_name,
                  device_name, store_id, device_type, status, block_reason,
-                 registered_at, approved_by, approved_at, last_seen_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 registered_at, approved_by, approved_at, last_seen_at,
+                 pending_fingerprint)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
                 hardware_fingerprint = EXCLUDED.hardware_fingerprint,
+                pending_fingerprint  = EXCLUDED.pending_fingerprint,
                 short_code           = EXCLUDED.short_code,
                 machine_name         = EXCLUDED.machine_name,
                 device_name          = EXCLUDED.device_name,
@@ -144,6 +146,7 @@ class PostgresDeviceRegistry(_BaseRepository):
                 str(device.approved_by) if device.approved_by else None,
                 device.approved_at,
                 device.last_seen_at,
+                device.pending_fingerprint.value if device.pending_fingerprint else None,
             ),
         )
 
@@ -184,6 +187,13 @@ def _to_device(row: dict[str, Any]) -> RegisteredDevice:
         approved_at=row["approved_at"],
         last_seen_at=row["last_seen_at"],
         block_reason=row["block_reason"],
+        # Gözləyən iz DAVAMLI olmalıdır: cihaz hər açılışda bazadan yenidən
+        # oxunur. Yalnız yaddaşda saxlansaydı, dedupe hər restart-dan sonra
+        # sıfırlanar və eyni uyğunsuzluq yenidən audit sətri yazardı — yəni
+        # düzəliş özü-özünü ləğv edərdi.
+        pending_fingerprint=(
+            DeviceFingerprint(row["pending_fingerprint"]) if row["pending_fingerprint"] else None
+        ),
         emit_created_event=False,
     )
 

@@ -28,6 +28,12 @@ işləməzdi və problemi həll etməyin yeganə yolu adminə zəng olardı — 
 uyğunsuzluğun səbəbi 99% halda təmirdir. Ona görə hadisə QEYDƏ ALINIR
 (`DeviceFingerprintChangedEvent` → audit + admin ekranı), qərarı isə adam
 verir. Bax `value_objects/devices.py` başlığı.
+
+«Qərarı adam verir» cümləsinin İKİ tələbi var və ikisi də burada təmin
+olunur: adam qəbul edəcəyi dəyəri GÖRMƏLİDİR (`pending_fingerprint`) və
+qərarı BİR YERƏ düşməlidir (`accept_fingerprint()`). İkincisi olmasaydı
+xəbərdarlıq legitim təmirdən sonra da əbədi qalardı — və əbədi xəbərdarlıq
+oxunmayan xəbərdarlıqdır.
 """
 
 from __future__ import annotations
@@ -39,6 +45,7 @@ from src.domain.entities.base import AggregateRoot, DomainRuleError, InvalidStat
 from src.domain.events import (
     DeviceApprovedEvent,
     DeviceBlockedEvent,
+    DeviceFingerprintAcceptedEvent,
     DeviceFingerprintChangedEvent,
     DeviceRegisteredEvent,
 )
@@ -82,6 +89,13 @@ class RegisteredDevice(AggregateRoot):
     approved_at: datetime | None = None
     last_seen_at: datetime | None = None
     block_reason: str = ""
+    #: MÜŞAHİDƏ olunan, lakin hələ QƏBUL EDİLMƏMİŞ aparat izi.
+    #:
+    #: Ayrıca sahədir, çünki `fingerprint`-i dərhal üstündən yazmaq detektoru
+    #: ləğv edərdi: `device.json`-u başqa maşına köçürən adam bir audit
+    #: sətrindən sonra «qanuni» olardı. Burada dəyər GÖZLƏYİR — admin onu
+    #: görür və `accept_fingerprint()` ilə qərarını verir.
+    pending_fingerprint: DeviceFingerprint | None = None
     #: Repository-dən BƏRPA edilən aqreqat hadisə YAYMAMALIDIR (`CLAUDE.md` §3).
     emit_created_event: bool = True
 
@@ -266,12 +280,24 @@ class RegisteredDevice(AggregateRoot):
     def verify_fingerprint(self, observed: DeviceFingerprint) -> bool:
         """Aparat izini müqayisə edir; fərq varsa hadisə yazır, BLOKLAMIR.
 
+        Hadisə YALNIZ İZ DƏYİŞƏNDƏ yazılır, hər müqayisədə yox. Fərq
+        vacibdir: cihaz hər açılışda qeydiyyatdan keçir, yəni eyni
+        uyğunsuzluq gündə onlarla dəfə görünə bilər. Hər dəfə yazsaydıq audit
+        eyni sətrin nüsxələri ilə dolar və HƏQİQİ hadisə — məsələn ikinci,
+        FƏRQLİ bir dəyişiklik — həmin yığının içində itərdi.
+
         Returns:
             `True` — uyğundur; `False` — dəyişib (çağıran tərəf qərar vermir,
             hadisə onsuz da yazılıb).
         """
         if observed == self.fingerprint:
+            # Aparat geri qaytarılıb (disk yerinə qoyulub) — gözləyən dəyər
+            # artıq mövcud deyil və admin-in onu qəbul etməsi mənasızdır.
+            self.pending_fingerprint = None
             return True
+        if self.pending_fingerprint == observed:
+            return False
+        self.pending_fingerprint = observed
         self.record_event(
             DeviceFingerprintChangedEvent(
                 device_id=str(self.id),
@@ -281,6 +307,35 @@ class RegisteredDevice(AggregateRoot):
             )
         )
         return False
+
+    def accept_fingerprint(self, *, accepted_by: EmployeeId, now: datetime) -> DeviceFingerprint:
+        """Gözləyən izi qəbul edir və onu saxlanmış iz edir.
+
+        Bu, uyğunsuzluq axınının YEGANƏ bağlanma yoludur. Onsuz xəbərdarlıq
+        əbədi qalırdı: `verify_fingerprint` saxlanmış izi qəsdən dəyişmir,
+        `approve()` isə yalnız `PENDING_APPROVAL`-dan işləyir — yəni legitim
+        təmirdən sonra admin-in qərarı heç yerə düşmürdü.
+
+        Raises:
+            DomainRuleError: gözləyən dəyər yoxdur — «qəbul edildi» audit
+                yazısı heç nə dəyişmədən yaranardı.
+        """
+        require_aware(now, field="now")
+        if self.pending_fingerprint is None:
+            raise DomainRuleError("Qəbul ediləcək yeni aparat izi yoxdur")
+        previous = self.fingerprint
+        self.fingerprint = self.pending_fingerprint
+        self.pending_fingerprint = None
+        self.record_event(
+            DeviceFingerprintAcceptedEvent(
+                device_id=str(self.id),
+                tenant_id=self.tenant_id,
+                previous_fingerprint=previous.value,
+                accepted_fingerprint=self.fingerprint.value,
+                accepted_by=str(accepted_by),
+            )
+        )
+        return previous
 
 
 @dataclass(frozen=True)

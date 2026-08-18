@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 import logging
 import logging.handlers
-import os
 import sys
 import threading
 import traceback
@@ -34,11 +33,16 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Final
 
+from src.shared.data_paths import default_log_dir
+
 # --------------------------------------------------------------------------- #
 # Konfiqurasiya sabitləri
 # --------------------------------------------------------------------------- #
 
-DEFAULT_LOG_DIR: Final[Path] = Path(os.environ.get("KOMPASOS_LOG_DIR", Path.cwd() / "logs"))
+#: Log qovluğu FUNKSİYA ilə həll olunur, sabitlə yox — səbəb
+#: `data_paths.default_log_dir()` docstring-indədir: idxal anında hesablanan
+#: `Path.cwd()/logs` qısayoldan açılan `.exe`-də `System32\\logs` demək idi.
+
 MAX_BYTES: Final[int] = 10 * 1024 * 1024  # 10 MB / fayl
 BACKUP_COUNT: Final[int] = 10
 
@@ -210,10 +214,11 @@ def configure_logging(
     console: bool = True,
     force: bool = False,
 ) -> Path:
-    """Bütün log kanallarını qurur. Idempotent-dir (təkrar çağırış təsirsizdir).
+    r"""Bütün log kanallarını qurur. Idempotent-dir (təkrar çağırış təsirsizdir).
 
     Args:
-        log_dir: Log fayllarının qovluğu. Defolt: `KOMPASOS_LOG_DIR` və ya `./logs`.
+        log_dir: Log fayllarının qovluğu. Defolt: `KOMPASOS_LOG_DIR` və ya
+            `%PROGRAMDATA%\KompasOS\logs` (`data_paths.default_log_dir`).
         level: Kök log səviyyəsi.
         app_version: Hər sətrə əlavə olunan tətbiq versiyası.
         console: `True` olduqda `app` kanalı həm də stdout-a yazır.
@@ -226,9 +231,9 @@ def configure_logging(
 
     with _configure_lock:
         if _configured and not force:
-            return log_dir or DEFAULT_LOG_DIR
+            return log_dir or default_log_dir()
 
-        target_dir = Path(log_dir) if log_dir else DEFAULT_LOG_DIR
+        target_dir = Path(log_dir) if log_dir else default_log_dir()
         target_dir.mkdir(parents=True, exist_ok=True)
 
         for channel in LogChannel:

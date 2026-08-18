@@ -54,6 +54,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from src.shared.data_paths import shared_root
 from src.shared.exceptions import DecryptionError, EncryptionKeyError
 from src.shared.logger import LogChannel, get_logger
 
@@ -199,16 +200,45 @@ class WindowsDpapiKeyProvider:
                 əhatəsi doğru qərardır; yalnız PAYLAŞILAN konfiqurasiya
                 (bağlantı parolu) maşın əhatəsinə keçir.
         """
-        self._blob_path = blob_path or self._default_path()
         self._machine_scope = machine_scope
+        self._blob_path = blob_path or self._default_path(machine_scope)
 
     @staticmethod
-    def _default_path() -> Path:
+    def _default_path(machine_scope: bool = False) -> Path:
+        """Blob faylının yeri — açarın ƏHATƏSİ ilə uyğun olmalıdır.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ MAŞIN ƏHATƏSİ `%PROGRAMDATA%`-ya KEÇDİ
+        ──────────────────────────────────────────────────────────────────────
+        `connection.json` MAŞIN əhatəli açarla şifrələnir, çünki paylaşılan
+        mağaza PC-sində ikinci Windows hesabı da onu AÇA BİLMƏLİDİR. Lakin
+        blob FAYLI istifadəçinin `%LOCALAPPDATA%`-sında qalırdı — yəni ikinci
+        hesab paylaşılan konfiqurasiyanı oxuyur, açarı isə TAPMIRDI və
+        «Saxlanmış parol açıla bilmədi — açar bu kompüterdə dəyişib» xətası
+        alırdı. DPAPI-nin əhatəsi düz idi, faylın yeri səhv.
+
+        İstifadəçi əhatəli açar (defolt) `%LOCALAPPDATA%`-da QALIR: onu
+        paylaşılan qovluğa qoymaq başqa hesabın faylı görməsinə səbəb olardı
+        — halbuki həmin açarın bütün mənası əksidir.
+
+        KÖHNƏ BLOB KÖÇÜRÜLMÜR, TANINIR: mövcud quraşdırmada fayl hələ köhnə
+        yerdədir və onunla şifrələnmiş HƏR ŞEY (bağlantı parolu, ERP
+        tokenləri) ona bağlıdır. Köçürmə yarımçıq qalsaydı, açar itər və
+        məlumat bərpa edilməz olardı — `data_paths` modulundakı eyni qərar.
+        """
         override = os.environ.get(DPAPI_BLOB_ENV)
         if override:
             return Path(override)
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local" / "share"))
-        return base / "KompasOS" / DEFAULT_DPAPI_FILENAME
+        user_scoped = (
+            Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local" / "share"))
+            / "KompasOS"
+            / DEFAULT_DPAPI_FILENAME
+        )
+        if not machine_scope:
+            return user_scoped
+        if user_scoped.is_file():
+            return user_scoped
+        return shared_root() / DEFAULT_DPAPI_FILENAME
 
     @property
     def blob_path(self) -> Path:

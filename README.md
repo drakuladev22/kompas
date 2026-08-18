@@ -425,6 +425,8 @@ bölməsinə.
   bağlı öhdəlik siyahısıdır — «cari» sözü oxucuya sənədin tam yenilənmiş
   olduğunu vəd edirdi. Faylın ÖZ «Son yenilənmə» sətri həqiqi tarixi göstərir;
   vəziyyəti oradan oxuyun.**)**
+- [`docs/build_and_release.md`](docs/build_and_release.md) — `.exe` → `Setup.exe`
+  → imzalama ardıcıllığı və təmiz maşın test siyahısı (`installer/KompasOS.iss`)
 - [`docs/dependency_policy.md`](docs/dependency_policy.md) — versiya hədləri və yeniləmə proseduru
 - [`docs/key_rotation.md`](docs/key_rotation.md) — şifrələmə açarının rotasiyası
 - [`docs/scheduler_setup.md`](docs/scheduler_setup.md) — pg_cron / xarici scheduler

@@ -185,3 +185,133 @@ def test_the_default_path_is_machine_wide(monkeypatch: pytest.MonkeyPatch) -> No
     path = connection_file_path()
     assert path.parts[-2:] == ("KompasOS", "connection.json")
     assert "ProgramData" in str(path)
+
+
+# --------------------------------------------------------------------------- #
+# Setup ilə quraşdırma: axtarış SIRASI (SETUP-1 Faza 1)
+#
+# OXU `.exe`-nin yanından BAŞLAYIR, YAZI isə həmişə `ProgramData`-ya gedir.
+# Asimmetriya qəsdəndir və hər iki tərəfin öz səbəbi var:
+#
+#   * OXU — dəstək axını konfiqurasiyanı AnyDesk ilə `.exe` qovluğuna
+#     köçürür. `--onedir` paketində orada onsuz da 100+ fayl var, yəni
+#     config gözə dəymir və köçürmə ən qısa yoldur.
+#   * YAZI — `C:\Program Files\` standart istifadəçi üçün YAZILA BİLMİR
+#     (UAC). Konfiqurasiya ekranı ora yazmağa çalışsaydı, icazə xətası ilə
+#     dayanardı.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def _clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Path]:
+    """Üç axtarış yerini müvəqqəti qovluqlara bağlayır."""
+    from src.infrastructure.config import connection_file as module
+
+    program_data = tmp_path / "ProgramData"
+    app_data = tmp_path / "AppData"
+    beside_exe = tmp_path / "portativ"
+    for folder in (program_data, app_data, beside_exe):
+        folder.mkdir()
+
+    monkeypatch.delenv(CONNECTION_FILE_ENV, raising=False)
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
+    monkeypatch.setenv("APPDATA", str(app_data))
+    monkeypatch.setattr(module, "deployment_root", lambda: beside_exe)
+    return {
+        "program_data": program_data / "KompasOS" / "connection.json",
+        "app_data": app_data / "KompasOS" / "connection.json",
+        "beside_exe": beside_exe / "connection.json",
+    }
+
+
+def test_the_search_order_starts_beside_the_executable(_clean_env: dict[str, Path]) -> None:
+    """Sıra təsadüfi deyil: dəstək axını faylı `.exe` qovluğuna qoyur."""
+    from src.infrastructure.config.connection_file import connection_search_paths
+
+    assert connection_search_paths() == [
+        _clean_env["beside_exe"],
+        _clean_env["program_data"],
+        _clean_env["app_data"],
+    ]
+
+
+def test_the_environment_override_replaces_the_whole_search(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Açıq göstərilən yol axtarışı BİTİRİR — testlər və xüsusi quraşdırma."""
+    from src.infrastructure.config.connection_file import connection_search_paths
+
+    monkeypatch.setenv(CONNECTION_FILE_ENV, str(tmp_path / "xüsusi.json"))
+
+    assert connection_search_paths() == [tmp_path / "xüsusi.json"]
+
+
+def test_a_file_beside_the_exe_is_still_found(_clean_env: dict[str, Path]) -> None:
+    """Portativ quraşdırma POZULMUR — köhnə davranış saxlanılır."""
+    target = _clean_env["beside_exe"]
+    save_settings(_SETTINGS, target)
+
+    loaded = load_settings()
+
+    assert loaded is not None
+    assert loaded.host == _SETTINGS.host
+
+
+def test_the_copy_beside_the_exe_wins_when_two_exist(_clean_env: dict[str, Path]) -> None:
+    """İki nüsxə varsa qərar BİRMƏNALI olmalıdır.
+
+    Qalib `.exe`-nin yanındakıdır, çünki dəstək məhz oranı əl ilə düzəldir:
+    əks halda texnik faylı köçürər, proqram isə köhnə `ProgramData` nüsxəsini
+    oxumağa davam edər və «düzəltdim, dəyişmədi» vəziyyəti yaranardı.
+
+    Qarşı risk (köhnə fayl `.exe` yanında qalıb yenisini kölgələyir) EKRANDA
+    görünür: Bağlantı Ayarları diaqnostikası FAKTİKİ işlədilən yolu yazır.
+    """
+    save_settings(_SETTINGS, _clean_env["beside_exe"])
+    save_settings(
+        ConnectionSettings(
+            host="program-data.example",
+            port=5432,
+            database="postgres",
+            username="postgres",
+            password="x",
+        ),
+        _clean_env["program_data"],
+    )
+
+    loaded = load_settings()
+
+    assert loaded is not None
+    assert loaded.host == _SETTINGS.host
+
+
+def test_the_user_level_copy_is_used_when_program_data_has_none(
+    _clean_env: dict[str, Path],
+) -> None:
+    """ProgramData əlçatmaz olan maşında (siyasət/UAC) proqram dayanmır."""
+    save_settings(_SETTINGS, _clean_env["app_data"])
+
+    loaded = load_settings()
+
+    assert loaded is not None
+    assert loaded.host == _SETTINGS.host
+
+
+def test_writing_always_targets_program_data(_clean_env: dict[str, Path]) -> None:
+    """Oxu `.exe` yanından gəlsə belə YAZI paylaşılan yerə gedir.
+
+    Əks halda konfiqurasiya ekranı `Program Files`-a yazmağa çalışar və
+    standart istifadəçidə icazə xətası ilə dayanardı — SETUP-1-in həll etdiyi
+    problemin məhz özü.
+    """
+    save_settings(_SETTINGS, _clean_env["beside_exe"])
+
+    written = save_settings(_SETTINGS)
+
+    assert written == _clean_env["program_data"]
+    assert written.is_file()
+
+
+def test_nothing_anywhere_is_still_not_an_error(_clean_env: dict[str, Path]) -> None:
+    """Konfiqurasiya edilməmiş quraşdırma gözlənilən haldır (bax `load_settings`)."""
+    assert load_settings() is None

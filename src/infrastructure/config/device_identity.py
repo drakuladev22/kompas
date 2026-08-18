@@ -23,7 +23,29 @@ yaradır və audit-ə düşür. Şifrələmək təhlükəsizlik vermədən qura�
 diaqnostika imkanını (faylı gözlə yoxlamaq) əlindən alardı.
 
 ──────────────────────────────────────────────────────────────────────────────
-FINGERPRINT WMI İLƏ OXUNUR VƏ NASAZLIQ DAYANDIRICI DEYİL
+NİYƏ `wmic` DEYİL — VƏ NİYƏ İKİ AYRI MƏNBƏ
+──────────────────────────────────────────────────────────────────────────────
+Modul əvvəllər üç `wmic` sorğusuna bağlı idi. Microsoft `wmic.exe`-ni Windows
+11 24H2-dən sonra sistemdən ÇIXARDI: əmr tapılmır, hər üç sorğu dərhal
+`FileNotFoundError` verir və nəticə HƏR açılışda zəif fingerprint olurdu.
+Qüsur sükutlu idi — proqram normal açılır, sadəcə `device.json`-un başqa
+maşına köçürülməsini aşkarlayan yeganə lövbər itirdi.
+
+İndi iki mənbə var və onlar QƏSDƏN fərqli xarakterlidir:
+
+    1. `machine_guid` — REGISTRY-dən (`winreg`), subprocess-siz, ~0.5 ms və
+       nasazlığı praktiki olaraq mümkün deyil. Bu, izin lövbəridir: sorğu
+       icra faylı yoxa çıxsa da fingerprint zəif yola DÜŞMÜR.
+    2. anakart/disk/SMBIOS seriyaları — TƏK PowerShell `Get-CimInstance`
+       çağırışı ilə. CIM `wmic`-dən fərqli olaraq çıxarılmayıb və hər
+       dəstəklənən Windows-da var.
+
+Üç ayrı proses əvəzinə BİR proses açılır: açılış yolundayıq, hər proses soyuq
+başlanğıcda saniyələr yeyir. Hissələrin ardıcıllığı da SABİTdir (registry →
+anakart → disk → SMBIOS), çünki hash sıradan asılıdır.
+
+──────────────────────────────────────────────────────────────────────────────
+NASAZLIQ DAYANDIRICI DEYİL
 ──────────────────────────────────────────────────────────────────────────────
 Anakart/disk seriyası bəzi maşınlarda (virtual maşın, bəzi OEM lövhələr) boş
 qayıdır. Belə halda tətbiqin açılmaması ƏN PİS nəticədir: fingerprint kimlik
@@ -39,6 +61,7 @@ import json
 import os
 import platform
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 from typing import Final
@@ -55,18 +78,63 @@ DEVICE_FILE_ENV: Final[str] = "KOMPASOS_DEVICE_FILE"
 DEVICE_FILENAME: Final[str] = "device.json"
 APP_DIR_NAME: Final[str] = "KompasOS"
 
-#: WMI sorğularının taymautu. Sabit ədəddir və ROOT PARAMETRİ DEYİL: bu,
+#: Aparat sorğusunun taymautu. Sabit ədəddir və ROOT PARAMETRİ DEYİL: bu,
 #: tətbiqin AÇILIŞ yolundadır — Root dəyəri oxumaq üçün baza lazımdır, baza
 #: isə hələ açılmayıb. Dövri asılılıq yaranardı.
-WMI_TIMEOUT_SECONDS: Final[float] = 5.0
+#:
+#: 8 saniyə üç `wmic` sorğusunun köhnə 3×5 = 15 saniyəlik ən pis halından
+#: AZDIR, lakin soyuq PowerShell başlanğıcına (antivirus yoxlaması ilə
+#: birlikdə köhnə mağaza PC-sində bir neçə saniyə) dözür. Taymaut baş versə
+#: `machine_guid` onsuz da toplanıb — fingerprint zəif yola düşmür.
+HARDWARE_PROBE_TIMEOUT_SECONDS: Final[float] = 8.0
 
-#: Aparat göstəricilərini verən əmrlər. Siyahı SABİTdir və istifadəçi mətni
-#: QƏBUL ETMİR — `subprocess` çağırışı `shell=False` ilə, arqumentlər isə
-#: massiv kimi ötürülür, yəni inyeksiya səthi yoxdur.
-_WMI_QUERIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
-    ("baseboard", ("wmic", "baseboard", "get", "serialnumber")),
-    ("diskdrive", ("wmic", "diskdrive", "get", "serialnumber")),
-    ("csproduct", ("wmic", "csproduct", "get", "uuid")),
+#: Windows kriptoqrafiya bölməsindəki quraşdırma GUID-i. Aparat SERİYASI
+#: deyil, lakin köçürmə detektoru üçün ondan güclüdür: fayl başqa maşına
+#: köçürüləndə mütləq dəyişir, disk təmir olunanda isə dəyişmir.
+_MACHINE_GUID_KEY: Final[str] = r"SOFTWARE\Microsoft\Cryptography"
+_MACHINE_GUID_VALUE: Final[str] = "MachineGuid"
+
+#: PowerShell skripti. İstifadəçi mətni QƏBUL ETMİR — tam sabitdir və
+#: `shell=False` ilə massiv kimi ötürülür, yəni inyeksiya səthi yoxdur.
+#: Disk `DeviceID`-yə görə çeşidlənir: sıralama olmasaydı iki diskli maşında
+#: sadalanma sırası boot-dan boot-a dəyişib saxta uyğunsuzluq yaradardı.
+_PROBE_SCRIPT: Final[str] = (
+    "$ErrorActionPreference='SilentlyContinue';"
+    "$b=(Get-CimInstance Win32_BaseBoard|Select-Object -First 1).SerialNumber;"
+    "$d=(Get-CimInstance Win32_DiskDrive|Sort-Object DeviceID|Select-Object -First 1)"
+    ".SerialNumber;"
+    "$u=(Get-CimInstance Win32_ComputerSystemProduct|Select-Object -First 1).UUID;"
+    'Write-Output "BASEBOARD=$b";Write-Output "DISK=$d";Write-Output "UUID=$u"'
+)
+
+#: Aparat sorğusunun tam əmri.
+HARDWARE_PROBE_COMMAND: Final[tuple[str, ...]] = (
+    "powershell.exe",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    _PROBE_SCRIPT,
+)
+
+#: Çıxış açarı → fingerprint hissəsinin adı. Sıra hash-ə düşən sıradır.
+_PROBE_LABELS: Final[tuple[tuple[str, str], ...]] = (
+    ("BASEBOARD", "baseboard"),
+    ("DISK", "diskdrive"),
+    ("UUID", "csproduct"),
+)
+
+#: OEM-in doldurmadığı sahələr. Bunları hash-a qatmaq maşınları bir-birindən
+#: UZAQLAŞDIRMAZDI, əksinə YAXINLAŞDIRARDI — eyni «Default string» minlərlə
+#: lövhədə var.
+_PLACEHOLDER_VALUES: Final[frozenset[str]] = frozenset(
+    {
+        "to be filled by o.e.m.",
+        "default string",
+        "none",
+        "system serial number",
+        "0",
+        "00000000-0000-0000-0000-000000000000",
+    }
 )
 
 
@@ -149,52 +217,97 @@ def collect_fingerprint() -> DeviceFingerprint:
 def _hardware_parts() -> list[tuple[str, str]]:
     """Oxuna bilən aparat göstəriciləri — `(mənbə, dəyər)` cütləri."""
     if platform.system() != "Windows":
-        # WMI yalnız Windows-dadır. Linux/macOS-da (CI, developer maşını)
-        # boş qayıdırıq və çağıran tərəf zəif fingerprint-ə düşür — bu, test
-        # mühitində gözlənilən davranışdır, qüsur deyil.
+        # Registry də, CIM də yalnız Windows-dadır. Linux/macOS-da (CI,
+        # developer maşını) boş qayıdırıq və çağıran tərəf zəif fingerprint-ə
+        # düşür — bu, test mühitində gözlənilən davranışdır, qüsur deyil.
         return []
 
     found: list[tuple[str, str]] = []
-    for source, command in _WMI_QUERIES:
-        value = _run_wmi(command)
-        if value:
-            found.append((source, value))
+    guid = _read_machine_guid()
+    if guid:
+        found.append(("machine_guid", guid))
+    found.extend(_parse_probe_output(_probe_hardware()))
     return found
 
 
-def _run_wmi(command: tuple[str, ...]) -> str:
-    """Bir WMI sorğusu; nasazlıqda boş sətir.
+def _read_machine_guid() -> str:
+    """Windows quraşdırma GUID-i; oxunmasa boş sətir.
 
-    Hər nasazlıq udulur və YALNIZ debug jurnalına düşür: `wmic` Windows 11-də
-    köhnəlmiş sayılır və bəzi quraşdırmalarda ümumiyyətlə yoxdur. Bunu
-    xəbərdarlıq kimi yazsaydıq, hər açılışda üç xəbərdarlıq görünərdi və
-    həqiqi problemləri gizlədərdi.
+    Qapı İCRA üçündür: CI pytest-i Ubuntu-da da işlədir və orada `winreg`
+    modulu ÜMUMİYYƏTLƏ yoxdur — idxal `ImportError` verərdi.
+
+    `platform.system()` əvəzinə `sys.platform` seçilib, çünki mypy məhz bu
+    formanı STATİK platforma qapısı sayır və budağı səssizcə kəsir (pyproject
+    mypy-ı `platform = "win32"`-ə bağlayır). Beləcə tək yoxlanış həm icraya,
+    həm də tip yoxlayıcısına xidmət edir.
+    """
+    if sys.platform != "win32":
+        return ""
+    import winreg  # noqa: PLC0415 — Windows-a xas modul, yuxarıda idxal oluna bilməz
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _MACHINE_GUID_KEY) as key:
+            value, _ = winreg.QueryValueEx(key, _MACHINE_GUID_VALUE)
+    except OSError as exc:
+        _log.debug("MACHINE_GUID_UNREADABLE", extra={"error": str(exc)})
+        return ""
+    return str(value).strip()
+
+
+def _probe_hardware() -> str:
+    """Aparat sorğusunun xam çıxışı; nasazlıqda boş sətir.
+
+    Hər nasazlıq udulur və YALNIZ debug jurnalına düşür: sorğu qadağan
+    edilmiş PowerShell siyasəti olan maşınlarda işləməyə bilər. Bunu
+    xəbərdarlıq kimi yazsaydıq, hər açılışda görünərdi və həqiqi problemləri
+    gizlədərdi — həqiqi siqnal `DEVICE_FINGERPRINT_WEAK`-dir və o, YALNIZ
+    heç bir mənbə qalmayanda yazılır.
     """
     try:
         result = subprocess.run(  # noqa: S603 — əmr SABİT massivdir, `shell=False`
-            command,
+            HARDWARE_PROBE_COMMAND,
             capture_output=True,
             text=True,
-            timeout=WMI_TIMEOUT_SECONDS,
+            timeout=HARDWARE_PROBE_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        _log.debug("WMI_QUERY_FAILED", extra={"command": command[1], "error": str(exc)})
+        _log.debug("HARDWARE_PROBE_FAILED", extra={"error": str(exc)})
         return ""
-
     if result.returncode != 0:
+        _log.debug("HARDWARE_PROBE_FAILED", extra={"returncode": result.returncode})
         return ""
-    # Birinci sətir sütun başlığıdır (`SerialNumber`), qalanı dəyərlərdir.
-    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    values = [line for line in lines[1:] if line.lower() not in {"", "to be filled by o.e.m."}]
-    return values[0] if values else ""
+    return str(result.stdout)
+
+
+def _parse_probe_output(stdout: str) -> list[tuple[str, str]]:
+    """`KEY=VALUE` sətirlərini `(mənbə, dəyər)` cütlərinə çevirir.
+
+    Sıra ÇIXIŞDAN yox, `_PROBE_LABELS`-dən götürülür: PowerShell sətirlərin
+    ardıcıllığını dəyişsə hash da dəyişərdi və eyni maşın özünü «dəyişmiş»
+    kimi göstərərdi.
+    """
+    values: dict[str, str] = {}
+    for line in stdout.splitlines():
+        key, separator, raw = line.partition("=")
+        if not separator:
+            continue
+        values[key.strip().upper()] = raw.strip()
+
+    found: list[tuple[str, str]] = []
+    for key, source in _PROBE_LABELS:
+        value = values.get(key, "")
+        if value and value.lower() not in _PLACEHOLDER_VALUES:
+            found.append((source, value))
+    return found
 
 
 __all__ = [
     "APP_DIR_NAME",
     "DEVICE_FILENAME",
     "DEVICE_FILE_ENV",
-    "WMI_TIMEOUT_SECONDS",
+    "HARDWARE_PROBE_COMMAND",
+    "HARDWARE_PROBE_TIMEOUT_SECONDS",
     "DeviceIdentityError",
     "collect_fingerprint",
     "device_file_path",

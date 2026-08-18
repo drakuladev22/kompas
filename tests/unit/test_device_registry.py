@@ -248,6 +248,123 @@ def test_a_fingerprint_change_is_recorded_but_does_not_block() -> None:
     assert "DEVICE_FINGERPRINT_CHANGED" in audit.actions(), "hadisə izsiz qaldı"
 
 
+def test_the_observed_fingerprint_is_kept_so_the_admin_can_decide() -> None:
+    """«Qərarı adam verir» — deməli adam GÖRDÜYÜ dəyəri qəbul edə bilməlidir.
+
+    Müşahidə olunan iz saxlanmasaydı, admin paneldə yalnız «dəyişib» sözünü
+    görərdi və qəbul edəcəyi dəyər HEÇ YERDƏ olmazdı: uyğunsuzluq həll
+    edilməz vəziyyətə düşərdi.
+    """
+    use_case, registry, _, _ = _build()
+    device = _device(status=DeviceStatus.ACTIVE, store_id=STORE_A)
+    registry.save(device)
+
+    outcome = use_case.register_self(
+        tenant_id=TENANT,
+        device_id=device.id,
+        fingerprint=OTHER_FINGERPRINT,
+        machine_name="KASSA-1",
+    )
+
+    assert outcome.device.pending_fingerprint == OTHER_FINGERPRINT
+    assert outcome.device.fingerprint == FINGERPRINT, "saxlanmış iz admin qərarına qədər qalır"
+
+
+def test_the_same_mismatch_is_audited_once_not_at_every_start() -> None:
+    """Təkrarlanan yazı auditi doldurur və HƏQİQİ hadisəni gizlədir."""
+    use_case, registry, audit, _ = _build()
+    device = _device(status=DeviceStatus.ACTIVE, store_id=STORE_A)
+    registry.save(device)
+
+    for _ in range(3):
+        use_case.register_self(
+            tenant_id=TENANT,
+            device_id=device.id,
+            fingerprint=OTHER_FINGERPRINT,
+            machine_name="KASSA-1",
+        )
+
+    assert audit.actions().count("DEVICE_FINGERPRINT_CHANGED") == 1
+
+
+def test_restored_hardware_clears_the_pending_value() -> None:
+    """Disk geri qoyulubsa gözləyən dəyər qalmamalıdır — yoxsa admin
+    artıq mövcud olmayan bir izi qəbul edərdi."""
+    use_case, registry, _, _ = _build()
+    device = _device(status=DeviceStatus.ACTIVE, store_id=STORE_A)
+    registry.save(device)
+    use_case.register_self(
+        tenant_id=TENANT,
+        device_id=device.id,
+        fingerprint=OTHER_FINGERPRINT,
+        machine_name="KASSA-1",
+    )
+
+    outcome = use_case.register_self(
+        tenant_id=TENANT, device_id=device.id, fingerprint=FINGERPRINT, machine_name="KASSA-1"
+    )
+
+    assert outcome.device.pending_fingerprint is None
+    assert not outcome.fingerprint_changed
+
+
+def test_accepting_the_new_fingerprint_replaces_the_stored_one() -> None:
+    """Admin-in qərarı BİR YERƏ düşməlidir — yoxsa xəbərdarlıq əbədi qalır."""
+    use_case, registry, audit, _ = _build()
+    device = _device(status=DeviceStatus.ACTIVE, store_id=STORE_A)
+    registry.save(device)
+    use_case.register_self(
+        tenant_id=TENANT,
+        device_id=device.id,
+        fingerprint=OTHER_FINGERPRINT,
+        machine_name="KASSA-1",
+    )
+
+    accepted = use_case.accept_fingerprint(
+        tenant_id=TENANT,
+        actor=_FakeActor(),  # type: ignore[arg-type]
+        device_id=device.id,
+    )
+
+    assert accepted.fingerprint == OTHER_FINGERPRINT
+    assert accepted.pending_fingerprint is None
+    assert "DEVICE_FINGERPRINT_ACCEPTED" in audit.actions()
+
+
+def test_accepting_requires_the_device_flag() -> None:
+    """Qəbul aparat lövbərini DƏYİŞİR — hər kəsə açıq ola bilməz."""
+    use_case, registry, _, _ = _build()
+    device = _device(status=DeviceStatus.ACTIVE, store_id=STORE_A)
+    registry.save(device)
+    use_case.register_self(
+        tenant_id=TENANT,
+        device_id=device.id,
+        fingerprint=OTHER_FINGERPRINT,
+        machine_name="KASSA-1",
+    )
+
+    with pytest.raises(DevicePermissionError):
+        use_case.accept_fingerprint(
+            tenant_id=TENANT,
+            actor=_FakeActor(allowed=False),  # type: ignore[arg-type]
+            device_id=device.id,
+        )
+
+
+def test_accepting_without_a_pending_value_is_refused() -> None:
+    """Boş qəbul auditə «təsdiqləndi» yazardı — halbuki heç nə dəyişməyib."""
+    use_case, registry, _, _ = _build()
+    device = _device(status=DeviceStatus.ACTIVE, store_id=STORE_A)
+    registry.save(device)
+
+    with pytest.raises(DomainRuleError):
+        use_case.accept_fingerprint(
+            tenant_id=TENANT,
+            actor=_FakeActor(),  # type: ignore[arg-type]
+            device_id=device.id,
+        )
+
+
 # --------------------------------------------------------------------------- #
 # 3. Vəziyyət maşını
 # --------------------------------------------------------------------------- #

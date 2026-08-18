@@ -228,8 +228,9 @@ class OfflineBuffer:
         `CREATE TABLE IF NOT EXISTS` MÖVCUD cədvələ sütun ƏLAVƏ ETMİR — o,
         cədvəl varsa heç nə etmir. Yəni yeni sütun yalnız TƏMİZ quraşdırmada
         yaranardı və yenilənən mağazada `no such column` ilə çökərdi. Bufer
-        faylı isə istifadəçinin `%LOCALAPPDATA%`-sındadır: onu silmək
-        sinxronlaşdırılmamış davamiyyət qeydlərini silmək deməkdir.
+        faylı isə paylaşılan məlumat qovluğundadır (`%PROGRAMDATA%\\KompasOS\\
+        data`, bax `shared/data_paths.py`): onu silmək sinxronlaşdırılmamış
+        davamiyyət qeydlərini silmək deməkdir.
 
         Postgres tərəfdəki `database/migrations/` mexanizmi buraya
         gətirilmədi: burada bir SQLite faylı və bir neçə sütun var, versiya

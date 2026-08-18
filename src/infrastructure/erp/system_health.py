@@ -34,6 +34,7 @@ from src.infrastructure.config.limits import (
     fallback_float,
     fallback_int,
 )
+from src.shared.data_paths import default_data_dir
 from src.shared.logger import get_logger
 
 if TYPE_CHECKING:
@@ -111,14 +112,37 @@ class SystemHealthSnapshot:
         )
 
 
+def _existing_ancestor(path: Path) -> Path:
+    """Yolun özü, mövcud deyilsə mövcud olan ən yaxın ana qovluq.
+
+    Kök qovluğa qədər qalxır və onu qaytarır: kök də yoxdursa (disk qopub)
+    çağıran tərəf `OSError` alacaq və metrik «Ölçülə bilmədi» olacaq — bu,
+    həmin halda DÜZGÜN cavabdır.
+    """
+    for candidate in (path, *path.parents):
+        if candidate.exists():
+            return candidate
+    return path
+
+
 def disk_metric(
     path: Path | None = None, *, limits: InfrastructureLimits | None = None
 ) -> HealthMetric:
     """Disk istifadəsi — tətbiqin yazdığı diskə görə.
 
-    Ölçmə `Path.cwd()`-dən aparılır (və ya verilmiş yoldan), çünki bizi
+    Ölçmə MƏLUMAT QOVLUĞUNDAN aparılır (və ya verilmiş yoldan), çünki bizi
     maraqlandıran məhz TƏTBİQİN yazdığı disk-dir, sistem diski deyil —
     mağaza PC-lərində bunlar fərqli ola bilər.
+
+    Əvvəl `Path.cwd()` işlədilirdi və bu, sənədləşdirilmiş məqsədə ZİDD idi:
+    qısayoldan açılan `.exe`-də CWD `C:\\Windows\\System32`, kiosk
+    alt-prosesində isə `C:\\Program Files\\KompasOS` olur — hər ikisi
+    proqramın heç nə YAZMADIĞI yerlərdir (SETUP-1).
+
+    İlk açılışda məlumat qovluğu hələ yaradılmamış ola bilər; belə halda
+    mövcud olan ən yaxın ANA qovluq ölçülür. `shutil.disk_usage` olmayan yolda
+    istisna atır və metrik «Ölçülə bilmədi» olardı — yəni xəbərdarlıq məhz ən
+    çox lazım olan anda (təzə quraşdırma, dolu disk) susardı.
 
     `limits` verilməzsə fallback hədlər işləyir: monitorun ÖZÜ baza
     əlçatmazlığında da cavab verməlidir — əks halda "baza cavab vermir"
@@ -127,7 +151,7 @@ def disk_metric(
     resolved = limits or InfrastructureLimits()
     warning_percent = resolved.float_of(SystemLimitKey.HEALTH_DISK_WARNING_PERCENT)
     critical_percent = resolved.float_of(SystemLimitKey.HEALTH_DISK_CRITICAL_PERCENT)
-    target = path or Path.cwd()
+    target = path or _existing_ancestor(default_data_dir())
     try:
         usage = shutil.disk_usage(target)
     except OSError as exc:

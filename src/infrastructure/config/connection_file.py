@@ -20,6 +20,26 @@ NİYƏ `%PROGRAMDATA%` — NİYƏ `%LOCALAPPDATA%` VƏ YA `.exe`-NİN YANI DEYİ
   (`infrastructure/backup/service.py`).
 
 ──────────────────────────────────────────────────────────────────────────────
+OXU ÜÇ YERƏ BAXIR, YAZI İSƏ BİR YERƏ (SETUP-1)
+──────────────────────────────────────────────────────────────────────────────
+Yuxarıdakı qərar YAZI üçün qüvvədə qalır və dəyişmir. OXU isə `.exe`-nin
+yanından BAŞLAYIR:
+
+    1. `.exe`-nin yanı             — DƏSTƏK axınının yeri (AnyDesk ilə
+       köçürülən fayl); `--onedir` paketində orada 100+ fayl var;
+    2. `%PROGRAMDATA%\\KompasOS\\`  — konfiqurasiya ekranının YAZDIĞI yer;
+    3. `%APPDATA%\\KompasOS\\`      — qrup siyasəti ProgramData-ya yazmağı
+       bağlayan maşınlarda istifadəçi səviyyəli ehtiyat.
+
+Asimmetriya (oxu üç yerdən, yazı bir yerə) qəsdəndir: `Program Files`-a geri
+yazmaq standart istifadəçidə icazə xətası verərdi və SETUP-1-in həll etdiyi
+problem məhz budur.
+
+Sıra `connection_search_paths()`-dədir; ilk MÖVCUD fayl qalib gəlir və
+FAKTİKİ işlədilən yol Bağlantı Ayarları ekranının diaqnostika sətrində
+yazılır — iki nüsxə qalsa hansının qüvvədə olduğu gözlə görünür.
+
+──────────────────────────────────────────────────────────────────────────────
 PAROL FAYLDA AÇIQ SAXLANILMIR
 ──────────────────────────────────────────────────────────────────────────────
 Yalnız parol sahəsi şifrələnir (mövcud AES-256-GCM modulu ilə), qalan sahələr
@@ -51,6 +71,7 @@ from urllib.parse import quote, unquote, urlparse
 from src.infrastructure.security.encryption import EncryptionService
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import get_logger
+from src.shared.runtime import deployment_root
 
 _log = get_logger(__name__)
 
@@ -119,13 +140,71 @@ class ConnectionSettings:
 
 
 def connection_file_path() -> Path:
-    """Konfiqurasiya faylının yolu (mühit dəyişəni ilə əvəzlənə bilər)."""
+    """Faylın YAZILDIĞI yol (mühit dəyişəni ilə əvəzlənə bilər).
+
+    Oxumaqdan FƏRQLİDİR və qəsdən: oxu üç yerə baxır
+    (`connection_search_paths`), yazı isə HƏMİŞƏ buraya — paylaşılan,
+    yazıla bilən qovluğa — gedir. Yazı da «tapıldığı yerə» getsəydi,
+    `.exe`-nin yanından oxunan fayl `Program Files`-a geri yazılmağa
+    çalışardı və standart istifadəçidə icazə xətası verərdi.
+    """
     override = os.environ.get(CONNECTION_FILE_ENV, "").strip()
     if override:
         return Path(override)
     base = os.environ.get("PROGRAMDATA") or os.environ.get("XDG_CONFIG_HOME")
     root = Path(base) if base else Path.home() / ".config"
     return root / APP_DIR_NAME / CONNECTION_FILENAME
+
+
+def connection_search_paths() -> list[Path]:
+    """Faylın axtarıldığı yerlər — ARDICILLIQLA, ilk tapılan qalib gəlir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    SIRA TƏSADÜFİ DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+        1. `.exe`-nin yanı            — DƏSTƏK AXINININ yeri. Texnik
+           konfiqurasiyanı AnyDesk ilə həmin qovluğa köçürür; `--onedir`
+           paketində orada onsuz da 100+ fayl var, yəni config gözə dəymir.
+           Birinci olmasaydı, köçürülən fayl köhnə `ProgramData` nüsxəsi
+           tərəfindən kölgələnər və «düzəltdim, dəyişmədi» vəziyyəti yaranardı.
+        2. `%PROGRAMDATA%\\KompasOS\\` — konfiqurasiya EKRANININ yazdığı yer:
+           bütün Windows hesabları eyni faylı görür və qovluq yazıla biləndir.
+        3. `%APPDATA%\\KompasOS\\`     — istifadəçi səviyyəsində ehtiyat:
+           qrup siyasəti ProgramData-ya yazmağı bağlayan maşınlarda proqram
+           dayanmır, sadəcə konfiqurasiya həmin istifadəçiyə aid olur.
+
+    Sıranın qarşı riski (köhnə fayl `.exe` yanında qalıb yenisini kölgələyir)
+    EKRANDA görünür: Bağlantı Ayarları diaqnostikası FAKTİKİ işlədilən yolu
+    yazır (`controllers/connection_settings.diagnostic_paths`).
+
+    Mühit dəyişəni verilibsə axtarış ÜMUMİYYƏTLƏ aparılmır — açıq göstərilən
+    yol mübahisəsizdir və testlər/konteyner quraşdırmaları ona arxalanır.
+    """
+    override = os.environ.get(CONNECTION_FILE_ENV, "").strip()
+    if override:
+        return [Path(override)]
+
+    candidates = [deployment_root() / CONNECTION_FILENAME, connection_file_path()]
+    app_data = os.environ.get("APPDATA", "").strip()
+    if app_data:
+        candidates.append(Path(app_data) / APP_DIR_NAME / CONNECTION_FILENAME)
+
+    # Təkrarlar atılır, SIRA saxlanılır: `%PROGRAMDATA%` və `%APPDATA%` eyni
+    # qovluğa baxan maşınlarda (nadir, lakin mümkün) eyni yol iki dəfə
+    # yoxlanardı və diaqnostika mesajı oxunmaz olardı.
+    unique: list[Path] = []
+    for candidate in candidates:
+        if candidate not in unique:
+            unique.append(candidate)
+    return unique
+
+
+def find_connection_file() -> Path | None:
+    """Mövcud olan İLK konfiqurasiya faylı; heç biri yoxdursa `None`."""
+    for candidate in connection_search_paths():
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def load_settings(path: Path | None = None) -> ConnectionSettings | None:
@@ -139,8 +218,8 @@ def load_settings(path: Path | None = None) -> ConnectionSettings | None:
             deşifrələnmir). Bu, sükutla «konfiqurasiya yoxdur» kimi
             oxunmamalıdır — səbəb istifadəçiyə deyilməlidir.
     """
-    target = path or connection_file_path()
-    if not target.is_file():
+    target = path or find_connection_file()
+    if target is None or not target.is_file():
         return None
 
     try:
@@ -262,6 +341,8 @@ __all__ = [
     "ConnectionFileError",
     "ConnectionSettings",
     "connection_file_path",
+    "connection_search_paths",
+    "find_connection_file",
     "load_settings",
     "save_settings",
 ]

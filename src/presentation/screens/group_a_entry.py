@@ -1061,27 +1061,32 @@ class FatalStartupScreen(QWidget):
     ──────────────────────────────────────────────────────────────────────────
     DÜYMƏLƏR İSTƏYƏ BAĞLIDIR VƏ DEFOLT YOXDUR (DB-4 Faza 4)
     ──────────────────────────────────────────────────────────────────────────
-    Ekran əvvəl yalnız mətn göstərirdi və istifadəçinin yeganə hərəkəti
-    proqramı bağlamaq idi. İndi çağıran tərəf nasazlığın NÖVÜNƏ görə düymə
-    əlavə edə bilir:
+    Ekran əvvəl yalnız mətn göstərirdi. `retry=True` təkrar cəhd düyməsi
+    əlavə edir — server müvəqqəti əlçatmaz olanda bu, mənalı yeganə
+    hərəkətdir. Defolt `False`-dur: səhv nasazlıqda təkrar cəhd təklif etmək
+    istifadəçini nəticəsiz döngəyə salardı, yəni düymənin OLMAMASI da qərardır.
 
-        `retry=True`      → server müvəqqəti əlçatmazdır, təkrar cəhd MƏNALIDIR;
-        `configure=True`  → bağlantı məlumatı yoxdur/yanlışdır.
+    ──────────────────────────────────────────────────────────────────────────
+    «BAĞLANTI AYARLARI» DÜYMƏSİ ARTIQ YOXDUR (RECOVERY-1 Faza 2)
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl konfiqurasiya nasazlığında ekran ikinci düymə göstərirdi. Nəticə:
+    mağaza işçisi problemi ÖZÜ «düzəltməyə» çalışır və İŞLƏK konfiqurasiyanı
+    poza bilirdi — sonra dəstək həm nasazlığı, həm də ona əlavə olunmuş
+    dəyişikliyi araşdırmalı qalırdı.
 
-    Hər ikisi defolt `False`-dur: səhv nasazlıqda «Yenidən cəhd et» göstərmək
-    istifadəçini nəticəsiz döngəyə salar, «Ayarlar» isə DÜZGÜN dəyərləri
-    dəyişməyə sövq edərdi. Yəni düymənin OLMAMASI da qərardır.
+    Müştərinin gördüyü ekran indi QƏSDƏN kasıbdır: mesaj + «Yenidən Cəhd Et» +
+    dəstək ünvanı. Eyni imkan TEXNİKDƏDİR: `Ctrl+Shift+K` → Bərpa Konsolu
+    (qapı `controllers/recovery_console.may_open`-dadır). Nasazlığın NÖVÜ
+    ötürülməkdə davam edir (DB-4 Faza 4) — `app.py` ona görə qərar verir.
 
     Signals:
         retry_requested: «Yenidən cəhd et» basıldı.
-        configure_requested: «Bağlantı Ayarları» basıldı.
     """
 
     #: Tətbiq açılmadıqda müştərinin yeganə çıxış yolu (bölmə 8).
     FALLBACK_CONTACT: Final = "dəstək@kompas.az · +994 12 000 00 00"
 
     retry_requested = Signal()
-    configure_requested = Signal()
 
     def __init__(
         self,
@@ -1090,7 +1095,6 @@ class FatalStartupScreen(QWidget):
         message: str,
         contact: str = FALLBACK_CONTACT,
         retry: bool = False,
-        configure: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -1118,8 +1122,7 @@ class FatalStartupScreen(QWidget):
         card.body().addWidget(detail, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self._retry_button: QPushButton | None = None
-        self._configure_button: QPushButton | None = None
-        if retry or configure:
+        if retry:
             actions = QWidget()
             actions_layout = QHBoxLayout(actions)
             actions_layout.setContentsMargins(0, 0, 0, 0)
@@ -1131,15 +1134,6 @@ class FatalStartupScreen(QWidget):
                 self._retry_button.setMinimumHeight(44)
                 self._retry_button.clicked.connect(self.retry_requested.emit)
                 actions_layout.addWidget(self._retry_button)
-
-            if configure:
-                # KONFİQURASİYA HALINDA ƏSAS DÜYMƏ ODUR, «təkrar cəhd» yox:
-                # məlumat yoxdursa təkrar cəhd tərifə görə eyni nəticəni verir.
-                factory = action_button if not retry else secondary_button
-                self._configure_button = factory("Bağlantı Ayarları")
-                self._configure_button.setMinimumHeight(44)
-                self._configure_button.clicked.connect(self.configure_requested.emit)
-                actions_layout.addWidget(self._configure_button)
 
             card.add(actions)
 
@@ -1255,6 +1249,22 @@ class ConnectionSettingsScreen(QWidget):
         self._status.setWordWrap(True)
         card.add(self._status)
 
+        # DİAQNOSTİKA — bax `controllers/connection_settings.diagnostic_paths`.
+        # Kart mətninin ən kiçik və ən solğun hissəsidir: o, formanı DOLDURAN
+        # istifadəçiyə lazım deyil, yalnız «proqram hansı faylı oxuyur?»
+        # sualını verən quraşdırıcıya lazımdır. Vurğulu göstərsəydik, hər
+        # açılışda diqqəti forma sahələrindən yayındırardı.
+        self._diagnostics = muted_label("")
+        self._diagnostics.setWordWrap(True)
+        diagnostics_font = self._diagnostics.font()
+        diagnostics_font.setPixelSize(11)
+        self._diagnostics.setFont(diagnostics_font)
+        self._diagnostics.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        card.add(self._diagnostics)
+
         actions = QWidget()
         actions_layout = QHBoxLayout(actions)
         actions_layout.setContentsMargins(0, 0, 0, 0)
@@ -1281,6 +1291,15 @@ class ConnectionSettingsScreen(QWidget):
                 widget.returnPressed.connect(self._on_submit)
 
     # ------------------------------ setter API -------------------------------- #
+
+    def set_diagnostics(self, rows: list[tuple[str, str]]) -> None:
+        """Proqramın FAKTİKİ işlətdiyi yolları göstərir.
+
+        Ekran yolları ÖZÜ hesablamır (CLAUDE.md §6): o, yalnız `theme` alır və
+        setter API-si təqdim edir. Hesablama `connection_settings` kontrollerin-
+        dədir, çünki yollar mühit dəyişənlərindən və fayl sistemindən asılıdır.
+        """
+        self._diagnostics.setText("\n".join(f"{label}: {value}" for label, value in rows))
 
     def populate(self, settings: dict[str, object]) -> None:
         """Mövcud dəyərləri göstərir (parol İSTİSNA — bax sinif başlığı)."""

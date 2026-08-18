@@ -163,10 +163,16 @@ class DeviceRegistryUseCase:
         if device_id is not None:
             existing = self._devices.get(device_id)
             if existing is not None:
+                # Bu iz ARTIQ gözləyirmi — yoxlamadan ƏVVƏL soruşulur, çünki
+                # `verify_fingerprint` onu elə indi yazacaq. Cihaz hər
+                # açılışda qeydiyyatdan keçir; şərt olmasaydı eyni
+                # uyğunsuzluq gündə onlarla audit sətri yaradar və HƏQİQİ
+                # ikinci dəyişiklik həmin yığında görünməz qalardı.
+                already_known = existing.pending_fingerprint == fingerprint
                 matched = existing.verify_fingerprint(fingerprint)
                 existing.touch(now=now)
                 self._devices.save(existing)
-                if not matched:
+                if not matched and not already_known:
                     # Bloklamırıq (bax entity başlığı) — lakin İZSİZ də
                     # buraxmırıq: audit yazısı mübahisə halında yeganə sübutdur.
                     self._audit.record(
@@ -331,6 +337,35 @@ class DeviceRegistryUseCase:
             entity_type="registered_device",
             entity_id=str(device.id),
             reason=reason,
+        )
+        return device
+
+    def accept_fingerprint(
+        self, *, tenant_id: TenantId, actor: Employee, device_id: DeviceId
+    ) -> RegisteredDevice:
+        """Admin gözləyən aparat izini qəbul edir — xəbərdarlığı bağlayır.
+
+        Bloklamaq TƏK cavab deyil: uyğunsuzluğun 99%-i legitim təmirdir və o
+        halda admin-in istədiyi şey cihazı ÇIXARMAQ yox, yeni izi TANIMAQdır.
+        Bu yol olmasaydı admin ya xəbərdarlığı əbədi görməli, ya da işlək
+        cihazı bloklamalı olardı — hər ikisi səhv cavabdır.
+
+        Audit `before_state`/`after_state` ilə yazılır: mübahisə halında
+        «hansı izdən hansına keçildi» sualının cavabı yalnız burada qalır.
+        """
+        self._require(actor)
+        device = self._require_device(device_id)
+        previous = device.accept_fingerprint(accepted_by=actor.id, now=self._clock.now())
+        self._devices.save(device)
+        self._audit.record(
+            tenant_id=tenant_id,
+            actor_id=actor.id,
+            action="DEVICE_FINGERPRINT_ACCEPTED",
+            entity_type="registered_device",
+            entity_id=str(device.id),
+            before_state={"fingerprint": previous.value},
+            after_state={"fingerprint": device.fingerprint.value},
+            reason="Admin yeni aparat izini təsdiqlədi",
         )
         return device
 

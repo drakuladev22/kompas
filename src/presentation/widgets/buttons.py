@@ -312,6 +312,24 @@ class KeyFocusRingMixin:
             self._set_key_focus(False)
         super().focusOutEvent(event)  # type: ignore[misc]
 
+    def clear_key_focus_ring(self) -> None:
+        """Halqanı söndürür — fokusun ÖZÜNƏ toxunmadan.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ AYRICA ÇAĞIRIŞ LAZIM OLDU
+        ──────────────────────────────────────────────────────────────────────
+        Fokuslu widget MƏHV olanda (ekran əvəzlənir) Qt fokusu zəncirin
+        növbəti elementinə `TabFocusReason` ilə ötürür — yəni HƏQİQİ `Tab`
+        basılışı ilə EYNİ səbəb kodu ilə. `focusInEvent` ikisini ayırd edə
+        bilmir və halqa çəkilirdi: istifadəçi «Yenidən cəhd et» düyməsini
+        SİÇANLA basandan sonra başlıq zolağındakı tema düyməsinin
+        işıqlandığını görürdü.
+
+        Ayrım məlumatı yalnız ekranı əvəz EDƏN tərəfdədir
+        (`FramelessWindow.set_content`), ona görə qərar oraya verilir.
+        """
+        self._set_key_focus(False)
+
     def _set_key_focus(self, active: bool) -> None:
         value = "true" if active else "false"
         if self.property("keyfocus") == value:  # type: ignore[attr-defined]

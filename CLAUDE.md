@@ -242,7 +242,7 @@ sonra əlavə olunur:
 | `FRESHNESS_INTERVAL_MULTIPLIER = 2.0` | `server_time.py` | Sinxronizasiya intervalının NƏTİCƏSİ, ayrıca siyasət deyil: bir buraxılmış dövr hələ nasazlıq deyil, ikisi artıq nasazlıqdır. Root-a verilsəydi interval ilə ziddiyyətli qoşa dəyər yaranardı |
 | `SHORT_CODE_LENGTH = 6`, `SHORT_CODE_ALPHABET` | `devices.py` | İnsan erqonomikasının ölçüsü: kod TELEFONLA söylənilir. Root onu 3-ə endirsəydi toqquşma real olardı, 20-yə qaldırsaydı kodun bütün mənası itərdi |
 | `SHORT_CODE_ATTEMPTS = 5` | `device_registry.py` | Riyazi zərurət, siyasət deyil — sonsuz dövrədən qoruyan tavan |
-| `WMI_TIMEOUT_SECONDS = 5.0` | `device_identity.py` | Tətbiqin AÇILIŞ yolundadır: Root dəyərini oxumaq üçün baza lazımdır, baza isə hələ açılmayıb — dövri asılılıq |
+| `HARDWARE_PROBE_TIMEOUT_SECONDS = 8.0` | `device_identity.py` | Tətbiqin AÇILIŞ yolundadır: Root dəyərini oxumaq üçün baza lazımdır, baza isə hələ açılmayıb — dövri asılılıq |
 
 Bu sabitlər üçün şərh şablonu FƏRQLİDİR: «fallback» yazılmır, **niyə Root
 parametri olmadığı** yazılır.
@@ -381,7 +381,7 @@ qalmır, qərara çevrilir.
 | Özünə-host lisenziya sətri (SEC-023) | `migrations/065`, `tests/unit/test_license_bootstrap_privilege.py` |
 | Server-lövbərli vaxt + manipulyasiya aşkarlaması | `src/infrastructure/timekeeping/server_time.py`, `migrations/062` |
 | Vaxt etibarlılıq səviyyəsi (domen) | `src/domain/value_objects/time_integrity.py` |
-| Cihaz qeydiyyatı (filial tanıma) | `src/application/use_cases/device_registry.py`, `migrations/063` |
+| Cihaz qeydiyyatı (filial tanıma) | `src/application/use_cases/device_registry.py`, `migrations/063` + `067` (gözləyən aparat izi) |
 | Cihaz kimliyi faylı + aparat izi | `src/infrastructure/config/device_identity.py` |
 | Tenant brendinqi (ad/loqo/rəng) | `src/application/use_cases/tenant_branding.py`, `migrations/064` |
 | Yeni müştəri quraşdırması | `scripts/onboard_new_tenant.py` (`.exe`-yə DÜŞMÜR) |
@@ -395,6 +395,9 @@ qalmır, qərara çevrilir.
 | Ekranların YAZI yolu | `src/presentation/controllers/{fine_entry,camera_queue,drive_connection}.py` |
 | Üz qeydiyyatı qapısı (ilk giriş + CEO bootstrap) | `src/presentation/controllers/face_setup.py`, `use_cases/face_control.py` (`enroll_first_account`, SEC-025) |
 | Panel girişində «Üzlə daxil ol» | `src/presentation/controllers/face_login.py` (SEC-026) |
+| Gizli bərpa konsolu (`Ctrl+Shift+K`) | `presentation/screens/recovery_console.py`, `controllers/recovery_console.py` (RECOVERY-1) |
+| Avtomatik baza quruluşu (paketlənmiş sxem + miqrasiyalar) | `infrastructure/persistence/provisioning.py` |
+| Setup quraşdırıcısı və buraxılış ardıcıllığı | `installer/KompasOS.iss`, `docs/build_and_release.md` (SETUP-1) |
 | Drive razılığı (OAuth) | `src/infrastructure/storage/oauth_flow.py` |
 | Sübut şəkli növbəsi (SQLite + spool) | `src/infrastructure/storage/upload_queue.py` |
 | Test sahtələri (fakes) | `tests/fixtures/fakes.py` |
@@ -411,7 +414,7 @@ açarın məcburi olduğunu oradan öyrənir.
 |---|---|---|
 | `KOMPASOS_FERNET_KEY`, `KOMPASOS_HASH_PEPPER` | ❌ istehsalatda | `--strict` işə düşmür |
 | `KOMPASOS_GOOGLE_CLIENT_ID` / `_SECRET` | ✅ | Şəkillər lokal növbədə gözləyir, cərimələr normal yaranır |
-| `KOMPASOS_EVIDENCE_QUEUE_PATH`, `KOMPASOS_SQLITE_PATH` | ✅ | Defolt `%LOCALAPPDATA%\KompasOS\data\` — CWD-yə nisbi YOX, çünki paketlənmiş `.exe` ixtiyari qovluqdan işə düşür |
+| `KOMPASOS_EVIDENCE_QUEUE_PATH`, `KOMPASOS_SQLITE_PATH`, `KOMPASOS_LOG_DIR` | ✅ | Defolt `%PROGRAMDATA%\KompasOS\` (`data\`, `logs\`) — CWD-yə nisbi YOX, çünki paketlənmiş `.exe` ixtiyari qovluqdan işə düşür və `Program Files` yazıla bilmir (SETUP-1). Köhnə `%LOCALAPPDATA%` faylı mövcuddursa TANINIR, köçürülmür |
 | `KOMPASOS_PRIVATE_SERVER_DSN` | ✅ | Boşdursa baza keçidi işləmir, aydın səbəb qaytarılır |
 | `KOMPASOS_TENANT_ID`, `KOMPASOS_INSTALLATION_PATH` | ✅ | Boş = ilk quraşdırma: kimlik `installation.json`-da yaranır və sihirbaz açılır (SEC-021) |
 | `KOMPASOS_DEVICE_FILE` | ✅ | Defolt `%PROGRAMDATA%\KompasOS\device.json`. Faylda yalnız `device_id` var və şifrələnmir — sirr deyil (DEVICE-1). Silinsə cihaz YENİ qeydiyyat yaradır |

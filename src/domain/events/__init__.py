@@ -568,6 +568,22 @@ class DeviceFingerprintChangedEvent(DomainEvent):
 
 
 @dataclass(frozen=True, kw_only=True)
+class DeviceFingerprintAcceptedEvent(DomainEvent):
+    """Admin yeni aparat izini QƏBUL etdi — xəbərdarlıq bağlandı (DEVICE-1).
+
+    `DeviceFingerprintChangedEvent` xəbərdarlığı AÇIR, bu isə onu BAĞLAYIR.
+    İkisi ayrı hadisədir və qəsdən: audit izində «kim, nə vaxt, hansı dəyəri»
+    təsdiqlədiyi görünməlidir — dəyişikliyin özünü sükutla üstündən yazsaydıq,
+    təmir ilə köçürməni sonradan ayırd etmək mümkün olmazdı.
+    """
+
+    device_id: str
+    previous_fingerprint: str
+    accepted_fingerprint: str
+    accepted_by: str
+
+
+@dataclass(frozen=True, kw_only=True)
 class LocalClockManipulationDetectedEvent(DomainEvent):
     """PC saatı Postgres server vaxtından həddindən çox fərqlənir (TIME-1).
 
@@ -619,6 +635,7 @@ __all__ = [
     "DailyAttendanceSheetConfirmedEvent",
     "DeviceApprovedEvent",
     "DeviceBlockedEvent",
+    "DeviceFingerprintAcceptedEvent",
     "DeviceFingerprintChangedEvent",
     "DeviceRegisteredEvent",
     "DualControlApprovalRequestedEvent",

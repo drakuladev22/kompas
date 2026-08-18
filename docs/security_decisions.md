@@ -924,6 +924,66 @@ halbuki düymə burada alternativdir və şifrə sahəsi elə yanındadır.
 
 ---
 
+## SEC-027 — Smart App Control: imzanın MÖVCUDLUĞU kifayət etmir
+
+**Vəziyyət:** Qəbul edildi — **developer maşınında ölçülüb**
+
+**Problem.** SEC-012 «imzasız istehsalat buraxılışı qadağandır» deyir və CI
+həmin qapını saxlayır. Bu, ZƏRURİ, lakin KİFAYƏT DEYİL. Windows 11-in Smart
+App Control (SAC) mexanizmi Authenticode imzasının mövcudluğuna deyil,
+imzalayanın REPUTASİYASINA baxır.
+
+Ölçmə (18.08.2026, Windows 11 Pro 26200):
+
+```
+HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy
+  VerifiedAndReputablePolicyState = 1        ← məcburi rejim
+
+CodeIntegrity/Operational
+  3118  Smart App Control Block Details
+  3077  ...attempted to load ...\dist\KompasOS.exe
+
+Get-AuthenticodeSignature dist\KompasOS.exe → NotSigned
+```
+
+`.exe` ümumiyyətlə YÜKLƏNMİR (exit 126) — nə `Start-Process`-dan, nə
+Explorer-dən. Bu, antivirus və ya icazə problemi deyil: Code Integrity
+qatıdır və istifadəçiyə «davam et» seçimi TƏKLİF ETMİR.
+
+**Niyə bu, developer maşınının yox, MÜŞTƏRİNİN problemidir.** SAC Windows
+11-in TƏMİZ quraşdırmalarında defolt açıqdır və mağaza PC-ləri məhz belə
+gəlir. İmzalanmış, lakin reputasiyası hələ toplanmamış `.exe` müştərilərin
+bir hissəsində sadəcə açılmayacaq — heç bir izah, heç bir jurnal olmadan.
+Şikayət «proqram işləmir» kimi gələcək və səbəbi uzaqdan görünməyəcək.
+
+**Qərar.** Paylanan `.exe` üçün **EV (Extended Validation) sertifikatı**
+tələb olunur. Adi OV sertifikatı SEC-012 qapısını keçir, lakin SAC üçün
+kifayət etmir: reputasiya buraxılış sayı və yayılma ilə TOPLANIR, yəni ilk
+müştərilər blok altında qalır — məhz pilot quraşdırmalar.
+
+| Alternativ | Niyə rədd edildi |
+|---|---|
+| Özü-imzalı sertifikat | SAC etibar zəncirinə baxır; özü-imzalı kök müştəri maşınında yoxdur |
+| «Müştəri SAC-ı söndürsün» | Söndürmə BİR YÖNLÜDÜR — geri qaytarmaq üçün Windows-un təmiz quraşdırılması lazımdır. Quraşdırma təlimatında belə addım tələb etmək olmaz |
+| Defender istisnası (`Add-MpPreference`) | SAC ayrı qatdır və Defender istisnalarına tabe deyil |
+| İmzasız paylamaq | SEC-012 |
+
+**Lokal build imzasızdır və bu QƏSDƏNDİR.** Sertifikat yalnız CI-nin
+`production` mühitindədir (`CODE_SIGNING_CERT_BASE64`); developer maşınında
+imzalama sirri SAXLANMIR — saxlansaydı, sirrin surəti hər developer PC-sinə
+düşərdi. Deməli `dist\KompasOS.exe`-ni SAC açıq maşında lokal işə salmaq
+MÜMKÜN DEYİL və bu, qüsur DEYİL. Lokal yoxlama mənbədən aparılır:
+`scripts/dev_panel.py` və ya `python -m src.main`.
+
+**Satınalmadan əvvəl təsdiqlənməli.** EV sertifikatının SAC-da DƏRHAL etibar
+verməsi vendorun öz sənədində yazılı olmalıdır — bu qərar ölçülmüş faktdan
+(yuxarıdakı bloklama) və sertifikat siniflərinin bəyan edilmiş davranışından
+çıxarılıb, vendor sınağından YOX.
+
+**Tətbiq:** `.github/workflows/ci.yml` (`production-release`), SEC-012.
+
+---
+
 ## Açıq qalan (Faza 3-də bağlanır)
 
 | # | Məsələ | Faza |
@@ -934,3 +994,4 @@ halbuki düymə burada alternativdir və şifrə sahəsi elə yanındadır.
 | 4 | Köhnə Fernet token-lərinin toplu miqrasiyası (`needs_rotation` + `rotate_token`) | 3 |
 | 5 | Plugin sandbox-un OS-səviyyəli izolyasiyası (ayrı proses + məhdud hüquq) | 2 |
 | 6 | Hüquqi məsləhət: kamera izləmə + cərimə sistemi üçün (bölmə 6 UYĞUNLUQ QEYDİ) | müştəri |
+| 7 | EV kod imzalama sertifikatının alınması — onsuz `production-release` SEC-012 qapısında dayanır (SEC-027) | müştəri |

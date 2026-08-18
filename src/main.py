@@ -436,35 +436,28 @@ def _run_gui(args: argparse.Namespace) -> int:
                        göstərilir (bölmə 8) — səssiz boş pəncərə YOX.
     """
     from src.presentation.app import run  # noqa: PLC0415
-    from src.presentation.composition import StartupError, build_context  # noqa: PLC0415
+    from src.presentation.composition import build_context  # noqa: PLC0415
     from src.presentation.theme.tokens import ThemeMode  # noqa: PLC0415
 
-    context = None
-    startup_error = ""
-    startup_failure_kind = None
-    if not args.preview:
-        try:
-            context = build_context()
-        except StartupError as exc:
-            # Proses BURADA dayanmır: istifadəçi izahlı ekran görməlidir,
-            # konsola yazılmış bir sətir deyil (mağaza PC-sində konsol yoxdur).
-            startup_error = exc.user_message
-            # NÖV DƏ ÖTÜRÜLÜR (DB-4 Faza 4): ekran «yenidən cəhd et» ilə
-            # «bağlantı ayarları» arasında məhz ona görə seçim edir. Yalnız
-            # mətn ötürsəydik, şəbəkə nasazlığı da, konfiqurasiya boşluğu da
-            # eyni çıxılmaz ekranı verərdi.
-            startup_failure_kind = exc.kind
-            get_logger(__name__, channel=LogChannel.ERROR).critical(
-                "GUI_STARTUP_ERROR", extra=exc.to_dict()
-            )
-
+    # KONTEKST BURADA QURULMUR — `run()` onu SPLASH ARXASINDA qurur.
+    #
+    # Əvvəl `build_context()` məhz bu sətirdə, PƏNCƏRƏDƏN ƏVVƏL çağırılırdı.
+    # Baza əlçatmaz olanda (kabel çıxıb, VPN düşüb, DSN səhvdir) bağlantı
+    # taymautu 15 saniyəyədəkdir və istifadəçi həmin müddət boyu HEÇ NƏ
+    # görmürdü — nə splash, nə xəta. Mağaza işçisi bunu «proqram açılmır»
+    # kimi qavrayır və dəstəyə zəng edir.
+    #
+    # Nasazlığın emalı DƏYİŞMİR, sadəcə YERİ dəyişir: `run()` eyni
+    # `StartupError`-u tutur, eyni mətni və NÖVÜ ekrana ötürür (DB-4 Faza 4)
+    # — ekran «yenidən cəhd et» ilə «bağlantı ayarları» arasında məhz ona
+    # görə seçim edir. Bax `presentation/app.py::_load_context_behind_splash`.
     return run(
         preview=args.preview,
         kiosk=args.kiosk,
         theme=ThemeMode(args.theme),
-        context=context,
-        startup_error=startup_error,
-        startup_failure_kind=startup_failure_kind,
+        context=None,
+        startup_error="",
+        startup_failure_kind=None,
         # ÖNİZLƏMƏ REJİMİNDƏ `None`: orada baza ümumiyyətlə tələb olunmur,
         # yəni «yenidən cəhd et» düyməsi mənasız olardı.
         rebuild_context=None if args.preview else build_context,
@@ -511,10 +504,13 @@ def _run_scheduled_jobs() -> int:
 
     log = get_logger(__name__)
     # KİMLİK BURADA YARADILMIR (`allow_generate=False`): bu yol Task Scheduler
-    # altında, çox vaxt BAŞQA istifadəçi hesabı ilə işləyir və onun
-    # `%LOCALAPPDATA%`-sı fərqlidir. Orada avtomatik yaradılan kimlik "ikinci,
-    # boş tenant" demək olardı — gecəlik işlər səssizcə heç nə etməzdi və
-    # nasazlıq yalnız aylar sonra, ehtiyat nüsxə axtarılanda üzə çıxardı.
+    # altında, çox vaxt BAŞQA istifadəçi hesabı ilə işləyir. Kimlik faylının
+    # yeri artıq PAYLAŞILAN qovluqdadır (SETUP-1: `%PROGRAMDATA%`), yəni hesab
+    # fərqi ilə bağlı köhnə risk aradan qalxıb — lakin qadağa QALIR və səbəbi
+    # dəyişməyib: gecəlik iş HEÇ VAXT yeni kirayəçi yaratmamalıdır. Fayl nə
+    # vaxtsa silinsə, avtomatik yaradılan kimlik "ikinci, boş tenant" demək
+    # olardı — işlər səssizcə heç nə etməzdi və nasazlıq yalnız aylar sonra,
+    # ehtiyat nüsxə axtarılanda üzə çıxardı.
     # GUI yolu isə tam əksinədir: orada kimliyin yaradılması ilk quraşdırmanın
     # ÖZÜDÜR (`build_context()` defoltu, SEC-021).
     context = build_context(allow_generate=False)

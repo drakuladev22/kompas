@@ -55,6 +55,7 @@ _error_log = get_logger(__name__, channel=LogChannel.ERROR)
 LIST_READ_FAILED: Final = "Cihaz siyahısı oxunmadı. Yenidən cəhd edin."
 APPROVE_FAILED: Final = "Cihaz təsdiqlənmədi. Yenidən cəhd edin."
 BLOCK_FAILED: Final = "Cihaz bloklanmadı. Yenidən cəhd edin."
+ACCEPT_FINGERPRINT_FAILED: Final = "Aparat izi təsdiqlənmədi. Yenidən cəhd edin."
 REGISTER_FAILED: Final = (
     "Cihaz qeydiyyatı aparıla bilmədi. Baza bağlantısını yoxlayıb yenidən cəhd edin."
 )
@@ -83,6 +84,9 @@ class DeviceAdminController:
             lambda device_id: self._on_reactivate(screen, device_id)
         )
         screen.reassign_requested.connect(lambda payload: self._on_reassign(screen, payload))
+        screen.accept_fingerprint_requested.connect(
+            lambda device_id: self._on_accept_fingerprint(screen, device_id)
+        )
         screen.refresh_requested.connect(lambda: self.refresh(screen))
         self.refresh(screen)
 
@@ -162,6 +166,20 @@ class DeviceAdminController:
             failure=BLOCK_FAILED,
             title="Bərpa edilmədi",
             action=lambda session: session.devices.reactivate(
+                tenant_id=session.tenant_id, actor=self._actor, device_id=target
+            ),
+        )
+
+    def _on_accept_fingerprint(self, screen: DeviceAdminScreen, device_id: str) -> None:
+        """Gözləyən aparat izini təsdiqləyir — xəbərdarlığı bağlayır."""
+        target = _as_device_id(device_id)
+        if target is None:
+            return
+        self._write(
+            screen,
+            failure=ACCEPT_FINGERPRINT_FAILED,
+            title="İz təsdiqlənmədi",
+            action=lambda session: session.devices.accept_fingerprint(
                 tenant_id=session.tenant_id, actor=self._actor, device_id=target
             ),
         )
@@ -323,6 +341,11 @@ def _to_list_row(device: RegisteredDevice, names: dict[str, str]) -> dict[str, o
         "status": device.status.value,
         "status_label": status_label(device.status),
         "last_seen": _format_moment(device.last_seen_at),
+        # İZİN ÖZÜ DEYİL, YALNIZ «GÖZLƏYİR» FAKTI: 32 simvolluq hash ekranda
+        # heç bir qərar dəstəkləmir — admin onu heç nə ilə müqayisə edə
+        # bilmir. Qərara lazım olan yeganə məlumat budur ki, dəyişiklik
+        # görülüb və təsdiq gözləyir.
+        "fingerprint_pending": device.pending_fingerprint is not None,
     }
 
 

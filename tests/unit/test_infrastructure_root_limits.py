@@ -503,6 +503,69 @@ def test_disk_metric_reads_thresholds_from_root(
     assert disk_metric(tmp_path, limits=window).level is HealthLevel.CRITICAL
 
 
+def _captured_disk_target(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    """`shutil.disk_usage`-in HANSI yolla çağırıldığını tutur.
+
+    Orijinal funksiya yamaqdan ƏVVƏL saxlanılır: `system_health.shutil` elə
+    `shutil` modulunun özüdür, ona görə yamaqdan sonra `shutil.disk_usage`
+    çağırmaq sahtəni yenidən çağırar və sonsuz rekursiya yaranar.
+    """
+    from src.infrastructure.erp import system_health
+
+    original = system_health.shutil.disk_usage
+    seen: list[Path] = []
+
+    def fake_usage(path: object) -> object:
+        seen.append(Path(str(path)))
+        return original(Path.home())
+
+    monkeypatch.setattr(system_health.shutil, "disk_usage", fake_usage)
+    return seen
+
+
+def test_disk_metric_measures_the_disk_the_app_writes_to(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`Path.cwd()` quraşdırılmış `.exe`-də TƏTBİQİN YAZDIĞI disk DEYİL.
+
+    Qısayoldan açılanda CWD `C:\\Windows\\System32`, kiosk alt-prosesində isə
+    `C:\\Program Files\\KompasOS` olur — hər ikisi proqramın heç nə YAZMADIĞI
+    yerlərdir. Ölçmə məhz məlumat qovluğuna aid olmalıdır (SETUP-1).
+    """
+    from src.infrastructure.erp.system_health import disk_metric
+    from src.shared.data_paths import default_data_dir
+
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "ProgramData"))
+    default_data_dir().mkdir(parents=True)
+    seen = _captured_disk_target(monkeypatch)
+
+    disk_metric()
+
+    assert seen == [default_data_dir()]
+
+
+def test_disk_metric_falls_back_to_an_existing_parent_on_first_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """İlk açılışda məlumat qovluğu HƏLƏ YOXDUR.
+
+    `shutil.disk_usage` mövcud olmayan yolda `OSError` atır və metrik
+    «Ölçülə bilmədi» olardı — yəni disk xəbərdarlığı məhz ən çox lazım olan
+    anda (təzə quraşdırma) susardı.
+    """
+    from src.infrastructure.erp.system_health import HealthLevel, disk_metric
+
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "ProgramData"))
+    seen = _captured_disk_target(monkeypatch)
+
+    metric = disk_metric()
+
+    assert seen == [tmp_path]
+    assert metric.level is not HealthLevel.UNKNOWN
+
+
 def test_pool_settings_are_clamped_and_kept_consistent() -> None:
     """`min > max` cütü `psycopg_pool`-da istisna atardı — tətbiq açılmazdı."""
     from src.infrastructure.persistence.connection import _clamped_pool_settings
