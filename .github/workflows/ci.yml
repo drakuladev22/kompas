@@ -299,7 +299,7 @@ jobs:
       # token açardı — sirr skanının şərh yazması bu riskə dəymir. Tapıntı
       # onsuz da addımı qırır və SARIF artefaktında görünür.
       - name: Sirr skanı (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_COMMENTS: "false"
