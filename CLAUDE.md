@@ -64,9 +64,10 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 5350 t
 
 **`QT_QPA_PLATFORM=offscreen` OPSİYONAL DEYİL.** Bu maşında real Windows
 platform plagini ilə e2e Qt testləri dəqiqədə ~4 test sürətinə düşür — tam
-dəst saatlarla çəkir və "asmış" kimi görünür. Offscreen-də eyni dəst dəqiqələr
-içində bitir. Yeganə fərq: `test_mono_role_resolves_to_a_fixed_pitch_font`
-atlanır (aşağıya bax).
+dəst saatlarla çəkir və "asmış" kimi görünür. Offscreen-də eyni dəst **~55
+dəqiqəyə** bitir (ölçülüb; paralel qurma işi getdikdə daha uzun) — yəni onu
+fon işi kimi başladıb gözləmək lazımdır, "asmış" saymaq yox. Yeganə fərq:
+`test_mono_role_resolves_to_a_fixed_pitch_font` atlanır (aşağıya bax).
 
 Kontrast yoxlayıcısı **160 rəng cütünü** (`--include-high-contrast` olmadan
 158) ölçür — həm `tokens.py` cütlərini,
