@@ -45,6 +45,32 @@ bərabərliyi AÇIQ yoxlayır və dayanır.
 
     # Nə ediləcəyini görmək (heç nə yazılmır):
     ... --dry-run
+
+──────────────────────────────────────────────────────────────────────────────
+YARIMÇIQ ÇÖKMƏDƏN SONRA DAVAM ETMƏ (D4) — `--tenant-id` / `--license-key`
+──────────────────────────────────────────────────────────────────────────────
+Beş addım BİR-BİRİNDƏN asılıdır (yuxarı bax), amma 1-4-ün HƏR BİRİ artıq
+idempotentdir: 1/2 miqrasiya icraçısının ÖZÜ (reyestrə görə), 3/4 isə
+`ON CONFLICT (tenant_id) DO NOTHING` ilə. Yeganə çatışmayan hissə — `tenant_id`
+və `license_key` HƏR ÇAĞIRIŞDA TƏSADÜFİ yaranırdı, ona görə təkrar işə salmaq
+DAVAM ETMİRDİ, YENİ (üçüncü, dördüncü, …) yetim kirayəçi yaradırdı.
+
+`--tenant-id`/`--license-key` verilsə, `uuid4()`/`token_urlsafe()` ƏVƏZİNƏ
+ONLAR işlənir — beləcə eyni kimliklə təkrar çağırış yuxarıdakı idempotentlik
+sayəsində TƏBİİ ŞƏKİLDƏ "davam edir" (artıq tamamlanmış addımlar sükutla
+keçilir, yarımçıq qalan YERİNDƏN başlayır). Alternativ («`--verify` rejimi» —
+iki bazanı çarpaz skan edib yetim sətirləri aşkarlamaq) RƏDD EDİLDİ: hər
+müştərinin AYRI Supabase DSN-i var (yuxarı bax, "İKİ BAZA") və vendor bazası
+tək başına HEÇ BİR tenant DSN-i saxlamır (DB-3 qərarı) — yəni "hamısını skan
+et" mümkün deyil, YALNIZ operator ƏLİNDƏ olan tək müştərinin iki DSN-ini
+YENİDƏN verməklə YOXLAMAQ olar. Bu isə artıq `--tenant-id` ilə TƏKRAR işə
+salmağın ÖZÜdür — ayrıca rejim yalnız YENİ, sınanmamış səth əlavə edərdi,
+mövcud axını fəaliyyətə gətirmədən.
+
+Addım 4-dən (vendor sətri, `license_key` artıq ORADA plaintext saxlanılır —
+bax `_create_vendor_row` başlığı) SONRAKI hər `DAYANDI` TAM `license_key`-i
+və hazır `--tenant-id`/`--license-key` sətrini çap edir (bax `_resume_hint`) —
+operator vendor bazasını əl ilə SQL-lə sorğulamaq məcburiyyətində qalmır.
 """
 
 from __future__ import annotations
@@ -55,6 +81,7 @@ import secrets
 import subprocess
 import sys
 import uuid
+from contextlib import suppress
 from pathlib import Path
 from typing import Final
 
@@ -71,12 +98,39 @@ LICENSE_KEY_BYTES: Final[int] = 32
 #: səlahiyyəti vermək lisenziya qapısını yan keçmək olardı.
 INITIAL_STATUS: Final[str] = "ODENIS_GOZLENILIR"
 
+#: D4: bu addımdan (vendor sətri COMMIT olunur) sonrakı `DAYANDI` bərpa
+#: göstərişi çap edir — bax `_resume_hint`.
+VENDOR_ROW_STEP: Final[int] = 4
+
 
 class OnboardingError(RuntimeError):
     """Addımlardan biri uğursuz oldu — sonrakılar İCRA OLUNMUR."""
 
 
+def _ensure_utf8_stdio() -> None:
+    """Windows-un defolt konsol kodlaşdırmasını (cp1252) DÜZƏLDİR.
+
+    `scripts/apply_migrations.py::_ensure_utf8_stdio`-nun HƏRFİ nüsxəsi —
+    səbəb eynidir: bu skript Azərbaycan hərfli (`ə`, `ı`, `İ`) mesajları
+    ÖZÜ yazır (məs. sətir "Yeni kirayəçi", "BİTDİ"), `PYTHONIOENCODING`
+    təyin edilməyəndə (adi Windows terminalı) həmin yazılar
+    `UnicodeEncodeError` ilə çökür. Bu, MÜŞTƏRİ QURAŞDIRMASI skriptidir —
+    çökmə beş addımlı onboarding-i yarımçıq (bax `_apply_migrations`-dan
+    sonrakı addımlar) buraxa bilər, halbuki əsl səbəb konsol, DB deyil.
+
+    `_apply_migrations`-ın açdığı ALT PROSESƏ ötürülən
+    `PYTHONIOENCODING=utf-8` (aşağıda) AYRICA saxlanılır: subprocess ayrı
+    prosesdir və mühit dəyişəni ora bu yolla çatır — bu funksiya YALNIZ
+    CARİ prosesin (yəni bu skriptin ÖZÜNÜN) axınlarını qoruyur.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            with suppress(Exception):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _ensure_utf8_stdio()
     args = _parse_args(argv)
 
     if args.tenant_dsn == args.vendor_dsn:
@@ -87,10 +141,47 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    tenant_id = uuid.uuid4()
-    license_key = secrets.token_urlsafe(LICENSE_KEY_BYTES)
+    # INF-02 (dövrə 1 audit): `--tenant-id`/`--license-key` CÜT tələb olunur.
+    # ──────────────────────────────────────────────────────────────────────
+    # Əvvəl ikisi MÜSTƏQİL həll olunurdu ("license_key-in mənbəyi tenant_id-dən
+    # asılı deyil" fərziyyəsi) — operator addım 4-dən (vendor sətri artıq
+    # COMMIT olunub) sonra YALNIZ `--tenant-id`-i köçürüb `--license-key`-i
+    # unutsa, bu sətir SƏSSİZCƏ YENİ təsadüfi açar yaradırdı. Addım 3/4-ün
+    # `ON CONFLICT (tenant_id) DO NOTHING`-i DB-də köhnə (düzgün) açarı
+    # SAXLAYIR, lakin addım 5 (`_write_config`) hər halda bu YENİ, HEÇ YERDƏ
+    # saxlanmayan açarı müştəri faylına yazırdı — nəticə paket nə vendor, nə
+    # tenant bazası ilə uyğun gəlməyən açar daşıyırdı. Hazırda bunu HEÇ BİR
+    # yoxlama tutmur, çünki `license_key_hash`-i doğrulayan yol hələ yoxdur
+    # (bax `_create_tenant_row` başlığı) — səhv YALNIZ gələcək bir doğrulama
+    # əlavə olunanda üzə çıxardı. İkisi YALNIZ CÜT mənalıdır: BƏRPA rejimi
+    # KEÇMİŞ bir çağırışın İKİ dəyərini BİRLİKDƏ təkrarlamaqdır, YARISINI YOX.
+    if bool(args.tenant_id) != bool(args.license_key):
+        sys.stderr.write(
+            "XƏTA: `--tenant-id` və `--license-key` YALNIZ BİRLİKDƏ verilə bilər "
+            "(D4 bərpa rejimi). Yalnız birini vermək DB-də SAXLANAN açarla "
+            "UYĞUNSUZ, YENİ təsadüfi açar yaradardı və müştəri konfiqurasiyası "
+            "SINARDI. `DAYANDI` mesajındakı `_resume_hint` sətrini TAM (hər "
+            "iki bayrağı) kopyalayın, ya da heç birini verməyib TAMAMİLƏ YENİ "
+            "kirayəçi yaradın.\n"
+        )
+        return 2
 
-    sys.stdout.write(f"Yeni kirayəçi: {args.company}\n")
+    if args.tenant_id:
+        try:
+            tenant_id = uuid.UUID(args.tenant_id)
+        except ValueError:
+            sys.stderr.write(f"XƏTA: `--tenant-id` keçərli UUID deyil: {args.tenant_id!r}\n")
+            return 2
+        resumed = True
+    else:
+        tenant_id = uuid.uuid4()
+        resumed = False
+    # Yuxarıdakı cüt-yoxlama sayəsində burada YA hər ikisi doludur (bərpa),
+    # YA da hər ikisi boşdur (yeni) — `or` budağı artıq yalnız SƏNƏDLƏŞDİRMƏ
+    # xarakterlidir, sükutla qarışıq hal yarada BİLMƏZ.
+    license_key = args.license_key or secrets.token_urlsafe(LICENSE_KEY_BYTES)
+
+    sys.stdout.write(f"{'Davam edilən' if resumed else 'Yeni'} kirayəçi: {args.company}\n")
     sys.stdout.write(f"  tenant_id   : {tenant_id}\n")
     sys.stdout.write(f"  license_key : {license_key[:8]}… ({len(license_key)} simvol)\n")
     sys.stdout.write(f"  supabase_ref: {args.supabase_ref or '(verilməyib)'}\n\n")
@@ -100,26 +191,36 @@ def main(argv: list[str] | None = None) -> int:
         _describe_steps(args)
         return 0
 
+    # Addım 4 (vendor sətri) bitəndən SONRA baş verən uğursuzluqda `DAYANDI`
+    # mesajına bərpa göstərişi əlavə olunur — bax `_resume_hint` və fayl
+    # başlığındakı "D4" bölməsi.
+    last_ok = 0
     try:
         _step(1, "Tenant bazasına miqrasiyalar", lambda: _apply_migrations(args.tenant_dsn))
+        last_ok = 1
         _step(
             2,
             "Vendor bazasına miqrasiyalar",
             lambda: _apply_migrations(args.vendor_dsn, vendor=True),
         )
+        last_ok = 2
         _step(
             3,
             "Kirayəçi sətri (tenant bazası)",
             lambda: _create_tenant_row(args, tenant_id, license_key),
         )
+        last_ok = 3
         _step(
             4,
             "Abunə sətri (vendor bazası)",
             lambda: _create_vendor_row(args, tenant_id, license_key),
         )
+        last_ok = 4
         _step(5, "Konfiqurasiya faylları", lambda: _write_config(args, tenant_id, license_key))
     except OnboardingError as exc:
         sys.stderr.write(f"\nDAYANDI: {exc}\n")
+        if last_ok >= VENDOR_ROW_STEP:
+            sys.stderr.write(_resume_hint(tenant_id, license_key))
         return 1
 
     sys.stdout.write("\nBİTDİ. Növbəti addımlar:\n")
@@ -140,6 +241,40 @@ def _step(number: int, title: str, action: object) -> None:
     sys.stdout.write(f"[{number}/5] {title} — OK\n")
 
 
+def _resume_hint(tenant_id: uuid.UUID, license_key: str) -> str:
+    """D4: addım 4-dən sonrakı çökmədə bərpa üçün TAM açar + hazır bayraqlar.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ TAM `license_key` (8 simvol YOX)
+    ──────────────────────────────────────────────────────────────────────────
+    Addım 4 artıq COMMIT olub — `license_key` VENDOR bazasında plaintext
+    saxlanılır (bax `_create_vendor_row` başlığı), yəni açarın özü artıq
+    "sızıb" sayılan yerdədir; onu BURADA gizlətmək əlavə təhlükəsizlik
+    vermir, əksinə operatoru vendor bazasını əl ilə SQL-lə sorğulamağa
+    məcbur edərdi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    RİSK — BU SƏTİR YENİDƏN YAZILMAMALI, KOPYALANMALIDIR
+    ──────────────────────────────────────────────────────────────────────────
+    Aşağıdakı sətir KOPYALANMAQ üçündür, ƏL İLƏ transkript üçün YOX: açar
+    43 simvoldur və bir hərfin səhv yazılması `--license-key`-i DƏYİŞDİRMİR
+    (`_create_tenant_row`-dakı `ON CONFLICT (tenant_id) DO NOTHING` artıq
+    yazılmış `license_key_hash`-i SAXLAYIR), lakin `_write_config` sonrakı
+    fayllara MƏHZ səhv yazılan (yeni) açarı yazar — nəticədə müştəri
+    faylındakı açar vendor/tenant bazasındakı HEÇ BİRİ ilə uyğun gəlməz və
+    bu uyğunsuzluq YALNIZ müştəri lisenziyanı yoxlatmaq istəyəndə üzə çıxar.
+    """
+    command = f"  --tenant-id {tenant_id} --license-key {license_key}\n"
+    return (
+        "\nBƏRPA: addım 4 (vendor sətri) ARTIQ YAZILIB — yenidən başlamaq "
+        "TƏKRAR abunə sətri yaratmasın deyə eyni kimliklə davam edin.\n"
+        f"  tenant_id   : {tenant_id}\n"
+        f"  license_key : {license_key}\n"
+        "Orijinal əmrə bu İKİ bayrağı ƏLAVƏ EDİB (KOPYALAYARAQ, əl ilə "
+        "yenidən yazmadan) təkrar işə salın:\n" + command
+    )
+
+
 def _apply_migrations(dsn: str, *, vendor: bool = False) -> None:
     """Miqrasiya icraçısını çağırır — SIFIRDAN yazılmır.
 
@@ -147,6 +282,13 @@ def _apply_migrations(dsn: str, *, vendor: bool = False) -> None:
     fərqli yazıcıya bölərdi (migrations/061) və hansının yazdığı sual altında
     qalardı. Ona görə mövcud icraçı ALT PROSES kimi çağırılır və DSN mühit
     dəyişəni ilə ötürülür.
+
+    `PYTHONIOENCODING=utf-8` mühitə AÇIQ yazılır: alt proses AYRI Python
+    prosesidir və `_ensure_utf8_stdio()` yalnız CARİ prosesi qoruyur — mühit
+    dəyişəni olmasa `apply_migrations.py` öz konsol kodlaşdırmasını yenə
+    özü təyin edəcək (o da indi `_ensure_utf8_stdio()` ilə qorunur, bax
+    `scripts/apply_migrations.py`), lakin bura AÇIQ yazmaq iki müstəqil
+    qoruma qatını EYNİ NİYYƏTLƏ üst-üstə salır — biri pozulsa digəri qalır.
     """
     command = [sys.executable, str(_APPLY_MIGRATIONS)]
     if vendor:
@@ -338,6 +480,18 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("--out", default="./onboarding", help="konfiqurasiya qovluğu")
     parser.add_argument("--dry-run", action="store_true", help="heç nə yazma, addımları göstər")
+    # D4: yarımçıq çökmədən sonra DAVAM ETMƏ — bax fayl başlığı. Verilməzsə
+    # köhnə davranış (təsadüfi `uuid4()`/`token_urlsafe()`) DƏYİŞMİR.
+    parser.add_argument(
+        "--tenant-id",
+        default="",
+        help="əvvəlki (yarımçıq) çağırışın tenant_id-si — verilsə YENİSİ yaranmır",
+    )
+    parser.add_argument(
+        "--license-key",
+        default="",
+        help="əvvəlki çağırışın DAYANDI mesajında çap olunan tam açar — verilsə YENİSİ yaranmır",
+    )
     return parser.parse_args(argv)
 
 

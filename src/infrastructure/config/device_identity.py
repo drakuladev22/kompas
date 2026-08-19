@@ -57,6 +57,7 @@ audit-ə yazılır.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -197,6 +198,34 @@ def save_device_id(device_id: DeviceId, path: Path | None = None) -> Path:
     return target
 
 
+def read_machine_guid_hash() -> str | None:
+    """Windows `MachineGuid`-in SHA-256 heşi (hex, kiçik hərflə) — SEC-01/SEC-05
+    terminal PIN throttle açarı (`domain/value_objects/machine_identity.py`).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ HEŞLƏMƏ BURADADIR, DOMEN QATINDA YOX
+    ──────────────────────────────────────────────────────────────────────────
+    Xam GUID bu funksiyadan KƏNARA ÇIXMIR — `MachineIdentityHash` (domen)
+    `winreg` idxal EDƏ BİLMƏZ (CLAUDE.md §3: domen OS-a xas modul idxal
+    etmir, `Clock` portu ilə eyni prinsip). Ona görə oxuma VƏ heşləmə TƏK
+    yerdə, infrastruktur qatındadır — çağıran (kiosk kontrolleri) yalnız
+    opaq 64-simvollu hex-digest görür.
+
+    `_read_machine_guid()`-in ÖZÜ TƏKRARLANMIR — Windows-dan kənar/registry
+    əlçatmaz qapısı ARTIQ ORADADIR, bu funksiya sadəcə nəticəni heşləyir.
+
+    Returns:
+        64 simvollu SHA-256 hex-digest; GUID oxuna BİLMƏYƏNDƏ (Windows deyil,
+        registry əlçatmaz) `None`. `None` XƏTA DEYİL — bu halda NECƏ
+        davranmaq (aydın xəta göstərmək, `KOMPASOS_STORE_ID` naxışı ilə eyni)
+        çağıran tərəfin qərarıdır, bu funksiya YALNIZ FAKTI bildirir.
+    """
+    guid = _read_machine_guid()
+    if not guid:
+        return None
+    return hashlib.sha256(guid.encode("utf-8")).hexdigest()
+
+
 def collect_fingerprint() -> DeviceFingerprint:
     """Aparat izini oxuyur; nasazlıqda zəif, lakin işlək dəyər qaytarır."""
     parts = [value for _, value in _hardware_parts()]
@@ -312,5 +341,6 @@ __all__ = [
     "collect_fingerprint",
     "device_file_path",
     "load_device_id",
+    "read_machine_guid_hash",
     "save_device_id",
 ]

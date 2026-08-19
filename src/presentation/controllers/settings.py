@@ -25,9 +25,8 @@ bilməzdi (bax `controllers/profile.py::_on_close_sessions`).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
-from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
@@ -36,6 +35,19 @@ if TYPE_CHECKING:
     from src.presentation.screens.group_d import SettingsScreen
 
 _error_log = get_logger(__name__, channel=LogChannel.ERROR)
+
+#: D3-03 (dövrə 3 audit) — «Şifrə» sahəsinin mətni. Sabit dəyər QƏSDƏNDİR,
+#: uydurma "N gün əvvəl" DEYİL: `employees`/`credentials` cədvəlində parolun
+#: DƏYİŞDİYİ TARİX saxlanmır (yalnız cari `password_hash` var), yəni real
+#: "son dəyişiklik" tarixini yalnız audit jurnalından (`PASSWORD_RESET_BY_
+#: ADMIN`) çıxarmaq olardı — o isə `can_view_audit_logs` tələb edir (bax
+#: `AuditQueryUseCase._require_access`), Ayarlar ekranı isə FLAG-SIZDIR
+#: (özünə-xidmət, `menu.py`). Uydurma ədəd göstərmək «yanlış rəqəm
+#: göstərməkdənsə heç nə göstərməmək dürüstdür» qaydasını (bax `screen_data.
+#: py`, `base.py` başlıqları) pozardı — DOĞRU, sabit mətn seçilib.
+#: Aşağıdakı sətirdəki bastırma EKRAN MƏTNİ üçündür, sirr üçün DEYİL (bandit
+#: yalançı müsbəti — dəyişən adında "password" sözü var deyə tetiklənir).
+PASSWORD_AGE_TEXT: Final = "Administrator tərəfindən idarə olunur (SEC-016)."  # noqa: S105
 
 
 class SettingsController:
@@ -54,14 +66,65 @@ class SettingsController:
     # ------------------------------- oxuma ----------------------------------- #
 
     def refresh(self, screen: SettingsScreen) -> None:
-        """Saxlanmış bildiriş tərcihlərini ekrana qaytarır."""
+        """Saxlanmış bildiriş tərcihlərini VƏ Təhlükəsizlik kartını ekrana qaytarır.
+
+        ──────────────────────────────────────────────────────────────────────
+        TUTUCU `KompasOSError` DEYİL, `Exception`-dır — SƏBƏB
+        ──────────────────────────────────────────────────────────────────────
+        Bu metod ekran FABRİKASINDAN çağırılır (`app.py::_register_screens`).
+        Buradan qaçan istisna `AdminShell.show_screen()`-ə çıxır və menyu
+        maddəsi «basılır, heç nə açılmır» halına düşür.
+
+        Dar tutucu məhz bunu buraxırdı: baza qatı hər xətanı `KompasOSError`-ə
+        BÜRÜMÜR — hovuz taymautu və bağlantı qırılması `psycopg.OperationalError`
+        kimi qalxır. Yəni ötəri şəbəkə problemi bütün «Ayarlar» ekranını
+        əlçatmaz edirdi.
+
+        Ekran indi AÇILIR və istifadəçi bölmənin yüklənmədiyini GÖRÜR
+        (`set_section_error`) — sükutla defolt dəyər göstərmək daha pis olardı:
+        istifadəçi öz tərcihlərini söndürülmüş sanardı.
+
+        ──────────────────────────────────────────────────────────────────────
+        D3-03 (dövrə 3 audit) — «TƏHLÜKƏSİZLİK» KARTI ARTIQ DOLDURULUR
+        ──────────────────────────────────────────────────────────────────────
+        `screen.set_security_info(...)` ƏVVƏL HEÇ ÇAĞIRILMIRDI — kartın iki
+        sətri (parol, sessiyalar) istehsalatda HƏMİŞƏ BOŞ qalırdı, maket isə
+        dolu göstərirdi (`preview_screens.py::_settings`). Bu, «maket və
+        canlı yol EYNİ açarları işlətməlidir» qaydasının (CLAUDE.md §6,
+        `menu.py` qüsuru ilə eyni ailə) pozuntusu idi.
+
+        İKİ bölmə AYRI sessiyalarda oxunur (SIRA/KONSİSTENSİYA tələbi yoxdur,
+        `support_inbox.py::refresh`-dəki EYNİ-sessiya qaydasından FƏRQLİ) ki,
+        BİRİNİN uğursuzluğu DİGƏRİNİ maskalamasın — Qrup G qaydası
+        (`base.py`-nin öz başlığı: "yeddi müstəqil bölmədən biri sınanda
+        qalanları gizlətmə").
+        """
         try:
             with self._context.session(user_id=self._actor.id) as session:
                 prefs = session.preferences.notification_prefs(self._actor.id)
-        except KompasOSError as exc:
+        except Exception as exc:
             _error_log.exception("SETTINGS_LOAD_FAILED", extra={"error": str(exc)})
-            return
-        screen.set_notification_prefs(prefs)
+            screen.set_section_error("Bildiriş tərcihləri")
+        else:
+            screen.set_notification_prefs(prefs)
+
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                # `_active_session_count` `profile.py`-dandır — `_on_sessions`
+                # (aşağı) ARTIQ EYNİ funksiyanı işlədir; SQL-i BURADA TƏKRAR
+                # yazmaq iki nüsxənin bir gün ayrılması riski yaradardı.
+                from src.presentation.controllers.profile import (  # noqa: PLC0415
+                    _active_session_count,
+                )
+
+                active = _active_session_count(session, self._actor, now=self._context.clock.now())
+        except Exception as exc:
+            _error_log.exception("SETTINGS_SECURITY_INFO_FAILED", extra={"error": str(exc)})
+            screen.set_section_error("Təhlükəsizlik")
+        else:
+            screen.set_security_info(
+                password_age=PASSWORD_AGE_TEXT, sessions=_sessions_text(active)
+            )
 
     # -------------------------------- yazı ----------------------------------- #
 
@@ -86,7 +149,13 @@ class SettingsController:
                     self._actor.id, {str(k): bool(v) for k, v in prefs.items()}
                 )
                 session.commit()
-        except KompasOSError as exc:
+        except Exception as exc:
+            # Tutucu `KompasOSError` DEYİL, `Exception`-dır — SƏBƏB `refresh()`-
+            # dəki ilə EYNİDİR (yuxarı, sətir 60-69): psycopg-in çılpaq
+            # `OperationalError`-u `KompasOSError` DEYİL, dar tutma isə bu YAZI
+            # yolunu («Yadda Saxla») sükutla «basılır, heç nə olmur» halına
+            # salırdı. `refresh()` eyni səbəbdən artıq geniş tutur — YAZI yolu
+            # geridə qalmışdı.
             _error_log.exception("SETTINGS_SAVE_FAILED", extra={"error": str(exc)})
             screen.show_error(
                 title="Ayarlar yadda saxlanılmadı",
@@ -96,12 +165,26 @@ class SettingsController:
         _inform(screen, "Ayarlar", "Bildiriş tərcihləriniz yadda saxlanıldı.")
 
     def _on_sessions(self, screen: SettingsScreen) -> None:
-        """«Bütün sessiyaları bağla» — Profil ekranı ilə EYNİ davranış."""
+        """«Bütün sessiyaları bağla» — sayı göstərir, LƏĞV ETMİR (SEC-5).
+
+        ──────────────────────────────────────────────────────────────────────
+        BURADA HƏLƏ LƏĞV YOXDUR — Profil ekranından FƏRQLİ, QƏSDƏN
+        ──────────────────────────────────────────────────────────────────────
+        `profile.py::_on_close_sessions` indi HƏQİQİ ləğv edir (SEC-5), amma
+        YALNIZ DİGƏR sessiyaları — CARİNİ İSTİSNA edir. Bu düymə isə "BÜTÜN
+        sessiyaları" bağlayır, yəni CARİ sessiyanı DA — özünü ləğv etmək
+        dərhal çıxışa bərabərdir və bu, `_on_close_sessions`-dan tamamilə
+        FƏRQLİ bir axındır (ekranın özünün bağlanması, yenidən girişə
+        yönləndirmə). SEC-5 iş müqaviləsi bunu əhatə etmirdi, ona görə
+        BURADA əlavə edilmədi — "sayı göstər" davranışı QALIR, mətn isə artıq
+        YALAN İDDİA ETMİR (əvvəl "giriş axını token buraxmır" deyirdi, amma
+        `issue()` indi bağlıdır).
+        """
         from src.presentation.controllers.profile import _active_session_count  # noqa: PLC0415
 
         try:
             with self._context.session(user_id=self._actor.id) as session:
-                active = _active_session_count(session, self._actor)
+                active = _active_session_count(session, self._actor, now=self._context.clock.now())
         except Exception:
             _error_log.exception("SETTINGS_SESSIONS_FAILED")
             _inform(screen, "Sessiyalar", "Sessiya məlumatı oxuna bilmədi.")
@@ -113,8 +196,8 @@ class SettingsController:
         _inform(
             screen,
             "Sessiyalar",
-            f"{active} aktiv sessiya var. Ləğv etmə hələ aktiv deyil — "
-            "giriş axını sessiya tokeni buraxmır.",
+            f"{active} aktiv sessiya var. Digər sessiyaları bağlamaq üçün "
+            "«Profil» ekranındakı «Digər sessiyaları bağla» düyməsini işlədin.",
         )
 
     def _on_password(self, screen: SettingsScreen) -> None:
@@ -139,4 +222,13 @@ def _inform(screen: Any, title: str, message: str) -> None:
     QMessageBox.information(screen, title, message)
 
 
-__all__ = ["SettingsController"]
+def _sessions_text(active: int) -> str:
+    """`set_security_info(sessions=...)`-in mətni — `_on_sessions` ilə EYNİ say mənbəyi."""
+    if active == 0:
+        return "Aktiv sessiya yoxdur."
+    if active == 1:
+        return "1 cihazda aktiv sessiyanız var."
+    return f"{active} cihazda aktiv sessiyanız var."
+
+
+__all__ = ["PASSWORD_AGE_TEXT", "SettingsController"]

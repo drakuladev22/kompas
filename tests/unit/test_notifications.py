@@ -658,6 +658,102 @@ class TestScrubbing:
         assert "42" in scrub("line 42, in verify")
 
 
+class TestScrubbingSecrets:
+    """SEC-03 (dövrə 3 audit) — sistem sirləri, `.team/r3/SEC-03-scrub-patterns.md`.
+
+    Hər test İKİ şeyi yoxlayır: sirrin ÖZÜ YOXDUR, VƏ ətraf diaqnostik
+    məlumat (host, xəta növü, açar ADI) İTMİR — "həddindən artıq təmizləmə
+    də qüsurdur" (ARCHITECT tapşırığı).
+    """
+
+    def test_dsn_parolu_gizlenir_host_qalir(self) -> None:
+        cleaned = scrub(
+            "postgresql://kompasos_app:S3cr3tPass!@"
+            "aws-0-ap-southeast-1.pooler.supabase.com/postgres"
+        )
+
+        assert "S3cr3tPass!" not in cleaned
+        assert "aws-0-ap-southeast-1.pooler.supabase.com" in cleaned
+        assert "kompasos_app" in cleaned  # istifadəçi adı sirr DEYİL
+
+    def test_libpq_conninfo_parolu_gizlenir_qalan_sahalar_qalir(self) -> None:
+        cleaned = scrub("host=localhost dbname=kompasos user=app password=hunter2 sslmode=require")
+
+        assert "hunter2" not in cleaned
+        assert "host=localhost" in cleaned
+        assert "sslmode=require" in cleaned
+
+    def test_telegram_bot_tokeni_tam_gizlenir(self) -> None:
+        secret = "AAF" + "x" * 32  # bax SEC-03 siyahısı: 35 simvollıq hissə
+        assert len(secret) == 35
+        cleaned = scrub(f"Telegram sendMessage failed for bot 123456789:{secret}")
+
+        assert secret not in cleaned
+        assert "123456789" not in cleaned  # bot ID TƏK başına da açıqlanmır
+        assert "Telegram sendMessage failed" in cleaned
+
+    def test_google_access_tokeni_gizlenir(self) -> None:
+        cleaned = scrub("OAuth error: access_token=ya29.a0AfH6SMB_fake_example_token_value")
+
+        assert "ya29." not in cleaned
+        assert "OAuth error" in cleaned
+
+    def test_google_refresh_tokeni_gizlenir(self) -> None:
+        cleaned = scrub("refresh token 1//0gAbCdEfGhIjKlMnOpQrStUvWxYz-example")
+
+        assert "1//0g" not in cleaned
+        assert "refresh token" in cleaned
+
+    def test_bearer_tokeni_dict_reprinde_gizlenir(self) -> None:
+        cleaned = scrub(
+            "httpx.HTTPStatusError: 401 Client Error, "
+            "request headers: {'Authorization': 'Bearer sk-abc123DEF456.token'}"
+        )
+
+        assert "sk-abc123DEF456.token" not in cleaned
+        assert "401 Client Error" in cleaned
+
+    def test_authorization_basliginda_bearer_tokeni_tam_gizlenir(self) -> None:
+        """Köhnəlmiş `\\S+`-tək naxış YALNIZ "Bearer" sözünü tutub həqiqi
+        tokeni açıq buraxırdı (canlı sınaqda tapılan qüsur) — bu test məhz
+        onu bağlayır."""
+        cleaned = scrub("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig")
+
+        assert "eyJhbGciOiJIUzI1NiJ9" not in cleaned
+        assert "payload" not in cleaned
+
+    def test_authorization_basligi_bearer_olmadan_da_tam_gizlenir(self) -> None:
+        cleaned = scrub("Authorization: ApiKey raw-secret-value-without-scheme")
+
+        assert "raw-secret-value-without-scheme" not in cleaned
+
+    def test_umumi_acar_deyer_toru_gizlenir_acar_adi_qalir(self) -> None:
+        cleaned = scrub("ValidationError: client_secret=GOCSPX-abc123XYZ is invalid")
+
+        assert "GOCSPX-abc123XYZ" not in cleaned
+        assert "client_secret=" in cleaned  # hansı SAHƏNİN sirr olduğu qalır
+        assert "is invalid" in cleaned
+
+    def test_argon2_hesi_tam_gizlenir(self) -> None:
+        cleaned = scrub(
+            "verify_pin failed, stored_hash="
+            "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$aGFzaHZhbHVlaGVyZQ"
+        )
+
+        assert "aGFzaHZhbHVlaGVyZQ" not in cleaned
+        assert "verify_pin failed" in cleaned
+
+    def test_fernet_acari_siyahida_yoxdur_amma_ehtiyac_da_yoxdur(self) -> None:
+        """Fernet açarı `scrub()`-un HEDƏFİ DEYİL (bax modul başlığı,
+        `EncryptionService` onu mətnə heç vaxt interpolyasiya etmir) — bu
+        test YALNIZ ADİ mətnin (heç bir naxışa uymayan) DƏYİŞMƏDƏN
+        qaldığını, yəni yeni naxışların HƏDDİNDƏN ARTIQ AQRESSİV olmadığını
+        sübut edir."""
+        cleaned = scrub("ConnectionRefusedError: connect to host db.example.com failed")
+
+        assert cleaned == "ConnectionRefusedError: connect to host db.example.com failed"
+
+
 class TestCrashReporter:
     def _boom(self) -> None:
         message = "Employee aliyev@kompas.az (11111111-1111-1111-1111-111111111111) yoxdur"

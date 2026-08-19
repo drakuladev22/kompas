@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -15,6 +16,7 @@ from src.application.use_cases import (
     TimeDriftError,
 )
 from src.application.use_cases.leave_verification import MonthlyLeaveUsage
+from src.domain import events as domain_events
 from src.domain.entities import CheckInStatus, FineSource, LeaveStatus
 from src.domain.entities.base import DomainRuleError, InvalidStateTransitionError
 from src.domain.entities.employee import Employee
@@ -51,6 +53,7 @@ from tests.fixtures.fakes import (
     InMemoryFines,
     InMemoryLeaveRequests,
     RecordingAudit,
+    RecordingEventBus,
     RecordingNotifier,
 )
 
@@ -158,7 +161,12 @@ class Ctx:
             )
         )
 
-    def leave_uc(self) -> LeaveVerificationUseCase:
+    def leave_uc(self, *, event_bus: Any = None) -> LeaveVerificationUseCase:
+        # `event_bus` OPSİONAL VƏ DEFOLT `None`: mövcud bütün çağırışlar
+        # (`ctx.leave_uc()`) heç nə ötürmür və `_publish_events`-in "bus
+        # yoxdursa heç nə etmə" qolunu artıq işlədir (bax D2 — [c] halı,
+        # `test_event_bus_absence_does_not_change_the_outcome`). Yeni parametr
+        # YALNIZ D2 reqressiya testlərinə xidmət edir.
         return LeaveVerificationUseCase(
             leave_requests=self.leave_requests,  # type: ignore[arg-type]
             fines=self.fines,  # type: ignore[arg-type]
@@ -173,6 +181,7 @@ class Ctx:
             saga=self.saga,
             audit=self.audit,  # type: ignore[arg-type]
             notifier=self.notifier,  # type: ignore[arg-type]
+            event_bus=event_bus,
         )
 
     def checkin_uc(self) -> MorningCheckInUseCase:
@@ -392,6 +401,116 @@ async def test_saga_compensation_discards_fine_when_audit_fails(ctx: Ctx) -> Non
     assert ctx.leave_requests.items[request_id].status is LeaveStatus.PENDING_RETURN_VERIFICATION
 
 
+# --------------------------------------------------------------------------- #
+# D2 — `verify_return()` hadisə yayımı
+# --------------------------------------------------------------------------- #
+# `qa` çarpaz sorğuda tapdı: mövcud ~15 `verify_return()` çağırışının HEÇ BİRİ
+# `LeaveVerifiedEvent`-in Event Bus-a çatıb-çatmadığını yoxlamırdı (yalnız
+# `outcome` — status/cərimə). `domain` düzəlişi: `event_bus: EventBus | None`
+# opsional parametr, uğur yolunda `request.collect_events()` yayılır.
+# Dörd hal AŞAĞIDA — `_publish_events` modul başlığındakı bütün budaqlar.
+
+
+async def test_a_successful_verification_publishes_the_event(ctx: Ctx) -> None:
+    """[a] `event_bus` verilib, saga UĞURLU → `LeaveVerifiedEvent` bus-a çatır.
+
+    STEP1/STEP2 arasında `request.collect_events()` ÇAĞIRILIR: `InMemory
+    LeaveRequests` (bu fayldakı digər testlərdən fərqli olaraq BURADA) `save()`
+    zamanı obyekti KOPYALAMIR — eyni Python instansı bütün 3 addım boyu
+    saxlanılır, yəni `LeaveRequestedEvent`/`LeaveReturnClaimedEvent` DRENAJ
+    EDİLMƏSƏ STEP3-ə qədər yığılıb qalır. Real Postgres repo-da hər addım
+    aqreqatı SƏTİRDƏN YENİDƏN qurur (`emit_created_event=False`) — yəni
+    `verify_return()` yalnız ÖZ addımının hadisəsini görər. Bu sətir məhz
+    HƏMİN fərqi kompensasiya edir ki, test yalnız D2-nin predmetini (STEP3-ün
+    ÖZ hadisəsi yayılırmı) ölçsün, fakenin obyekt-referans xüsusiyyətini yox.
+    """
+    bus = RecordingEventBus()
+    open_leave(ctx)
+    ctx.clock.set(at(13, 30))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+    ctx.leave_requests.items[request_id].collect_events()
+
+    outcome = await ctx.leave_uc(event_bus=bus).verify_return(
+        tenant_id=TENANT, operator_id=OPERATOR, request_id=request_id
+    )
+
+    assert outcome.succeeded is True
+    assert bus.names() == ["LeaveVerifiedEvent"]
+    (event,) = bus.published
+    assert isinstance(event, domain_events.LeaveVerifiedEvent)
+
+
+async def test_a_compensated_verification_does_not_publish(ctx: Ctx) -> None:
+    """[b] Saga KOMPENSASİYAYA düşsə hadisə YAYILMIR.
+
+    `undo_update_status` (`leave_verification.py:400`) `request.
+    discard_events()` çağırır — `_pending_events` uğursuzluq anında ARTIQ
+    boşdur. `verify_return()`-un özündəki `if result.succeeded:` şərti bunu
+    İKİNCİ dəfə təmin edir (bax modul şərhi, sətir 517-522).
+    """
+    bus = RecordingEventBus()
+    ctx.limits.set(SystemLimitKey.DELAY_FINE_RATE_PER_MINUTE, "0.50")
+    open_leave(ctx)
+    ctx.clock.set(at(13, 30))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+    ctx.fines.save_failure = RuntimeError("DB əlçatmazdır")
+
+    outcome = await ctx.leave_uc(event_bus=bus).verify_return(
+        tenant_id=TENANT, operator_id=OPERATOR, request_id=request_id
+    )
+
+    assert outcome.succeeded is False
+    assert outcome.saga.status is SagaStatus.PENDING_RECONCILIATION
+    assert bus.published == []
+
+
+async def test_event_bus_absence_does_not_change_the_outcome(ctx: Ctx) -> None:
+    """[c] `event_bus=None` (defolt) → istisna atılmır, əməliyyat normal işləyir.
+
+    Bu, `ctx.leave_uc()`-un ARQUMENTSİZ formasıdır — yəni bu faylda ARTIQ
+    mövcud olan bütün digər `verify_return()` testləri (məs.
+    `test_full_flow_creates_no_fine_by_default`) bu halı örtür. Test AÇIQ
+    saxlanılıb ki, "defolt niyə etibarlıdır" sualı bu faylda BİR yerdə,
+    D2 bölməsində cavablandırılsın.
+    """
+    open_leave(ctx)
+    ctx.clock.set(at(13, 30))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+
+    outcome = await ctx.leave_uc().verify_return(
+        tenant_id=TENANT, operator_id=OPERATOR, request_id=request_id
+    )
+
+    assert outcome.succeeded is True
+
+
+async def test_a_publish_failure_does_not_undo_the_verification(ctx: Ctx) -> None:
+    """[d] Bus `publish()` istisna atsa `verify_return()` YENƏ uğurlu qalır.
+
+    `saga_orchestrator._emit()` ilə EYNİ naxış: bu nöqtədə Saga artıq
+    `COMPLETED`-dir, status/cərimə/audit DB-yə yazılıb. Yayım nasazlığı
+    telemetriya kanalını itirir, əməliyyatı YOX (bax `_publish_events`
+    docstring-i, `leave_verification.py:872-878`).
+    """
+    bus = RecordingEventBus()
+    bus.failure = RuntimeError("Event Bus əlçatmazdır")
+    open_leave(ctx)
+    ctx.clock.set(at(13, 30))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+
+    outcome = await ctx.leave_uc(event_bus=bus).verify_return(
+        tenant_id=TENANT, operator_id=OPERATOR, request_id=request_id
+    )
+
+    assert outcome.succeeded is True
+    assert outcome.saga.status is SagaStatus.COMPLETED
+    assert bus.published == []  # istisna `append`-dən ƏVVƏL atılıb
+
+
 async def test_compensated_fine_does_not_block_a_new_verification(ctx: Ctx) -> None:
     """Kompensasiyadan sonra TƏKRAR təsdiq bloklanmır.
 
@@ -462,19 +581,54 @@ async def test_second_verification_creates_no_second_fine(ctx: Ctx) -> None:
 
 
 async def test_verify_return_reads_the_row_under_lock(ctx: Ctx) -> None:
-    """Yazma axını KİLİDLİ oxudan keçir (oxu-yalnız yol toxunulmazdır)."""
+    """Yazma axını KİLİDLİ oxudan keçir (oxu-yalnız yol toxunulmazdır).
+
+    D-R2-02 (dövrə 2) düzəlişindən SONRA STEP 2 (`claim_return`) DƏ kilidli
+    oxudur — əvvəllər YALNIZ STEP 3 (`verify_return`) kilidli idi, halbuki
+    STEP 2-nin kilidsiz `find_open_for_employee`-si ikiqat toxunma/şəbəkə
+    təkrarında `LEAVE_RETURN_CLAIMED`-i ikiqat yaza, `return_claimed_time`-ı
+    (gecikmə/cərimə hesabına birbaşa daxil olan sahə) qeyri-deterministik
+    qoya bilirdi (bax `_require_open_request_locked`-in öz şərhi).
+    """
     open_leave(ctx)
     ctx.clock.set(at(13, 0))
     ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
     request_id = next(iter(ctx.leave_requests.items))
 
-    assert ctx.leave_requests.locked_reads == []  # STEP 1/2 kilid tələb etmir
+    assert ctx.leave_requests.locked_reads == [request_id]  # STEP 2 kilidli oxudur
 
     await ctx.leave_uc().verify_return(
         tenant_id=TENANT, operator_id=OPERATOR, request_id=request_id
     )
 
-    assert ctx.leave_requests.locked_reads == [request_id]
+    assert ctx.leave_requests.locked_reads == [request_id, request_id]  # STEP 2 + STEP 3
+
+
+def test_double_claim_return_is_rejected_on_the_second_locked_read(ctx: Ctx) -> None:
+    """D-R2-02: ikiqat toxunma/şəbəkə təkrarını modelləşdirir.
+
+    Sahtə repo həqiqi `FOR UPDATE` kilidini simulyasiya edə bilmir (tək
+    saplıdır — bax `InMemoryLeaveRequests.get_for_update`-in öz şərhi),
+    AMMA əsl DB-də ikinci tranzaksiya BİRİNCİNİN commit-indən SONRA eyni
+    sətri oxuyacaq — yəni artıq `PENDING_RETURN_VERIFICATION` görəcək.
+    Bu test məhz o SIRALI nəticəni yoxlayır: ikinci `claim_return()`
+    entity-səviyyəli `_require_status(OUTSIDE)` qoruğuna çırpılmalıdır,
+    həm də HƏR İKİ çağırış kilidli oxudan keçməlidir (əks halda qoruma
+    yalnız TƏSADÜFƏN işləyər, strukturca deyil).
+    """
+    open_leave(ctx)
+    ctx.clock.set(at(13, 0))
+
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    request_id = next(iter(ctx.leave_requests.items))
+    assert ctx.leave_requests.items[request_id].status is LeaveStatus.PENDING_RETURN_VERIFICATION
+
+    with pytest.raises(InvalidStateTransitionError, match="OUTSIDE"):
+        ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+
+    # HƏR İKİ cəhd kilidli oxu ilə keçib — ikincinin rədd edilməsi TƏSADÜFİ
+    # sıralamanın deyil, hər çağırışın eyni kilidli yoldan keçməsinin nəticəsidir.
+    assert ctx.leave_requests.locked_reads == [request_id, request_id]
 
 
 async def test_operator_outside_scope_blocked(ctx: Ctx) -> None:

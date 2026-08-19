@@ -564,6 +564,53 @@ class EncryptionService:
             return base + b"|" + context.encode("utf-8")
         return base
 
+    def _seal(self, data: bytes, context: str | None) -> tuple[str, bytes]:
+        """AES-256-GCM-lə bağlayır — MƏTN və BAYT şifrələməsinin ORTAQ NÜVƏSİ.
+
+        `encrypt()` və `encrypt_bytes()` İKİSİ DƏ buradan keçir: açar seçimi,
+        nonce yaradılması və AAD bağlanması TƏK yerdə qalır. Yalnız ZƏRFİN
+        formatı fərqlənir (mətn üçün base64 sətir, bayt üçün xam bayt) —
+        aşağıdakı iki metodda. Əks halda kripto nüvəsi iki yerdə təkrarlanardı
+        və birinin düzəlişi (məs. AAD sxemi dəyişəndə) digərində unudulardı.
+
+        Returns:
+            `(key_id, nonce + sealed)` — zərfə salmaq çağıranın işidir.
+        """
+        self._ensure_loaded()
+        assert self._primary_key_id is not None
+        key_id = self._primary_key_id
+        nonce = os.urandom(NONCE_SIZE)
+        cipher = self._ciphers[key_id]
+        sealed = cipher.encrypt(nonce, data, self._aad(key_id, context))
+        return key_id, nonce + sealed
+
+    def _open(self, key_id: str, nonce_and_sealed: bytes, context: str | None) -> bytes:
+        """AES-256-GCM-i açır — MƏTN və BAYT deşifrəsinin ORTAQ NÜVƏSİ (bax `_seal`)."""
+        self._ensure_loaded()
+        cipher = self._ciphers.get(key_id)
+        if cipher is None:
+            _security_log.error("DECRYPTION_UNKNOWN_KEY_ID", extra={"key_id": key_id})
+            raise DecryptionError(
+                f"Bu məlumat naməlum açarla ('{key_id}') şifrələnib. "
+                f"Köhnə açarı KOMPASOS_FERNET_KEY_PREVIOUS-a əlavə edin.",
+                context={"key_id": key_id},
+            )
+
+        nonce, sealed = nonce_and_sealed[:NONCE_SIZE], nonce_and_sealed[NONCE_SIZE:]
+        try:
+            return cipher.decrypt(nonce, sealed, self._aad(key_id, context))
+        except InvalidTag as exc:
+            _security_log.warning(
+                "DECRYPTION_FAILED",
+                extra={"reason": "invalid_tag_or_context", "key_id": key_id},
+            )
+            raise DecryptionError(
+                "Şifrələnmiş dəyər açıla bilmədi — məlumat dəyişdirilib və ya "
+                "yanlış kontekst verilib"
+            ) from exc
+        except Exception as exc:
+            raise DecryptionError("Şifrələnmiş dəyər açıla bilmədi") from exc
+
     def encrypt(self, plaintext: str | bytes, *, context: str | None = None) -> str:
         """Mətni AES-256-GCM ilə şifrələyir və versiyalı token qaytarır.
 
@@ -573,15 +620,10 @@ class EncryptionService:
                 (məs. ``f"erp_server:{server_id}"``). Açarkən eyni dəyər
                 verilməlidir.
         """
-        self._ensure_loaded()
-        assert self._primary_key_id is not None
-
         data = plaintext.encode("utf-8") if isinstance(plaintext, str) else plaintext
-        nonce = os.urandom(NONCE_SIZE)
-        cipher = self._ciphers[self._primary_key_id]
-        sealed = cipher.encrypt(nonce, data, self._aad(self._primary_key_id, context))
-        payload = base64.urlsafe_b64encode(nonce + sealed).decode("ascii")
-        return f"{TOKEN_VERSION}.{self._primary_key_id}.{payload}"
+        key_id, body = self._seal(data, context)
+        payload = base64.urlsafe_b64encode(body).decode("ascii")
+        return f"{TOKEN_VERSION}.{key_id}.{payload}"
 
     def decrypt(self, token: str | bytes, *, context: str | None = None) -> str:
         """Token-i açır — həm AES-256-GCM, həm də köhnə Fernet formatını dəstəkləyir."""
@@ -598,30 +640,14 @@ class EncryptionService:
         except ValueError as exc:
             raise DecryptionError("Şifrələnmiş dəyərin formatı yararsızdır") from exc
 
-        cipher = self._ciphers.get(key_id)
-        if cipher is None:
-            _security_log.error("DECRYPTION_UNKNOWN_KEY_ID", extra={"key_id": key_id})
-            raise DecryptionError(
-                f"Bu məlumat naməlum açarla ('{key_id}') şifrələnib. "
-                f"Köhnə açarı KOMPASOS_FERNET_KEY_PREVIOUS-a əlavə edin.",
-                context={"key_id": key_id},
-            )
-
         try:
             raw = base64.urlsafe_b64decode(payload.encode("ascii"))
-            nonce, sealed = raw[:NONCE_SIZE], raw[NONCE_SIZE:]
-            return cipher.decrypt(nonce, sealed, self._aad(key_id, context)).decode("utf-8")
-        except InvalidTag as exc:
-            _security_log.warning(
-                "DECRYPTION_FAILED",
-                extra={"reason": "invalid_tag_or_context", "key_id": key_id},
-            )
-            raise DecryptionError(
-                "Şifrələnmiş dəyər açıla bilmədi — məlumat dəyişdirilib və ya "
-                "yanlış kontekst verilib"
-            ) from exc
         except Exception as exc:
             raise DecryptionError("Şifrələnmiş dəyər açıla bilmədi") from exc
+
+        # `_open()` `.decode("utf-8")` ETMİR (bayt API-si ilə ORTAQ olduğu üçün) —
+        # mətn sərhədi MƏHZ BURADADIR, ən xarici mətn səthində.
+        return self._open(key_id, raw, context).decode("utf-8")
 
     def _decrypt_legacy_fernet(self, token: str) -> str:
         """Köhnə (AES-256-GCM-ə keçiddən əvvəlki) Fernet token-lərini oxuyur."""
@@ -637,6 +663,59 @@ class EncryptionService:
         raise DecryptionError(
             "Şifrələnmiş dəyər açıla bilmədi — açar uyğun gəlmir və ya məlumat korlanıb"
         )
+
+    # ------------------------------ bayt API --------------------------------- #
+    #
+    # NİYƏ AYRICA API LAZIM OLDU (SEC-4, dövrə 2 audit tapıntısı):
+    # yuxarıdakı `encrypt()`/`decrypt()` MƏTN üçündür — `decrypt()` `_open()`-un
+    # nəticəsini `.decode("utf-8")` edir. Binar bayt axını (sübut şəkli, PDF)
+    # demək olar HEÇ VAXT keçərli UTF-8 olmur → şəkil üçün `decrypt()`
+    # `UnicodeDecodeError` ilə ÇÖKƏRDİ. Üstəlik `encrypt()` nəticəni base64
+    # sətrə çevirir — bu, ~33% şişmədir (3 bayt → 4 simvol). `upload_queue.py`
+    # modulunun ÖZÜ məhz bu səbəbdən sübut şəkillərini SQLite/JSON sütununa
+    # YOX, ayrıca fayla yazmağı seçib (bax orada modul başlığı) — eyni
+    # məntiqlə, o faylı şifrələyəndə DƏ base64 əlavə etmək məqsədsizdir.
+    #
+    # NİYƏ BASE64 YOXDUR: `encrypt_bytes()` xam bayt qaytarır — çağıran onu
+    # BİRBAŞA diskə yaza bilər. Zərf `TOKEN_VERSION.key_id.` ASCII başlığı +
+    # xam `nonce || şifrmətn || tag`-dır (mətn tokeninin eyni sxemi, YALNIZ
+    # son hissə base64-lənmir).
+    #
+    # NİYƏ MƏTN API-Sİ ÜSTÜNDƏ QURULUB (`_seal`/`_open`): kripto nüvəsi
+    # (açar seçimi, nonce, AAD bağlanması) TƏK yerdədir — iki ayrı şifrələmə
+    # yolu olsaydı, AAD sxemi dəyişəndə (məs. INFRA-2 tapıntısındakı AAD
+    # mənbəyi uyğunsuzluğu kimi) yalnız biri düzəlib digəri unudula bilərdi.
+    #
+    # YADDAŞ SƏRHƏDİ (gələcək üçün sənədləşdirilir): `AESGCM` AXIN (streaming)
+    # rejimi TƏKLİF ETMİR — bütün `data` YADDAŞDA bütöv şifrələnir/açılır.
+    # 10 MB şəkil üçün zirvə yaddaş sərfi ~3× (orijinal + şifrəli surət +
+    # köçürmə buferi) qədər ola bilər. Bu, mövcud sübut şəkli həddi ilə
+    # (`MAX_UPLOAD_BYTES`/`system_limits`, bir neçə MB) TƏHLÜKƏSİZDİR, lakin
+    # bu API-ni video və ya böyük arxiv üçün İSTİFADƏ ETMƏYİN — yüzlərlə
+    # meqabaytlıq fayl üçün axın-əsaslı şifrələmə (məs. bloklara bölünmüş
+    # AES-GCM) tələb olunur, bu sinif onu təmin ETMİR.
+
+    def encrypt_bytes(self, data: bytes, *, context: str | None = None) -> bytes:
+        """Xam bayt axınını (şəkil, sənəd) AES-256-GCM ilə şifrələyir.
+
+        `encrypt()`-dən fərqli olaraq NƏTİCƏ BASE64-LƏNMİR — çağıran onu
+        birbaşa fayla/BLOB sütununa yaza bilər. `context` mətn API-si ilə
+        EYNİ semantikadadır: verilibsə, `decrypt_bytes()`-ə EYNİ dəyər
+        ötürülməlidir, əks halda `DecryptionError`.
+        """
+        key_id, body = self._seal(data, context)
+        return f"{TOKEN_VERSION}.{key_id}.".encode("ascii") + body
+
+    def decrypt_bytes(self, blob: bytes, *, context: str | None = None) -> bytes:
+        """`encrypt_bytes()` nəticəsini açır — nəticə XAM BAYTDIR, mətn DEYİL."""
+        self._ensure_loaded()
+        try:
+            prefix, key_id_bytes, body = blob.split(b".", 2)
+        except ValueError as exc:
+            raise DecryptionError("Şifrələnmiş dəyərin formatı yararsızdır") from exc
+        if prefix != TOKEN_VERSION.encode("ascii"):
+            raise DecryptionError("Şifrələnmiş dəyərin formatı yararsızdır")
+        return self._open(key_id_bytes.decode("ascii"), body, context)
 
     # ------------------------------ JSON ----------------------------------- #
 

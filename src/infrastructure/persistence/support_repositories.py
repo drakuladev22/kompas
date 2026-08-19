@@ -109,8 +109,9 @@ class PostgresSupportTicketRepository(_BaseRepository):
         cavab gözləyir, yəni işçinin növbəti mesajı məhz həmin söhbətin
         davamıdır.
         """
+        # INF2-02: bax `_filter_sql`-dəki eyni izah.
         conditions = ["tenant_id = %s", "status <> 'CLOSED'", "channel = %s"]
-        params: list[Any] = [tenant_id, channel.value]
+        params: list[Any] = [self._require_matching_tenant(tenant_id), channel.value]
         if opened_by is not None:
             conditions.append("opened_by = %s")
             params.append(opened_by)
@@ -153,8 +154,12 @@ class PostgresSupportTicketRepository(_BaseRepository):
         Ayrı-ayrı qursaydıq, `🔴 Açıq (12)` yazan sayğac başqa şərtlərlə
         işləyə bilər və istifadəçi 12 yazan düyməni basıb 9 sətir görərdi.
         """
+        # INF2-02: `tenant_id` arqumenti bağlantının ÖZ kontekstiylə UYĞUN
+        # olmalıdır — uyğunsuzluqda GURULTULU xəta (bax `_require_matching_
+        # tenant` şərhi, `repositories.py`). Bu, HƏM `list_threads`, HƏM DƏ
+        # `count_by_status`-un ORTAQ yoludur — bir yerdə düzəliş ikisini əhatə edir.
         conditions = ["t.tenant_id = %s"]
-        params: list[Any] = [tenant_id]
+        params: list[Any] = [self._require_matching_tenant(tenant_id)]
         if channel is not None:
             conditions.append("t.channel = %s")
             params.append(channel.value)

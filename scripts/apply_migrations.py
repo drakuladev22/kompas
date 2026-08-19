@@ -60,6 +60,45 @@ sys.path.insert(0, str(_REPO_ROOT))
 LEDGER = "kompasos.schema_migrations"
 
 
+def _ensure_utf8_stdio() -> None:
+    """Windows-un defolt konsol kodlaşdırmasını (cp1252) DÜZƏLDİR.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ LAZIMDIR — CANLI REPRODUKSİYA
+    ──────────────────────────────────────────────────────────────────────────
+    `PYTHONIOENCODING` əl ilə təyin edilməyəndə (adi Windows terminalının
+    DEFOLT vəziyyəti) `ə`, `ı`, `ğ`, `ş`, `İ` kimi Azərbaycan hərfləri
+    daşıyan `sys.stdout.write(...)` `UnicodeEncodeError` ilə ÇÖKÜR — bu fayl
+    demək olar HƏR sətirdə belə hərf işlədir. Ən zərərli məqam: sətir 174-dəki
+    yekun "BİTDİ" mesajı BÜTÜN miqrasiyalar artıq COMMIT olunduqdan SONRA
+    yazılır (`autocommit=True`, hər fayl öz `BEGIN;`/`COMMIT;` cütündə) — yəni
+    əməliyyat FAKTİKİ uğurlu olsa da, operator traceback görüb "işləmədi" zənn
+    edir. Bu, DB-5-in aradan qaldırdığı "tətbiq olunanın vəziyyəti bəlli
+    deyil" riskini görünürlük itkisi ilə YENİDƏN yaradır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ MÜDAFİƏLİ ÇAĞIRIŞ
+    ──────────────────────────────────────────────────────────────────────────
+    `sys.stdout` paketlənmiş/`pythonw` mühitində `None` ola bilər və hər axının
+    `reconfigure` metodu olmaya bilər (məs. test alətlərinin əvəz etdiyi
+    axınlar) — `hasattr` yoxlaması olmadan çağırış `AttributeError` ilə
+    çökərdi, `None` üzərində çağırış isə heç mümkün deyil. `errors="replace"`
+    QƏSDƏNDİR: məqsəd MƏLUMATI çatdırmaqdır, hərfin `?`-ə düşməsi çökməkdən
+    üstündür.
+
+    `scripts/onboard_new_tenant.py:156` bu skripti ALT PROSES kimi çağıranda
+    `PYTHONIOENCODING=utf-8`-i onun mühitinə ötürür — o yamaq YENƏ SAXLANILIR
+    (subprocess ayrı prosesdir, mühit dəyişəni ora çatmalıdır), amma indi
+    BURADAKI mənbə özü də qorunur, ona görə skript BİRBAŞA (subprocess kimi
+    yox) işə salınanda da (CLAUDE.md §7-dəki sənədləşdirilmiş əmr məhz belədir)
+    çökmür.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            with suppress(Exception):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def _load_dotenv() -> None:
     """`.env`-i mühitə yükləyir — TƏTBİQ bunu etmir, yalnız bu skript edir.
 
@@ -76,6 +115,27 @@ def _load_dotenv() -> None:
             continue
         key, _, value = line.partition("=")
         os.environ.setdefault(key.strip(), value.strip())
+
+
+def _print_notice(diag: object) -> None:
+    """Server `RAISE NOTICE`-lərini operatorun konsoluna çıxarır (INFRA-5).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ LAZIM OLDU — BOŞLUQ CANLI OLARAQ TAPILDI
+    ──────────────────────────────────────────────────────────────────────────
+    psycopg3 defolt olaraq `NOTICE`-i heç yerə YAZMIR (handler qeydiyyatdan
+    keçirilmədikdə sükutla atılır — empirik yoxlanıldı, `conn.notices` kimi
+    psycopg2-stil bufer də YOXDUR). Nəticədə `RAISE NOTICE` işlədən
+    miqrasiyalar (məs. 070, silinən sətirlərin sayını bildirir) HEÇ VAXT
+    operatora çatmırdı, halbuki SQL-in özü düzgün icra olunurdu — yəni
+    "görünürlük yoxdur" problemi, "işləmir" problemi DEYİL.
+
+    `Diagnostic.message_primary` server mesajının ƏSAS mətnidir (detal/hint
+    YOXDUR — onlar adətən boşdur və "MİQRASİYA 070: ..." tipli mesajlar üçün
+    lazım deyil).
+    """
+    message = getattr(diag, "message_primary", None) or str(diag)
+    sys.stdout.write(f"  [NOTICE] {message}\n")
 
 
 def _checksum(path: Path) -> str:
@@ -97,11 +157,14 @@ def _ledger_state(cur: object) -> dict[str, str]:
     if row is None or row[0] is None:
         return {}
     # `LEDGER` bu faylda təyin olunmuş SABİTdir, xarici giriş deyil.
-    cursor.execute(f"SELECT filename, checksum FROM {LEDGER}")  # noqa: S608
-    return dict(cursor.fetchall())  # type: ignore[attr-defined,no-any-return]
+    cursor.execute(  # type: ignore[attr-defined]
+        f"SELECT filename, checksum FROM {LEDGER}"  # noqa: S608
+    )
+    return dict(cursor.fetchall())  # type: ignore[attr-defined]
 
 
 def main(argv: list[str] | None = None) -> int:
+    _ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description="KompasOS miqrasiya icraçısı")
     parser.add_argument(
         "--all", action="store_true", help="reyestrdə olanları da yenidən tətbiq et"
@@ -132,6 +195,8 @@ def main(argv: list[str] | None = None) -> int:
     # tranzaksiyanı bitirər və qalan ifadələr tranzaksiyadan KƏNARDA icra
     # olunardı — yəni uğursuzluqda yarımçıq nəticə qalardı.
     with psycopg.connect(dsn, connect_timeout=30, autocommit=True) as conn, conn.cursor() as cur:
+        # INFRA-5: handler-siz `RAISE NOTICE` sükutla itir — bax `_print_notice`.
+        conn.add_notice_handler(_print_notice)
         applied = _ledger_state(cur)
         pending: list[tuple[Path, str, str]] = []
         for path in files:
@@ -158,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
         for path, digest, _reason in pending:
             started = time.monotonic()
             try:
-                cur.execute(path.read_text(encoding="utf-8", errors="replace"))  # type: ignore[arg-type]
+                cur.execute(path.read_text(encoding="utf-8", errors="replace"))
             except Exception as exc:  # icra dayanır: növbəti fayl əvvəlkindən asılı ola bilər
                 # Tranzaksiya artıq bağlanmış ola bilər — `ROLLBACK` özü də
                 # xəta verə bilər və o xəta ƏSAS səbəbi gizlətməməlidir.

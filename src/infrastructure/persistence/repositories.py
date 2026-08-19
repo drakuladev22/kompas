@@ -19,6 +19,10 @@ from uuid import UUID
 
 from psycopg import errors as pg_errors
 
+from src.application.use_cases.fine_management import (
+    ConcurrentVerificationConflictError,
+    DuplicateFineSubmissionError,
+)
 from src.application.use_cases.leave_verification import OperationNotPermittedError
 from src.domain.entities.attendance_record import AttendanceRecord, CheckInStatus
 from src.domain.entities.employee import Employee
@@ -36,6 +40,7 @@ from src.domain.value_objects.identifiers import (
     StoreId,
     TenantId,
 )
+from src.infrastructure.persistence.connection import TenantContextError
 from src.infrastructure.persistence.mappers import (
     Credentials,
     apply_overrides,
@@ -71,6 +76,65 @@ class _BaseRepository:
     @property
     def _tenant(self) -> TenantId:
         return self._context.tenant_id
+
+    def _require_matching_tenant(self, tenant_id: TenantId) -> TenantId:
+        """Çağıranın `tenant_id` arqumenti bağlantının ÖZ kontekstiylə UYĞUNDUR MU.
+
+        INF2-02 (dövrə 2 audit): bir sıra `list_*()`-tipli metod imzası
+        Protocol-un tələb etdiyi `tenant_id` arqumentini QƏBUL EDİR (ports.py
+        çağıranın kontekstindən asılı olmayan sabit imza istəyir), lakin
+        sorğuda `self._tenant`-i YOX, məhz bu arqumenti işlədirdi. RLS
+        (`WITH CHECK`/`USING (tenant_id = current_tenant_id())`) hələ də
+        SIZMANIN qarşısını alır — nəticə səhv `tenant_id`-lə YALNIZ BOŞ qayıda
+        bilər, BAŞQA kirayəçinin sətri HEÇ VAXT — amma "heç nə yoxdur" ilə
+        "çağıran KOD SƏHVİDİR" arasındakı fərq itir: operator "məlumat yoxdur"
+        zənn edir, halbuki arxada YANLIŞ `tenant_id` ötürülüb.
+
+        Bu metod o fərqi GERİ QAYTARIR: SÜKUTLA `self._tenant`-ə keçmək əvəzinə
+        (bu, uyğunsuzluğu YENƏ gizlədərdi, sadəcə yerini dəyişdirərdi),
+        uyğunsuzluqda GURULTULU `TenantContextError` atır — proqramçı səhvi
+        SƏSSİZ qalmamalıdır. Uyğunluq varsa `self._tenant`-i qaytarır ki,
+        çağıran sorğuda TƏK mənbədən (bağlantının kontekstindən) istifadə etsin.
+
+        ──────────────────────────────────────────────────────────────────────
+        BU QATIN İKİ NAXIŞLI OLDUĞU BİLİNMƏLİDİR — HƏLƏ TAM TƏTBİQ OLUNMAYIB
+        ──────────────────────────────────────────────────────────────────────
+        Bu metod `persistence/`-in HƏDƏF naxışıdır, KÖNÜLLÜ HAMISINA yayılan
+        DEYİL. Dövrə 2 audit ~154 metodu (~40 fayl) AŞKARLADI ki, `tenant_id:
+        TenantId` arqumentini QƏBUL EDİR, lakin `self._tenant`-i YOX, birbaşa
+        arqumentin ÖZÜNÜ işlədir — yəni bu qorumadan KEÇMİR. Yalnız BEŞ fayl
+        (`auth_session_repository.py`, `security_event_repository.py`,
+        `telegram_repositories.py`, VƏ dövrə 2-də əlavə olunan
+        `exception_repositories.py`/`open_shift_repository.py`/
+        `support_repositories.py`/`announcement_repository.py`) bu metodu
+        işlədir və ya `self._tenant`-i birbaşa istifadə edir.
+
+        Qalan ~154 metod TOPLU şəkildə KÖÇÜRÜLMÜR — SƏBƏBLƏR:
+          1. Miqyas: 40 fayl, hər biri öz sorğu quruluşuna görə ayrıca yoxlama
+             tələb edir — bir dövrənin ORTASINDA yarımçıq/izlənilməz olardı.
+          2. TƏHLÜKƏSİZLİK DEŞİYİ DEYİL: RLS (`WITH CHECK`/`USING (tenant_id =
+             current_tenant_id())`) sızmanın qarşısını onsuz da alır — itən
+             şey YALNIZ "boş nəticə" ilə "kodda xəta" arasındakı fərqdir
+             (dərinlikdə müdafiə güzəşti, kritik boşluq deyil).
+          3. Ayrıca planlaşdırılmalı, ayrıca test olunmalı, ayrıca commit
+             olunmalı bir işdir (ARCHITECT-in dövrə 2 qərarı).
+
+        **YENİ metod yazan növbəti oxucu üçün qayda:** YENİ yazılan hər
+        `tenant_id` qəbul edən repository metodu bu funksiyanı ÇAĞIRMALIDIR
+        — "köhnə 154-ə bənzət" YOX, "yeni beşliyə bənzət". Rəqəm (154) qəsdən
+        BURADA SAXLANILIR — vaxtla köhnəlsə belə, qalan işin BÖYÜKLÜK
+        SIRASINI göstərir.
+        """
+        if tenant_id != self._tenant:
+            raise TenantContextError(
+                "Çağıran `tenant_id` bağlantının ÖZ kontekstindən FƏRQLİDİR — "
+                "proqram xətası (bax `_require_matching_tenant` şərhi)",
+                context={
+                    "argument_tenant_id": str(tenant_id),
+                    "connection_tenant_id": str(self._tenant),
+                },
+            )
+        return self._tenant
 
     def _fetch_one(self, sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
         with self._conn.cursor() as cur:
@@ -692,6 +756,31 @@ class PostgresLeaveRequestRepository(_BaseRepository):
         )
         return self._hydrate(row) if row else None
 
+    def find_open_for_employee_locked(self, employee_id: EmployeeId) -> LeaveRequest | None:
+        """`find_open_for_employee`-nin SƏTİR KİLİDLİ variantı — YALNIZ `claim_return`
+        (STEP 2, DOM-R2-02 audit tapıntısı, dövrə 2).
+
+        `get_for_update`-lə EYNİ məntiq (bax onun şərhi: niyə `get()`/
+        `find_open_for_employee` DƏYİŞDİRİLMİR, niyə kilid tranzaksiya sonuna
+        qədər YAŞAYA BİLƏR) — YALNIZ `WHERE` şərti fərqlidir: ID YOX,
+        "bu işçinin AÇIQ sorğusu" axtarılır. `_OPEN_STATUSES` `find_open_
+        for_employee` ilə HƏRFƏN eynidir ki, kilidli variant kilidsiz
+        variantın tapdığı EYNİ sətri versin.
+
+        `FOR UPDATE` Postgres qrammatikasında `LIMIT`-dən SONRA yazılır
+        (`ORDER BY ... LIMIT ... FOR UPDATE`) — sıra təsadüfi deyil, dil
+        qaydasıdır.
+        """
+        row = self._fetch_one(
+            self._SELECT
+            + """
+            WHERE employee_id = %s AND tenant_id = %s AND status = ANY(%s)
+            ORDER BY requested_time DESC LIMIT 1 FOR UPDATE
+            """,
+            (employee_id, self._tenant, list(self._OPEN_STATUSES)),
+        )
+        return self._hydrate(row) if row else None
+
     def find_open_for_employee(self, employee_id: EmployeeId) -> LeaveRequest | None:
         row = self._fetch_one(
             self._SELECT
@@ -1105,10 +1194,24 @@ class PostgresFineRepository(_BaseRepository):
                leave_request_id, amount, fine_date, issued_by, photo_evidence_url,
                status, published_at, reviewed_by, review_decision_reason,
                reversed_by, reversed_at, reversal_reason,
-               appeal_window_closes_at, exported_period, created_at AS issued_at,
+               appeal_window_closes_at, exported_period, review_batch_id,
+               idempotency_key, created_at AS issued_at,
                {_UNDECIDED_APPEAL_EXISTS} AS has_open_appeal
         FROM fines
     """  # noqa: S608 — fraqment SABİT sətirdir, istifadəçi girişi yoxdur
+
+    def get_by_idempotency_key(self, tenant_id: TenantId, key: UUID) -> Fine | None:
+        """D7: `DuplicateFineSubmissionError` tutulduqdan SONRA mövcud sətri tapır.
+
+        `tenant_id` DEYİL, `self._tenant` işlədilir — INFRA-2 naxışı
+        (RLS-ə əlavə ikinci qat, arqumentə güvənmə).
+        """
+        del tenant_id
+        row = self._fetch_one(
+            self._SELECT + " WHERE tenant_id = %s AND idempotency_key = %s",
+            (self._tenant, key),
+        )
+        return fine_from_row(row) if row else None
 
     def get(self, fine_id: FineId) -> Fine | None:
         row = self._fetch_one(
@@ -1299,52 +1402,108 @@ class PostgresFineRepository(_BaseRepository):
         #       `REVERSED` edir və həmin sətir də eyni CHECK-ə dəyirdi.
         # Sütunlar ƏLAVƏ olunur, mövcud `ON CONFLICT (id) DO UPDATE` naxışı
         # OLDUĞU KİMİ QALIR — sadəcə yenilənən sahələrin siyahısı genişlənir.
+        #
+        # SEC-8: `review_batch_id` EYNİ SƏBƏBLƏ ƏLAVƏ OLUNUR — `fine_to_
+        # params` onu artıq verir (bax mapper-in şərhi), lakin bu INSERT/
+        # UPDATE onu HEÇ VAXT bazaya göndərmirdi: "bu cərimə hansı partiyada
+        # nəşr olundu?" sualı yaddaşda cavablı, DB-də HƏMİŞƏ NULL qalırdı.
+        #
+        # D7: `idempotency_key` + `try/except UniqueViolation` — `Postgres
+        # LeaveRequestRepository.save()`-dəki HƏRFİ naxış (bax onun şərhi).
+        # Qismən unikal indeks (`uq_fines_manual_camera_idempotency_key`,
+        # migrations/074) İKİNCİ manual cərimə göndərişini DB SƏVİYYƏSİNDƏ
+        # rədd edir; xam `UniqueViolation` çağırana SIZMIR — `ManualFineUseCase.
+        # issue()` `DuplicateFineSubmissionError`-u tutub mövcud sətri
+        # `get_by_idempotency_key()` ilə tapır və "uğurlu" nəticə qaytarır.
         params = fine_to_params(fine)
-        self._execute(
-            """
-            INSERT INTO fines
-                (id, tenant_id, employee_id, store_id, source, fine_type_id,
-                 leave_request_id, amount, fine_date, issued_by,
-                 photo_evidence_url, status, published_at, reviewed_by,
-                 review_decision_reason, reversed_by, reversed_at,
-                 reversal_reason, appeal_window_closes_at, exported_period)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO UPDATE SET
-                amount                 = EXCLUDED.amount,
-                status                 = EXCLUDED.status,
-                published_at           = EXCLUDED.published_at,
-                reviewed_by            = EXCLUDED.reviewed_by,
-                review_decision_reason = EXCLUDED.review_decision_reason,
-                reversed_by            = EXCLUDED.reversed_by,
-                reversed_at            = EXCLUDED.reversed_at,
-                reversal_reason        = EXCLUDED.reversal_reason,
-                appeal_window_closes_at = EXCLUDED.appeal_window_closes_at,
-                exported_period        = EXCLUDED.exported_period
-            """,
-            (
-                params["id"],
-                params["tenant_id"],
-                params["employee_id"],
-                params["store_id"],
-                params["source"],
-                params["fine_type_id"],
-                params["leave_request_id"],
-                params["amount"],
-                params["fine_date"],
-                params["issued_by"],
-                params["photo_evidence_url"],
-                params["status"],
-                params["published_at"],
-                params["reviewed_by"],
-                params["review_decision_reason"],
-                params["reversed_by"],
-                params["reversed_at"],
-                params["reversal_reason"],
-                params["appeal_window_closes_at"],
-                params["exported_period"],
-            ),
-        )
+        try:
+            self._execute(
+                """
+                INSERT INTO fines
+                    (id, tenant_id, employee_id, store_id, source, fine_type_id,
+                     leave_request_id, amount, fine_date, issued_by,
+                     photo_evidence_url, status, published_at, reviewed_by,
+                     review_decision_reason, reversed_by, reversed_at,
+                     reversal_reason, appeal_window_closes_at, exported_period,
+                     review_batch_id, idempotency_key)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    amount                 = EXCLUDED.amount,
+                    status                 = EXCLUDED.status,
+                    published_at           = EXCLUDED.published_at,
+                    reviewed_by            = EXCLUDED.reviewed_by,
+                    review_decision_reason = EXCLUDED.review_decision_reason,
+                    reversed_by            = EXCLUDED.reversed_by,
+                    reversed_at            = EXCLUDED.reversed_at,
+                    reversal_reason        = EXCLUDED.reversal_reason,
+                    appeal_window_closes_at = EXCLUDED.appeal_window_closes_at,
+                    exported_period        = EXCLUDED.exported_period,
+                    review_batch_id        = EXCLUDED.review_batch_id,
+                    idempotency_key        = EXCLUDED.idempotency_key
+                """,
+                (
+                    params["id"],
+                    params["tenant_id"],
+                    params["employee_id"],
+                    params["store_id"],
+                    params["source"],
+                    params["fine_type_id"],
+                    params["leave_request_id"],
+                    params["amount"],
+                    params["fine_date"],
+                    params["issued_by"],
+                    params["photo_evidence_url"],
+                    params["status"],
+                    params["published_at"],
+                    params["reviewed_by"],
+                    params["review_decision_reason"],
+                    params["reversed_by"],
+                    params["reversed_at"],
+                    params["reversal_reason"],
+                    params["appeal_window_closes_at"],
+                    params["exported_period"],
+                    params["review_batch_id"],
+                    params["idempotency_key"],
+                ),
+            )
+        except pg_errors.UniqueViolation as error:
+            # INF-01 (dövrə 1 audit): `fines`-də İKİ MÜSTƏQİL unikal indeks var
+            # və onları EYNİ istisnaya yığmaq YANLIŞ diaqnoz qoyardı —
+            # `constraint_name`-ə görə BUDAQLANIR, naməlum halda xam istisna
+            # ötürülür (fail-loud, sükutla səhv izah uydurmaqdansa).
+            constraint = getattr(error.diag, "constraint_name", None)
+            if constraint == "uq_fines_manual_camera_idempotency_key":
+                # D7: eyni forma İKİNCİ dəfə göndərilib (operatorun ÖZÜ ilə
+                # yarış) — `ManualFineUseCase.issue()` bunu tutub mövcud
+                # sətri `get_by_idempotency_key()` ilə tapır (bax onun şərhi).
+                raise DuplicateFineSubmissionError(
+                    "Eyni idempotentlik açarı ilə cərimə artıq mövcuddur (DB unikal indeksi)",
+                    context={
+                        "fine_id": str(fine.id),
+                        "idempotency_key": str(fine.idempotency_key),
+                        "constraint": constraint,
+                    },
+                ) from error
+            if constraint == "uq_fines_one_live_auto_delay_per_leave":
+                # İKİ FƏRQLİ Kamera Operatorunun EYNİ gecikməni EYNİ ANDA
+                # təsdiqləməsi — yarış qapağıdır, idempotentlik DEYİL (bax
+                # `ConcurrentVerificationConflictError` docstring-i). QƏSDƏN
+                # BURADA TUTULMUR: sərbəst yuxarı sızmalıdır ki, Saga
+                # (`LeaveVerificationUseCase.verify_return::step_create_fine`)
+                # addımı UĞURSUZ sayıb kompensasiya etsin.
+                raise ConcurrentVerificationConflictError(
+                    "Bu icazə üçün cərimə artıq başqa təsdiq tərəfindən yaradılıb "
+                    "(DB unikal indeksi)",
+                    context={
+                        "fine_id": str(fine.id),
+                        "leave_request_id": (
+                            str(fine.leave_request_id) if fine.leave_request_id else None
+                        ),
+                        "constraint": constraint,
+                    },
+                ) from error
+            raise
 
 
 __all__ = [

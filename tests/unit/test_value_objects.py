@@ -31,6 +31,7 @@ from src.domain.value_objects import (
     calculate_leave_penalty,
     require_aware,
 )
+from src.domain.value_objects.scheduling import resolve_work_date
 
 pytestmark = pytest.mark.unit
 
@@ -364,6 +365,42 @@ def test_time_range_rejects_equal_bounds() -> None:
         TimeRange(time(8, 0), time(8, 0))
 
 
+def test_time_range_formats_as_az_dash_range() -> None:
+    assert TimeRange(time(8, 0), time(17, 0)).format_az() == "08:00–17:00"
+    assert str(TimeRange(time(8, 0), time(17, 0))) == "08:00–17:00"
+
+
+def test_covers_accepts_a_moment_inside_a_day_shift() -> None:
+    shift = TimeRange(time(9, 0), time(18, 0))
+    day = date(2026, 8, 8)
+    assert shift.covers(day, datetime(2026, 8, 8, 10, 0, tzinfo=BAKU)) is True
+
+
+def test_covers_rejects_a_moment_outside_a_day_shift() -> None:
+    shift = TimeRange(time(9, 0), time(18, 0))
+    day = date(2026, 8, 8)
+    # növbədən ƏVVƏL
+    assert shift.covers(day, datetime(2026, 8, 8, 7, 0, tzinfo=BAKU)) is False
+    # növbədən SONRA — yarı-açıq aralıq, `end` özü DAXİL DEYİL
+    assert shift.covers(day, datetime(2026, 8, 8, 18, 0, tzinfo=BAKU)) is False
+
+
+def test_covers_follows_an_overnight_shift_past_midnight() -> None:
+    """D10: gecə növbəsi (22:00–06:00) `day`-ə TƏYİN OLUNUB, amma ƏHATƏSİ
+    gecəyarıdan sonrakı NÖVBƏTİ təqvim gününə keçir."""
+    night = TimeRange(time(22, 0), time(6, 0))
+    day = date(2026, 8, 8)
+    assert night.covers(day, datetime(2026, 8, 9, 2, 0, tzinfo=BAKU)) is True
+    # növbətən sonra (06:00-dan sonra) artıq əhatədən KƏNARDIR
+    assert night.covers(day, datetime(2026, 8, 9, 6, 0, tzinfo=BAKU)) is False
+
+
+def test_covers_rejects_a_naive_moment() -> None:
+    shift = TimeRange(time(9, 0), time(18, 0))
+    with pytest.raises(NaiveDatetimeError):
+        shift.covers(date(2026, 8, 8), datetime(2026, 8, 8, 10, 0))  # noqa: DTZ001
+
+
 def test_require_aware_rejects_naive() -> None:
     with pytest.raises(NaiveDatetimeError):
         require_aware(datetime(2026, 8, 8, 10, 0))  # noqa: DTZ001
@@ -410,6 +447,86 @@ def test_early_arrival_is_not_late() -> None:
     )
     assert result.is_late is False
     assert result.late_minutes == 0
+
+
+def test_lateness_rejects_a_negative_tolerance() -> None:
+    with pytest.raises(InvalidScheduleError):
+        assess_lateness(
+            verified_at=datetime(2026, 8, 8, 8, 0, tzinfo=BAKU),
+            scheduled_start=datetime(2026, 8, 8, 8, 0, tzinfo=BAKU),
+            tolerance_minutes=-1,
+        )
+
+
+# --------------------------------------------------------------------------- #
+# resolve_work_date (D10 audit tapıntısı — gecə növbəsinin gün-təyini)
+# --------------------------------------------------------------------------- #
+
+
+def test_resolve_work_date_picks_yesterday_for_a_post_midnight_night_shift_entry() -> None:
+    """Qayda 1: YALNIZ dünənin `TimeRange`-i əhatə edir → DÜNƏN qaytarılır."""
+    today = date(2026, 8, 9)
+    yesterday = today - timedelta(days=1)
+    schedules = {
+        yesterday: TimeRange(time(22, 0), time(6, 0)),
+        today: TimeRange(time(9, 0), time(18, 0)),
+    }
+    at = datetime(2026, 8, 9, 2, 0, tzinfo=BAKU)  # gecəyarıdan sonra, hələ gecə növbəsi içində
+
+    assert resolve_work_date(at, schedules=schedules) == yesterday
+
+
+def test_resolve_work_date_picks_today_for_the_normal_case() -> None:
+    """Qayda 2: YALNIZ bugünün `TimeRange`-i əhatə edir → BUGÜN qaytarılır."""
+    today = date(2026, 8, 9)
+    yesterday = today - timedelta(days=1)
+    schedules = {
+        yesterday: TimeRange(time(9, 0), time(18, 0)),
+        today: TimeRange(time(9, 0), time(18, 0)),
+    }
+    at = datetime(2026, 8, 9, 10, 0, tzinfo=BAKU)
+
+    assert resolve_work_date(at, schedules=schedules) == today
+
+
+def test_resolve_work_date_falls_back_to_the_calendar_date_when_unplanned() -> None:
+    """Qayda 3: HEÇ BİRİ əhatə etmir → köhnə sükut davranış (`at.date()`)."""
+    today = date(2026, 8, 9)
+    yesterday = today - timedelta(days=1)
+    schedules = {
+        yesterday: TimeRange(time(9, 0), time(18, 0)),
+        today: TimeRange(time(9, 0), time(18, 0)),
+    }
+    at = datetime(2026, 8, 9, 21, 0, tzinfo=BAKU)  # hər iki növbədən KƏNAR
+
+    assert resolve_work_date(at, schedules=schedules) == today
+
+
+def test_resolve_work_date_prefers_the_later_starting_candidate_when_both_cover() -> None:
+    """Qayda 4: üst-üstə düşən təyinat — DAHA GEC BAŞLAYAN namizəd seçilir."""
+    today = date(2026, 8, 9)
+    yesterday = today - timedelta(days=1)
+    schedules = {
+        yesterday: TimeRange(time(22, 0), time(6, 0)),  # dünəndən bugünə keçir
+        today: TimeRange(time(4, 0), time(13, 0)),  # bugün ERKƏN başlayır, üst-üstə düşür
+    }
+    at = datetime(2026, 8, 9, 5, 0, tzinfo=BAKU)  # HƏR İKİ növbənin içindədir
+
+    assert resolve_work_date(at, schedules=schedules) == today
+
+
+def test_resolve_work_date_ignores_days_missing_from_the_schedule_map() -> None:
+    """`schedules_for()`-un ötürmədiyi gün (istirahət) əhatə yoxlamasına DAXİL EDİLMİR."""
+    today = date(2026, 8, 9)
+    schedules = {today: TimeRange(time(9, 0), time(18, 0))}
+    at = datetime(2026, 8, 9, 10, 0, tzinfo=BAKU)
+
+    assert resolve_work_date(at, schedules=schedules) == today
+
+
+def test_resolve_work_date_rejects_a_naive_moment() -> None:
+    with pytest.raises(NaiveDatetimeError):
+        resolve_work_date(datetime(2026, 8, 9, 10, 0), schedules={})  # noqa: DTZ001
 
 
 # --------------------------------------------------------------------------- #

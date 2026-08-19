@@ -46,6 +46,17 @@ DUAL_FLAG = PermissionFlag(
 )
 #: Adi operativ flag — heç bir qadağası yoxdur.
 PLAIN_FLAG = PermissionFlag(code="can_view_audit_logs", category="SISTEM")
+#: Cərimə TƏSDİQ flag-i — `excludes_camera_role=True`: cərimə YARADAN
+#: (kamera-tipli rol) ilə onu TƏSDİQ EDƏN eyni şəxs ola bilməz (SEC-001,
+#: bölmə 3). `DUAL_FLAG`-dan fərqli olaraq `ANTI_FRAUD_FORBIDDEN_ROLES`-a
+#: DEYİL, məhz kamera-tipliyə bağlıdır — SEC-1 reqressiyası üçün lazım olan
+#: ayırıcı budur (bax aşağı test).
+CAMERA_EXCLUDED_FLAG = PermissionFlag(
+    code="can_publish_fines",
+    category="KAMERA_CERIME",
+    is_anti_fraud=True,
+    excludes_camera_role=True,
+)
 
 
 def _position(role: SystemRole, *, priority: RolePriority | None = None) -> Position:
@@ -138,6 +149,86 @@ def test_unknown_flag_in_overrides_is_not_dropped() -> None:
 
     removed = employee.change_position(_position(SystemRole.STORE_MANAGER), catalog={})
     assert removed == []
+
+
+def _custom_camera_position() -> Position:
+    """CUSTOM kamera-tipli rol — heç bir 7 sistem roluna uyğun gəlmir.
+
+    `code` `SystemRole(...)`-a çevrilmədiyi üçün `Position.system_role` `None`
+    qaytarır və `effective_system_role` `_PRIORITY_TO_ROLE[OPERATIONAL]` =
+    `SystemRole.HR_ADMIN`-ə düşür (`position.py:342`). `HR_ADMIN.is_camera_type`
+    isə `False`-dur — yəni `role.is_camera_type` bu barədə HEÇ NƏ demir, YEGANƏ
+    siqnal `Position.is_camera_type=True`-nın özüdür.
+    """
+    return Position(
+        position_id=PositionId(uuid.uuid4()),
+        code="KAMERA_XUSUSI_ROL",
+        name_az="Xüsusi Kamera Nəzarətçisi",
+        priority=RolePriority.OPERATIONAL,
+        tenant_id=TENANT,
+        is_system=False,
+        is_camera_type=True,
+    )
+
+
+def test_role_change_to_a_custom_camera_role_revokes_the_excluded_flag() -> None:
+    """SEC-1 reqressiyası — `qa` çarpaz sorğuda tapdı, `domain` düzəltdi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    QÜSUR NƏ İDİ
+    ──────────────────────────────────────────────────────────────────────────
+    `change_position()` `flag.assert_grantable_to(position.effective_system_role)`
+    çağırırdı — `is_camera_type_role=position.is_camera_type` ÖTÜRMƏDƏN.
+    `grant()` (`position.py:104-106`) və `permission_guards.py:246-249` bu
+    parametri artıq ötürürdü, `change_position()` isə YEGANƏ istisna idi
+    (`assert_grantable_to(` repoda cəmi 4 istinad, bu 3-ü düzgün idi).
+
+    NƏTİCƏ: CUSTOM kamera-tipli rola (`Position.is_camera_type=True`,
+    `_PRIORITY_TO_ROLE[OPERATIONAL] = HR_ADMIN`) keçən işçidə əvvəlki
+    `can_publish_fines` (cərimə TƏSDİQ) override-u TƏMİZLƏNMİRDİ, çünki
+    `camera_capable = is_camera_type_role or role.is_camera_type` hesablanarkən
+    HƏR İKİ tərəf `False`-a düşürdü — `is_camera_type_role` ötürülmədiyi,
+    `HR_ADMIN.is_camera_type` isə həqiqətən `False` olduğu üçün.
+    Beləliklə cərimə YARADAN (kamera) ilə TƏSDİQ EDƏN eyni şəxs ola bilirdi —
+    SEC-001-in "vəzifə ayrılığı" zəmanəti CUSTOM rol vasitəsilə yan keçilirdi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ MÖVCUD İKİ TEST (yuxarı) BUNU TUTMURDU
+    ──────────────────────────────────────────────────────────────────────────
+    `test_role_change_revokes_forbidden_overrides` `DUAL_FLAG`
+    (`can_approve_dual_control_override`) və hədəf `SystemRole.STORE_MANAGER`
+    işlədir — həmin kombinasiya `ANTI_FRAUD_FORBIDDEN_ROLES`-un BİRİNCİ
+    şərtindən (`assert_grantable_to`-nun kamera qolundan ƏVVƏLKİ şərt) keçib
+    istisna atır, yəni kamera-tipli budağa HEÇ ÇATMIR. `_position()` helperi
+    də HƏR YERDƏ `is_camera_type=role.is_camera_type` yazır — yəni SİSTEM
+    rolundan törəyir, CUSTOM `Position(is_camera_type=True, ...)` heç vaxt
+    qurulmurdu. Bu test məhz həmin ikinci, sınanmamış budağı ölçür.
+
+    ──────────────────────────────────────────────────────────────────────────
+    TEST DÜZƏLİŞDƏN ƏVVƏL NİYƏ ÇÖKƏRDİ
+    ──────────────────────────────────────────────────────────────────────────
+    `employee.py:246`-da `is_camera_type_role=position.is_camera_type`
+    arqumenti ÇIXARILSA (zehnən), `assert_grantable_to` yalnız
+    `role.is_camera_type` (`HR_ADMIN` → `False`) görər, `excludes_camera_role`
+    şərti işə düşməz, `AuthorizationError` atılmaz, `removed` boş qalar —
+    aşağıdakı iki `assert` İKİSİ də sınardı.
+    """
+    employee = _employee(SystemRole.HR_ADMIN)
+    employee.apply_override(
+        PermissionOverride(
+            flag_code=CAMERA_EXCLUDED_FLAG.code,
+            effect=PermissionEffect.GRANT,
+            granted_by=EmployeeId(uuid.uuid4()),
+        )
+    )
+    assert employee.has_permission(CAMERA_EXCLUDED_FLAG.code, now=NOW) is True
+
+    removed = employee.change_position(
+        _custom_camera_position(), catalog={CAMERA_EXCLUDED_FLAG.code: CAMERA_EXCLUDED_FLAG}
+    )
+
+    assert removed == [CAMERA_EXCLUDED_FLAG.code]
+    assert employee.has_permission(CAMERA_EXCLUDED_FLAG.code, now=NOW) is False
 
 
 # --------------------------------------------------------------------------- #

@@ -56,7 +56,8 @@ o cümlədən PIN handshake, işləmir)". `license_state()` həmin qərarı veri
 from __future__ import annotations
 
 import socket
-from contextlib import contextmanager, suppress
+import threading
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -70,6 +71,7 @@ from src.infrastructure.timekeeping.server_time import (
     ServerTimeService,
 )
 from src.shared.data_paths import resolve_data_file
+from src.shared.event_bus import get_event_bus
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
@@ -80,6 +82,7 @@ if TYPE_CHECKING:
     from src.application.use_cases.annual_leave import AnnualLeaveUseCase
     from src.application.use_cases.attrition_risk import AttritionRiskUseCase
     from src.application.use_cases.audit_query import AuditQueryUseCase
+    from src.application.use_cases.authentication import SessionManagementUseCase
     from src.application.use_cases.backup_access import BackupAccessUseCase
     from src.application.use_cases.behavior_baseline import BehaviorBaselineUseCase
     from src.application.use_cases.bulk_operations import (
@@ -770,6 +773,14 @@ class Session:
     # naxış): yeganə çağırış nöqtəsi planlayıcıdır.
     face_log_retention: FaceVerificationLogRetentionUseCase
 
+    # --- SEC-011 sessiya müddəti (SEC-5 iş müqaviləsi) ----------------------- #
+    #
+    # `issue`/`validate`/`touch`/`revoke` — `app.py::_start_session_guard`
+    # (giriş, `SessionGuard.touch`) və `controllers/profile.py::
+    # _on_close_sessions` (uzaqdan ləğv) buradan keçir. `AuthSessionRepository`
+    # portu domen tipi (`AuthSession`) qaytardığı üçün `ports.py`-dadır.
+    sessions: SessionManagementUseCase
+
     def commit(self) -> None:
         self.uow.commit()
 
@@ -843,6 +854,10 @@ class ApplicationContext:
         self._database = database
         self._tenant_id = tenant_id
         self._license = license_client
+        #: `read_batch()` üçün SAPA GÖRƏ paylaşılan sessiya (PERF-3).
+        #: Qlobal olsaydı fon sapları eyni bağlantını paylaşardı — səbəbi
+        #: həmin metodun izahındadır.
+        self._read_batch = threading.local()
         # ──────────────────────────────────────────────────────────────────
         # `self_hosted` NİYƏ AYRI BAYRAQDIR
         # ──────────────────────────────────────────────────────────────────
@@ -1107,6 +1122,9 @@ class ApplicationContext:
     def evidence_queue(self) -> Any:
         """Sübut şəkillərinin lokal növbəsi (`EvidenceUploadQueue`)."""
         if self._evidence_queue is None:
+            from src.infrastructure.security.encryption import (  # noqa: PLC0415
+                EncryptionService,
+            )
             from src.infrastructure.storage.upload_queue import (  # noqa: PLC0415
                 EvidenceUploadQueue,
             )
@@ -1124,10 +1142,28 @@ class ApplicationContext:
             # `limits` növbənin İKİNCİ ROOT parametrini açır
             # (`UPLOAD_CLAIM_STALE_AFTER_SECONDS`): "claim" edilmiş element
             # nə vaxt yenidən götürülə bilər.
+            # `encryption` (SEC-4) İSTEHSALAT yolunda MƏCBURİDİR: sinif özü
+            # `None`-u qəbul edir (sınaq/diaqnostika kontekstləri şifrələməsiz
+            # qurula bilsin deyə, bax `EvidenceUploadQueue.__init__` başlığı),
+            # LAKİN `None` ötürülsə BÜTÜN yeni yazılar da açıq (`is_encrypted=
+            # False`) qalır — kompozisiya kökü onu ötürməsə SEC-4 "fantom
+            # düzəliş" olardı: fayl yazılıb, testi keçib, amma istehsalatda heç
+            # kim çağırmır (bu dövrədə dəfələrlə görülən qüsur sinfi).
+            #
+            # Köhnə spool sətirləri BACKFILL EDİLMİR: onlar faktiki AÇIQ
+            # yazılıb, `is_encrypted=1`-ə "düzəltmək" yalan olardı — oxucu
+            # bayrağa görə şərti deşifrə edir. `enqueue()`-da şifrələmə
+            # uğursuz olsa istisna YUXARI ötürülür (operator sinxron gözləyir,
+            # foto hələ onun əlindədir → "yenidən cəhd edin"). Arxa-plan
+            # `read_plaintext()`-də `DecryptionError` → `mark_rejected()`
+            # (`mark_failed` YOX — açar problemi backoff ilə həll olunmur);
+            # spool faylı SİLİNMİR, `requeue_rejected()` açar bərpa olunanda
+            # sübutu qaytarır.
             self._evidence_queue = EvidenceUploadQueue(
                 path,
                 max_upload_bytes=self._upload_limit(),
                 limits=self._infrastructure_limits,
+                encryption=EncryptionService(),
             )
         return self._evidence_queue
 
@@ -2164,9 +2200,131 @@ class ApplicationContext:
 
     @contextmanager
     def session(self, *, user_id: EmployeeId | None = None) -> Iterator[Session]:
-        """Bir tranzaksiya + onun üzərində qurulmuş use case dəsti."""
+        """Bir tranzaksiya + onun üzərində qurulmuş use case dəsti.
+
+        `read_batch()` aktiv olduqda YENİ tranzaksiya açılmır — mövcud olan
+        təkrar istifadə edilir (bax həmin metodun izahı).
+
+        AKTOR ŞƏRTİ: toplu yalnız `user_id` verilmədikdə, VƏ YA toplunun öz
+        aktoru ilə eyni olduqda təkrar istifadə edilir. BAŞQA aktor istənirsə
+        çağırış öz sessiyasını alır — əks halda `app.user_id` GUC-u səhv
+        şəxsi göstərərdi.
+
+        `user_id=None` halının topluya düşməsi TƏHLÜKƏSİZDİR: `app.user_id`
+        heç bir RLS OXU siyasətində işlənmir — onu yalnız `position_permissions`
+        üzərindəki `DELETE` trigger-i oxuyur (miqrasiya 046), yəni yazma yolu.
+        Deməli aktoru olan tranzaksiyada aktorsuz oxu APARMAQ nəticəni nə
+        daraldır, nə genişləndirir.
+        """
+        shared = getattr(self._read_batch, "session", None)
+        if shared is not None and (
+            user_id is None or user_id == getattr(self._read_batch, "user_id", None)
+        ):
+            try:
+                yield shared
+            except Exception:
+                # ────────────────────────────────────────────────────────────
+                # BİR SINAN OXU TOPLUNU ÖLDÜRÜR — VƏ BU, QƏSDƏNDİR
+                # ────────────────────────────────────────────────────────────
+                # PostgreSQL sorğu xətasından sonra tranzaksiyanı ABORTED
+                # vəziyyətinə salır: həmin tranzaksiyada NÖVBƏTİ hər sorğu
+                # «current transaction is aborted» ilə dayanır. Toplu olmasaydı
+                # bu, YALNIZ bir oxuya təsir edərdi (hər biri öz sessiyasında
+                # idi) — yəni birləşdirmə dayanıqlılığı azaldır.
+                #
+                # Ona görə ilk xətada toplu SÖNDÜRÜLÜR: sonrakı oxular yenidən
+                # ÖZ sessiyalarını açır və köhnə, dayanıqlı davranış qayıdır.
+                # Yalnız BU oxu itir.
+                #
+                # ALTERNATİV RƏDD EDİLDİ — hər oxunu `SAVEPOINT`-ə salmaq
+                # izolyasiyanı saxlayardı, lakin SAVEPOINT + RELEASE iki əlavə
+                # gediş-gəlişdir; 12 oxu üçün bu, ~5 saniyə deməkdir və
+                # optimallaşdırmanın ÖZÜNÜ yeyərdi.
+                self._read_batch.session = None
+                self._read_batch.user_id = None
+                _log.warning("READ_BATCH_ABORTED", extra={"reason": "sorğu xətası"})
+                raise
+            return
         with self._database.unit_of_work(self._tenant_id, user_id=user_id) as uow:
             yield self._build_session(uow)
+
+    @contextmanager
+    def read_batch(self, *, user_id: EmployeeId | None = None) -> Iterator[bool]:
+        """Ardıcıl OXULARI BİR tranzaksiyada birləşdirir (PERF-3).
+
+        ──────────────────────────────────────────────────────────────────────
+        PROBLEM: PANELİN AÇILIŞI 13 TRANZAKSİYA İDİ
+        ──────────────────────────────────────────────────────────────────────
+        `show_admin()` girişdən sonra bir sıra kiçik oxu edir — saxlanmış tema,
+        aktiv modullar, plugin siyahısı, planlayıcı intervalı, cərimə növləri,
+        işçi adları, bildiriş sayğacı, dəstək nişanları, kontekst altyazıları.
+        Hər biri ÖZ sessiyasını açırdı. Ölçüldü (uzaq baza, gediş-gəliş
+        ~206 ms): 13 sessiya → `show_admin` **18 saniyə**, üstəlik ilk ekran.
+        Sessiyanın öz yükü (BEGIN + kontekst + bağlanış) təxminən 0.63 s-dir,
+        yəni vaxtın yarıdan çoxu SORĞU DEYİL, tranzaksiya açıb-bağlamaq idi.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ SAPA GÖRƏ AYRI (`threading.local`)
+        ──────────────────────────────────────────────────────────────────────
+        `BackgroundTask` bəzi ekranlarda (server sağlamlığı, ERP sınağı) FON
+        SAPINDA öz sessiyasını açır. Paylaşılan istinad qlobal olsaydı, həmin
+        sap əsas sapın psycopg bağlantısına eyni anda yazar və bağlantı
+        vəziyyəti pozulardı — bu, sükutlu və təkrarlanması çətin nasazlıqdır.
+        `threading.local` ilə toplu YALNIZ onu açan sapa aiddir; digər saplar
+        həmişə öz tranzaksiyalarını alır.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ «UZUN TRANZAKSİYA QADAĞASI»-nı POZMUR (CLAUDE.md §6)
+        ──────────────────────────────────────────────────────────────────────
+        Qadağa PANELİN ÖMRÜ boyu açıq qalan sessiyaya aiddir: panel saatlarla
+        açıq durur və o müddətdə kilid saxlamaq olmaz. Bu toplu isə AÇILIŞ
+        BURSTUdur — saniyələrlə ölçülür və `with` bloku bitən kimi bağlanır.
+        Kontrollerlərin əməliyyat-başına-sessiya qaydası DƏYİŞMİR.
+
+        YALNIZ OXU ÜÇÜNDÜR: daxildə `commit()` çağırılarsa, o, topludakı BÜTÜN
+        işi təsdiqləyər. Yazı yolları (kontrollerlər) topludan KƏNARDA qalır.
+
+        ──────────────────────────────────────────────────────────────────────
+        TOPLU AÇILA BİLMƏSƏ AXIN DAYANMIR
+        ──────────────────────────────────────────────────────────────────────
+        Tranzaksiyanı açmaq özü uğursuz ola bilər (hovuz tükənib, bağlantı
+        qırılıb). Bu, YALNIZ optimallaşdırmadır — onun uğursuzluğu girişi
+        dayandırmamalıdır. Belə halda toplusuz davam edilir: hər oxu yenidən
+        öz sessiyasını açır, yəni panel yavaş, LAKİN işlək qalır. Səbəb loga
+        düşür ki, «niyə yavaşdır?» sualı cavabsız qalmasın.
+
+        ──────────────────────────────────────────────────────────────────────
+        QAYTARILAN `bool` NİYƏ VAR (UI-1)
+        ──────────────────────────────────────────────────────────────────────
+        Toplu AÇILA BİLMƏSƏ çağıran (`show_admin`) 1-2 saniyəlik gözləntisi
+        13-sessiyalı ~18 saniyəyə geri qayıdığını BİLMƏLİDİR — əks halda
+        bloklama müddətinin göstəricisi (`flush_ui`/busy vəziyyəti) yalnız
+        "adi" halı nəzərə alıb erkən sönə bilər. Log tək başına KİFAYƏT ETMİR:
+        o, operatora deyil, istifadəçiyə çatmalıdır. `True` = toplu aktivdir
+        (yeni açılıb VƏ YA yuvalanıb — hər ikisində oxular sürətlidir),
+        `False` = yalnız fallback halında, oxular köhnə yavaş yola qayıdıb.
+        """
+        if getattr(self._read_batch, "session", None) is not None:
+            yield True  # yuvalanma — sahibi kənardadır, ikinci dəfə açmırıq
+            return
+
+        with ExitStack() as stack:
+            try:
+                uow = stack.enter_context(
+                    self._database.unit_of_work(self._tenant_id, user_id=user_id)
+                )
+            except Exception:
+                _error_log.exception("READ_BATCH_UNAVAILABLE")
+                yield False  # toplusuz davam — davranış köhnə (yavaş) yola qayıdır
+                return
+
+            self._read_batch.session = self._build_session(uow)
+            self._read_batch.user_id = user_id
+            try:
+                yield True
+            finally:
+                self._read_batch.session = None
+                self._read_batch.user_id = None
 
     def _build_session(self, uow: PostgresUnitOfWork) -> Session:  # noqa: PLR0915
         """Use case qrafını cari `UnitOfWork`-un repo-ları ilə qurur.
@@ -2193,6 +2351,9 @@ class ApplicationContext:
             AttritionRiskUseCase,
         )
         from src.application.use_cases.audit_query import AuditQueryUseCase  # noqa: PLC0415
+        from src.application.use_cases.authentication import (  # noqa: PLC0415
+            SessionManagementUseCase,
+        )
         from src.application.use_cases.backup_access import (  # noqa: PLC0415
             BackupAccessUseCase,
         )
@@ -2360,6 +2521,8 @@ class ApplicationContext:
             PluginRegistrySurface,
         )
         from src.shared.saga_orchestrator import SagaOrchestrator  # noqa: PLC0415
+        from src.shared.saga_policies import policy_for  # noqa: PLC0415
+        from src.shared.security_events import FailSoftSecurityEventRecorder  # noqa: PLC0415
 
         repo = uow.repository
         clock = self._clock
@@ -2629,9 +2792,41 @@ class ApplicationContext:
                 ntp=ntp,
                 limits=repo("limits"),
                 toggles=repo("toggles"),
-                saga=SagaOrchestrator(),
+                # `SagaOrchestrator()` ƏVVƏL SIFIR arqumentlə qurulurdu (D6):
+                # hər sessiyada TƏZƏ boş `InMemorySagaStateRepository` yaranır
+                # və uzlaşma gözləyən əməliyyatın izi `with` bloku bitən kimi
+                # İTİRDİ — `PENDING_RECONCILIATION` vəziyyəti heç vaxt
+                # bərpa oluna bilmirdi. `state_repository=repo("saga_state")`
+                # (infra, `PostgresSagaStateRepository`) izi DAVAMLI saxlayır.
+                # `event_bus=get_event_bus()` D2-də ARTIQ eyni blokda idxal
+                # olunub (yuxarı bax) — QLOBAL bus, İKİNCİ instans YOX.
+                #
+                # `policy_resolver=policy_for` (D9): `main.py::build_container`
+                # EYNİ funksiyanı bağlayır (özü sənədləşdirir: "kompozisiya
+                # kökündə" verilməlidir). Bağlamasaydıq GUI yolu HƏMİŞƏ ən
+                # sərt defolt siyasəti (`ON_ANY_FAILURE`) işlədərdi və
+                # `saga_policies` reyestri GUI üçün ÖLÜ KOD qalardı — eyni
+                # saga CLI-dan icra olunanda BAŞQA, GUI-dən icra olunanda
+                # BAŞQA siyasətlə davranardı. CLI/GUI eyni əməliyyatı EYNİ
+                # qaydalarla idarə etməlidir (D3-lə eyni sinif: mexanizm
+                # mövcuddur, bağlanmayıbsa "səbəbsiz fərq" yaranır).
+                saga=SagaOrchestrator(
+                    event_bus=get_event_bus(),
+                    state_repository=repo("saga_state"),
+                    policy_resolver=policy_for,
+                ),
                 audit=audit,
                 notifier=notifier,
+                # `LeaveVerifiedEvent` (D2) — QLOBAL `get_event_bus()` bağlanır,
+                # BURADA YENİ instans QURULMUR: `main.py`-dakı universal audit
+                # dinləyicisi (sətir ~108) `main.py:71`-in ÖZ bağladığı bus-a
+                # abunədir. Ayrı `EventBus()` qursaydıq, GUI-nin yaydığı hadisə
+                # CLI-nin dinləyicisinə heç vaxt çatmazdı — iki İZOLƏ olunmuş
+                # bus mövcud olardı və düzəlişin bütün mənası itərdi.
+                # YALNIZ `LeaveVerificationUseCase`: qalan use case-lərdə
+                # dinləyici YOXDUR (`_drain()` qərarı, CLAUDE.md naxışı) —
+                # onlara bus bağlamaq sənədləşdirilmiş qərarı pozardı.
+                event_bus=get_event_bus(),
             ),
             morning_check_in=MorningCheckInUseCase(
                 attendance=uow.attendance,
@@ -2718,6 +2913,13 @@ class ApplicationContext:
                 audit=audit,
                 notifier=notifier,
                 limits=repo("limits"),
+                # SEC-8 — "bu cərimə hansı partiyada nəşr olundu?" sualının
+                # TƏK mənbəyi (`monthly_fine_review_batches`, `Fine`-in
+                # ÜSTÜNDƏ yaşamır, bax use case başlığı). Açar `infra` ilə
+                # ƏVVƏLCƏDƏN razılaşdırılıb (`team-lead`) — repo hələ
+                # YAZILMAYIBSA `mypy`/işə salınma xətası GÖZLƏNİLƏNDİR, bu
+                # sətir öz tərəfini artıq TAMAMLAYIB.
+                review_batches=repo("fine_review_batches"),
             ),
             tasks=task_workflow,
             sales_points=sales_points,
@@ -2777,6 +2979,11 @@ class ApplicationContext:
                 audit=audit,
                 clock=clock,
                 notifier=notifier,
+                # SEC-7 — SARILMIŞ forma MƏCBURİDİR (bax `app.py::
+                # _SessionScopedLogin.login` eyni şərhi): üz doğrulaması
+                # kamera-tipli sətirdə çalışır, `security_events` yazısının
+                # uğursuzluğu doğrulamanın ÖZÜNÜ dayandırmamalıdır.
+                security_events=FailSoftSecurityEventRecorder(repo("security_events")),
             ),
             # `limits=repo("limits")` — AÇIQ BAĞLANTININ repo-su: istisnanın
             # maksimum müddəti (`FACE_EXEMPTION_MAX_DAYS`) sətrin yazıldığı
@@ -2811,6 +3018,19 @@ class ApplicationContext:
                 limits=repo("limits"),
                 audit=audit,
                 clock=clock,
+            ),
+            # SEC-011/SEC-5 — `"auth_sessions"` açarı `infra`-nın
+            # `PostgresAuthSessionRepository`-sidir (`connection.py`).
+            # `limits` MÜDDƏTLƏRİN ÖZÜNÜ (`ADMIN_PANEL_SESSION_IDLE_TIMEOUT_
+            # MINUTES` və s.) `system_limits`-dən oxuyur — `app.py`-dakı
+            # `SessionGuard` YERLİ taymerləri ÜÇÜN eyni açarları AYRICA oxuyur
+            # (bax `app.py::_admin_panel_idle_timeout_minutes`), çünki client
+            # məcburi çıxışı server dəstəyi OLMADAN da işləməlidir.
+            sessions=SessionManagementUseCase(
+                sessions=repo("auth_sessions"),
+                clock=clock,
+                limits=repo("limits"),
+                audit=audit,
             ),
             audit_query=AuditQueryUseCase(
                 reader=repo("audit_reader"),

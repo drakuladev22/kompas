@@ -313,8 +313,18 @@ class UsersEmployeeDocumentController:
         try:
             document_id = EmployeeDocumentId(UUID(document_id_text))
         except ValueError:
+            # QA-13 (dövrə 3 audit) — əvvəl BURADA loqa yazıb SUKUTLA qayıdırdı:
+            # admin "Deaktiv Et" basır, ekran heç nə demirdi. Normal axında baş
+            # verməməlidir (`document_id_text` dialoqun ÖZ siyahısından gəlir),
+            # amma köhnəlmiş sətir/gələcək UI uyğunsuzluğu halında istifadəçi
+            # SƏBƏBİ görməlidir — "susqun boş ekran" CLAUDE.md-nin qadağan
+            # etdiyi haldır.
             _error_log.error(
                 "EMPLOYEE_DOCUMENT_ID_MALFORMED", extra={"document_id": document_id_text}
+            )
+            screen.show_error(
+                title="Sənəd deaktiv edilmədi",
+                message="Sənəd identifikatoru düzgün deyil. Səhifəni yeniləyin.",
             )
             return
 

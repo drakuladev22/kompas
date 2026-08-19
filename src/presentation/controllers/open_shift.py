@@ -161,8 +161,16 @@ class ShiftMatrixOpenShiftController:
             screen.show_error(title="Açıq növbələr oxunmadı", message=error.user_message)
             return
         except Exception:
+            # QA-14 (dövrə 3 audit) — əvvəl bura DA sükutla boşaldırdı, LAKİN
+            # `show_error()` çağırmırdı: baza əlaqəsi kəsiləndə admin BOŞ
+            # kart görürdü, `KompasOSError` qolundan FƏRQLİ olaraq səbəb heç
+            # yerdə görünmürdü. İki qol İNDİ SİMMETRİKDİR.
             _error_log.exception("OPEN_SHIFT_ADMIN_LIST_FAILED")
             screen.set_open_shift_postings([])
+            screen.show_error(
+                title="Açıq növbələr oxunmadı",
+                message="Siyahı yüklənmədi. Yenidən cəhd edin.",
+            )
             return
 
         screen.set_open_shift_postings(rows)

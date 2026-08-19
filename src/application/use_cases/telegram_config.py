@@ -212,9 +212,24 @@ class TelegramConfigUseCase:
         actor: Employee,
         bot_token: str,
         chat_id: str,
-        is_active: bool = True,
+        is_active: bool | None = None,
     ) -> TelegramConfigView:
-        """Yeni token/chat ID yazır. Mövcud sətir varsa ƏVVƏLCƏ arxivlənir."""
+        """Yeni token/chat ID yazır. Mövcud sətir varsa ƏVVƏLCƏ arxivlənir.
+
+        ──────────────────────────────────────────────────────────────────────
+        `is_active` DEFOLTU `True` DEYİL — MÖVCUD VƏZİYYƏTDİR
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəl defolt `True` idi və nəticə sükutlu idi: Root inteqrasiyanı
+        QƏSDƏN söndürüb (`set_active(False)`), sonra botu dəyişəndə
+        («Botu Dəyiş» yalnız token/chat ID göndərir) inteqrasiya ÖZÜ-ÖZÜNƏ
+        yenidən aktivləşirdi. Yəni bir ayarın dəyişməsi BAŞQA ayarı geri
+        qaytarırdı və istifadəçi bunu yalnız Telegram-a mesaj düşəndə görərdi.
+
+        `None` = «vəziyyətə toxunma». İLK konfiqurasiyada saxlanmış sətir
+        yoxdur, ona görə `True` seçilir: bot qurmaq onu işlətmək niyyətidir.
+        Açıq `True`/`False` ötürülərsə hörmət edilir — `set_active()` yolu
+        dəyişmir.
+        """
         self._require(actor)
         token = bot_token.strip()
         chat = chat_id.strip()
@@ -229,6 +244,10 @@ class TelegramConfigUseCase:
                 "Chat ID boşdur",
                 user_message="Chat ID boş ola bilməz.",
             )
+
+        if is_active is None:
+            existing = self._repository.load(tenant_id)
+            is_active = existing.is_active if existing is not None else True
 
         now = self._clock.now()
         archived = self._repository.archive(tenant_id, replaced_by=actor.id, at=now)

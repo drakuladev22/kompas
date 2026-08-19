@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 
     from src.domain.entities.employee import Employee
     from src.domain.value_objects.credentials import Username
-    from src.domain.value_objects.identifiers import EmployeeId, LeaveTypeId, TenantId
+    from src.domain.value_objects.identifiers import EmployeeId, LeaveTypeId, SessionId, TenantId
     from src.infrastructure.persistence.mappers import Credentials
     from src.presentation.composition import ApplicationContext, StartupFailureKind
     from src.presentation.controllers.auth import AuthController
@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from src.presentation.controllers.kiosk import KioskController, KioskOutcome
     from src.presentation.controllers.sales_review import SalesReviewController
     from src.presentation.controllers.screen_data import ScreenDataBinder
+    from src.presentation.controllers.session_guard import SessionGuard
     from src.presentation.plugin_surface import PluginPage
     from src.presentation.screens.group_a_kiosk import EmployeeHomeScreen
     from src.presentation.widgets.worker_status import WorkerStatus
@@ -63,15 +64,26 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 
 
-def _recovery_may_open(*, actor: Employee | None, configured: bool) -> bool:
+def _recovery_may_open(
+    *,
+    actor: Employee | None,
+    configured: bool,
+    startup_failure_kind: StartupFailureKind | None = None,
+) -> bool:
     """Bərpa konsolunun qapısı — məntiq kontrollerdədir.
 
     Ayrıca funksiya ona görə var ki, qərar TƏK yerdən gəlsin: `app.py`
     şərti təkrar yazsaydı, iki qapı bir gün ayrılardı (CLAUDE.md §5).
+
+    `startup_failure_kind` NİYƏ ÇILPAQ `bool` DEYİL (SEC-2): «baza əlçatmazdır»
+    tək bayraqla ifadə olunanda `CREDENTIALS_INVALID` (baza İŞLƏKDİR, sadəcə
+    saxlanmış parol səhvdir) DA bypass-a düşürdü — halbuki orada səlahiyyət
+    YOXLANILA BİLƏRDİ. Növ `may_open`-a olduğu kimi ötürülür, qərar YENƏ DƏ
+    ORADADIR (bax `recovery_console.may_open` başlığı).
     """
     from src.presentation.controllers.recovery_console import may_open  # noqa: PLC0415
 
-    return may_open(actor=actor, configured=configured)
+    return may_open(actor=actor, configured=configured, startup_failure_kind=startup_failure_kind)
 
 
 #: `SQLSTATE 42P01` — «relation does not exist». Sxem heç tətbiq olunmayıb.
@@ -125,6 +137,20 @@ MIN_UPLOAD_POLL_INTERVAL_SECONDS: Final = 10
 FALLBACK_SCHEDULER_POLL_INTERVAL_MS: Final = (
     int(DEFAULT_LIMITS[SystemLimitKey.SCHEDULER_POLL_INTERVAL_MINUTES]) * 60 * 1000
 )
+
+#: SEC-011 — sessiya müddəti (SEC-5 iş müqaviləsi, `session_guard.py`).
+#:
+#: HAZIRDA FALLBACK DEYİL, YEGANƏ MƏNBƏDİR: `SystemLimitKey` açarları
+#: `domain` SEC-5 portunu (`use_cases/authentication.py`, `policies.py`)
+#: çatdırana qədər mövcud deyil. Port gələndə bura `_upload_poll_interval_ms`
+#: naxışı ilə (Root-dan oxu, uğursuzluqda fallback) ƏVƏZ OLUNACAQ — dəyərlər
+#: isə `docs/security_decisions.md` SEC-011 qərarı ilə EYNİDİR ki, portun
+#: gəlişi mövcud davranışı DƏYİŞMƏSİN, yalnız mənbəni dəyişsin.
+ADMIN_PANEL_INACTIVITY_MINUTES_FALLBACK: Final = 30
+ADMIN_PANEL_ABSOLUTE_HOURS_FALLBACK: Final = 8
+#: CAMERA_DASHBOARD-da hərəkətsizlik yoxlaması YOXDUR — «operator ekrana
+#: baxır, klikləmir» (SEC-011). Yalnız mütləq həd var.
+CAMERA_DASHBOARD_ABSOLUTE_HOURS_FALLBACK: Final = 12
 
 #: Brend ikonu — pəncərə başlığı, Windows Taskbar və Alt-Tab (bölmə 9, 296).
 ICON_RELATIVE_PATH: Final = "assets/kompasos.ico"
@@ -260,6 +286,10 @@ class KompasApplication:
         _apply_window_icon(app)
         #: Canlı obyekt qrafı (Faza 5/6). `None` -> önizləmə/dizayn rejimi.
         self._context = context
+        #: Başlanğıc uğursuzluğunun NÖVÜ (SEC-2) — `_context is None` olanda
+        #: SƏBƏBİ ayırır (`recovery_console.may_open`-un bypass qərarı buna
+        #: söykənir). Kontekst uğurla qurulubsa `None` qalır.
+        self._startup_failure_kind: StartupFailureKind | None = None
         self._theme = ThemeManager(preference=theme_preference)
         self._theme.apply(app)
 
@@ -290,6 +320,13 @@ class KompasApplication:
         self._auth: AuthController | None = None
         #: Kiosk PIN körpüsü (Faza 5). `None` → önizləmə rejimi.
         self._kiosk_controller: KioskController | None = None
+        #: INF2-04/ui (dövrə 2 audit) — `_build_kiosk_controller` körpünü
+        #: QURA BİLMƏYƏNDƏ (məs. `KOMPASOS_STORE_ID` yoxdur) SƏBƏBİN İSTİFADƏÇİYƏ
+        #: GÖRÜNƏN mətni. `_kiosk_controller is None` TƏK BAŞINA "niyə?" sualına
+        #: cavab vermir — köhnə davranış YALNIZ loga yazırdı (`_log.error`),
+        #: mağazada logu kim oxuyacaqdı? `start_kiosk()` bunu PIN klaviaturası
+        #: AÇILAN KİMİ göstərir, ilk PİN cəhdini GÖZLƏMİR.
+        self._kiosk_setup_error: str | None = None
         #: Ekranları canlı məlumatla dolduran körpü — login-dən sonra qurulur.
         self._binder: ScreenDataBinder | None = None
         #: Cərimə formasının yazı yolu — dropdown-ları da bu verir.
@@ -299,11 +336,33 @@ class KompasApplication:
         self._sales_review: SalesReviewController | None = None
         #: Sübut şəkillərini arxa planda Drive-a köçürən taymer.
         self._upload_timer: QTimer | None = None
+        #: D3-01 (dövrə 3 audit) — dövri yükləmə dövrəsinin fon işçisinə
+        #: istinad. `_drain_upload_queue`-nun İKİ məqsədi var: (a) nəticə
+        #: gəlməmiş Python obyekti toplamasın (`background_task.py`-dakı
+        #: eyni əsaslandırma), (b) `is_running`-i əvvəlki dövrənin HƏLƏ
+        #: qaçıb-qaçmadığını yoxlamaq üçün — eyni anda İKİ yükləmə dövrəsi
+        #: başlamasın.
+        self._upload_task: Any = None
         #: Planlaşdırılmış YÜNGÜL fon işlərini işlədən taymer (Faza 11).
         #: Sübut taymeri ilə YAN-YANA dayanır, onu ƏVƏZ ETMİR: ritmləri ayrı
         #: Root parametrlərindən gəlir (biri şəbəkəyə, digəri gecə işlərinə
         #: kökləndiyi üçün eyni intervalı paylaşa bilməzlər).
         self._scheduler_timer: QTimer | None = None
+        #: SEC-011 hərəkətsizlik/mütləq-müddət qapısı — `show_admin()`
+        #: uğurlu olanda qurulur, logout/expiry-də dayandırılır.
+        self._session_guard: SessionGuard | None = None
+        #: `issue()`-nin BİR DƏFƏLİK açıq tokeni (SEC-5) — YALNIZ yaddaşda,
+        #: diskə YAZILMIR, loga DÜŞMÜR. `_touch_session()`/`_stop_session_guard`
+        #: işlədir.
+        self._session_token: str | None = None
+        #: Cari sessiyanın `id`-si — sirr DEYİL (yalnız UUID), "Digər
+        #: sessiyaları bağla" (`profile.py`) CARİNİ İSTİSNA etmək üçün lazımdır.
+        self._session_id: SessionId | None = None
+        #: UI-02 (dövrə 1 audit) — `_touch_session`-ın fon işçisinə İSTİNAD.
+        #: `BackgroundTask` `self._window`-un uşağıdır (ömrü ordan idarə
+        #: olunur), amma yerli dəyişən qalmasa Python onu nəticə gəlməmiş
+        #: toplaya bilər (`background_task.py`-dakı eyni əsaslandırma).
+        self._touch_task: Any = None
         #: Plugin-lərin verdiyi səhifələr (audit G-3) — girişdə hesablanır.
         self._plugin_pages: tuple[PluginPage, ...] = ()
 
@@ -345,14 +404,27 @@ class KompasApplication:
         self._window.set_content(splash)
         self._window.show()
 
-    def set_context(self, context: ApplicationContext | None) -> None:
+    def set_context(
+        self,
+        context: ApplicationContext | None,
+        *,
+        startup_failure_kind: StartupFailureKind | None = None,
+    ) -> None:
         """Kontekst SONRADAN qoşulur (splash arxasında qurulanda).
 
         Konstruktorda `None` ötürülür, çünki pəncərə kontekstdən ƏVVƏL
         görünməlidir — əks halda baza əlçatmaz olan maşında istifadəçi
         taymaut bitənə qədər boş ekran görürdü.
+
+        `startup_failure_kind` (SEC-2) `context is None` olan halda SƏBƏBİ
+        daşıyır — `_load_context_behind_splash` onu ARTIQ hesablayır, burada
+        sadəcə SAXLANILIR ki, `open_recovery_console` sonradan oxuya bilsin.
+        Uğurlu qoşulmada (`context is not None`) çağıran `None` ötürür və
+        köhnə uğursuzluq izi TƏMİZLƏNİR — əks halda «Yenidən Cəhd Et»dən
+        sonrakı UĞURLU giriş belə köhnə növün kölgəsində qalardı.
         """
         self._context = context
+        self._startup_failure_kind = startup_failure_kind
 
     def _after_splash(self) -> None:
         """Splash bitdi — lisenziya qapısı, sonra quraşdırma və ya giriş."""
@@ -654,11 +726,36 @@ class KompasApplication:
             employee, on_continue=lambda: self.show_admin(employee, now=datetime.now(UTC))
         ):
             return
-        self.show_admin(employee, now=datetime.now(UTC))
+        # ──────────────────────────────────────────────────────────────────
+        # `show_admin()` DA BLOKLAYAN ƏMƏLİYYATDIR — İKİNCİ BUSY PƏNCƏRƏSİ (UI-1)
+        # ──────────────────────────────────────────────────────────────────
+        # Yuxarıdakı `finally` göstəricini artıq söndürüb (uğursuz cəhddə düymə
+        # AÇIQ qalmalıdır), lakin bu sətirdən sonra `read_batch()` (PERF-3)
+        # YENİDƏN bloklayır — adətən 1-2 s, hovuz tükənəndə/bağlantı qırılanda
+        # isə köhnə yola qayıdıb ~18 s-ə qədər çəkə bilər (bax `show_admin`
+        # başlığı). Göstərici bu pəncərədə də SÖNÜK qalsaydı, istifadəçi
+        # düymənin normala qayıtdığını görüb pəncərəni "cavab vermir" sanardı.
+        self._login.set_busy(True)
+        flush_ui()
+        try:
+            self.show_admin(employee, now=datetime.now(UTC))
+        finally:
+            self._login.set_busy(False)
 
     def set_kiosk_controller(self, controller: KioskController) -> None:
         """Kiosk PIN körpüsünü qoşur (Faza 5)."""
         self._kiosk_controller = controller
+
+    def set_kiosk_setup_error(self, reason: str) -> None:
+        """Körpü QURULA BİLMƏDİ — SƏBƏBİN istifadəçiyə görünən mətni (INF2-04/ui).
+
+        `_build_kiosk_controller` çağıranı ilə bağlıdır: `run()` kontrolleri
+        qura bilməsə bunun ƏVƏZİNƏ bura yazır. `start_kiosk()` mesajı PIN
+        klaviaturası açılan KİMİ göstərir — səbəb yalnız loga düşüb
+        istifadəçiyə heç nə görünməməsi (köhnə davranış) mağazada heç kimin
+        `app.log`-u oxumayacağı faktını görməzdən gəlirdi.
+        """
+        self._kiosk_setup_error = reason
 
     def set_auth_controller(self, controller: AuthController) -> None:
         """Real autentifikasiyanı qoşur (Faza 5).
@@ -736,7 +833,15 @@ class KompasApplication:
             employee, on_continue=lambda: self.show_admin(employee, now=datetime.now(UTC))
         ):
             return
-        self.show_admin(employee, now=datetime.now(UTC))
+        # `show_admin()` DA bloklayan əməliyyatdır — bax `_on_face_login_requested`-
+        # dəki EYNİ blokun izahı (UI-1): göstərici bura qədər ARTIQ sönüb
+        # (`finally`, yuxarı), `read_batch()` isə YENİDƏN bloklaya bilər.
+        self._login.set_busy(True)
+        flush_ui()
+        try:
+            self.show_admin(employee, now=datetime.now(UTC))
+        finally:
+            self._login.set_busy(False)
 
     def _show_face_setup_if_required(
         self,
@@ -818,12 +923,33 @@ class KompasApplication:
         )
 
         configured = self._context is not None or find_connection_file() is not None
-        if not _recovery_may_open(actor=self._current_employee, configured=configured):
+        # `_context is None` = tətbiq baza ilə QALXA BİLMƏDİ. Həmin anda
+        # səlahiyyət yoxlaması mümkün deyil (flag bazadadır) — qapının
+        # məntiqi `may_open`-dadır, burada yalnız FAKT (SƏBƏB NÖVÜ DAXİL,
+        # SEC-2) ötürülür.
+        if not _recovery_may_open(
+            actor=self._current_employee,
+            configured=configured,
+            startup_failure_kind=self._startup_failure_kind,
+        ):
             return
-        self.show_recovery_console()
+        # SEC-2 genişlənməsi (dövrə 1 audit, `recovery_console.
+        # RecoveryConsoleController` başlığı) — bayraq EKRANDAN yox,
+        # ÇAĞIRIŞ YERİNDƏN alınır: `self._current_employee is None` elə
+        # `may_open`-un ÖZÜNÜN "kim" sualına verdiyi cavabdır (ya konsol
+        # `configured=False`/bypass NÖVÜ ilə keçib, ya da həqiqi login var).
+        # Ekrana etibar etsəydik, bayrağı TOXUNULA BİLƏN bir mənbədən
+        # oxumuş olardıq.
+        self.show_recovery_console(authenticated=self._current_employee is not None)
 
-    def show_recovery_console(self) -> None:
-        """Bərpa konsolunu açır (qapı ARTIQ yoxlanılıb)."""
+    def show_recovery_console(self, *, authenticated: bool) -> None:
+        """Bərpa konsolunu açır (qapı ARTIQ yoxlanılıb).
+
+        `authenticated=False` — konsol `may_open`-un bypass şərti ilə
+        (`actor=None`) açılıb: `RecoveryConsoleController` bu halda
+        saxlanmış parolu HEÇ VAXT bərpa etmir (bax onun sinif başlığı,
+        SEC-2 genişlənməsi).
+        """
         from src.presentation.controllers.recovery_console import (  # noqa: PLC0415
             RecoveryConsoleController,
         )
@@ -832,7 +958,7 @@ class KompasApplication:
         )
 
         screen = RecoveryConsoleScreen(self._theme)
-        controller = RecoveryConsoleController()
+        controller = RecoveryConsoleController(authenticated=authenticated)
         controller.attach(screen)
         # Kontrollerə istinad `lambda`-nın bağlamasında yaşayır (CLAUDE.md §6).
         screen.closed.connect(lambda: self._leave_recovery_console(controller))
@@ -870,12 +996,70 @@ class KompasApplication:
         axındır.
         """
         _log.info("SESSION_LOGOUT", extra={"had_shell": self._shell is not None})
+        self._stop_session_guard()
         self._current_employee = None
         self._shell = None
         self.show_login()
 
     def show_admin(self, employee: Employee, *, now: datetime) -> None:
-        """Admin örtüyünü qurur və bütün ekranları qeydiyyata alır."""
+        """Admin örtüyünü qurur və bütün ekranları qeydiyyata alır.
+
+        ──────────────────────────────────────────────────────────────────────
+        BÜTÜN AÇILIŞ OXULARI BİR TRANZAKSİYADADIR (PERF-3)
+        ──────────────────────────────────────────────────────────────────────
+        Bu metod bir sıra kiçik oxu edir — saxlanmış tema, aktiv modullar,
+        plugin siyahısı, planlayıcı intervalı, cərimə növləri, işçi adları,
+        bildiriş sayğacı, dəstək nişanları, altyazılar — və hər biri ÖZ
+        sessiyasını açırdı. Ölçüldü: 13 tranzaksiya, `show_admin` **18 saniyə**
+        (uzaq bazada bir gediş-gəliş ~206 ms, sessiyanın öz yükü ~0.63 s).
+
+        `read_batch()` onları bir tranzaksiyada birləşdirir. Sərhəd BURADADIR,
+        çünki «açılış nə vaxt başlayıb nə vaxt bitir» sualının cavabını yalnız
+        bu metod bilir; aşağıdakı kontrollerlərin heç biri bunu bilmir və
+        onların əməliyyat-başına-sessiya qaydası DƏYİŞMİR.
+
+        `_context` yoxdursa (önizləmə rejimi) toplu da yoxdur — orada baza
+        ümumiyyətlə açılmır.
+
+        `read_batch()`-in qaytardığı `bool` FALLBACK halını bildirir (UI-1):
+        hovuz tükənib ya bağlantı qırılıbsa toplu açılmır, oxular köhnə
+        13-sessiyalı yola qayıdır (~18 s). Bu, YALNIZ loga (`READ_BATCH_
+        UNAVAILABLE`) düşsəydi, istifadəçi pəncərənin niyə adi vaxtdan uzun
+        açıldığını heç vaxt öyrənməzdi — ona görə `_notify_slow_admin_load()`
+        AYRICA çağırılır.
+        """
+        if self._context is None:
+            self._build_admin_shell(employee, now=now)
+            return
+        # Toplu AKTORLA açılır: açılış oxularının çoxu `session(user_id=...)`
+        # şəklindədir (bildirişlər, dəstək nişanları, cərimə növləri) və
+        # aktorsuz toplu onları kənarda qoyardı — yəni qazanc yarıya enərdi.
+        with self._context.read_batch(user_id=employee.id) as batch_active:
+            self._build_admin_shell(employee, now=now)
+        if not batch_active:
+            self._notify_slow_admin_load()
+
+    def _notify_slow_admin_load(self) -> None:
+        """`read_batch()` FALLBACK halında istifadəçini xəbərdar edir (UI-1).
+
+        YENİ widget QURULMUR — `QMessageBox.information` artıq iki kontrollerdə
+        (`profile.py::_inform`, `settings.py::_inform`) EYNİ məqsədlə işlədilir:
+        "bura xəta deyil, sadəcə məlumatdır". Səssiz keçmək YANLIŞ olardı: admin
+        panelin niyə adi vaxtdan uzun açıldığını bilməli, əks halda "asılıb"
+        zənn edib məcburi bağlaya bilər — məhz `docstring`-dəki 18 saniyəlik
+        halın PRAKTİKİ nəticəsi budur.
+        """
+        from PySide6.QtWidgets import QMessageBox  # noqa: PLC0415
+
+        QMessageBox.information(
+            self._shell,
+            "Panel",
+            "Panel adətən daha sürətli açılır. Bu dəfə bağlantı zəif olduğu üçün "
+            "yükləmə adi vaxtdan uzun çəkdi — bütün məlumatlar doğru yükləndi.",
+        )
+
+    def _build_admin_shell(self, employee: Employee, *, now: datetime) -> None:
+        """Örtüyün FAKTİKİ qurulması — sərhəd `show_admin`-dədir."""
         self._current_employee = employee
         self._apply_stored_theme(employee)
         if self._context is not None:
@@ -897,6 +1081,7 @@ class KompasApplication:
             self._sales_review = SalesReviewController(self._context, employee)
             self._start_upload_timer()
             self._start_scheduler_timer()
+            self._start_session_guard(employee)
 
         # PLUGIN SƏTHİ (audit G-3) — reyestr HƏR GİRİŞDƏ TƏZƏDƏN qurulur.
         #
@@ -1015,6 +1200,31 @@ class KompasApplication:
         UĞURSUZLUQ SƏSSİZDİR VƏ BOŞ QALIR: sorğu alınmasa mətn yazılmır.
         Yanlış rəqəm göstərməkdənsə heç nə göstərməmək dürüstdür — bu, həmin
         qüsurun ÖZ dərsidir.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ BİRBAŞA SQL, USE CASE DEYİL (D5 audit qərarı — QƏSDLİDİR)
+        ──────────────────────────────────────────────────────────────────────
+        Presentation qatında `application/use_cases`-i keçən YEGANƏ oxu
+        yoludur — bu, TƏSADÜF deyil, amma GENİŞLƏNMƏYƏ AÇIQ QAPI da deyil.
+        İki SƏBƏBLƏ qəbul edilib:
+
+            1. Nəticə İKİ AQREQAT SAYDIR (`count(*)`), fərdi qeyd DEYİL —
+               "neçə aktiv filial/işçi var" sualının cavabı heç bir icazə
+               flag-i arxasında deyil (bax `menu.py` — bu ekranların
+               hamısı onsuz da bütün rollara açıqdır ki, subtitle görünsün).
+               Ona görə `actor` parametri YOXDUR: yoxlanılacaq SƏLAHİYYƏT
+               YOXDUR, "kimin nə qədər görə biləcəyi" sualı bura aid deyil.
+            2. Bunun üçün YALNIZ bir use case QURMAQ (`session.uow.connection`
+               səviyyəsindəki iki `count(*)`-dən başqa heç nə etməyən) real
+               məntiqi olmayan bir qat əlavə edərdi — CLAUDE.md-nin "əsl
+               qərar domendə olsun" prinsipi burada TƏTBİQ OLUNMUR, çünki
+               burada domen QAYDASI yoxdur, sadəcə GÖSTƏRİŞ mətni var.
+
+        ⚠️  XƏBƏRDARLIQ — BURA HƏSSAS SORĞU ƏLAVƏ ETMƏ: əgər gələcəkdə bu
+        metoda fərdi qeyd (ad, məbləğ, tarix və s.) qaytaran YENİ SELECT
+        əlavə edilərsə, o, HEÇ BİR icazə flag-indən keçmədən oxunacaq —
+        çünki `actor` BURADA YOXDUR. Həssas sahə lazımdırsa, bu metoddan
+        KƏNARDA, `actor`-lu, use case-dən keçən AYRICA yol qurulmalıdır.
         """
         if self._context is None:
             return
@@ -1179,11 +1389,9 @@ class KompasApplication:
     def _start_upload_timer(self) -> None:
         """Sübut növbəsini dövri boşaldır (Faza 3.9).
 
-        `EvidenceUploadWorker` özü sap YARATMIR — planlaşdırma çağıranın
-        işidir. Burada Qt taymeri seçilib, ayrıca `threading.Thread` yox:
-        yükləmə bitdikdən sonra `fines` sətri yenilənir və o iş bazaya
-        toxunur; Qt hadisə dövrəsində qalmaq bu yazının interfeyslə eyni
-        sırada getməsini təmin edir.
+        Taymerin ÖZÜ Qt hadisə dövrəsindədir (`timeout` GUI sapında yayılır),
+        LAKİN faktiki yükləmə İNDİ FON SAPINDADIR (D3-01, bax
+        `_drain_upload_queue`) — taymer YALNIZ "vaxtı çatdı" siqnalını verir.
 
         İNTERVAL ARTIQ ROOT-DANDIR (`EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS`,
         Faza 10.2): əvvəl sabit 120 000 ms idi və zəif internetli filialda onu
@@ -1220,13 +1428,71 @@ class KompasApplication:
         return max(MIN_UPLOAD_POLL_INTERVAL_SECONDS, seconds) * 1000
 
     def _drain_upload_queue(self) -> None:
+        """Bir yükləmə dövrəsi — DB İŞİ İNDİ `BackgroundTask`-DADIR (D3-01).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ KÖÇÜRÜLDÜ — UI-02-DƏN DƏ AĞIR
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəl `self._context.run_evidence_uploads()` BURADA, GUI sapında,
+        SİNXRON çağırılırdı: `QTimer.timeout` hər 10-120 saniyədən bir
+        (`EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS`) `EvidenceUploadWorker.
+        run_once()`-u işə salırdı, o isə növbədəki HƏR şəkli (partiya
+        ölçüsü 20-yə qədər) Google Drive-a SİNXRON yükləyirdi. UI-02
+        (`_touch_session`) DB gediş-gəlişi (~200 ms) idi; bu isə ŞƏBƏKƏ
+        ŞƏKİL YÜKLƏMƏSİdir (saniyələr) və HƏR admin sessiyasında davamlı
+        işləyir (bax `_build_admin_shell`) — özü də məhz "zəif internetli
+        filial" ssenarisində (bu modulun MÖVCUDLUQ səbəbi) ən uzun donurdu.
+
+        Köhnə "yazı sırasının qorunması üçün GUI sapında qalmaq lazımdır"
+        arqumenti YALANDIR: sıra TƏK FON SAPI ilə də qorunur — aşağıdakı
+        `is_running` yoxlaması eyni anda İKİNCİ dövrənin başlamasının
+        qarşısını alır (`_touch_task`-dakı EYNİ nəsil-token naxışı,
+        `background_task.py::BackgroundTask.run`).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ TƏHLÜKƏSİZDİR
+        ──────────────────────────────────────────────────────────────────────
+        `run_evidence_uploads()` ÖZÜ artıq `try/except Exception: return 0`
+        ilə bükülüb (`composition.py`) — fon sapında çağırılması ONUN daxili
+        `self.session()` çağırışını YENİ, sap-lokal bir bağlantıya aparır
+        (`psycopg_pool.ConnectionPool` çox-saplıdır, bax `_touch_session`-ın
+        EYNİ əsaslandırması).
+        """
         if self._context is None:
             return
-        # `run_evidence_uploads` özü istisna udur və 0 qaytarır — fon işi
-        # interfeysi çökdürməməlidir (bax `composition.py`).
-        uploaded = self._context.run_evidence_uploads()
+        if self._upload_task is not None and self._upload_task.is_running:
+            # Əvvəlki dövrə HƏLƏ QAÇIR — YENİ dövrə BAŞLADILMIR (bax metod
+            # başlığı). Nadir hal: partiya (20 şəkil) intervaldan uzun çəkib.
+            return
+
+        context = self._context
+
+        def job() -> object:
+            # FON SAPINDA icra olunur — `run_evidence_uploads` ÖZÜ istisna
+            # udur (bax metod başlığı), ona görə burada ƏLAVƏ `try` yoxdur.
+            return context.run_evidence_uploads()
+
+        from src.presentation.background_task import BackgroundTask  # noqa: PLC0415
+
+        task = BackgroundTask(parent=self._window, name="EVIDENCE_UPLOAD")
+        task.succeeded.connect(self._on_upload_drained)
+        task.failed.connect(self._on_upload_drain_failed)
+        self._upload_task = task
+        task.run(job)
+
+    def _on_upload_drained(self, payload: object) -> None:
+        """Yükləmə dövrəsi bitdi — ƏSAS SAPDA çağırılır."""
+        uploaded = payload if isinstance(payload, int) else 0
         if uploaded:
             _log.info("EVIDENCE_UPLOADED", extra={"count": uploaded})
+
+    def _on_upload_drain_failed(self, error: BaseException) -> None:
+        """`run_evidence_uploads()` ÖZÜ istisna udur — bura NORMALDA düşmür.
+
+        Son qoruyucu qalır: gözlənilməz bir dəyişiklik (məs. `job()`-un özü
+        çökərsə) növbəni sükutla "əbədi Yoxlanılır" halına salmasın deyə.
+        """
+        _log.error("EVIDENCE_UPLOAD_TASK_FAILED", exc_info=error)
 
     # --------------------------- planlaşdırılmış işlər ------------------------ #
 
@@ -1303,6 +1569,273 @@ class KompasApplication:
                     "ugursuz": list(report.failed_jobs),
                 },
             )
+
+    # ---------------------------- sessiya müddəti (SEC-011) ------------------- #
+
+    def _start_session_guard(self, employee: Employee) -> None:
+        """Sessiya müddətini SERVER-DƏ yaradır və yerli qapını quraşdırır (SEC-5).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `self._context is None`-DA QURULMUR
+        ──────────────────────────────────────────────────────────────────────
+        Önizləmə/dizayn rejimində real giriş yoxdur — məcburi çıxış dizayn
+        baxışını kəsərdi və heç bir təhlükəsizlik faydası verməzdi (eyni şərt
+        `_start_upload_timer`/`_start_scheduler_timer`-də də var).
+
+        ──────────────────────────────────────────────────────────────────────
+        KONTEKST (ADMIN_PANEL / CAMERA_DASHBOARD) EKRANDAN YOX, VƏZİFƏDƏN GƏLİR
+        ──────────────────────────────────────────────────────────────────────
+        Ayrı "Camera Dashboard" giriş ekranı YOXDUR — kamera-tipli rol eyni
+        `AdminShell`-ə daxil olur, sadəcə menyusu (məs. `live_queue`) dardır.
+        `employee.position.is_camera_type` artıq D3/SEC-1-də EYNİ məqsədlə
+        (kamera-tipli rolun davranış fərqini ayırmaq üçün) işlədilən sahədir —
+        bura YENİ naxış gətirmir. SEC-011-in "operator ekrana baxır,
+        klikləmir" əsaslandırması məhz bu rol növünə aiddir.
+
+        ──────────────────────────────────────────────────────────────────────
+        `issue()` UĞURSUZ OLSA GİRİŞ DAYANMIR
+        ──────────────────────────────────────────────────────────────────────
+        Server-tərəfli izləmə YALNIZ əlavə qatdır (bax `session_guard.py`
+        modul başlığı): yerli qapı (hərəkətsizlik/mütləq QTimer-lər) bundan
+        asılı olmadan işə düşür. `issue()` uğursuz olarsa `self._session_token`
+        `None` qalır, `SessionGuard`-a `touch=None` ötürülür — dırnaqlanmış
+        fəaliyyət callback-i sükutla heç nə etmir (bax `SessionGuard.__init__`).
+
+        AÇIQ TOKEN YALNIZ YADDAŞDA: `self._session_token` diskə YAZILMIR, heç
+        bir loga DÜŞMÜR (SEC-5 müqaviləsi) — yalnız `_touch_session()` və
+        `logout`/`_on_session_expired`-in yaddaşdan TƏMİZLƏMƏsi işlədir.
+
+        KİOSK bura DAXİL DEYİL: `sessiya YOXDUR — hər əməliyyat üçün PIN`
+        (SEC-5 müqaviləsi) və kiosk axını `show_admin()`-dən keçmir.
+        """
+        if self._context is None:
+            return
+        self._stop_session_guard()
+
+        from src.domain.entities.auth_session import SessionContext  # noqa: PLC0415
+        from src.presentation.controllers.session_guard import SessionGuard  # noqa: PLC0415
+
+        is_camera = bool(employee.position.is_camera_type)
+        session_context = (
+            SessionContext.CAMERA_DASHBOARD if is_camera else SessionContext.ADMIN_PANEL
+        )
+
+        import socket  # noqa: PLC0415
+
+        try:
+            with self._context.session(user_id=employee.id) as session:
+                issued = session.sessions.issue(
+                    tenant_id=session.tenant_id,
+                    employee=employee,
+                    context=session_context,
+                    machine_name=socket.gethostname(),
+                )
+                session.commit()
+            self._session_token = issued.token
+            self._session_id = issued.session.id
+        except Exception:
+            # Bax metod başlığı: `issue()` KÖMƏKÇİ qatdır, uğursuzluğu girişi
+            # DAYANDIRMAMALIDIR.
+            _log.exception("SESSION_ISSUE_FAILED")
+            self._session_token = None
+            self._session_id = None
+
+        guard = SessionGuard(
+            inactivity_minutes=None if is_camera else self._admin_panel_idle_timeout_minutes(),
+            absolute_hours=(
+                self._camera_dashboard_absolute_timeout_hours()
+                if is_camera
+                else self._admin_panel_absolute_timeout_hours()
+            ),
+            touch=self._touch_session if self._session_token is not None else None,
+            parent=self._window,
+        )
+        guard.expired.connect(self._on_session_expired)
+        self._app.installEventFilter(guard)
+        guard.start()
+        self._session_guard = guard
+
+    def _admin_panel_idle_timeout_minutes(self) -> int:
+        """`ADMIN_PANEL_SESSION_IDLE_TIMEOUT_MINUTES` — ROOT-dan, fallback 30 dəq.
+
+        Naxış `_upload_poll_interval_ms`-in EYNİSİdir. `ADMIN_PANEL_
+        INACTIVITY_MINUTES_FALLBACK` artıq həqiqi mənbə DEYİL — YALNIZ bura
+        (və server tərəfin öz `DEFAULT_LIMITS`-i, `composition.py::
+        SessionManagementUseCase`) əlçatmaz olanda işə düşən son xətdir.
+        """
+        if self._context is None:
+            return ADMIN_PANEL_INACTIVITY_MINUTES_FALLBACK
+        try:
+            return self._context.infrastructure_limits().int_of(
+                SystemLimitKey.ADMIN_PANEL_SESSION_IDLE_TIMEOUT_MINUTES
+            )
+        except Exception:
+            _log.exception("SESSION_IDLE_TIMEOUT_READ_FAILED")
+            return ADMIN_PANEL_INACTIVITY_MINUTES_FALLBACK
+
+    def _admin_panel_absolute_timeout_hours(self) -> int:
+        """`ADMIN_PANEL_SESSION_ABSOLUTE_TIMEOUT_HOURS` — ROOT-dan, fallback 8 saat."""
+        if self._context is None:
+            return ADMIN_PANEL_ABSOLUTE_HOURS_FALLBACK
+        try:
+            return self._context.infrastructure_limits().int_of(
+                SystemLimitKey.ADMIN_PANEL_SESSION_ABSOLUTE_TIMEOUT_HOURS
+            )
+        except Exception:
+            _log.exception("SESSION_ABSOLUTE_TIMEOUT_READ_FAILED")
+            return ADMIN_PANEL_ABSOLUTE_HOURS_FALLBACK
+
+    def _camera_dashboard_absolute_timeout_hours(self) -> int:
+        """`CAMERA_DASHBOARD_SESSION_ABSOLUTE_TIMEOUT_HOURS` — ROOT-dan, fallback 12 saat."""
+        if self._context is None:
+            return CAMERA_DASHBOARD_ABSOLUTE_HOURS_FALLBACK
+        try:
+            return self._context.infrastructure_limits().int_of(
+                SystemLimitKey.CAMERA_DASHBOARD_SESSION_ABSOLUTE_TIMEOUT_HOURS
+            )
+        except Exception:
+            _log.exception("SESSION_CAMERA_ABSOLUTE_TIMEOUT_READ_FAILED")
+            return CAMERA_DASHBOARD_ABSOLUTE_HOURS_FALLBACK
+
+    def _touch_session(self) -> None:
+        """`SessionGuard`-ın dırnaqlanmış fəaliyyət callback-i (SEC-5, SEC-011).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ ƏVVƏLCƏ `validate()`, SONRA `touch()`
+        ──────────────────────────────────────────────────────────────────────
+        Yalnız `touch()` çağırsaydıq, admin sessiyani UZAQDAN LƏĞV ETSƏ belə
+        (`revoke`) YERLİ tərəf bunu HEÇ VAXT öyrənməzdi — QTimer öz mütləq
+        müddətinə qədər davam edərdi. `validate()` `SessionExpiredError` atır
+        (ləğv edilib VƏ YA hər hansı müddət artıq bitibsə) — məhz bu, "mütləq
+        müddət SERVER tərəfdə də yoxlanılmalıdır" tələbinin YERİDİR: yerli
+        saat manipulyasiya edilə bilsə də, server-in `now()`-u (`Clock`,
+        TIME-1) buna aldanmır.
+
+        ──────────────────────────────────────────────────────────────────────
+        UI-02 (dövrə 1 audit) — DB İŞİ `BackgroundTask`-A KÖÇÜB
+        ──────────────────────────────────────────────────────────────────────
+        Bu metod `SessionGuard.eventFilter`-dən (siçan hərəkəti/klaviatura
+        hadisəsi) çağırılır — yəni GUI SAPINDADIR. `context.session()` +
+        `validate()` + `touch()` + `commit()` əvvəl BURADA SİNXRON icra
+        olunurdu: uzaq bazada bir gediş-gəliş composition.py-da ölçülmüş
+        ~206 ms-dir, yəni hər dırnaqlama pəncərəsində (min 60 s, adətən
+        `inactivity/6`) istifadəçinin NÖVBƏTİ siçan/klaviatura hərəkəti
+        panelı qısamüddətli DONDURURDU — məhz UX-1/UI-1-in düzəltdiyi qüsur
+        sinfinin təkrarı, sadəcə fərqli tetikleyicidən.
+
+        `BackgroundTask` naxışı BURADA da təhlükəsizdir (bax onun modul
+        başlığı, "SESSİYA SAP SƏRHƏDİNİ KEÇMİR"): `psycopg_pool.
+        ConnectionPool` (connection.py) çox-saplıdır, fon sapı ÖZ
+        bağlantısını götürür — GUI sapının bağlantısına TOXUNMUR. Nəticə
+        (uğur/`SessionExpiredError`/digər istisna) `QueuedConnection`-la
+        avtomatik GUI sapına qayıdır (`background_task.py:354-359`) — YALNIZ
+        gecikmə şəbəkə round-trip-i qədərdir (~206 ms + bir hadisə dövrü),
+        GUI bu müddətdə DONMUR.
+
+        Paralel iki task riski PRAKTİKİ olaraq yoxdur: `SessionGuard`-ın
+        özündəki `_touch_ready`/dırnaqlama pəncərəsi (min 60 s) round-trip-
+        dən (~200 ms) çox-çox uzundur, ona görə YENİ çağırış BAŞLAYANDA
+        köhnəsi ARTIQ bitmiş olur. Yenə də tək bir `self._touch_task`
+        sahəsində saxlanılır (`BackgroundTask`-ın öz nəsil-token mexanizmi
+        ehtimal xaricində üst-üstə düşmə halında belə YALNIZ SONUNCU
+        nəticəni qəbul edir, bax `background_task.py::run`).
+        """
+        if self._context is None or self._session_token is None:
+            return
+
+        context = self._context
+        token = self._session_token
+        user_id = self._current_employee.id if self._current_employee else None
+
+        def job() -> object:
+            # FON SAPINDA icra olunur — ÖZ sessiyasını açır (bax modul
+            # başlığı, `background_task.py`). `validate()` `SessionExpiredError`
+            # atarsa BURADA TUTULMUR — `_capture()` (background_task.py) onu
+            # `TaskOutcome.error`-a qoyub GUI sapına ötürür, `_on_touch_failed`
+            # orada AYIRD edir.
+            with context.session(user_id=user_id) as session:
+                validated = session.sessions.validate(tenant_id=session.tenant_id, token=token)
+                session.sessions.touch(tenant_id=session.tenant_id, session=validated)
+                session.commit()
+            return None
+
+        from src.presentation.background_task import BackgroundTask  # noqa: PLC0415
+
+        task = BackgroundTask(parent=self._window, name="SESSION_TOUCH")
+        task.failed.connect(self._on_touch_failed)
+        self._touch_task = task
+        task.run(job)
+
+    def _on_touch_failed(self, error: BaseException) -> None:
+        """`_touch_session`-ın fon işi uğursuz oldu — ƏSAS SAPDA çağırılır.
+
+        `SessionExpiredError` XÜSUSİ haldır (server sessiyanı LƏĞV ETMİŞ VƏ
+        YA hər hansı müddət bitmişdir) — istifadəçi DƏRHAL çıxarılmalıdır.
+        Qalan hər şey ötəri şəbəkə xətasıdır: `touch()` YALNIZ server izini
+        uzadır, ötəri xəta yerli qapını (QTimer-lər) POZMAMALIDIR — istifadəçi
+        yenə də vaxtında çıxarılacaq, sadəcə server tərəfi bir az geri qala
+        bilər (eyni əsaslandırma `SessionGuard._maybe_touch`-dadır).
+        """
+        from src.application.use_cases.authentication import (  # noqa: PLC0415
+            SessionExpiredError,
+        )
+
+        if isinstance(error, SessionExpiredError):
+            self._on_session_expired("Sessiyanızın müddəti server tərəfdə bitdi (SEC-011).")
+            return
+        _log.error("SESSION_TOUCH_FAILED", exc_info=error)
+
+    def _stop_session_guard(self) -> None:
+        """Qapını dayandırır — logout, məcburi çıxış VƏ yeni giriş ƏVVƏLİ.
+
+        `removeEventFilter` MÜTLƏQDİR: unudulsa köhnə `SessionGuard` YENİ
+        girişdən sonra da hadisələri almağa davam edərdi — iki qapı eyni anda
+        işləyər, biri digərini vaxtından ƏVVƏL bağlaya bilərdi.
+
+        Açıq token da BURADA təmizlənir: sessiya dayanan kimi köhnə tokenin
+        yaddaşda qalması faydasız risk daşıyardı.
+
+        `self._touch_task.cancel()` (UI-02) — DB işi indi FON SAPINDA
+        (`BackgroundTask`), yəni istifadəçi TAM DÜZGÜN LOGOUT etdiyi anda
+        köhnə bir `_touch_session()` hələ QAÇIRSA (nadir, amma mümkün — round-
+        trip ~200 ms), onun GECİKMİŞ nəticəsi (məs. `SessionExpiredError`)
+        `_on_touch_failed`-ə çatıb `_on_session_expired`-i YENİDƏN çağıra
+        bilərdi — istifadəçi ARTIQ giriş ekranındadır, amma üstünə "sessiyanız
+        bitdi" mesajı gələrdi. `cancel()` nəsli köhnəldir (`background_task.py::
+        _deliver`), gecikmiş nəticə SÜKUTLA atılır.
+        """
+        guard = self._session_guard
+        if guard is not None:
+            self._app.removeEventFilter(guard)
+            guard.stop()
+            self._session_guard = None
+        task = self._touch_task
+        if task is not None:
+            task.cancel()
+        self._session_token = None
+        self._session_id = None
+
+    def _on_session_expired(self, reason: str) -> None:
+        """SEC-011 — sessiya müddəti bitdi, panel MƏCBURİ bağlanır.
+
+        ──────────────────────────────────────────────────────────────────────
+        YARIMÇIQ İŞ XƏBƏRDARLIĞI NİYƏ ÜMUMİDİR, DƏQİQ DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Tətbiqdə mərkəzi "saxlanmamış dəyişiklik" reyestri YOXDUR — hər yazı
+        öz sessiyasını açıb dərhal commit edir (CLAUDE.md §6), yəni HANSI
+        ekranda nə qədər doldurulmuş forma qaldığını DƏQİQ bilmək mümkün
+        deyil. Sükutla "hər şey qaydasındadır" təəssüratı buraxmaqdansa ÜMUMİ
+        xəbərdarlıq doğrudur — yanlış həyəcan, sükutla itmiş məlumatdan
+        DAHA YAXŞIDIR.
+        """
+        _log.info("SESSION_EXPIRED", extra={"reason": reason})
+        self._stop_session_guard()
+        self._current_employee = None
+        self._shell = None
+        self.show_login()
+        self._login.set_error(
+            f"{reason} Yadda saxlanmamış dəyişiklik varsa itmiş ola bilər — yenidən daxil olun."
+        )
 
     def _attach_fine_entry(self, screen: QWidget) -> None:
         """Cərimə formasını use case-ə və sübut növbəsinə bağlayır (bölmə 4)."""
@@ -1662,7 +2195,9 @@ class KompasApplication:
             return
         if not isinstance(screen, ProfileScreen):  # pragma: no cover - tip qoruyucusu
             return
-        ProfileController(self._context, self._current_employee).attach(screen)
+        ProfileController(
+            self._context, self._current_employee, current_session_id=self._session_id
+        ).attach(screen)
 
     def _attach_plugin_admin(self, screen: QWidget) -> None:
         """Plugin ekranını `PluginManagementUseCase`-ə bağlayır (bölmə 1)."""
@@ -2699,7 +3234,23 @@ class KompasApplication:
         self._window.show()
 
     def show_connection_settings(self, rebuild: Callable[[], ApplicationContext]) -> None:
-        """«Bağlantı Ayarları» ekranı — girişdən ƏVVƏL açılan yeganə yazı yolu."""
+        """«Bağlantı Ayarları» ekranı — HAZIRDA HEÇ YERDƏN ÇAĞIRILMIR.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ QALIR VƏ NİYƏ ÇAĞIRILMIR
+        ──────────────────────────────────────────────────────────────────────
+        Metodun köhnə başlığı «girişdən ƏVVƏL açılan yeganə yazı yolu»
+        deyirdi — bu, ARTIQ DOĞRU DEYİL. RECOVERY-1 Faza 2 fatal ekrandakı
+        «Bağlantı Ayarları» düyməsini QƏSDƏN çıxardı (səbəb
+        `FatalStartupScreen` başlığındadır: mağaza işçisi işlək konfiqurasiyanı
+        özü «düzəldib» poza bilirdi). Texnikin yolu indi `Ctrl+Shift+K` →
+        Bərpa Konsoludur və o, EYNİ `save_settings()` funksiyasını çağırır.
+
+        Metod və ekran SİLİNMİR: hər ikisi işlək, sınanmış koddur və
+        quraşdırma axınının dəyişməsi halında yenidən bağlana bilər. Lakin
+        «çağırılmır» faktı BURADA yazılır — əks halda növbəti oxucu onu canlı
+        yol sanıb ekranı düzəltməyə çalışardı (audit məhz bunu tapdı).
+        """
         from src.presentation.controllers.connection_settings import (  # noqa: PLC0415
             ConnectionSettingsController,
         )
@@ -2739,6 +3290,11 @@ class KompasApplication:
         çünki `_build_auth_controller` konteksti tələb edir.
         """
         self._context = context
+        # Köhnə başlanğıc uğursuzluğunun İZİ TƏMİZLƏNİR (SEC-2) — əks halda
+        # bu retry-dan sonra giriş ekranında Ctrl+Shift+K KÖHNƏ növü (məs.
+        # `DATABASE_UNREACHABLE`) görər və baza artıq İŞLƏK olsa belə
+        # `may_open`-in bypass şərti səhvən keçərdi.
+        self._startup_failure_kind = None
         self.set_auth_controller(_build_auth_controller(context))
         _log.info("STARTUP_RECOVERED", extra={"tenant_id": str(context.tenant_id)})
         self.start()
@@ -2950,8 +3506,18 @@ class KompasApplication:
         refresh(outcome)
         return home
 
-    def start_kiosk(self) -> KioskWindow:
-        """Kiosk axını — PIN klaviaturası ilə başlayır."""
+    def start_kiosk(self) -> KioskWindow:  # noqa: PLR0915
+        """Kiosk axını — PIN klaviaturası ilə başlayır.
+
+        `PLR0915` (çox ifadə) BURADA SUSDURULUB — səbəb `composition.py::
+        _build_session`-dəki EYNİDİR: bu, mürəkkəb budaqlı MƏNTİQ deyil,
+        ekran/siqnal QURUCUSUDUR (hər əl-siqnal cütü bir-iki sətir). INF2-04/
+        ui (dövrə 2 audit) səbəb-mesajı əlavə edəndə hədd (50) keçildi;
+        funksiyanı bölmək `kiosk`/`pin_pad`/`on_pin`/`on_face_login`
+        arasındakı bağlama dəyişənlərini (closure) parçalayardı və "hansı
+        siqnal hansı closure-a bağlıdır?" sualını iki metod arasında
+        dağıdardı.
+        """
         from src.presentation import preview_data  # noqa: PLC0415
         from src.presentation.screens.group_a_kiosk import (  # noqa: PLC0415
             EmployeeHomeScreen,
@@ -3023,6 +3589,21 @@ class KompasApplication:
             home.logout_requested.connect(lambda: kiosk.set_content(pin_pad))
             kiosk.set_content(home)
 
+        def kiosk_unconfigured_message() -> str:
+            """`_kiosk_setup_error` VARSA konkret səbəb, YOXDURSA generic ehtiyat.
+
+            İkinci hal PRAKTİKİ olaraq baş verməməlidir (`run()` kontroller
+            qurula bilməyəndə HƏMİŞƏ səbəb ötürür, bax `_build_kiosk_controller`)
+            — amma `set_kiosk_controller`/`set_kiosk_setup_error` ayrı-ayrı
+            çağırıla bilən İCTİMAİ metodlardır (məs. gələcək bir test/skript
+            yalnız birini çağırsa), ona görə boş mesaj YERİNƏ sükutlu ehtiyat
+            saxlanılır — FAIL-CLOSED məlumat itkisi olmasın deyə.
+            """
+            return (
+                self._kiosk_setup_error
+                or "Sistem konfiqurasiya edilməyib — administratorla əlaqə saxlayın."
+            )
+
         def on_pin(code: str) -> None:
             """PIN daxil edildi — önizləmədə nümunə, əks halda REAL yoxlama."""
             if self._preview:
@@ -3032,9 +3613,7 @@ class KompasApplication:
                 # Kontroller yoxdursa PIN yoxlanıla bilməz. Səssiz keçmək
                 # işçiyə "sistem məni tanımır" hissi verərdi; açıq mesaj isə
                 # onu dərhal menecerə yönləndirir.
-                pin_pad.show_message(
-                    "Sistem konfiqurasiya edilməyib — administratorla əlaqə saxlayın."
-                )
+                pin_pad.show_message(kiosk_unconfigured_message())
                 return
 
             outcome = self._kiosk_controller.authenticate(code)
@@ -3074,9 +3653,7 @@ class KompasApplication:
                 show_preview_home()
                 return
             if self._kiosk_controller is None:
-                pin_pad.show_message(
-                    "Sistem konfiqurasiya edilməyib — administratorla əlaqə saxlayın."
-                )
+                pin_pad.show_message(kiosk_unconfigured_message())
                 return
 
             outcome = self._kiosk_controller.authenticate_by_face()
@@ -3099,6 +3676,12 @@ class KompasApplication:
             and self._kiosk_controller.face_login_available()
         )
         kiosk.set_content(pin_pad)
+        # INF2-04/ui — SƏBƏB PIN cəhdini GÖZLƏMİR: körpü qurulmayıbsa mesaj
+        # ekran AÇILAN KİMİ görünür, əks halda işçi "PIN işləmir" deyib
+        # dəfələrlə cəhd edərdi, texnik isə log faylını oxumadan səbəbi
+        # bilməzdi (bax `_build_kiosk_controller`/`kiosk_unconfigured_message`).
+        if not self._preview and self._kiosk_controller is None:
+            pin_pad.show_message(kiosk_unconfigured_message())
 
         def on_exit() -> None:
             kiosk.allow_close()
@@ -3238,7 +3821,7 @@ def run(
         context, startup_error, startup_failure_kind = _load_context_behind_splash(
             app, application, rebuild_context
         )
-        application.set_context(context)
+        application.set_context(context, startup_failure_kind=startup_failure_kind)
 
     application.set_rebuild_context(rebuild_context)
     device_gate = _device_gate(application, context) if context is not None else None
@@ -3261,9 +3844,13 @@ def run(
             application.show_fatal_error(startup_error)
     elif kiosk:
         if context is not None:
-            controller = _build_kiosk_controller(context)
+            controller, setup_error = _build_kiosk_controller(context)
             if controller is not None:
                 application.set_kiosk_controller(controller)
+            elif setup_error:
+                # INF2-04/ui — SƏBƏB itmir: `_build_kiosk_controller` artıq
+                # loga yazıb, bura İSTİFADƏÇİ TƏRƏFİ üçün ƏLAVƏ edir.
+                application.set_kiosk_setup_error(setup_error)
         application.start_kiosk()
     else:
         if context is not None:
@@ -3485,7 +4072,16 @@ def _leave_type_id_or_none(home: EmployeeHomeScreen) -> LeaveTypeId | None:
         return None
 
 
-def _build_kiosk_controller(context: ApplicationContext) -> KioskController | None:
+#: INF2-04/ui — `_build_kiosk_controller`-in İKİ uğursuzluq mətni. Sabit
+#: SƏTİRDƏ saxlanılır ki, log açarı (`extra={"env": ...}`) və istifadəçi
+#: mətni EYNİ dəyişənin adını göstərsin — ikisi ayrı yazılsaydı, biri
+#: yeniləndikdə digəri KÖHNƏLƏ bilərdi.
+_KIOSK_STORE_ENV_KEY: Final = "KOMPASOS_STORE_ID"
+
+
+def _build_kiosk_controller(
+    context: ApplicationContext,
+) -> tuple[KioskController | None, str]:
     """Kiosk körpüsünü qurur — mağaza identifikatoru mühitdən gəlir.
 
     Hər kiosk PC-si BİR mağazaya bağlıdır və PIN handshake yalnız həmin
@@ -3493,24 +4089,67 @@ def _build_kiosk_controller(context: ApplicationContext) -> KioskController | No
     Mağaza təyin edilməyibsə kontroller QURULMUR: "bütün mağazalarda axtar"
     variantı 235 işçi üçün Argon2 hesablaması demək olardı və üstəlik başqa
     filialın işçisinin bu terminalda giriş etməsinə imkan verərdi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    QAYTARILAN İKİNCİ SAHƏ — SƏBƏB İTMİR (INF2-04/ui, dövrə 2 audit)
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl uğursuzluqda YALNIZ `None` qayıdırdı — səbəb `_log.error`-a
+    yazılırdı, LAKİN mağazada `app.log`-u kim oxuyacaqdı? Nəticə: kiosk
+    ekranı açılırdı, PIN düyməsi sadəcə İŞLƏMİRDİ və heç yerdə izah yox idi.
+    İndi çağıran (`run()`) bu mətni `application.set_kiosk_setup_error(...)`-
+    a ötürür, `start_kiosk()` isə PIN klaviaturası AÇILAN KİMİ göstərir —
+    ilk PİN cəhdini gözləmir. Mətn mühit dəyişəninin ADINI AÇIQ yazır
+    (`installation.py`-dakı eyni naxış): texnik loga baxmadan nə edəcəyini
+    bilməlidir.
+
+    Returns:
+        `(controller, "")` uğurda; `(None, "<istifadəçiyə görünən səbəb>")`
+        uğursuzluqda.
     """
     import os  # noqa: PLC0415
     import uuid  # noqa: PLC0415
 
     from src.domain.value_objects.identifiers import StoreId  # noqa: PLC0415
+    from src.domain.value_objects.machine_identity import MachineIdentityHash  # noqa: PLC0415
+    from src.infrastructure.config.device_identity import (  # noqa: PLC0415
+        read_machine_guid_hash,
+    )
     from src.presentation.controllers.kiosk import KioskController  # noqa: PLC0415
 
-    raw_store = os.environ.get("KOMPASOS_STORE_ID", "").strip()
+    raw_store = os.environ.get(_KIOSK_STORE_ENV_KEY, "").strip()
     if not raw_store:
-        _log.error("KIOSK_STORE_NOT_CONFIGURED", extra={"env": "KOMPASOS_STORE_ID"})
-        return None
+        _log.error("KIOSK_STORE_NOT_CONFIGURED", extra={"env": _KIOSK_STORE_ENV_KEY})
+        return None, (
+            f"Terminal konfiqurasiya edilməyib — `{_KIOSK_STORE_ENV_KEY}` mühit dəyişəni "
+            "təyin edilməyib. Administratorla əlaqə saxlayın."
+        )
     try:
         store_id = StoreId(uuid.UUID(raw_store))
     except ValueError:
         _log.error("KIOSK_STORE_ID_INVALID", extra={"value": raw_store})
-        return None
+        return None, (
+            f"Terminal konfiqurasiyası səhvdir — `{_KIOSK_STORE_ENV_KEY}` düzgün formatda "
+            "deyil. Administratorla əlaqə saxlayın."
+        )
 
-    return KioskController(context, store_id=store_id)
+    # SEC-01/SEC-05 (dövrə 3) — FAIL-CLOSED, `KOMPASOS_STORE_ID`-in EYNİ
+    # naxışı: `read_machine_guid_hash()` `None` qaytarsa (Windows deyil,
+    # registry əlçatmaz) PIN girişi AÇILMIR. Throttle olmadan PIN girişini
+    # açmaq brute-force qorumasını SÜKUTLA söndürmək demək olardı — məhz
+    # SEC-01-in özü (qoruma var, heç vaxt işə düşmür, aylarla görünmür).
+    # Xam GUID BURADA oxunmur — `read_machine_guid_hash()` heşləməni özü
+    # aparır (`device_identity.py` başlığı: domen/tətbiq qatına xam GUID
+    # heç vaxt çatmır).
+    digest = read_machine_guid_hash()
+    if digest is None:
+        _log.error("KIOSK_MACHINE_IDENTITY_UNAVAILABLE")
+        return None, (
+            "Terminal kimliyi oxuna bilmədi — PIN girişi qorumasız açıla bilməz. "
+            "Administratorla əlaqə saxlayın."
+        )
+    machine_key = MachineIdentityHash(digest=digest)
+
+    return KioskController(context, store_id=store_id, machine_key=machine_key), ""
 
 
 def _build_auth_controller(context: ApplicationContext) -> AuthController:
@@ -3616,11 +4255,14 @@ class _SessionScopedLogin:
         stored_hash: str | None,
         pepper_version: int = 1,
     ) -> object:
+        import socket  # noqa: PLC0415
+
         from src.application.use_cases.authentication import (  # noqa: PLC0415
             AdminLoginUseCase,
         )
         from src.infrastructure.security.hashing import HashingService  # noqa: PLC0415
         from src.infrastructure.timekeeping.clock import SystemClock  # noqa: PLC0415
+        from src.shared.security_events import FailSoftSecurityEventRecorder  # noqa: PLC0415
 
         with self._session() as session:
             use_case = AdminLoginUseCase(
@@ -3632,6 +4274,16 @@ class _SessionScopedLogin:
                 hashing=HashingService(limits=self._context.infrastructure_limits()),
                 clock=SystemClock(),
                 audit=session.uow.audit,
+                # SEC-7 — SARILMIŞ forma MƏCBURİDİR: xam repo bağlansaydı
+                # `security_events` yazısının uğursuzluğu (DB yükü, şəbəkə)
+                # istisna kimi YUXARI qalxardı və girişin ÖZÜ çökərdi — bu,
+                # hücumçuya DB-ni yükləməklə HAMININ girişini bloklamaq
+                # imkanı verərdi (DoS). `FailSoftSecurityEventRecorder`
+                # uğursuzluğu udur, `security.log`-a `critical` yazır (bax
+                # `ports.py::SecurityEventRepository` başlığı).
+                security_events=FailSoftSecurityEventRecorder(
+                    session.uow.repository("security_events")
+                ),
             )
             try:
                 result = use_case.login(
@@ -3640,6 +4292,10 @@ class _SessionScopedLogin:
                     password=password,
                     stored_hash=stored_hash,
                     pepper_version=pepper_version,
+                    # `ip_address` BURADA MƏLUM DEYİL: masaüstü tətbiq DB-yə
+                    # birbaşa qoşulur, HTTP sorğusu yoxdur ki, uzaq ünvan
+                    # məlum olsun — uydurmaqdansa `None` buraxılır.
+                    machine_name=socket.gethostname(),
                 )
             except Exception:
                 # Uğursuz cəhdin sayğacı da YAZILMALIDIR — onsuz lockout

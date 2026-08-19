@@ -116,11 +116,27 @@ class PostgresNotificationRepository(_BaseRepository):
         hidden_categories: Sequence[str],
         limit: int = PANEL_LIMIT,
     ) -> list[NotificationRow]:
-        """Ən yeni bildirişlər — oxunmuşlar da daxil.
+        """Ən yeni bildirişlər — oxunmuşlar da daxil, PRİORİTETLİ sırada (D8).
 
         Oxunmuşlar SÜZÜLMÜR: panel onları solğun sətir kimi göstərir və
         istifadəçi "bayaq nə yazılmışdı" sualına cavab tapmalıdır. Yalnız
         oxunmamışları göstərsəydik, panel klikdən sonra boşalardı.
+
+        ──────────────────────────────────────────────────────────────────────
+        SIRA NİYƏ SADƏ `created_at DESC` DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        `PANEL_LIMIT` (50) DƏYİŞMİR — pəncərənin ölçüsündən doğur (bax yuxarı
+        şərh), Root parametri DEYİL. Əvvəlki sıra (`created_at DESC`) isə
+        bunun NƏTİCƏSİNDƏ köhnə, hələ OXUNMAMIŞ və ya KRİTİK sətri sükutla
+        itirirdi: 50-dən çox bildirişi olan istifadəçidə yeni, ADİ sətirlər
+        onu pəncərədən İTƏLƏYİRDİ — `mark_read` ona bir daha heç vaxt
+        çatmırdı, çünki ekran onu ÜMUMİYYƏTLƏ göstərmirdi (pagination yoxdur).
+
+        Sıra İNDİ: OXUNMAMIŞ əvvəl (`read_at IS NULL` → TRUE=1, `DESC`),
+        sonra KRİTİK əvvəl, sonra ƏN YENİ. Yəni limit dolanda İLK atılanlar
+        HƏMİŞƏ oxunmuş+adi sətirlərdir — məhz "artıq görülüb, təkrar sual
+        doğurmur" olanlar. Bu, mövcud `idx_notifications_panel_priority`
+        (migrations/071) indeksinin sütun sırası ilə HƏRFƏN eynidir.
 
         Args:
             hidden_categories: Aktorun səlahiyyəti çatmayan tenant səviyyəli
@@ -132,7 +148,7 @@ class PostgresNotificationRepository(_BaseRepository):
         rows = self._fetch_all(
             f"""{self._SELECT}
             WHERE tenant_id = %s AND {self._AUDIENCE}
-            ORDER BY created_at DESC
+            ORDER BY (read_at IS NULL) DESC, is_critical DESC, created_at DESC
             LIMIT %s
             """,
             (self._tenant, recipient_id, list(hidden_categories), limit),

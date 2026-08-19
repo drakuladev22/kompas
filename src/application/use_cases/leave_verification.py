@@ -74,6 +74,7 @@ from src.domain.value_objects.identifiers import (
     new_leave_request_id,
 )
 from src.domain.value_objects.penalty import LeavePenalty
+from src.shared.event_bus import DomainEvent, EventBus
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 from src.shared.saga_orchestrator import SagaOrchestrator, SagaResult, SagaStep
@@ -193,6 +194,7 @@ class LeaveVerificationUseCase:
         saga: SagaOrchestrator,
         audit: AuditTrail,
         notifier: Notifier,
+        event_bus: EventBus | None = None,
     ) -> None:
         self._leave_requests = leave_requests
         self._fines = fines
@@ -207,6 +209,13 @@ class LeaveVerificationUseCase:
         self._saga = saga
         self._audit = audit
         self._notifier = notifier
+        # OPSİONAL VƏ DEFOLT `None`: kompozisiya kökü (`presentation/
+        # composition.py`) hələ bu use case-ə Event Bus bağlamır. `None`
+        # olduqda `_publish_events` sadəcə heç nə etmir — mövcud davranış
+        # (hadisə sükutla itir) DƏYİŞMİR, yalnız bağlantı ediləndə YENİ
+        # davranış (yayım) aktivləşir. Məcburi arqument etsəydik, bu faylın
+        # sahibi olmadığı `composition.py`-a TOXUNMADAN testlər belə pozulardı.
+        self._event_bus = event_bus
 
     # ------------------------------ STEP 1 ---------------------------------- #
 
@@ -315,9 +324,19 @@ class LeaveVerificationUseCase:
     # ------------------------------ STEP 2 ---------------------------------- #
 
     def claim_return(self, *, tenant_id: TenantId, employee_id: EmployeeId) -> LeaveRequest:
-        """`[Mən Qayıtdım]` — status `🟡 Gözləyir` olur."""
+        """`[Mən Qayıtdım]` — status `🟡 Gözləyir` olur.
+
+        Sətir KİLİDLİ oxunur (D-R2-02, dövrə 2): işçinin cihazda ikiqat
+        toxunması / şəbəkə təkrarı iki eyni-anlı çağırışa çevrilə bilər —
+        kilidsiz halda hər ikisi `OUTSIDE` görüb entity qoruğunu keçər və
+        nəticə İKİQAT audit + `return_claimed_time`-ın son-commit-edənə görə
+        qeyri-deterministik qalması olardı (bu sahə `resolved_return_time()`
+        ilə gecikmə/cərimə hesabına birbaşa daxil olur). `verify_return`-un
+        (STEP 3) kilidli oxusu ilə EYNİ əsaslandırma — bax `_require_request_
+        locked`.
+        """
         claimed_at, _ = self._verified_now(tenant_id, operation="STEP_2")
-        request = self._require_open_request(employee_id)
+        request = self._require_open_request_locked(employee_id)
 
         request.claim_return(claimed_at=claimed_at)
         self._leave_requests.save(request)
@@ -500,6 +519,31 @@ class LeaveVerificationUseCase:
             tenant_id=tenant_id,
             actor_id=operator_id,
         )
+
+        # ──────────────────────────────────────────────────────────────────────
+        # HADİSƏ YAYIMI — SAGA TAM BİTDİKDƏN SONRA, KOMPENSASİYA EHTİMALI
+        # QALMAYAN NÖQTƏDƏ
+        # ──────────────────────────────────────────────────────────────────────
+        # `result.succeeded` YALNIZ `SagaStatus.COMPLETED`-də `True`-dur.
+        # Uğursuz/kompensasiya olunmuş halda `undo_update_status` artıq
+        # `request.discard_events()` çağırıb (yuxarıda) — həmin qolda
+        # `_pending_events` onsuz da boşdur, ona görə burada ayrıca şərt
+        # YAZILMASA da təhlükəsizdir, lakin niyyəti AÇIQ saxlamaq üçün
+        # `result.succeeded` şərti saxlanılır.
+        #
+        # BU USE CASE `exception_engine._drain()` / `open_shift_market._drain()`
+        # / `sales_points` / `task_workflow` ilə EYNİ NAXIŞDA DEYİL: o dörd
+        # yerdə Event Bus inyeksiya olunmur, çünki DİNLƏYİCİ YOXDUR — hadisə
+        # yalnız audit/telemetriya niyyəti daşıyır və boşaltmaq düzgün qərardır.
+        # BURADA isə dinləyici VAR: `main.py:_register_audit_listener`
+        # `DomainEvent` BAZİS tipinə abunədir və `event_bus.py` MRO üzrə
+        # dispatch etdiyi üçün törəmə `LeaveVerifiedEvent`-i AVTOMATİK tutur.
+        # Yəni bu hadisəni sükutla boşaltmaq mövcud dinləyicini məhrum edərdi.
+        # DB audit sətri (`step_write_audit`, yuxarıda) kompliyansı ödəyir —
+        # boşluq YALNIZ `audit.log` FAYL kanalındadır, ona görə KRİTİK deyil,
+        # amma real boşluqdur və `_publish_events` onu bağlayır.
+        if result.succeeded:
+            await self._publish_events(request.collect_events())
 
         # Saga uğursuz olduqda kompensasiya `penalty`-ni sıfırlayır — çağıran
         # tərəf `outcome.saga.status` ilə vəziyyəti yoxlamalıdır.
@@ -832,6 +876,28 @@ class LeaveVerificationUseCase:
                 context={"module": module.value},
             )
 
+    async def _publish_events(self, events: tuple[DomainEvent, ...]) -> None:
+        """Toplanmış domen hadisələrini Event Bus-a yayır.
+
+        UĞURSUZLUQ İSTİSNA ATMIR VƏ ƏMƏLİYYATI GERİ QAYTARMIR: bu nöqtədə
+        Saga artıq `COMPLETED`-dir, status/cərimə/audit sətri DB-yə yazılıb.
+        Hadisə yalnız telemetriya/audit.log kanalı üçündür (`_audit.record()`
+        DB audit cədvəlini bundan ASILI OLMADAN artıq yazıb — bax `step_write_
+        audit`), ona görə yayım nasazlığı əməliyyatı yarımçıq saymamalıdır.
+        Naxış `saga_orchestrator.SagaOrchestrator._emit()` ilə EYNİDİR
+        (try/except + log, saga-nın öz addımlarını "geri" almır).
+        """
+        if self._event_bus is None:
+            return
+        for event in events:
+            try:
+                await self._event_bus.publish(event)
+            except Exception:
+                _log.exception(
+                    "LEAVE_VERIFICATION_EVENT_PUBLISH_FAILED",
+                    extra={"event": event.event_name},
+                )
+
     def _require_request(self, request_id: LeaveRequestId) -> LeaveRequest:
         request = self._leave_requests.get(request_id)
         if request is None:
@@ -877,6 +943,26 @@ class LeaveVerificationUseCase:
                 user_message="Açıq icazəniz yoxdur.",
                 context={"employee_id": str(employee_id)},
             )
+        return request
+
+    def _require_open_request_locked(self, employee_id: EmployeeId) -> LeaveRequest:
+        """`_require_open_request`-in STEP 2 (`claim_return`) üçün sətir-kilidli
+        variantı (D-R2-02 audit tapıntısı, dövrə 2) — `_require_request_locked`
+        (yuxarıda) ilə EYNİ naxış: kilid AYRICA metoddadır ki, sadə baxış
+        yolları yazı-kilidinə çevrilməsin, repo kilidi dəstəkləmirsə davranış
+        DƏYİŞMİR (mövcud kilidsiz yol işləyir).
+
+        `RowLockingLeaveRequests.find_open_for_employee_locked` istifadə edir,
+        `get_for_update`-i YOX — STEP 2 anında sorğunun `request_id`-si hələ
+        çağırana MƏLUM DEYİL (işçi yalnız öz `employee_id`-si ilə müraciət edir),
+        ona görə axtarış açarı fərqlidir.
+        """
+        repository = self._leave_requests
+        if not isinstance(repository, RowLockingLeaveRequests):
+            return self._require_open_request(employee_id)
+        request = repository.find_open_for_employee_locked(employee_id)
+        if request is None:
+            return self._require_open_request(employee_id)
         return request
 
     def _require_camera_permission(

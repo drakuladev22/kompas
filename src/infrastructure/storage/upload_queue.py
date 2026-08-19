@@ -111,11 +111,13 @@ from src.infrastructure.storage.google_drive import (
     EvidenceValidationError,
     validate_evidence_payload,
 )
+from src.shared.exceptions import DecryptionError, EncryptionKeyError
 from src.shared.logger import get_logger
 
 if TYPE_CHECKING:
     from src.domain.value_objects.identifiers import StoreId
     from src.domain.value_objects.storage import StorageReference
+    from src.infrastructure.security.encryption import EncryptionService
 
 _log = get_logger(__name__)
 
@@ -152,6 +154,21 @@ CREATE INDEX IF NOT EXISTS idx_evidence_ready
     ON evidence_uploads (status, next_attempt_at, seq);
 """
 _SCHEMA: Final[str] = _TABLE_SQL + _INDEX_SQL
+
+
+def _spool_context(entry_id: str) -> str:
+    """Şifrələmə AAD-i — SEC-4.
+
+    Sətrin ÖZ `entry_id`-sinə bağlanır (`telegram_config:{tenant_id}` ilə
+    EYNİ naxış, `telegram_repositories.py`): şifrələnmiş spool faylı BAŞQA
+    bir sətrin altına köçürülsə (disk faylına birbaşa çıxışı olan hücumçu
+    üçün nəzəri mümkün əməliyyat), deşifrə mərhələsində uğursuz olur.
+    `enqueue()` (yazır) və `read_plaintext()` (oxuyur) EYNİ funksiyanı
+    çağırır — iki ayrı yerdə TƏKRARLANAN sətir AAD uyğunsuzluğu riski
+    yaradardı (bax `telegram_repositories.py` başlığındakı xəbərdarlıq).
+    """
+    return f"evidence_upload:{entry_id}"
+
 
 #: Cədvəl köçürməsində (bax `_ensure_rejected_status`) sütunlar AÇIQ sadalanır:
 #: `INSERT INTO ... SELECT *` sütun sırasından asılıdır və gələcəkdə əlavə
@@ -244,8 +261,21 @@ class PendingUpload:
     attempts: int
     status: UploadStatus
     last_error: str | None = None
+    #: SEC-4. `False` — köhnə (şifrələmə əlavə edilməzdən ƏVVƏL yazılmış)
+    #: sətirlərin DEFOLTU da budur (bax `_ensure_encrypted_column`). Xam
+    #: bayt YALNIZ `read_bytes()`-dən gəlir — deşifrə üçün
+    #: `EvidenceUploadQueue.read_plaintext()` işlədilməlidir.
+    is_encrypted: bool = False
 
     def read_bytes(self) -> bytes:
+        """Spool faylının XAM baytı — şifrələnibsə HƏLƏ ŞİFRƏLİDİR.
+
+        Bu metod QƏSDƏN deşifrə ETMİR: `PendingUpload` `EncryptionService`-ə
+        istinad DAŞIMIR (təmiz məlumat obyekti olaraq qalır — sınaq və
+        diaqnostika kodunun kripto asılılığı olmadan işləməsi üçün). Yükləmə
+        axınının işlətməli olduğu düzgün yol `EvidenceUploadQueue.
+        read_plaintext(item)`-dir.
+        """
         return self.spool_path.read_bytes()
 
 
@@ -274,6 +304,7 @@ class EvidenceUploadQueue:
         max_upload_bytes: int = MAX_UPLOAD_BYTES,
         claim_stale_after_seconds: int | None = None,
         limits: InfrastructureLimits | None = None,
+        encryption: EncryptionService | None = None,
     ) -> None:
         """Args:
         max_upload_bytes: `enqueue()`-dəki ölçü həddi. Defolt `MAX_UPLOAD_BYTES`
@@ -290,12 +321,22 @@ class EvidenceUploadQueue:
             (min 60 saniyə, migrations/032).
         backoff_schedule: `None` = ROOT-dan (`OFFLINE_RETRY_BACKOFF_SECONDS`).
         limits: `system_limits`-ə açılan pəncərə; verilməzsə fallback-lar.
+        encryption: SEC-4. `None` — DEFOLTSUZ DEYİL (fərq
+            `telegram_repositories.py`-dan): bu sinif sınaq/diaqnostika
+            kontekstlərində şifrələməsiz də qurula bilməlidir (məs. `tests/`
+            fixture-ları), `PostgresTelegramConfigRepository`-nin tələb etdiyi
+            kimi HƏMİŞƏ mövcud bir DB bağlantısı deyil. `None` verilərsə
+            BÜTÜN yeni yazılar da açıq (`is_encrypted=False`) qalır — köhnə
+            sətirlərlə EYNİ, sənədləşdirilmiş vəziyyət (bax `_ensure_
+            encrypted_column`), sükutla "təhlükəsizdir" görünən YALANÇI qat
+            DEYİL. İSTEHSALATDA kompozisiya kökü onu HƏMİŞƏ ötürür.
         """
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._spool = Path(spool_dir) if spool_dir else self._path.parent / "evidence_spool"
         self._spool.mkdir(parents=True, exist_ok=True)
         self._limits = limits or InfrastructureLimits()
+        self._encryption = encryption
         self._explicit_backoff = backoff_schedule
         self._max_upload_bytes = max_upload_bytes if max_upload_bytes > 0 else MAX_UPLOAD_BYTES
         self._explicit_claim_stale_after = (
@@ -325,6 +366,9 @@ class EvidenceUploadQueue:
         # yuxarıdakı iki köçürmə hələ işə düşməmişsə cədvəl rename-COPY
         # ortasında ola bilər (bax `_ensure_owner_columns` başlığı).
         self._ensure_owner_columns()
+        # SEC-4 — `owner_type`/`owner_id` İLƏ EYNİ NAXIŞ: TAMAMİLƏ YENİ,
+        # `CHECK`-siz sütun, sadə `ALTER TABLE ADD COLUMN` kifayətdir.
+        self._ensure_encrypted_column()
 
     def _backoff_schedule(self) -> tuple[int, ...]:
         """Təkrar cəhd cədvəli — HƏR UĞURSUZ YÜKLƏMƏDƏ oxunur."""
@@ -456,6 +500,33 @@ class EvidenceUploadQueue:
                 extra={"status": "OWNER_COLUMNS", "backfilled_rows": backfilled},
             )
 
+    def _ensure_encrypted_column(self) -> None:
+        """`is_encrypted`-i köhnə (şifrələmədən ƏVVƏLKİ) fayla gətirir (SEC-4).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ KÖHNƏ SƏTİRLƏR BACKFILL EDİLMİR (`owner_type`-dan FƏRQ)
+        ──────────────────────────────────────────────────────────────────────
+        `_ensure_owner_columns()` köhnə sətirləri YENİ dəyərlə (`'FINE'`)
+        doldurur, çünki əvvəlki həqiqət MƏLUMDUR (növbə əvvəllər YALNIZ
+        cərimə üçün var idi). Burada isə əksinədir: sütun defolt `0`-dır və
+        KÖHNƏ sətirlər FAKTİKİ olaraq AÇIQ (şifrələnməmiş) yazılıb — onları
+        `1`-ə "düzəltmək" YALAN məlumat yazmaq olardı, çünki spool faylının
+        ÖZÜ şifrəli DEYİL. `%LOCALAPPDATA%` → `%PROGRAMDATA%` keçidinin
+        "köhnəni tanı, köçürmə" prinsipinin analoqu (CLAUDE.md §8): oxucu
+        (`read_plaintext`) bayrağa görə ŞƏRTİ davranır, məlumatın özü
+        dəyişmir.
+
+        Əməliyyat idempotentdir: sütun mövcuddursa `ALTER` ötürülür.
+        """
+        with self._lock, self._transaction() as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(evidence_uploads)")}
+            if "is_encrypted" in columns:
+                return
+            conn.execute(
+                "ALTER TABLE evidence_uploads ADD COLUMN is_encrypted INTEGER NOT NULL DEFAULT 0"
+            )
+        _log.info("EVIDENCE_QUEUE_SCHEMA_UPGRADED", extra={"status": "ENCRYPTED_COLUMN"})
+
     def set_max_upload_bytes(self, value: int) -> None:
         """Ölçü həddini yeniləyir — Root paneldəki dəyişiklikdən sonra.
 
@@ -523,9 +594,46 @@ class EvidenceUploadQueue:
         moment = now or datetime.now(UTC)
         entry_id = str(uuid.uuid4())
         spool_path = self._spool / f"{entry_id}.bin"
+
+        # ŞİFRƏLƏMƏ VALIDASİYADAN SONRA, DİSKƏ YAZMAZDAN ƏVVƏL (SEC-4).
+        # ──────────────────────────────────────────────────────────────────
+        # `self._encryption is None` — QƏSDƏN sükutla açıq yazmaq DEYİL:
+        # bu, YALNIZ kompozisiya kökünün xidməti ÖTÜRMƏDİYİ (sınaq/dev)
+        # kontekstlərdə baş verir və köhnə sətirlərlə EYNİ, sənədləşdirilmiş
+        # vəziyyətdir (bax konstruktor şərhi).
+        #
+        # `encrypt_bytes()` İSTİSNA ATSA (açar yüklənməyib, s.) — SÜKUTLA
+        # AÇIQ YAZILMIR, İstisna YUXARI ÖTÜRÜLÜR: heç nə hələ diskə/DB-yə
+        # yazılmayıb, yəni operator YALNIZ "yenidən cəhd edin" görür və
+        # şəkli itirmir — foto hələ ekranında/kamerasındadır. Bu, `validate_
+        # evidence_payload`-un yuxarıdakı İSTİSNA-ötürmə qərarı ilə EYNİ
+        # məntiqdir. `mark_failed`-in arxa-plan backoff-u BURADA YERSİZDİR:
+        # operator DƏRHAL, SİNXRON nəticə gözləyir (bu, arxa-plan Drive
+        # yükləməsi kimi gözədən-uzaq bir iş DEYİL).
+        is_encrypted = self._encryption is not None
+        to_write = (
+            self._encryption.encrypt_bytes(content, context=_spool_context(entry_id))
+            if self._encryption is not None
+            else content
+        )
         # Əvvəlcə DİSKƏ, sonra indeksə: tərsi olsaydı, aradakı çökmə
         # "növbədə var, faylı yoxdur" vəziyyəti yaradardı.
-        spool_path.write_bytes(content)
+        try:
+            spool_path.write_bytes(to_write)
+        except OSError:
+            # INF2-03 (dövrə 2 audit): `OSError` (disk dolu, icazə itib)
+            # YARIMÇIQ/sıfır-baytlıq fayl buraxa bilər. Heç bir DB sətri ona
+            # istinad ETMİR — aşağıdakı tranzaksiya BURAYA HEÇ VAXT çatmır —
+            # ona görə fayl SİLİNMƏSƏ ƏBƏDİ YETİM qalırdı və heç bir sweep/
+            # reconcile mexanizmi onu tapmırdı (bax `docs/open_questions.md`
+            # OQ — tam təmizləmə siyasəti AYRI qərardır, bu YALNIZ BU
+            # konkret uğursuzluq yolunun özünü təmizləyir). Məhz disk-dolu
+            # insidenti zamanı bu TƏKRARLANIR (hər uğursuz cəhd YENİ
+            # `entry_id` alır), yəni düzəliş olmasa insidenti yüngülləşdirmək
+            # ƏVƏZİNƏ tədricən AĞIRLAŞDIRIRDI. `missing_ok=True`: yazı hətta
+            # faylın ÖZÜ yaranmadan da uğursuz ola bilər (`open()` mərhələsi).
+            spool_path.unlink(missing_ok=True)
+            raise
 
         with self._lock, self._transaction() as conn:
             row = conn.execute(
@@ -536,8 +644,8 @@ class EvidenceUploadQueue:
                 INSERT INTO evidence_uploads
                     (id, seq, tenant_id, fine_id, store_id, filename, spool_path,
                      taken_at, status, attempts, queued_at, next_attempt_at,
-                     owner_type, owner_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?, ?, ?)
+                     owner_type, owner_id, is_encrypted)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry_id,
@@ -557,11 +665,17 @@ class EvidenceUploadQueue:
                     moment.isoformat(),
                     owner_type.value,
                     owner_id,
+                    int(is_encrypted),
                 ),
             )
         _log.info(
             "EVIDENCE_UPLOAD_QUEUED",
-            extra={"owner_type": owner_type.value, "owner_id": owner_id, "bytes": len(content)},
+            extra={
+                "owner_type": owner_type.value,
+                "owner_id": owner_id,
+                "bytes": len(content),
+                "encrypted": is_encrypted,
+            },
         )
         return entry_id
 
@@ -657,6 +771,41 @@ class EvidenceUploadQueue:
                 "SELECT * FROM evidence_uploads WHERE id = ?", (entry_id,)
             ).fetchone()
         return _row_to_upload(row) if row else None
+
+    def read_plaintext(self, item: PendingUpload) -> bytes:
+        """`item.read_bytes()`-in DEŞİFRƏ-BİLƏN variantı (SEC-4).
+
+        Yükləmə axınının (`EvidenceUploadWorker`) işlətməli olduğu YEGANƏ
+        oxu yoludur — `PendingUpload.read_bytes()` ÖZÜ deşifrə etmir (bax
+        onun docstring-i).
+
+        Raises:
+            DecryptionError, EncryptionKeyError: açar dəyişib/itibsə.
+                `EvidenceUploadWorker` bunu `mark_rejected`-ə yönləndirir
+                (`mark_failed` YOX): açarın YENİDƏN yüklənməsi gözləməklə
+                DEYİL, operator müdaxiləsi ilə həll olunur, ona görə
+                avtomatik backoff `mark_rejected`-in qorumaq istədiyi
+                "sonsuz dövrə" problemini TƏKRARLAYARDI. Spool faylı
+                (`mark_rejected` heç vaxt silmir) toxunulmaz qalır — açar
+                bərpa olunanda `requeue_rejected()` yenidən cəhd edə bilər.
+        """
+        raw = item.read_bytes()
+        if not item.is_encrypted:
+            return raw
+        # `self._encryption is None` ola BİLMƏZ burada: `is_encrypted=True`
+        # sətri YALNIZ `encryption` verilmiş konstruktorda yarana bilər.
+        # Yenə də `None` olarsa (məs. eyni SQLite faylı ARDINCA şifrələməsiz
+        # konstruktorla açılıbsa — qeyri-adi, amma mümkün əməliyyat xətası),
+        # `EncryptionKeyError`-a bənzər aydın mesajla dayanmaq sükutla
+        # "deşifrə edilməyib" bayt qaytarmaqdan (yəni şifrəli zibili Drive-a
+        # göndərməkdən) qat-qat üstündür.
+        if self._encryption is None:
+            raise EncryptionKeyError(
+                "Sətir şifrəli işarələnib, lakin bu növbə şifrələmə xidməti "
+                "OLMADAN qurulub — konfiqurasiya uyğunsuzluğu",
+                context={"entry_id": item.id},
+            )
+        return self._encryption.decrypt_bytes(raw, context=_spool_context(item.id))
 
     def counts(self) -> dict[str, int]:
         with self._lock:
@@ -856,9 +1005,10 @@ class _Tx:
 
 
 def _row_to_upload(row: sqlite3.Row) -> PendingUpload:
-    # `owner_type`/`owner_id` bu ANDA HƏMİŞƏ doludur: konstruktor
-    # `_ensure_owner_columns()`-u sxem quraşdırmasının SON addımı kimi çağırır,
-    # yəni oxuma metodları işə düşənə qədər backfill artıq bitib.
+    # `owner_type`/`owner_id`/`is_encrypted` bu ANDA HƏMİŞƏ doludur: konstruktor
+    # `_ensure_owner_columns()`/`_ensure_encrypted_column()`-u sxem quraşdırmasının
+    # SON addımları kimi çağırır, yəni oxuma metodları işə düşənə qədər hər ikisi
+    # artıq bitib.
     return PendingUpload(
         id=row["id"],
         tenant_id=row["tenant_id"],
@@ -871,6 +1021,7 @@ def _row_to_upload(row: sqlite3.Row) -> PendingUpload:
         attempts=row["attempts"],
         status=UploadStatus(row["status"]),
         last_error=row["last_error"],
+        is_encrypted=bool(row["is_encrypted"]),
     )
 
 
@@ -925,7 +1076,10 @@ class EvidenceUploadWorker:
             report.attempted += 1
             try:
                 reference = provider.upload(
-                    item.read_bytes(),
+                    # SEC-4: `item.read_bytes()` DEYİL — o, şifrələnibsə XAM
+                    # (hələ şifrəli) bayt qaytarardı. `read_plaintext()` bayrağa
+                    # görə şərti deşifrə edir (bax onun docstring-i).
+                    self._queue.read_plaintext(item),
                     item.filename,
                     _UUID(item.store_id),
                     item.taken_at,
@@ -936,6 +1090,19 @@ class EvidenceUploadWorker:
                     # QANUNİ sənəd PDF-i `REJECTED` olardı.
                     owner_type=item.owner_type.value,
                 )
+            except (DecryptionError, EncryptionKeyError) as exc:
+                # SEC-4: açar dəyişib/itib — GÖZLƏMƏK NƏTİCƏNİ DƏYİŞMİR (əks
+                # halda `mark_failed`-in backoff-u eyni "sonsuz dövrə"
+                # problemini yaradardı ki, `mark_rejected` məhz onun üçün
+                # icad olunub — bax onun docstring-i). Spool faylı SİLİNMİR
+                # (`mark_rejected` heç vaxt silmir): açar bərpa olunanda
+                # (`KOMPASOS_FERNET_KEY_PREVIOUS`) admin `requeue_rejected()`
+                # ilə yenidən cəhd edə bilər — sübut İTMİR, YALNIZ gözləyir.
+                report.rejected += 1
+                assert report.errors is not None
+                report.errors.append(f"{item.owner_type.value}:{item.owner_id}: {exc}")
+                self._queue.mark_rejected(item.id, str(exc), now=moment)
+                continue
             except EvidenceValidationError as exc:
                 # Fayl yararsızdır — şəbəkə/kvota problemi DEYİL. Gözləmək
                 # nəticəni dəyişmədiyi üçün element daimi olaraq kənara

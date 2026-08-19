@@ -32,6 +32,7 @@ from src.domain.value_objects.authorization import (
     HardlockLevel,
     PermissionFlag,
     RolePriority,
+    SystemRole,
 )
 from src.domain.value_objects.identifiers import EmployeeId, PositionId, TenantId
 from src.infrastructure.plugins.contracts import PluginCapability
@@ -464,12 +465,49 @@ class _MatrixSession:
 
 
 class _FakePosition:
-    def __init__(self, code: str, name_az: str, priority: RolePriority, granted: set[str]) -> None:
+    """`PermissionMatrixController`-in gözlədiyi `Position` səthinin sahtəsi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    `effective_system_role` VƏ `is_camera_type` D3 ilə ƏLAVƏ OLUNDU
+    ──────────────────────────────────────────────────────────────────────────
+    `permission_matrix.py::_flag_groups` indi `flag.is_grantable_to(position.
+    effective_system_role, is_camera_type_role=position.is_camera_type)`
+    çağırır (əvvəl sadəcə `flag.hardlock is not HardlockLevel.NONE` idi) —
+    bax D3 reqressiyası. Bu sahtə YALNIZ REAL 7 sistem rolunun kodlarını
+    dəstəkləyir (`code` birbaşa `SystemRole(...)`-a çevrilir): bu faylın
+    BÜTÜN mövcud çağırışları ("ROOT", "ADMIN", "SATICI") artıq belədir.
+
+    CUSTOM/`priority`-əsaslı fallback (real `Position.effective_system_role`-
+    dəki `_PRIORITY_TO_ROLE` xəritəsi) burada QƏSDƏN TƏKRARLANMIR: o
+    xəritəni test faylında dublikatlaşdırsaq, `position.py` onu dəyişəndə bu
+    sahtə arxada qalardı (CLAUDE.md §7-nin "SÜTUN yox, QAYDA dəyişirsə hər
+    iki yer yenilənir" prinsipinin test analoqu). CUSTOM kamera-tipli rol
+    ssenarisi ARTIQ REAL `Position` entity-si ilə ölçülür — bax
+    `test_spec_audit_fixes.py::test_role_change_to_a_custom_camera_role_
+    revokes_the_excluded_flag` (SEC-1). Uyğun olmayan kod verilsə
+    `SystemRole(self.code)` `ValueError` atır — SƏSSİZ YANLIŞ NƏTİCƏ vermək
+    əvəzinə UCADAN sınmaq seçildi.
+    """
+
+    def __init__(
+        self,
+        code: str,
+        name_az: str,
+        priority: RolePriority,
+        granted: set[str],
+        *,
+        is_camera_type: bool = False,
+    ) -> None:
         self.id = PositionId(uuid.uuid4())
         self.code = code
         self.name_az = name_az
         self.priority = priority
         self.granted_flags = granted
+        self.is_camera_type = is_camera_type
+
+    @property
+    def effective_system_role(self) -> SystemRole:
+        return SystemRole(self.code)
 
 
 EXPORT = PermissionFlag(code="can_export_reports", category="SISTEM")
@@ -477,6 +515,10 @@ HARDLOCKED = PermissionFlag(
     code="can_manage_permissions", category="ICAZE", hardlock=HardlockLevel.ROOT_ONLY
 )
 UNCATEGORISED = PermissionFlag(code="can_do_thing", category="")
+#: SEC-001-in ÖZÜ — `assert_grantable_to`-da KODU ilə açıq yoxlanılır
+#: (`self.code == DUAL_CONTROL_APPROVAL_FLAG and camera_capable`), digər
+#: bool sahələrdən (`is_anti_fraud`/`excludes_camera_role`) ASILI DEYİL.
+DUAL_CONTROL = PermissionFlag(code="can_approve_dual_control_override", category="KAMERA_CERIME")
 
 
 def _matrix(
@@ -552,8 +594,24 @@ def test_an_empty_role_list_selects_nothing() -> None:
 
 
 def test_selecting_a_role_fills_the_matrix_with_grouped_flags() -> None:
+    """D3-dən SONRA dördüncü sahə ROLA GÖRƏ dəyişir — bax modul şərhi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    HARDLOCKED ASSERTİYASI D3-DƏN ƏVVƏLKİ VƏ SONRAKI ARASINDA TƏRSİNƏ DÖNDÜ
+    ──────────────────────────────────────────────────────────────────────────
+    Köhnə qayda `flag.hardlock is not HardlockLevel.NONE` idi — rol
+    NƏZƏRƏ ALINMIRDI, ona görə `ROOT_ONLY` flag HƏTTA `Root`-un ÖZÜ üçün belə
+    "hardlock" (deaktiv) göstərilirdi. Bu, məhz D3-ün düzəltdiyi qüsurun
+    özüdür: `HardlockLevel.ROOT_ONLY.allows(SystemRole.ROOT)` `True`-dur, yəni
+    `Root` sətrində bu checkbox indi AKTİV olmalıdır — köhnə testin
+    `flat[HARDLOCKED.code][3] is True` gözləntisi D3-ün ÖZÜNÜN qadağan etdiyi
+    davranışı sübut edirdi. Aşağıda İKİ sətir yoxlanılır ki, sahənin HƏM
+    doğru (Root-da aktiv), HƏM DƏ hardlock-un həqiqətən işlədiyi (Satıcıda
+    deaktiv) göstərilsin — tək sətirlə ROLA GÖRƏ dəyişmə sübut olunmaz.
+    """
     root = _FakePosition("ROOT", "Root", RolePriority.ROOT, {EXPORT.code})
-    positions = _Positions([_Summary(root)])
+    seller = _FakePosition("SATICI", "Satıcı", RolePriority.STAFF, set())
+    positions = _Positions([_Summary(root), _Summary(seller)])
     controller, _ = _matrix(
         positions=positions,
         labels=[{"code": EXPORT.code, "name_az": "Hesabat ixracı"}],
@@ -569,7 +627,57 @@ def test_selecting_a_role_fills_the_matrix_with_grouped_flags() -> None:
     assert flat[EXPORT.code][1] == "Hesabat ixracı"
     assert flat[EXPORT.code][2] is True, "Verilmiş flag işarəli gəlir"
     assert flat[HARDLOCKED.code][2] is False
-    assert flat[HARDLOCKED.code][3] is True, "Hardlock xanası ekranda işarələnir"
+    assert flat[HARDLOCKED.code][3] is False, "ROOT_ONLY flag Root-un ÖZÜ üçün aktiv olmalıdır (D3)"
+
+    controller._on_role_selected(screen, "SATICI")  # type: ignore[arg-type]
+
+    seller_role_name, seller_groups = screen.matrix[-1]
+    assert seller_role_name == "Satıcı"
+    seller_flat = {item[0]: item for group in seller_groups for item in group[1]}
+    assert seller_flat[HARDLOCKED.code][3] is True, (
+        "ROOT_ONLY flag Satıcıya görünür, LAKİN xana DEAKTİV olmalıdır"
+    )
+
+
+def test_a_camera_type_role_shows_the_dual_control_flag_as_disabled() -> None:
+    """D3 — «GÖRMƏK = SƏLAHİYYƏT»: SEC-001 checkbox SƏVİYYƏSİNDƏ görünməlidir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    QÜSUR NƏ İDİ
+    ──────────────────────────────────────────────────────────────────────────
+    Dördüncü sahə əvvəl `flag.hardlock is not HardlockLevel.NONE` idi — flag-in
+    ÖZ statik hardlock səviyyəsi, seçili ROLDAN asılı olmadan. Kamera-tipli rol
+    (`Kamera_Nəzarətçisi`) seçiləndə `can_approve_dual_control_override`
+    checkbox-u buna görə AKTİV görünürdü: admin onu işarələyib «Yadda Saxla»
+    basırdı, YALNIZ SONRA `_apply_flags`-dəki SEC-001 qaydası
+    (`assert_grantable_to`) onu rədd edirdi. «Görmək = səlahiyyət» qapısı
+    burada BİR ADDIM GECİKİRDİ — admin əvvəlcə "icazə verilir" düşünürdü.
+
+    ──────────────────────────────────────────────────────────────────────────
+    DÜZƏLİŞ NƏ ÖLÇÜR
+    ──────────────────────────────────────────────────────────────────────────
+    `_flag_groups` indi `flag.is_grantable_to(role, is_camera_type_role=...)`
+    çağırır — `Kamera_Nəzarətçisi` üçün bu, SEC-001-in ÖZÜNÜ
+    (`assert_grantable_to`-dakı `self.code == DUAL_CONTROL_APPROVAL_FLAG and
+    camera_capable` şərti) işə salır və checkbox ARTIQ İLK GÖRÜNTÜDƏN
+    DEAKTİV gəlir — "Yadda Saxla"-ya qədər gözləmək YOXDUR.
+    """
+    camera = _FakePosition(
+        "KAMERA_NEZARETCISI", "Kamera Nəzarətçisi", RolePriority.OPERATIONAL, set()
+    )
+    positions = _Positions([_Summary(camera)])
+    controller, _ = _matrix(positions=positions, flags=[DUAL_CONTROL])
+    screen = _MatrixScreen()
+    controller.refresh(screen)  # type: ignore[arg-type]
+
+    controller._on_role_selected(screen, "KAMERA_NEZARETCISI")  # type: ignore[arg-type]
+
+    role_name, groups = screen.matrix[-1]
+    assert role_name == "Kamera Nəzarətçisi"
+    flat = {item[0]: item for group in groups for item in group[1]}
+    assert flat[DUAL_CONTROL.code][3] is True, (
+        "SEC-001: kamera-tipli rolda dual-control təsdiqi İLK GÖRÜNTÜDƏN deaktivdir"
+    )
 
 
 def test_a_flag_without_a_label_falls_back_to_its_code() -> None:

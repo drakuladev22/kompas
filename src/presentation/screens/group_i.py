@@ -1030,14 +1030,31 @@ class PluginScreen(Screen):
         clear_layout(self._list_layout, keep_last=1)
 
         if not plugins:
-            self.show_empty(
+            # ────────────────────────────────────────────────────────────────
+            # BOŞ VƏZİYYƏTDƏ DÜYMƏ BURADA OLMALIDIR — ALƏT ZOLAĞI GİZLƏNİR
+            # ────────────────────────────────────────────────────────────────
+            # `show_empty()` `ContentSwitcher`-i BOŞ vəziyyətə keçirir və bu,
+            # bütün məzmun widget-ini — o cümlədən yuxarıdakı «Plugin Quraşdır»
+            # düyməsini daşıyan alət zolağını — gizlədir. Nəticə dövrə idi:
+            # plugin YOXDURSA quraşdırma düyməsi də yoxdur, yəni BİRİNCİ
+            # plugin heç vaxt quraşdırıla bilməzdi.
+            #
+            # `EmptyState`-in öz əsas düyməsi məhz bunun üçündür: boş ekran
+            # istifadəçini dalana yox, NÖVBƏTİ ADDIMA aparmalıdır.
+            empty = self.show_empty(
                 icon_name="grid",
                 title="Plugin quraşdırılmayıb",
                 message=(
                     "Plugin-lər ayrıca prosesdə, məhdud API səthi ilə işləyir və "
                     "yalnız imzalanmış paketlər qəbul edilir."
                 ),
+                primary_text="Plugin Quraşdır",
+                primary_icon="plus",
             )
+            # Hər çağırışda YENİ `EmptyState` qurulur (bax
+            # `ContentSwitcher.show_empty`), ona görə təkrar bağlanma riski
+            # yoxdur — köhnəsi siqnalı ilə birlikdə məhv olur.
+            empty.primary_clicked.connect(self.install_requested)
             return
 
         enabled = sum(1 for plugin in plugins if plugin.get("enabled") == "1")

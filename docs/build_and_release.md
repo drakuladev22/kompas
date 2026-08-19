@@ -139,8 +139,11 @@ qovluğundan işə düşür və hüquqlar fərqlidir):
       masaüstündə YALNIZ qısayol görünür (config/`.exe` gözə dəymir).
 - [ ] **ProgramData** — `C:\ProgramData\KompasOS\` yaranıb; `logs\` və `data\`
       alt qovluqları var və **standart istifadəçi** ora yaza bilir.
-- [ ] **Config-siz ilk açılış** — proqram ÇÖKMÜR, «Bağlantı Ayarları» ekranı
-      açılır. Ekranın altındakı Diaqnostika sətrində üç yol görünür.
+- [ ] **Config-siz ilk açılış** — proqram ÇÖKMÜR, «KompasOS işə düşə bilmədi»
+      ekranı açılır (mesaj + «Yenidən Cəhd Et» + dəstək ünvanı). Müştəri
+      ekranı QƏSDƏN kasıbdır — RECOVERY-1 Faza 2. Konfiqurasiyanı texnik
+      `Ctrl+Shift+K` → Bərpa Konsolu ilə yazır; diaqnostika yolları da
+      oradadır.
 - [ ] **Config yazılması** — ekrandan yadda saxlayın; fayl
       `C:\ProgramData\KompasOS\connection.json`-da yaranmalıdır (`.exe`-nin
       yanında YOX). Yanında `kompasos.key` də yaranır — şifrələmə açarı ilk
@@ -189,6 +192,29 @@ Müştərinin sihirbazı tamamlandıqdan SONRA, repozitoriya olan maşında:
 * Kirayəçi kimliyi tətbiqin öz mənbəyindən (`installation.json`) gəlir; bazada
   birdən çox kirayəçi varsa `--tenant-id` MƏCBURİ olur.
 * Aktiv `Root` artıq varsa skript DAYANIR (`--force` ilə keçilə bilər).
+
+---
+
+## 6.2. ÇOX-MAĞAZALI MÜŞTƏRİ — HƏR KİOSK PC-Sİ ÜÇÜN `sysprep` MƏCBURİDİR
+
+**Qısası:** eyni Windows imicini bir neçə mağaza PC-sinə klonlayırsınızsa,
+HƏR birində quraşdırmadan ƏVVƏL `sysprep /generalize /oobe /shutdown`
+işlədin. Bu, Windows-un ÖZ standart tövsiyəsidir, amma KompasOS-da
+buraxılması SƏSSİZ bir təhlükəsizlik boşluğuna gətirir:
+
+* Terminal PIN qorunması (SEC-01/SEC-05) hər kiosk PC-nin Windows quraşdırma
+  identifikatorına (`MachineGuid`) bağlıdır — bu, mağaza kodundan (`.env`)
+  FƏRQLİ olaraq admin hüququ olmadan dəyişdirilə bilmədiyi üçün seçilib.
+* `sysprep` KEÇİLMƏDƏN klonlanmış diskdə HƏR maşın EYNİ `MachineGuid`-i
+  daşıyır — Windows onu quraşdırma zamanı YENİDƏN yaratmır.
+* Nəticə: bütün klon mağazalar EYNİ PIN qoruma sayğacını PAYLAŞIR. Bir
+  mağazada baş verən uğursuz PIN cəhdləri BAŞQA mağazanın terminalını
+  bloklaya bilər — sistemin ÖZÜ bunu aşkarlayıb qeyd edir (audit jurnalında
+  «şübhəli klonlanmış maşın» siqnalı görünür), lakin qarşısını ALMIR.
+
+`sysprep`-dən sonra HƏR PC öz unikal `MachineGuid`-ini alır və bu problem
+kökündən aradan qalxır. Bircə PC-lik quraşdırmada (klon YOXDURSA) bu addıma
+ehtiyac yoxdur.
 
 ---
 

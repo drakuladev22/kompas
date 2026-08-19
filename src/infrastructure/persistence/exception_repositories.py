@@ -83,8 +83,11 @@ class PostgresExceptionRepository(_BaseRepository):
         limit: int = 200,
     ) -> list[ExceptionRecord]:
         """`idx_exceptions_open` indeksinin sorğusu — ən yenisi əvvəldə."""
+        # INF2-02: `tenant_id` arqumenti bağlantının ÖZ kontekstiylə (`self.
+        # _tenant`) UYĞUN olmalıdır — uyğunsuzluqda GURULTULU xəta (bax
+        # `_require_matching_tenant` şərhi).
         clauses = ["tenant_id = %s", "status = 'OPEN'"]
-        params: list[Any] = [tenant_id]
+        params: list[Any] = [self._require_matching_tenant(tenant_id)]
         if store_ids is not None:
             if not store_ids:
                 # BOŞ siyahı = "heç bir mağazaya çıxış yoxdur". `ANY('{}')`

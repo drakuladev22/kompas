@@ -143,9 +143,21 @@ class DevicePendingScreen(Screen):
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(theme, parent=parent)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(48, 48, 48, 48)
-        layout.setSpacing(0)
+        # ────────────────────────────────────────────────────────────────
+        # LAYOUT BAZADAN GƏLİR — İKİNCİSİNİ QURMAQ EKRANI BOŞALDIR (LAYOUT-1)
+        # ────────────────────────────────────────────────────────────────
+        # `Screen.__init__` `self` üzərində ARTIQ `QVBoxLayout` qurur. İkinci
+        # `QVBoxLayout(self)` Qt tərəfindən QURULMUR — konsola «which already
+        # has a layout» xəbərdarlığı yazılır və həmin layout-a əlavə edilən
+        # BÜTÜN vidjetlər valideynsiz qalır. Nəticə: ekran istisnasız qurulur,
+        # lakin TAM BOŞ görünür — yəni ən pis nasazlıq növü, çünki nə log, nə
+        # də xəta mesajı var.
+        #
+        # `body()` bazanın məzmun layout-udur; kənar boşluğu da baza verir
+        # (`CONTENT_PADDING_H/V`), ona görə burada ayrıca margin TƏYİN
+        # EDİLMİR — əks halda bu ekran qalan 38 ekrandan fərqli doldurma ilə
+        # görünərdi.
+        layout = self.body()
         layout.addStretch(1)
 
         card = Card()
@@ -239,9 +251,21 @@ class DeviceAdminScreen(Screen):
         self._stores: list[tuple[str, str]] = []
         self._selected_id = ""
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(metrics.CARD_SPACING)
+        # ────────────────────────────────────────────────────────────────
+        # LAYOUT BAZADAN GƏLİR — İKİNCİSİNİ QURMAQ EKRANI BOŞALDIR (LAYOUT-1)
+        # ────────────────────────────────────────────────────────────────
+        # `Screen.__init__` `self` üzərində ARTIQ `QVBoxLayout` qurur. İkinci
+        # `QVBoxLayout(self)` Qt tərəfindən QURULMUR — konsola «which already
+        # has a layout» xəbərdarlığı yazılır və həmin layout-a əlavə edilən
+        # BÜTÜN vidjetlər valideynsiz qalır. Nəticə: ekran istisnasız qurulur,
+        # lakin TAM BOŞ görünür — yəni ən pis nasazlıq növü, çünki nə log, nə
+        # də xəta mesajı var.
+        #
+        # `body()` bazanın məzmun layout-udur; kənar boşluğu da baza verir
+        # (`CONTENT_PADDING_H/V`), ona görə burada ayrıca margin TƏYİN
+        # EDİLMİR — əks halda bu ekran qalan 38 ekrandan fərqli doldurma ilə
+        # görünərdi.
+        layout = self.body()
 
         header = QHBoxLayout()
         header.addWidget(title_label("Cihazlar"))

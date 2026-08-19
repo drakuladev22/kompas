@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Final
 
@@ -27,10 +28,12 @@ from src.presentation.controllers.plugin_admin import PluginAdminController
 from src.presentation.controllers.profile import PASSWORD_POLICY_NOTE, ProfileController
 from src.presentation.controllers.sales_review import SINGLE_REASON, SalesReviewController
 from src.shared.exceptions import KompasOSError
+from tests.fixtures.fakes import FakeClock
 
 pytestmark = pytest.mark.unit
 
 TENANT: Final = TenantId(uuid.uuid4())
+NOW: Final = datetime(2026, 8, 10, 14, 10, tzinfo=UTC)
 
 
 class _DeniedError(KompasOSError):
@@ -42,11 +45,18 @@ def _actor() -> Any:
 
 
 class _Context:
-    """`ApplicationContext.session()` müqaviləsinin minimal təkrarı."""
+    """`ApplicationContext.session()` müqaviləsinin minimal təkrarı.
+
+    `clock` TIME-1 ilə əlavə olundu: `profile.py::refresh`/`_on_sessions`
+    artıq `self._context.clock.now()` çağırır (bax `test_controller_gap_
+    coverage.py::_Context`-in eyni izahı — bu fayldakı testlərin heç biri
+    sessiya sətrini `now`-a NİSBƏTƏN qurmur, ona görə sabit `NOW` kifayətdir).
+    """
 
     def __init__(self, session: Any) -> None:
         self._session = session
         self.opened = 0
+        self.clock = FakeClock(NOW)
 
     @contextmanager
     def session(self, *, user_id: Any = None) -> Any:
@@ -501,12 +511,33 @@ class _EmployeeProfileAccess:
         self.checks.append((viewer, subject))
 
 
+class _AuthSessionsRepo:
+    """`AuthSessionRepository.list_recent_for_user`-in minimal təkrarı (SEC-5/D5).
+
+    Boş siyahı qaytarır (real vəziyyət — bax köhnə `_ProfileConnection`
+    şərhi): giriş axını hələ sessiya sətri yazmır. `calls` sayğacı VACİBDİR
+    — `profile.py::_session_rows` artıq XAM SQL yox, birbaşa bu portu
+    çağırır (bax onun modul şərhi), ona görə köhnə `connection.queries`
+    yoxlaması ARTIQ bu çağırışı görmür; sayğac onun YERİNİ tutur.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def list_recent_for_user(self, tenant_id: Any, user_id: Any, *, limit: int = 10) -> list[Any]:
+        self.calls += 1
+        return []
+
+
 class _ProfileUow:
     def __init__(self, employee: Any) -> None:
         self.employees = _Employees(employee)
         self.connection = _ProfileConnection()
+        self.auth_sessions = _AuthSessionsRepo()
 
     def repository(self, name: str) -> Any:
+        if name == "auth_sessions":
+            return self.auth_sessions
         assert name == "permission_flags", f"Gözlənilməyən repo: {name}"
         return _PermissionFlagCatalog()
 
@@ -611,7 +642,11 @@ def test_profile_save_writes_only_the_name() -> None:
     assert screen.account["username"] == "r.mammadov"
     assert screen.account["password_note"] == PASSWORD_POLICY_NOTE
     assert session.employee_profile.checks, "`require_view` qapısı yan keçilməməlidir"
-    assert any("auth_sessions" in query for query in session.uow.connection.queries)
+    # SEC-5/D5: sessiya siyahısı ARTIQ repo portu ilə oxunur (bax `_AuthSessionsRepo`),
+    # köhnə xam-SQL yoxlaması ("auth_sessions" in query) buna görə əvəzlənib.
+    assert session.uow.auth_sessions.calls >= 1, (
+        "Sessiya siyahısı YAZIDAN SONRA yenidən oxunmalıdır"
+    )
 
 
 def test_profile_save_refuses_an_empty_name() -> None:

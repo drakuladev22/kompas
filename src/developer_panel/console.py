@@ -453,6 +453,7 @@ def _recover_access(
     from src.infrastructure.notifications.notifier import PostgresNotifier  # noqa: PLC0415
     from src.infrastructure.security.hashing import HashingService  # noqa: PLC0415
     from src.infrastructure.timekeeping.clock import SystemClock  # noqa: PLC0415
+    from src.shared.security_events import FailSoftSecurityEventRecorder  # noqa: PLC0415
 
     tenant_id, _, username = argument.partition("=")
     tenant_id, username = tenant_id.strip(), username.strip()
@@ -494,6 +495,12 @@ def _recover_access(
             audit=uow.audit,
             # Bildiriş cəhd/gözləmə cədvəli də həmin pəncərədən.
             notifier=PostgresNotifier(database, limits=limits),
+            # SEC-7 — SARILMIŞ forma MƏCBURİDİR (bax `app.py::
+            # _SessionScopedLogin.login` eyni şərhi). Bu əməliyyat artıq
+            # SON TƏDBİRDİR (bölmə 2) — `security_events` yazısının
+            # uğursuzluğu bərpanın ÖZÜNÜ dayandırmamalıdır, sadəcə
+            # `security.log`-a düşməlidir.
+            security_events=FailSoftSecurityEventRecorder(uow.repository("security_events")),
         )
         credential = use_case.recover(
             tenant_id=identifier,

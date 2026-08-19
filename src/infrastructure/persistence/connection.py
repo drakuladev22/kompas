@@ -509,6 +509,9 @@ class PostgresUnitOfWork:
             PostgresAuditReader,
             PostgresAuditTrail,
         )
+        from src.infrastructure.persistence.auth_session_repository import (  # noqa: PLC0415
+            PostgresAuthSessionRepository,
+        )
         from src.infrastructure.persistence.behavior_repositories import (  # noqa: PLC0415
             PostgresBehaviorBaselineRepository,
             PostgresCheckInHistoryProvider,
@@ -570,6 +573,9 @@ class PostgresUnitOfWork:
             PostgresFieldReportCatalog,
             PostgresFieldReportRepository,
         )
+        from src.infrastructure.persistence.fine_review_repository import (  # noqa: PLC0415
+            PostgresFineReviewBatchRepository,
+        )
         from src.infrastructure.persistence.migration import (  # noqa: PLC0415
             PostgresMigrationEventLog,
             SessionReadOnlyController,
@@ -586,6 +592,9 @@ class PostgresUnitOfWork:
         )
         from src.infrastructure.persistence.performance_review_repository import (  # noqa: PLC0415
             PostgresPerformanceReviewRepository,
+        )
+        from src.infrastructure.persistence.pin_throttle_repository import (  # noqa: PLC0415
+            PostgresPinThrottleRepository,
         )
         from src.infrastructure.persistence.platform_repositories import (  # noqa: PLC0415
             PostgresBackupCatalog,
@@ -606,6 +615,12 @@ class PostgresUnitOfWork:
             PostgresFineRepository,
             PostgresLeaveRequestRepository,
             PostgresPositionRepository,
+        )
+        from src.infrastructure.persistence.saga_repository import (  # noqa: PLC0415
+            PostgresSagaStateRepository,
+        )
+        from src.infrastructure.persistence.security_event_repository import (  # noqa: PLC0415
+            PostgresSecurityEventRepository,
         )
         from src.infrastructure.persistence.staffing_repositories import (  # noqa: PLC0415
             PostgresStaffingHistoryProvider,
@@ -849,6 +864,32 @@ class PostgresUnitOfWork:
             # jurnalı isə `db_migration_events`-dədir (bax `migration.py`).
             "read_only": SessionReadOnlyController(conn, self._context),
             "migration_events": PostgresMigrationEventLog(conn, self._context),
+            # --- Saga uzlaşma vəziyyəti (D6) -----------------------------------
+            # `SagaOrchestrator`-un konstruktoruna verilir (bax `composition.py`,
+            # `ui` bağlayır) — `PENDING_RECONCILIATION` sagalar bundan ƏVVƏL
+            # yalnız yaddaşda idi və sessiya bitəndə itirdi (bax `saga_
+            # repository.py` başlığı).
+            "saga_state": PostgresSagaStateRepository(conn, self._context),
+            # --- Sessiya müddəti (SEC-5, SEC-011) ------------------------------
+            # `SessionManagementUseCase`-ə verilir (bax `composition.py`, `ui`
+            # bağlayır) — `auth_sessions.py` başlığındakı boşluğu bağlayır.
+            "auth_sessions": PostgresAuthSessionRepository(conn, self._context),
+            # --- Aylıq Cərimə İcmalı partiyası (SEC-8) -------------------------
+            # `MonthlyFineReviewUseCase`-ə verilir — açar adı `ui`-yə ARTIQ
+            # bildirilib, DƏYİŞDİRİLMİR.
+            "fine_review_batches": PostgresFineReviewBatchRepository(conn, self._context),
+            # --- Giriş/icazə hadisələri (SEC-7) --------------------------------
+            # XAM formada BURADA qeydiyyatdan keçir — istehsalat kompozisiyası
+            # (`ui`) onu `FailSoftSecurityEventRecorder`-ə SARIMALIDIR
+            # (bax `security_event_repository.py` başlığı): bu repo öz
+            # uğursuzluğunu UDMUR, siyasət qərarı kompozisiya səviyyəsindədir.
+            "security_events": PostgresSecurityEventRepository(conn, self._context),
+            # --- Terminal PIN throttle (SEC-01/SEC-05) --------------------------
+            # `PinHandshakeUseCase`-ə verilir — açar adı `domain`-in `ui-r1`-ə
+            # bildirdiyi ilə EYNİ (`"pin_throttle"`), DƏYİŞDİRİLMİR. Bu asılılıq
+            # `security_events`-dən FƏRQLİ olaraq fail-soft SARILMIR — throttle
+            # QORUMADIR, uddurulan yazı qorumanı söndürər (domain-in qərarı).
+            "pin_throttle": PostgresPinThrottleRepository(conn, self._context),
         }
 
     def _release(self, *, rollback: bool) -> None:

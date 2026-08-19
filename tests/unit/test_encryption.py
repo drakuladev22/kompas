@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from src.infrastructure.security.encryption import (
@@ -166,13 +168,25 @@ def test_reload_picks_up_new_key(monkeypatch: pytest.MonkeyPatch) -> None:
     assert service.decrypt(token) == "məlumat"
 
 
-def test_dpapi_provider_inactive_off_windows() -> None:
-    """Windows-dan kənarda provayder passiv qalmalıdır (CI Linux runner)."""
+def test_dpapi_provider_inactive_off_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows-dan kənarda provayder passiv qalmalıdır (CI Linux runner).
+
+    QA tapıntısı: `if not provider.is_supported:` şərti bu maşında (Windows)
+    HƏMİŞƏ `False`-dur — köhnə versiya bu halda testin BÜTÜN bədənini
+    keçib, HEÇ BİR assert icra ETMƏDƏN yaşıl qayıdırdı (`is_supported`
+    sadəcə `sys.platform == "win32"`-i oxuyur, bax `encryption.py`). Windows
+    CI-da bu, "off-Windows davranışı" ÜMUMİYYƏTLƏ heç vaxt ölçülmürdü demək
+    idi. `sys.platform`-u BİLƏRƏKDƏN saxtalaşdırmaq (`test_first_install_key.
+    py`-dəki `skipif`-in ƏKSİ istiqamətdə) testi platformadan ASILI OLMADAN
+    DETERMİNİSTİK edir.
+    """
+    monkeypatch.setattr(sys, "platform", "linux")
     provider = WindowsDpapiKeyProvider()
-    if not provider.is_supported:
-        assert provider.load() is None
-        with pytest.raises(EncryptionKeyError):
-            provider.store(KeyMaterial(primary=generate_key()))
+
+    assert provider.is_supported is False
+    assert provider.load() is None
+    with pytest.raises(EncryptionKeyError):
+        provider.store(KeyMaterial(primary=generate_key()))
 
 
 # --------------------------------------------------------------------------- #

@@ -260,7 +260,7 @@ class SagaResult:
 
 
 # --------------------------------------------------------------------------- #
-# Vəziyyət saxlama (Faza 3-də Supabase repo-su ilə əvəzlənir)
+# Vəziyyət saxlama (Postgres reposu `saga_instances` cədvəli üzərində qurulur)
 # --------------------------------------------------------------------------- #
 
 
@@ -268,9 +268,20 @@ class SagaResult:
 class SagaStateRepository(Protocol):
     """Saga vəziyyətinin davamlı saxlanması üçün port.
 
-    Faza 3-də `saga_instances` cədvəli üzərində implementasiya olunur — bu,
-    tətbiq saga ortasında çökərsə (crash), yenidən başlayanda yarımçıq
+    `saga_instances` cədvəli (`schema.sql`) üzərində implementasiya olunur —
+    bu, tətbiq saga ortasında çökərsə (crash), yenidən başlayanda yarımçıq
     sagaların aşkarlanmasını mümkün edir.
+
+    QEYD (D6 audit tapıntısı, dövrə 2): «Faza 3-də edilir» ifadəsi ARTIQ
+    KEÇƏRSİZ İDDİA idi — cədvəl mövcud olsa da, `composition.py` bu portu
+    HEÇ VAXT bağlamırdı, `SagaOrchestrator()` sıfır arqumentlə qurulur və
+    `state_repository or InMemorySagaStateRepository()` fallback-ı işə düşürdü
+    (aşağıda). Nəticə: hər `session()` çağırışı TƏZƏ, boş yaddaş-daxili dict
+    alırdı — `PENDING_RECONCILIATION` qeydləri sessiya bağlananda GEDİRDİ.
+    Postgres implementasiyası indi YAZILIR (infra) və `composition.py`-a
+    bağlanacaq (ui); `InMemorySagaStateRepository` bundan sonra YALNIZ
+    test/fallback məqsədlidir — davamlı backend yoxdursa belə, orkestrator
+    partlamamalıdır (bax `_persist()`-in niyə istisnanı UDMASININ əsaslandırması).
     """
 
     def save(self, result: SagaResult) -> None: ...
@@ -620,12 +631,49 @@ class SagaOrchestrator:
             _error_log.exception("SAGA_EVENT_PUBLISH_FAILED", extra={"event": event.event_name})
 
     def _persist(self, result: SagaResult) -> None:
+        """Saga nəticəsini davamlı yaddaşa yazır — İSTİSNA UDULUR, ƏMƏLİYYAT
+        GERİ QAYTARILMIR.
+
+        ──────────────────────────────────────────────────────────────────────
+        QƏRAR (dövrə 2 debatı, D6): NİYƏ BU, `AuditTrail.record()` (CLAUDE.md
+        §5, "audit istisna udmur") QAYDASINA TABE DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        DB audit sətri saga-nın ÖZ ADDIMIDIR (`step_write_audit` və s.) —
+        uğursuz olsa bütün zəncir kompensasiyaya düşür, çünki o, ƏMƏLİYYATIN
+        QANUNİ NƏTİCƏSİDİR. `_persist()` isə saga ARTIQ öz yekun statusuna
+        (`COMPLETED`/`COMPENSATED`/`PENDING_RECONCILIATION`) çatdıqdan SONRA
+        çağırılır — yazdığı sətir ƏMƏLİYYATIN NƏTİCƏSİ DEYİL, orkestratorun
+        ÖZ NƏZARƏT jurnalıdır (crash-bərpa + HR/Root uzlaşma ekranı üçün).
+
+        İstisnanı ötürsəydik: artıq COMMIT olunmuş (audit sətri DAXİL) bir
+        leave-verification/fine əməliyyatı YALNIZ bu İKİNCİ DƏRƏCƏLİ yazı
+        uğursuz olduğu üçün tam geri qaytarılardı — real, artıq audit-lənmiş
+        bir əməliyyatı DB nasazlığı anında itirmək, uzlaşma qeydini
+        itirməkdən DAHA PİSDİR. Ona görə istisna BURADA udulur — `_emit()`
+        ilə EYNİ naxış (yuxarıda), fərqli səbəblə: orada hadisə telemetriyadır,
+        burada isə "artıq baş vermiş" bir NƏTİCƏNİN qeydidir.
+
+        BUNUNLA BELƏ `PENDING_RECONCILIATION` OPERATORUN YEGANƏ İZİ ola bilər
+        (D6: `saga_instances` reposu bağlanmayanda `InMemorySagaStateRepository`
+        sessiya bitəndə itir) — ona görə MƏHZ bu statusda uğursuzluq `critical`
+        səviyyəsində loglanır ki, "həm saga, həm onun qeydi" ikiqat itkisi
+        monitorinqdə İTMƏSİN. `execute()` bu statusda HƏR HALDA ayrıca
+        `_audit_log.critical("SAGA_PENDING_RECONCILIATION", ...)` yazır (bax
+        yuxarı) — bu metodun uğursuzluğundan ASILI OLMAYAN, ayrı fayl-kanalı izi.
+        """
         try:
             self._state_repository.save(result)
         except Exception:
-            _error_log.exception(
-                "SAGA_STATE_PERSIST_FAILED", extra={"saga_id": str(result.saga_id)}
-            )
+            if result.status is SagaStatus.PENDING_RECONCILIATION:
+                _error_log.critical(
+                    "SAGA_STATE_PERSIST_FAILED_FOR_PENDING_RECONCILIATION",
+                    extra={"saga_id": str(result.saga_id), "saga_name": result.saga_name},
+                    exc_info=True,
+                )
+            else:
+                _error_log.exception(
+                    "SAGA_STATE_PERSIST_FAILED", extra={"saga_id": str(result.saga_id)}
+                )
 
     # --------------------------- reconciliation ---------------------------- #
 

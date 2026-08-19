@@ -54,6 +54,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from enum import Enum
+from uuid import UUID
 
 from src.domain.entities.base import AggregateRoot, DomainRuleError
 from src.domain.events import FineIssuedEvent, FineReversedEvent
@@ -61,6 +62,7 @@ from src.domain.value_objects.identifiers import (
     AppealId,
     EmployeeId,
     FineId,
+    FineReviewBatchId,
     FineTypeId,
     LeaveRequestId,
     StoreId,
@@ -116,6 +118,7 @@ class Fine(AggregateRoot):
         leave_request_id: LeaveRequestId | None = None,
         issued_by: EmployeeId | None = None,
         photo_evidence_url: str | None = None,
+        idempotency_key: UUID | None = None,
     ) -> None:
         super().__init__()
         require_aware(issued_at, field="issued_at")
@@ -150,6 +153,14 @@ class Fine(AggregateRoot):
         self.leave_request_id = leave_request_id
         self.issued_by = issued_by
         self.photo_evidence_url = photo_evidence_url
+        #: D7 audit tapıntısı — İKİQAT GÖNDƏRİŞ ZƏMANƏTİNİN DB YARISI. GUI
+        #: FORMA AÇILANDA bir dəfə yaradır (`ManualFineUseCase.issue()`
+        #: başlığı), hər klikdə YOX. `fines`-də QİSMƏN unikal indeks
+        #: (`WHERE source='MANUAL_CAMERA' AND idempotency_key IS NOT NULL`)
+        #: eyni açarla ikinci sətri REDD edir — `_find_recent_duplicate()`
+        #: (application qatı) YALNIZ SÜRƏTLİ YOLDUR, ƏSAS zəmanət BURADAN,
+        #: DB-dən gəlir (CLAUDE.md §5: hər qayda iki yerdə).
+        self.idempotency_key = idempotency_key
 
         # Cərimə GÖRÜNMƏYƏN vəziyyətdə doğulur — `publish()` onu açır.
         self.status = FineStatus.PENDING_REVIEW
@@ -163,6 +174,12 @@ class Fine(AggregateRoot):
         self.reversed_at: datetime | None = None
         self.reversal_reason: str | None = None
         self.exported_period: str | None = None
+        #: Hansı Aylıq İcmal partiyasında qərar verildi (SEC-8 audit tapıntısı).
+        #: `publish()`/`discard_in_review()` bunu doldurur; `PENDING_REVIEW`
+        #: doğulan cərimədə HƏMİŞƏ `None`dur — icmaldan kənar qərar (Saga
+        #: kompensasiyası, `leave_verification.undo_create_fine`) da `None`
+        #: buraxır, çünki o, TOPLU nəşrin hissəsi deyil.
+        self.review_batch_id: FineReviewBatchId | None = None
 
         # ────────────────────────────────────────────────────────────────────
         # NİYƏ `fines`-DƏ BELƏ BİR SÜTUN YOXDUR
@@ -209,12 +226,17 @@ class Fine(AggregateRoot):
         reviewed_by: EmployeeId,
         published_at: datetime,
         appeal_window_hours: int | None = None,
+        review_batch_id: FineReviewBatchId | None = None,
     ) -> None:
         """ "[Bütün Filiallara Göndər]" — cərimə işçiyə açılır.
 
         Etiraz pəncərəsi MƏHZ BURADA başlayır.
 
         Args:
+            review_batch_id: Bu qərarın aid olduğu Aylıq İcmal partiyası
+                (SEC-8). Verilmirsə (məs. gələcək "fərdi nəşr" yolu) `None`
+                qalır — sahə MƏCBURİ DEYİL, çünki bütün `publish()` çağırışları
+                HƏLƏLİK yalnız `MonthlyFineReviewUseCase.publish_batch()`-dandır.
             appeal_window_hours: Tenant-ın NƏŞR ANINDAKI
                 `FINE_APPEAL_WINDOW_HOURS` limiti. Verilmədikdə obyektin
                 yaradılışda dondurduğu dəyər işlədilir.
@@ -256,14 +278,26 @@ class Fine(AggregateRoot):
         self.published_at = published_at
         self.reviewed_by = reviewed_by
         self.appeal_window_closes_at = published_at + timedelta(hours=self.appeal_window_hours)
+        if review_batch_id is not None:
+            self.review_batch_id = review_batch_id
 
     def discard_in_review(
-        self, *, reviewed_by: EmployeeId, reviewed_at: datetime, reason: str
+        self,
+        *,
+        reviewed_by: EmployeeId,
+        reviewed_at: datetime,
+        reason: str,
+        review_batch_id: FineReviewBatchId | None = None,
     ) -> None:
         """İcmalda "Sil" seçimi — qeyd FİZİKİ SİLİNMİR, `REVERSED` olur.
 
         Bu, `reverse()`-dən fərqlidir: orada cərimə artıq işçiyə görünüb və
         etiraz nəticəsində ləğv olunur. Burada isə heç vaxt görünməyib.
+
+        Args:
+            review_batch_id: `publish()`-in eyni-adlı arqumenti ilə EYNİ
+                naxış (SEC-8) — icmaldan kənar çağırış (Saga kompensasiyası,
+                `leave_verification.undo_create_fine`) `None` buraxır.
         """
         require_aware(reviewed_at, field="reviewed_at")
         if self.status is not FineStatus.PENDING_REVIEW:
@@ -283,6 +317,8 @@ class Fine(AggregateRoot):
         self.reversed_by = reviewed_by
         self.reversed_at = reviewed_at
         self.reversal_reason = cleaned
+        if review_batch_id is not None:
+            self.review_batch_id = review_batch_id
 
     # ------------------------------- etiraz --------------------------------- #
 
@@ -358,8 +394,20 @@ class Fine(AggregateRoot):
                 f"Ləğv səbəbi minimum {MIN_REVERSAL_REASON_LENGTH} simvol olmalıdır"
             )
 
-        if new_amount is not None and new_amount.is_positive:
+        # D-R2-01 audit tapıntısı: bu yoxlama ƏVVƏL `new_amount.is_positive`
+        # budağının İÇİNDƏ idi — orada ÖLÜ QORUMA idi, çünki `is_positive`
+        # artıq YALNIZ müsbət ədədləri buraxır və müsbət ədəd `require_
+        # non_negative()`-i HEÇ VAXT poza bilməz. Nəticədə mənfi `new_amount`
+        # (məs. UI-da səhvən `-` yazılması, ya da API-ni birbaşa çağıran
+        # skript) `else` budağına düşüb SÜKUTLA "tam ləğv" kimi işlənirdi —
+        # cərimə PUL kəsən əməliyyatdır, "azalt" niyyətinin izsiz "tam ləğv"ə
+        # çevrilməsi bu layihənin öz fəlsəfəsini (bölmə 4: cərimə mübahisədə
+        # SÜBUT edilə bilməlidir) pozardı. Ona görə yoxlama BUDAQDAN KƏNARA,
+        # `new_amount is not None` yoxlanan kimi, ŞƏRTSİZ çıxarılıb.
+        if new_amount is not None:
             new_amount.require_non_negative(field="yeni məbləğ")
+
+        if new_amount is not None and new_amount.is_positive:
             if new_amount >= self.original_amount:
                 raise DomainRuleError(
                     "Azaldılmış məbləğ orijinaldan kiçik olmalıdır",

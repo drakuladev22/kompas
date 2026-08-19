@@ -31,6 +31,7 @@ from src.application.use_cases.support_chat import (
     TelegramDelivery,
     TelegramOutgoing,
 )
+from src.domain.entities.base import DomainRuleError
 from src.domain.entities.employee import Employee, PermissionOverride
 from src.domain.entities.position import Position
 from src.domain.value_objects.authorization import (
@@ -827,6 +828,98 @@ def test_9b_a_worker_message_reopens_even_a_closed_thread() -> None:
     )
     assert fresh.ticket_id != thread.ticket_id
     assert fresh.ticket_status is SupportTicketStatus.OPEN
+
+
+def test_9c_an_illegal_status_jump_is_rejected() -> None:
+    """D-R2-03 audit tapıntısı: `set_status` əvvəllər HƏR statusa icazə
+    verirdi — ekranı yan keçən çağırış `CLOSED` müraciəti birbaşa
+    `WAITING`-ə apara bilərdi. İndi `DomainRuleError` atılır, DB-yə
+    YAZILMIR, audit TƏKRARLANMIR."""
+    harness = _build()
+    actor = _seller(harness)
+    root = _employee(SystemRole.ROOT, flags=[VIEW_TECHNICAL_FLAG])
+    thread = harness.chat.send(
+        tenant_id=TENANT, actor=actor, body="Nasazlıq", channel=SupportChannel.TECHNICAL
+    )
+    harness.inbox.set_status(
+        tenant_id=TENANT,
+        actor=root,
+        channel=SupportChannel.TECHNICAL,
+        ticket_id=thread.ticket_id,
+        status=SupportTicketStatus.CLOSED,
+    )
+    audit_count_before = len(harness.audit.entries)
+
+    with pytest.raises(DomainRuleError, match="icazəli deyil"):
+        harness.inbox.set_status(
+            tenant_id=TENANT,
+            actor=root,
+            channel=SupportChannel.TECHNICAL,
+            ticket_id=thread.ticket_id,
+            status=SupportTicketStatus.WAITING,
+        )
+
+    # Nə status dəyişib, nə də audit təkrarlanıb.
+    assert harness.tickets.rows[thread.ticket_id].status is SupportTicketStatus.CLOSED
+    assert len(harness.audit.entries) == audit_count_before
+
+
+def test_9d_re_clicking_the_same_status_button_is_a_silent_no_op() -> None:
+    """Düymənin ikiqat basılması İSTİFADƏÇİ səhvidir — xəta ATILMIR, AMMA
+    audit sətri də TƏKRARLANMIR (D-R2-03)."""
+    harness = _build()
+    actor = _seller(harness)
+    root = _employee(SystemRole.ROOT, flags=[VIEW_TECHNICAL_FLAG])
+    thread = harness.chat.send(
+        tenant_id=TENANT, actor=actor, body="Nasazlıq", channel=SupportChannel.TECHNICAL
+    )
+    harness.inbox.set_status(
+        tenant_id=TENANT,
+        actor=root,
+        channel=SupportChannel.TECHNICAL,
+        ticket_id=thread.ticket_id,
+        status=SupportTicketStatus.WAITING,
+    )
+    audit_count_after_first_click = len(harness.audit.entries)
+
+    again = harness.inbox.set_status(
+        tenant_id=TENANT,
+        actor=root,
+        channel=SupportChannel.TECHNICAL,
+        ticket_id=thread.ticket_id,
+        status=SupportTicketStatus.WAITING,
+    )
+
+    assert again.ticket_status is SupportTicketStatus.WAITING
+    assert len(harness.audit.entries) == audit_count_after_first_click
+
+
+def test_9e_a_closed_thread_can_be_reopened_through_set_status() -> None:
+    """`CLOSED → OPEN` AÇIQ qalır — müştəri bağlanmış müraciəti YENİDƏN
+    qaldıra bilməlidir (real iş axını, D-R2-03 şərhinin təsdiqi)."""
+    harness = _build()
+    actor = _seller(harness)
+    root = _employee(SystemRole.ROOT, flags=[VIEW_TECHNICAL_FLAG])
+    thread = harness.chat.send(
+        tenant_id=TENANT, actor=actor, body="Nasazlıq", channel=SupportChannel.TECHNICAL
+    )
+    harness.inbox.set_status(
+        tenant_id=TENANT,
+        actor=root,
+        channel=SupportChannel.TECHNICAL,
+        ticket_id=thread.ticket_id,
+        status=SupportTicketStatus.CLOSED,
+    )
+
+    reopened = harness.inbox.set_status(
+        tenant_id=TENANT,
+        actor=root,
+        channel=SupportChannel.TECHNICAL,
+        ticket_id=thread.ticket_id,
+        status=SupportTicketStatus.OPEN,
+    )
+
+    assert reopened.ticket_status is SupportTicketStatus.OPEN
 
 
 # --------------------------------------------------------------------------- #

@@ -2,25 +2,34 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from src.application.use_cases.authentication import (
     RESET_PASSWORD_FLAG,
     RESET_PIN_FLAG,
+    REVOKE_SESSION_FLAG,
     AccountLockedError,
     AdminLoginUseCase,
     AuthenticationError,
     CredentialResetUseCase,
     EmergencyAccessRecoveryUseCase,
+    IssuedSession,
     LoginStage,
     PinHandshakeUseCase,
+    SessionContextNotSupportedError,
+    SessionExpiredError,
+    SessionManagementUseCase,
     TenantContact,
+    TerminalLockedError,
+    TerminalThrottleUnavailableError,
 )
 from src.domain.entities import Employee, Position
-from src.domain.entities.base import DomainRuleError
+from src.domain.entities.auth_session import SessionContext
+from src.domain.entities.base import DomainRuleError, InvalidStateTransitionError
 from src.domain.value_objects import (
     EmailAddress,
     PermissionFlag,
@@ -33,19 +42,28 @@ from src.domain.value_objects.identifiers import (
     StoreId,
     TenantId,
 )
+from src.domain.value_objects.machine_identity import MachineIdentityHash
+from src.domain.value_objects.pin_throttle import TerminalPinThrottle
 from src.infrastructure.security.hashing import HashingService
 from tests.fixtures.fakes import (
     FakeClock,
     FakeSystemLimits,
+    InMemoryAuthSessions,
     InMemoryEmployees,
+    InMemoryPinThrottle,
     RecordingAudit,
     RecordingNotifier,
+    RecordingSecurityEvents,
 )
 
 pytestmark = pytest.mark.unit
 
 TENANT = TenantId(uuid.uuid4())
 STORE = StoreId(uuid.uuid4())
+#: SEC-05: throttle açarı — sınaqda sabit SHA-256-formatlı dəyər kifayətdir,
+#: xam `MachineGuid` heç vaxt bu qatda görünmür (bax `MachineIdentityHash`-in
+#: öz modul başlığı).
+MACHINE = MachineIdentityHash(digest="a" * 64)
 NOW = datetime(2026, 8, 8, 9, 0, tzinfo=UTC)
 GOOD_PASSWORD = "Güclü-Şifrə-2026!"
 
@@ -130,6 +148,10 @@ def login_uc(
         hashing=hashing,
         clock=clock,  # type: ignore[arg-type]
         audit=audit,  # type: ignore[arg-type]
+        # SEC-7: bu faylın 34 mövcud çağırışı `security_events`-i YOXLAMIR,
+        # ona görə birdəfəlik sahtə kifayətdir — inspeksiya lazımdırsa ayrıca
+        # arqument əlavə edin (SEC-8-dəki `review_batches` naxışı ilə eyni).
+        security_events=RecordingSecurityEvents(),  # type: ignore[arg-type]
     )
 
 
@@ -310,13 +332,24 @@ def pin_uc(
     hashing: HashingService,
     clock: FakeClock,
     audit: RecordingAudit,
+    *,
+    pin_throttle: InMemoryPinThrottle | None = None,
+    security_events: RecordingSecurityEvents | None = None,
+    limits: FakeSystemLimits | None = None,
 ) -> PinHandshakeUseCase:
+    """`pin_throttle`/`security_events`/`limits` OPSİONALDIR — köhnə çağıranlar
+    (arqumentsiz) dəyişmir, YENİ SEC-01 testləri isə eyni `InMemoryPinThrottle`/
+    `RecordingSecurityEvents` obyektini test bədənində SAXLAYIB birbaşa
+    yoxlaya bilsin deyə (məs. `locked_reads`, `.event_types()`)."""
+    resolved_limits = limits or FakeSystemLimits()
     return PinHandshakeUseCase(
         employees=employees,  # type: ignore[arg-type]
         hashing=hashing,
         clock=clock,  # type: ignore[arg-type]
-        limits=FakeSystemLimits(),  # type: ignore[arg-type]
+        limits=resolved_limits,  # type: ignore[arg-type]
         audit=audit,  # type: ignore[arg-type]
+        security_events=security_events or RecordingSecurityEvents(),  # type: ignore[arg-type]
+        pin_throttle=pin_throttle or InMemoryPinThrottle(clock=clock, limits=resolved_limits),  # type: ignore[arg-type]
     )
 
 
@@ -343,6 +376,7 @@ def test_pin_handshake_success(
     result = pin_uc(employees, hashing, clock, audit).authenticate(
         tenant_id=TENANT,
         store_id=STORE,
+        machine_key=MACHINE,
         pin="4821",
         pin_hashes={employee.id: (stored, 1)},
     )
@@ -361,6 +395,7 @@ def test_pin_handshake_wrong_pin(
         pin_uc(employees, hashing, clock, audit).authenticate(
             tenant_id=TENANT,
             store_id=STORE,
+            machine_key=MACHINE,
             pin="9999",
             pin_hashes={employee.id: (stored, 1)},
         )
@@ -387,6 +422,7 @@ def test_camera_operator_cannot_use_kiosk_pin(
         pin_uc(InMemoryEmployees([operator]), hashing, clock, audit).authenticate(
             tenant_id=TENANT,
             store_id=STORE,
+            machine_key=MACHINE,
             pin="4821",
             pin_hashes={operator.id: (stored, 1)},
         )
@@ -404,6 +440,7 @@ def test_locked_account_rejects_correct_pin(
         pin_uc(employees, hashing, clock, audit).authenticate(
             tenant_id=TENANT,
             store_id=STORE,
+            machine_key=MACHINE,
             pin="4821",
             pin_hashes={employee.id: (stored, 1)},
         )
@@ -436,6 +473,7 @@ def test_successful_pin_resets_lockout_counter(
     pin_uc(InMemoryEmployees([employee]), hashing, clock, audit).authenticate(
         tenant_id=TENANT,
         store_id=STORE,
+        machine_key=MACHINE,
         pin="4821",
         pin_hashes={employee.id: (stored, 1)},
     )
@@ -459,12 +497,340 @@ def test_pin_lazy_pepper_migration_flag(
     result = pin_uc(InMemoryEmployees([employee]), rotated, clock, audit).authenticate(
         tenant_id=TENANT,
         store_id=STORE,
+        machine_key=MACHINE,
         pin="4821",
         pin_hashes={employee.id: (stored, 1)},
     )
 
     assert result.employee.id == employee.id
     assert result.needs_pepper_rehash is True
+
+
+# --------------------------------------------------------------------------- #
+# SEC-01/SEC-05 — terminal PIN throttle DOMEN səviyyəsi
+# (`TerminalPinThrottle.advance_after_failure` — sabit-pəncərə sərhədləri)
+# --------------------------------------------------------------------------- #
+
+
+def _throttle(
+    *,
+    failed_count: int = 0,
+    window_started_at: datetime | None = None,
+    locked_until: datetime | None = None,
+) -> TerminalPinThrottle:
+    return TerminalPinThrottle(
+        tenant_id=TENANT,
+        machine_key=MACHINE,
+        store_id=STORE,
+        failed_count=failed_count,
+        window_started_at=window_started_at,
+        locked_until=locked_until,
+        updated_at=NOW,
+    )
+
+
+def test_advance_after_failure_starts_a_new_window_exactly_at_the_lock_boundary() -> None:
+    """Dövrə 4-ün ƏSAS düzəlişi: `now == locked_until` DƏQİQ anında kilid
+    ARTIQ bitmiş sayılır (`is_locked` ilə EYNİ `<` sərhəddi) — sayğac
+    KÖHNƏDƏN DAVAM ETMİR, YENİ pəncərə `1`-dən başlayır, terminal DƏRHAL
+    yenidən kilidlənmir. Bu, team-lead-in "kobud +1 dəqiqə testi tutmaz"
+    xəbərdarlıq etdiyi DƏQİQ sərhəddir."""
+    locked_until = NOW
+    throttle = _throttle(
+        failed_count=20, window_started_at=NOW - timedelta(minutes=15), locked_until=locked_until
+    )
+
+    result = throttle.advance_after_failure(now=locked_until, max_attempts=20, lockout_minutes=15)
+
+    assert result.failed_count == 1
+    assert result.window_started_at == locked_until
+    assert result.locked_until is None
+
+
+def test_advance_after_failure_freezes_the_counter_while_still_locked() -> None:
+    """Kilid müddətində sayğac DONUR — `locked_until` yenidən hesablanmır,
+    kilid UZADILMIR (müdafiə xətti; normal axında `_require_unlocked_throttle`
+    bu haldan ƏVVƏL dayanır)."""
+    locked_until = NOW + timedelta(minutes=5)
+    throttle = _throttle(failed_count=20, window_started_at=NOW, locked_until=locked_until)
+
+    result = throttle.advance_after_failure(
+        now=NOW + timedelta(minutes=1), max_attempts=20, lockout_minutes=15
+    )
+
+    assert result is throttle  # DƏYİŞMƏYİB — eyni obyekt qaytarılır.
+
+
+def test_advance_after_failure_accumulates_within_an_open_window() -> None:
+    """Pəncərə HƏLƏ bitməyib, kilid YOXDUR — sayğac ARTIR, pəncərənin
+    başlanğıcı DƏYİŞMİR."""
+    window_started_at = NOW
+    throttle = _throttle(failed_count=3, window_started_at=window_started_at, locked_until=None)
+
+    result = throttle.advance_after_failure(
+        now=NOW + timedelta(minutes=5), max_attempts=20, lockout_minutes=15
+    )
+
+    assert result.failed_count == 4
+    assert result.window_started_at == window_started_at
+    assert result.locked_until is None
+
+
+def test_advance_after_failure_starts_a_new_window_after_natural_expiry() -> None:
+    """Terminal HEÇ VAXT kilidlənməyib (hədd aşılmayıb), AMMA pəncərə
+    (`lockout_minutes`) təbii olaraq bitib — köhnə typo-lar İLİŞİB QALMIR,
+    YENİ pəncərə açılır. Bu, "uğurda sıfırlama yoxdur" qərarının ƏVƏZİNİ
+    verən DECAY mexanizmidir."""
+    throttle = _throttle(
+        failed_count=5, window_started_at=NOW - timedelta(minutes=20), locked_until=None
+    )
+
+    result = throttle.advance_after_failure(now=NOW, max_attempts=20, lockout_minutes=15)
+
+    assert result.failed_count == 1
+    assert result.window_started_at == NOW
+
+
+def test_advance_after_failure_locks_at_the_threshold() -> None:
+    """Hədd DƏQİQ bu cəhdlə keçilir — kilid MƏHZ bu andan başlayır."""
+    throttle = _throttle(failed_count=19, window_started_at=NOW, locked_until=None)
+
+    result = throttle.advance_after_failure(
+        now=NOW + timedelta(minutes=2), max_attempts=20, lockout_minutes=15
+    )
+
+    assert result.failed_count == 20
+    assert result.locked_until == NOW + timedelta(minutes=2) + timedelta(minutes=15)
+
+
+# --------------------------------------------------------------------------- #
+# SEC-01 — terminal PIN throttle (dövrə 3 audit tapıntısı)
+# --------------------------------------------------------------------------- #
+
+
+def _low_threshold_limits() -> FakeSystemLimits:
+    """Testdə 20 cəhd gözləməmək üçün həddi 2-yə endirir."""
+    return FakeSystemLimits(
+        {"KIOSK_STORE_PIN_MAX_FAILED_ATTEMPTS": "2", "KIOSK_STORE_PIN_LOCKOUT_MINUTES": "15"}
+    )
+
+
+class _BrokenPinThrottle:
+    """`get_for_update` HƏMİŞƏ istisna atır — fail-closed testi üçün (SEC-06)."""
+
+    def get_for_update(
+        self, tenant_id: TenantId, machine_key: MachineIdentityHash
+    ) -> None:  # pragma: no cover - yalnız istisna atır
+        raise RuntimeError("DB əlçatmazdır")
+
+    def record_failure(self, *args: object, **kwargs: object) -> None:  # pragma: no cover
+        raise AssertionError("bura HEÇ ÇATMAMALIDIR — fail-closed daha ƏVVƏL dayanmalıdır")
+
+    def update_last_seen_store(self, *args: object, **kwargs: object) -> None:  # pragma: no cover
+        raise AssertionError("bura HEÇ ÇATMAMALIDIR")
+
+
+def test_terminal_locks_after_the_threshold_and_the_message_hides_the_employee(
+    hashing: HashingService, clock: FakeClock, audit: RecordingAudit
+) -> None:
+    """Hədd sərhədi + mesajın işçi kimliyini AÇMAMASI.
+
+    İKİ fərqli işçi (A, B) İKİ AYRI yanlış PIN yazır — terminal sayğacı
+    KONKRET işçiyə yox, MAŞINA bağlıdır (SEC-05), ona görə fərqli işçilərin
+    cəhdləri EYNİ sayğacı artırır.
+    """
+    seller_a, stored_a = make_seller(hashing, pin="6532")
+    seller_b, stored_b = make_seller(hashing, pin="7419")
+    employees = InMemoryEmployees([seller_a, seller_b])
+    pin_hashes = {seller_a.id: (stored_a, 1), seller_b.id: (stored_b, 1)}
+
+    events = RecordingSecurityEvents()
+    uc = pin_uc(
+        employees, hashing, clock, audit, security_events=events, limits=_low_threshold_limits()
+    )
+
+    # 1-ci səhv cəhd (hədd 2-dir) — hələ bloklanmır.
+    with pytest.raises(AuthenticationError):
+        uc.authenticate(
+            tenant_id=TENANT, store_id=STORE, machine_key=MACHINE, pin="9999", pin_hashes=pin_hashes
+        )
+
+    # 2-ci səhv cəhd — hədd DOLUR, terminal bloklanır.
+    with pytest.raises(AuthenticationError):
+        uc.authenticate(
+            tenant_id=TENANT, store_id=STORE, machine_key=MACHINE, pin="9998", pin_hashes=pin_hashes
+        )
+
+    # 3-cü cəhd artıq DOĞRU PIN olsa belə rədd edilir — terminal bloklanıb.
+    with pytest.raises(TerminalLockedError) as excinfo:
+        uc.authenticate(
+            tenant_id=TENANT, store_id=STORE, machine_key=MACHINE, pin="6532", pin_hashes=pin_hashes
+        )
+
+    # Mesaj/kontekst HANSI işçinin (A və ya B) bloklandığını AÇMIR — çünki
+    # heç bir işçi bloklanmayıb, TERMİNAL bloklanıb (PIN anonimdir).
+    assert str(seller_a.id) not in str(excinfo.value.context)
+    assert str(seller_b.id) not in str(excinfo.value.context)
+    assert str(seller_a.id) not in excinfo.value.user_message
+    assert "terminal" in excinfo.value.user_message.lower()
+
+    assert "PIN_TERMINAL_LOCKED" in events.event_types()
+
+
+def test_terminal_lockout_expires_after_the_window(
+    hashing: HashingService, clock: FakeClock, audit: RecordingAudit
+) -> None:
+    """Pəncərənin bitməsi: `KIOSK_STORE_PIN_LOCKOUT_MINUTES` keçdikdən sonra
+    terminal ÖZÜ-ÖZÜNƏ açılır — əl ilə sıfırlama tələb olunmur."""
+    employee, stored = make_seller(hashing)
+    employees = InMemoryEmployees([employee])
+    pin_hashes = {employee.id: (stored, 1)}
+    uc = pin_uc(employees, hashing, clock, audit, limits=_low_threshold_limits())
+
+    for _ in range(2):
+        with pytest.raises(AuthenticationError):
+            uc.authenticate(
+                tenant_id=TENANT,
+                store_id=STORE,
+                machine_key=MACHINE,
+                pin="9999",
+                pin_hashes=pin_hashes,
+            )
+
+    with pytest.raises(TerminalLockedError):
+        uc.authenticate(
+            tenant_id=TENANT, store_id=STORE, machine_key=MACHINE, pin="4821", pin_hashes=pin_hashes
+        )
+
+    clock.advance(minutes=16)  # 15 dəqiqəlik pəncərə keçib
+
+    result = uc.authenticate(
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE, pin="4821", pin_hashes=pin_hashes
+    )
+    assert result.employee.id == employee.id
+
+
+def test_successful_login_does_not_reset_the_terminal_counter(
+    hashing: HashingService, clock: FakeClock, audit: RecordingAudit
+) -> None:
+    """SEC-05 qərarı: DOĞRU PIN terminal sayğacını SIFIRLAMIR (qərar
+    əsaslandırması `PinThrottleRepository`-nin öz şərhindədir, `ports.py`) —
+    əks halda hücumçu N-1 səhv edib qanuni girişi gözləməklə sayğacı
+    PULSUZ təmizləyərdi."""
+    employee, stored = make_seller(hashing)
+    employees = InMemoryEmployees([employee])
+    pin_hashes = {employee.id: (stored, 1)}
+    throttle = InMemoryPinThrottle(clock=clock, limits=_low_threshold_limits())
+    uc = pin_uc(
+        employees, hashing, clock, audit, pin_throttle=throttle, limits=_low_threshold_limits()
+    )
+
+    with pytest.raises(AuthenticationError):
+        uc.authenticate(
+            tenant_id=TENANT, store_id=STORE, machine_key=MACHINE, pin="9999", pin_hashes=pin_hashes
+        )
+    assert throttle.rows[(TENANT, MACHINE.digest)].failed_count == 1
+
+    uc.authenticate(
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE, pin="4821", pin_hashes=pin_hashes
+    )
+    # Uğurlu giriş sayğaca TOXUNMADI — dəyər UĞURDAN ƏVVƏLKİ kimi qalır.
+    assert throttle.rows[(TENANT, MACHINE.digest)].failed_count == 1
+
+    # YALNIZ 1 ƏLAVƏ səhv cəhd terminalı bloklamağa YETƏR (hədd 2, sayğac
+    # artıq 1-dir) — sıfırlansaydı, bu, İKİNCİ (yox, birinci) səhv olardı
+    # və hələ bloklamazdı. Bu ÇAĞIRIŞIN ÖZÜ hələ `AuthenticationError` verir
+    # (PIN doğrudan da yanlışdır) — həddi KEÇƏN çağırışın ÖZÜ deyil, YALNIZ
+    # NÖVBƏTİ çağırış `TerminalLockedError` görür (bax birinci testin eyni
+    # naxışı).
+    with pytest.raises(AuthenticationError):
+        uc.authenticate(
+            tenant_id=TENANT, store_id=STORE, machine_key=MACHINE, pin="9996", pin_hashes=pin_hashes
+        )
+    assert throttle.rows[(TENANT, MACHINE.digest)].failed_count == 2
+
+    with pytest.raises(TerminalLockedError):
+        uc.authenticate(
+            tenant_id=TENANT, store_id=STORE, machine_key=MACHINE, pin="9995", pin_hashes=pin_hashes
+        )
+
+
+def test_pin_check_reads_the_throttle_row_under_lock(
+    hashing: HashingService, clock: FakeClock, audit: RecordingAudit
+) -> None:
+    """`get_for_update` HƏR çağırışda işlədilir (yarış qapağı — DOM-R2-02-nin
+    eyni naxışı, bax `PinThrottleRepository`-nin öz şərhi)."""
+    employee, stored = make_seller(hashing)
+    employees = InMemoryEmployees([employee])
+    throttle = InMemoryPinThrottle(clock=clock)
+    uc = pin_uc(employees, hashing, clock, audit, pin_throttle=throttle)
+
+    uc.authenticate(
+        tenant_id=TENANT,
+        store_id=STORE,
+        machine_key=MACHINE,
+        pin="4821",
+        pin_hashes={employee.id: (stored, 1)},
+    )
+
+    assert throttle.locked_reads == [(TENANT, MACHINE.digest)]
+
+
+def test_throttle_read_failure_rejects_the_pin_attempt(
+    hashing: HashingService, clock: FakeClock, audit: RecordingAudit
+) -> None:
+    """FAIL-CLOSED (SEC-06): throttle sətri oxuna bilmirsə PIN cəhdi RƏDD
+    edilir — fail-OPEN (yoxlamanı keçib davam etmək) YOX. Səbəb
+    `TerminalThrottleUnavailableError`-in öz şərhindədir: sükutla
+    söndürülmüş qoruma məhz SEC-01-in özüdür."""
+    employee, stored = make_seller(hashing)
+    employees = InMemoryEmployees([employee])
+    uc = pin_uc(employees, hashing, clock, audit, pin_throttle=_BrokenPinThrottle())  # type: ignore[arg-type]
+
+    with pytest.raises(TerminalThrottleUnavailableError):
+        uc.authenticate(
+            tenant_id=TENANT,
+            store_id=STORE,
+            machine_key=MACHINE,
+            pin="4821",  # DOĞRU PIN belə keçmir — DB nasazlığı hər şeydən əvvəldir.
+            pin_hashes={employee.id: (stored, 1)},
+        )
+
+
+def test_clone_detection_logs_but_does_not_block(
+    hashing: HashingService, clock: FakeClock, audit: RecordingAudit
+) -> None:
+    """Klon aşkarlaması (team-lead-in əlavə tapşırığı): saxlanmış `store_id`
+    CARİ `store_id`-dən fərqlidirsə, PIN axını BLOKLANMIR — YALNIZ
+    `SUSPECTED_CLONED_MACHINE_GUID` yazılır və sətir yenilənir."""
+    employee, stored = make_seller(hashing)
+    employees = InMemoryEmployees([employee])
+    pin_hashes = {employee.id: (stored, 1)}
+    other_store = StoreId(uuid.uuid4())
+    events = RecordingSecurityEvents()
+    throttle = InMemoryPinThrottle(clock=clock)
+    uc = pin_uc(employees, hashing, clock, audit, pin_throttle=throttle, security_events=events)
+
+    # BAŞQA mağazada eyni `machine_key` ilə bir səhv cəhd — sətirdə
+    # `store_id=other_store` saxlanılır.
+    with pytest.raises(AuthenticationError):
+        uc.authenticate(
+            tenant_id=TENANT,
+            store_id=other_store,
+            machine_key=MACHINE,
+            pin="9999",
+            pin_hashes=pin_hashes,
+        )
+
+    # İNDİ eyni `machine_key`, AMMA CARİ mağaza fərqlidir (STORE) — klon şübhəsi.
+    result = uc.authenticate(
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE, pin="4821", pin_hashes=pin_hashes
+    )
+
+    assert result.employee.id == employee.id  # PIN axını BLOKLANMADI.
+    assert "SUSPECTED_CLONED_MACHINE_GUID" in events.event_types()
+    # Sətir YENİLƏNİB — təkrar siqnal göndərməmək üçün.
+    assert throttle.rows[(TENANT, MACHINE.digest)].store_id == STORE
 
 
 # --------------------------------------------------------------------------- #
@@ -485,6 +851,7 @@ def reset_uc(
         clock=clock,  # type: ignore[arg-type]
         audit=audit,  # type: ignore[arg-type]
         notifier=notifier,  # type: ignore[arg-type]
+        security_events=RecordingSecurityEvents(),  # type: ignore[arg-type]
     )
 
 
@@ -665,6 +1032,7 @@ def recovery_uc(
         clock=clock,  # type: ignore[arg-type]
         audit=audit,  # type: ignore[arg-type]
         notifier=notifier,  # type: ignore[arg-type]
+        security_events=RecordingSecurityEvents(),  # type: ignore[arg-type]
     )
 
 
@@ -966,3 +1334,294 @@ def test_tenant_contact_without_phone_rejects_any_number() -> None:
 
     assert contact.matches("+994501234567") is False
     assert contact.matches("rehber@kompas.az") is True
+
+
+# --------------------------------------------------------------------------- #
+# Sessiya müddəti (SEC-011 / dövrə debatı SEC-5)
+# --------------------------------------------------------------------------- #
+# `SessionManagementUseCase` `authentication.py:80%` əhatəsindəki əsas boş
+# blokdur (`qa` əhatə hesabatı, sətir 568-704) — dövrənin ƏN BÖYÜK satış
+# blokeri. Əsas invariant `AuthSession.touch()`-dadır (entity), bu sinif isə
+# limitləri oxuyub ona ötürür — testlər HƏR İKİ qatı əhatə edir.
+
+
+def session_uc(
+    *,
+    clock: FakeClock,
+    audit: RecordingAudit,
+    sessions: InMemoryAuthSessions | None = None,
+    limits: FakeSystemLimits | None = None,
+) -> tuple[SessionManagementUseCase, InMemoryAuthSessions]:
+    store = sessions if sessions is not None else InMemoryAuthSessions()
+    use_case = SessionManagementUseCase(
+        sessions=store,  # type: ignore[arg-type]
+        clock=clock,  # type: ignore[arg-type]
+        limits=limits or FakeSystemLimits(),  # type: ignore[arg-type]
+        audit=audit,  # type: ignore[arg-type]
+    )
+    return use_case, store
+
+
+def _issue(
+    uc: SessionManagementUseCase, employee: Employee, context: SessionContext
+) -> IssuedSession:
+    return uc.issue(tenant_id=TENANT, employee=employee, context=context)
+
+
+# --------------------------- `issue()` — token/hash --------------------------- #
+
+
+def test_issue_writes_only_the_hash_never_the_plaintext_token(
+    clock: FakeClock, audit: RecordingAudit
+) -> None:
+    """SEC-011: «DB sızsa mövcud sessiyalar oğurlana bilməz» — açıq token YAZILMIR."""
+    uc, sessions = session_uc(clock=clock, audit=audit)
+    employee = make_employee(SystemRole.HR_ADMIN)
+
+    issued = _issue(uc, employee, SessionContext.ADMIN_PANEL)
+
+    stored = sessions.items[issued.session.id]
+    assert stored.token_hash == hashlib.sha256(issued.token.encode("utf-8")).hexdigest()
+    # `AuthSession`-in HEÇ BİR sahəsi açıq tokenin ÖZÜNÜ daşımır.
+    assert issued.token not in vars(stored).values()
+    assert "SESSION_ISSUED" in audit.actions()
+
+
+def test_kiosk_context_never_gets_a_session() -> None:
+    """SEC-011: `KIOSK`-da sessiya YOXDUR — hər əməliyyat üçün PIN."""
+    uc, _ = session_uc(clock=FakeClock(NOW), audit=RecordingAudit())
+    employee = make_employee(SystemRole.SELLER)
+
+    with pytest.raises(SessionContextNotSupportedError):
+        _issue(uc, employee, SessionContext.KIOSK)
+
+
+# --------------------------------- kontekstlər --------------------------------- #
+
+
+def test_admin_panel_has_both_an_idle_and_an_absolute_ceiling(clock: FakeClock) -> None:
+    uc, _ = session_uc(clock=clock, audit=RecordingAudit())
+    employee = make_employee(SystemRole.HR_ADMIN)
+
+    issued = _issue(uc, employee, SessionContext.ADMIN_PANEL)
+
+    assert issued.session.expires_at == NOW + timedelta(minutes=30)
+    assert issued.session.absolute_expiry == NOW + timedelta(hours=8)
+
+
+def test_camera_dashboard_has_no_idle_ceiling_only_the_absolute_one(clock: FakeClock) -> None:
+    """SEC-011-in açıq tələbi: operator ekrana baxır, klikləmir."""
+    uc, _ = session_uc(clock=clock, audit=RecordingAudit())
+    employee = make_employee(SystemRole.CAMERA_OPERATOR)
+
+    issued = _issue(uc, employee, SessionContext.CAMERA_DASHBOARD)
+
+    assert issued.session.context.has_idle_timeout is False
+    assert issued.session.absolute_expiry == NOW + timedelta(hours=12)
+    # Hərəkətsizlik pəncərəsi YOXDUR — `expires_at` birbaşa mütləq tavana bərabərdir.
+    assert issued.session.expires_at == issued.session.absolute_expiry
+
+
+# ---------------------------------- `validate()` ---------------------------------- #
+
+
+def test_validate_accepts_a_freshly_issued_session(clock: FakeClock, audit: RecordingAudit) -> None:
+    uc, _ = session_uc(clock=clock, audit=audit)
+    employee = make_employee(SystemRole.HR_ADMIN)
+    issued = _issue(uc, employee, SessionContext.ADMIN_PANEL)
+
+    validated = uc.validate(tenant_id=TENANT, token=issued.token)
+
+    assert validated.id == issued.session.id
+
+
+def test_validate_rejects_an_unknown_token(clock: FakeClock, audit: RecordingAudit) -> None:
+    uc, _ = session_uc(clock=clock, audit=audit)
+
+    with pytest.raises(SessionExpiredError):
+        uc.validate(tenant_id=TENANT, token="heç-vaxt-verilməmiş-token")
+
+
+def test_validate_expires_an_idle_session_and_audits_it_once(
+    clock: FakeClock, audit: RecordingAudit
+) -> None:
+    """Müddət bitməsi SƏSSİZ deyil — SEC-5 müqaviləsi: audit izi tələb edir."""
+    uc, sessions = session_uc(clock=clock, audit=audit)
+    employee = make_employee(SystemRole.HR_ADMIN)
+    issued = _issue(uc, employee, SessionContext.ADMIN_PANEL)
+    clock.advance(minutes=31)  # idle həddi (30 dəq) keçib
+
+    with pytest.raises(SessionExpiredError):
+        uc.validate(tenant_id=TENANT, token=issued.token)
+
+    stored = sessions.items[issued.session.id]
+    assert stored.is_revoked is True
+    assert stored.revocation_reason == "Sessiya müddəti bitdi (timeout)"
+    assert audit.actions().count("SESSION_EXPIRED") == 1
+
+    # İKİNCİ `validate()` eyni (artıq ləğv edilmiş) sessiyanı YENƏ rədd edir,
+    # LAKİN audit sətri TƏKRAR yazılmır (`_expire_if_needed`-in `is_revoked`
+    # qapısı) — əks halda hər sınanmış sorğu öz sətrini yaradardı.
+    with pytest.raises(SessionExpiredError):
+        uc.validate(tenant_id=TENANT, token=issued.token)
+    assert audit.actions().count("SESSION_EXPIRED") == 1
+
+
+def test_validate_rejects_a_session_past_the_absolute_ceiling_even_if_recently_touched(
+    clock: FakeClock, audit: RecordingAudit
+) -> None:
+    """Mütləq tavan keçəndə TOXUNULMA TARİXİNDƏN ASILI OLMAYARAQ rədd edilir."""
+    uc, _ = session_uc(clock=clock, audit=audit)
+    employee = make_employee(SystemRole.HR_ADMIN)
+    issued = _issue(uc, employee, SessionContext.ADMIN_PANEL)
+    clock.advance(hours=7, minutes=50)
+    uc.touch(tenant_id=TENANT, session=issued.session)  # idle pəncərə tavana YAPIŞIR
+    clock.advance(hours=1)  # indi mütləq tavanın (8 saat) O TAYINDA
+
+    with pytest.raises(SessionExpiredError):
+        uc.validate(tenant_id=TENANT, token=issued.token)
+
+
+# ----------------------------------- `touch()` ------------------------------------ #
+
+
+def test_touch_extends_the_idle_window(clock: FakeClock, audit: RecordingAudit) -> None:
+    uc, _ = session_uc(clock=clock, audit=audit)
+    employee = make_employee(SystemRole.HR_ADMIN)
+    issued = _issue(uc, employee, SessionContext.ADMIN_PANEL)
+    clock.advance(minutes=20)
+
+    touched = uc.touch(tenant_id=TENANT, session=issued.session)
+
+    assert touched.expires_at == clock.now() + timedelta(minutes=30)
+    assert touched.last_seen_at == clock.now()
+
+
+def test_touch_never_extends_the_absolute_ceiling(clock: FakeClock, audit: RecordingAudit) -> None:
+    """SEC-011-in BÜTÜN MƏNASI (team-lead xüsusi vurğuladı, SEC5_CONTRACT.md).
+
+    `touch()` NƏ QƏDƏR TƏKRAR çağırılsa da `absolute_expiry` BİR SANİYƏ belə
+    sürüşmür — gecə növbəsinə "diri" qalan açıq sessiya SEC-011-in qadağan
+    etdiyi məhz budur.
+    """
+    uc, _ = session_uc(clock=clock, audit=audit)
+    employee = make_employee(SystemRole.HR_ADMIN)
+    issued = _issue(uc, employee, SessionContext.ADMIN_PANEL)
+    absolute_expiry = issued.session.absolute_expiry  # NOW + 8 saat
+
+    # 6 saat ərzində, 20 dəqiqəlik addımlarla — fasiləsiz "fəaliyyət" simulyasiyası.
+    for _ in range(18):
+        clock.advance(minutes=20)
+        uc.touch(tenant_id=TENANT, session=issued.session)
+
+    assert issued.session.absolute_expiry == absolute_expiry, (
+        "6 saatlıq fasiləsiz fəaliyyətdən sonra belə mütləq tavan dəyişməməlidir"
+    )
+    assert issued.session.expires_at <= absolute_expiry
+
+
+def test_touch_caps_the_idle_window_at_the_absolute_ceiling(
+    clock: FakeClock, audit: RecordingAudit
+) -> None:
+    """Namizəd pəncərə mütləq tavanı KEÇƏNDƏ `expires_at` ONA BƏRABƏRLƏŞDİRİLİR.
+
+    `AuthSession.touch()`-un `min(namizəd, absolute_expiry)` sətrinin BİRBAŞA
+    ölçüsü — bu sətir `now + idle_timeout` ilə əvəzlənsəydi test BURADA sınardı.
+    """
+    uc, _ = session_uc(clock=clock, audit=audit)
+    employee = make_employee(SystemRole.HR_ADMIN)
+    issued = _issue(uc, employee, SessionContext.ADMIN_PANEL)
+    absolute_expiry = issued.session.absolute_expiry  # NOW + 8 saat
+    clock.advance(hours=7, minutes=55)  # namizəd (+30 dəq) mütləq tavanı KEÇƏRDİ
+
+    uc.touch(tenant_id=TENANT, session=issued.session)
+
+    assert issued.session.expires_at == absolute_expiry
+    assert issued.session.is_valid(now=clock.now()) is True  # hələ sərhəddə, etibarlı
+
+
+def test_touch_is_a_no_op_for_camera_dashboard(clock: FakeClock, audit: RecordingAudit) -> None:
+    """CAMERA_DASHBOARD-da `touch()` SÜKUTLA heç nə etmir (PERF-1/2/3: lazımsız yazı yoxdur)."""
+    uc, sessions = session_uc(clock=clock, audit=audit)
+    employee = make_employee(SystemRole.CAMERA_OPERATOR)
+    issued = _issue(uc, employee, SessionContext.CAMERA_DASHBOARD)
+    original_expires_at = issued.session.expires_at
+    original_last_seen = issued.session.last_seen_at
+    saves_before = len(sessions.saves)
+    clock.advance(hours=1)
+
+    result = uc.touch(tenant_id=TENANT, session=issued.session)
+
+    assert result.expires_at == original_expires_at
+    assert result.last_seen_at == original_last_seen
+    assert len(sessions.saves) == saves_before  # yenidən `save()` ÇAĞIRILMADI
+
+
+def test_touch_refuses_a_revoked_session(clock: FakeClock, audit: RecordingAudit) -> None:
+    uc, _ = session_uc(clock=clock, audit=audit)
+    employee = make_employee(SystemRole.HR_ADMIN)
+    issued = _issue(uc, employee, SessionContext.ADMIN_PANEL)
+    uc.revoke(tenant_id=TENANT, actor=employee, target=issued.session, reason="Çıxış")
+
+    with pytest.raises(InvalidStateTransitionError):
+        uc.touch(tenant_id=TENANT, session=issued.session)
+
+
+# ----------------------------------- `revoke()` ------------------------------------ #
+
+
+def test_the_owner_can_revoke_their_own_session_without_any_flag(
+    clock: FakeClock, audit: RecordingAudit
+) -> None:
+    """«Çıxış» düyməsi HƏR KƏSƏ açıqdır — `can_revoke_sessions` ÖZÜNƏ aid deyil."""
+    uc, sessions = session_uc(clock=clock, audit=audit)
+    employee = make_employee(SystemRole.SELLER)
+    issued = _issue(uc, employee, SessionContext.ADMIN_PANEL)
+
+    uc.revoke(tenant_id=TENANT, actor=employee, target=issued.session, reason="Çıxış")
+
+    assert sessions.items[issued.session.id].is_revoked is True
+    assert "SESSION_REVOKED" in audit.actions()
+
+
+def test_revoking_someone_elses_session_requires_the_flag(
+    clock: FakeClock, audit: RecordingAudit
+) -> None:
+    uc, _ = session_uc(clock=clock, audit=audit)
+    owner = make_employee(SystemRole.SELLER)
+    admin_without_flag = make_employee(SystemRole.HR_ADMIN)
+    issued = _issue(uc, owner, SessionContext.ADMIN_PANEL)
+
+    with pytest.raises(AuthenticationError):
+        uc.revoke(
+            tenant_id=TENANT,
+            actor=admin_without_flag,
+            target=issued.session,
+            reason="Şübhəli giriş",
+        )
+
+
+def test_revoking_someone_elses_session_succeeds_with_the_flag(
+    clock: FakeClock, audit: RecordingAudit
+) -> None:
+    uc, sessions = session_uc(clock=clock, audit=audit)
+    owner = make_employee(SystemRole.SELLER)
+    admin = make_employee(SystemRole.HR_ADMIN, flags=[REVOKE_SESSION_FLAG])
+    issued = _issue(uc, owner, SessionContext.ADMIN_PANEL)
+
+    uc.revoke(tenant_id=TENANT, actor=admin, target=issued.session, reason="Şübhəli giriş")
+
+    stored = sessions.items[issued.session.id]
+    assert stored.is_revoked is True
+    assert stored.revoked_by == admin.id
+    assert stored.revocation_reason == "Şübhəli giriş"
+
+
+def test_a_revoked_session_fails_validation(clock: FakeClock, audit: RecordingAudit) -> None:
+    uc, _ = session_uc(clock=clock, audit=audit)
+    employee = make_employee(SystemRole.HR_ADMIN)
+    issued = _issue(uc, employee, SessionContext.ADMIN_PANEL)
+    uc.revoke(tenant_id=TENANT, actor=employee, target=issued.session, reason="Çıxış")
+
+    with pytest.raises(SessionExpiredError):
+        uc.validate(tenant_id=TENANT, token=issued.token)

@@ -36,6 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from src.application.root_limits import limit_int
 from src.application.use_cases.leave_verification import (
@@ -79,6 +80,25 @@ _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 ISSUE_FINES_FLAG = "can_issue_fines"
 APPROVE_APPEAL_FLAG = "can_approve_leave_appeal"
 
+#: İKİQAT GÖNDƏRİŞ — SÜRƏTLİ YOLUN PƏNCƏRƏSİ (D7 audit tapıntısı — dövrə debatı).
+#:
+#: TARİXÇƏ QEYDİ (şərh YENİLƏNİB): bu sabit ƏVVƏL YEGANƏ qorumaydı və şərh
+#: onu strukturən zəruri elan edirdi. D7-nin son həllində ƏSAS ZƏMANƏT
+#: `Fine.idempotency_key` + DB-dəki qismən unikal indeksdir (`fines`,
+#: `WHERE source='MANUAL_CAMERA' AND idempotency_key IS NOT NULL`,
+#: `ManualFineUseCase.issue()`-in `DuplicateFineSubmissionError` tutması).
+#: `_find_recent_duplicate()` VƏ bu pəncərə İNDİ YALNIZ SÜRƏTLİ YOLDUR:
+#: `idempotency_key` HƏLƏ göndərilməyən (GUI köhnə axını) və ya sadəcə
+#: lazımsız INSERT+istisna dövrəsindən qaçmaq üçün istifadə olunur.
+#:
+#: BU SƏBƏBDƏN `system_limits`-ə YAZILMIR: artıq DÜZGÜNLÜYÜ TƏMİN EDƏN
+#: struktur zəmanət DEYİL (o, DB indeksindədir), sadəcə performans
+#: optimallaşdırmasıdır (`PANEL_LIMIT` — `notification_repositories.py`
+#: ilə EYNİ kateqoriya: "dizayn sabiti", "biznes həddi" YOX). Root onu
+#: dəyişə bilməli DEYİL, çünki dəyişikliyin nəticəsi YALNIZ neçə SELECT-in
+#: DB-yə çatdığıdır — DOĞRULUĞA TƏSİRİ YOXDUR.
+DUPLICATE_SUBMISSION_WINDOW_SECONDS = 10
+
 
 class FinePermissionError(KompasOSError):
     """Cərimə əməliyyatı üçün səlahiyyət yoxdur."""
@@ -98,6 +118,61 @@ class AppealWindowClosedError(KompasOSError):
     """72 saat keçib — etiraz qəbul edilmir."""
 
     user_message = "Etiraz müddəti (72 saat) bitib."
+
+
+class DuplicateFineSubmissionError(KompasOSError):
+    """D7: `idempotency_key` DB-də ARTIQ mövcuddur — İSTİFADƏÇİYƏ ÇATMIR.
+
+    `PostgresLeaveRequestRepository.save()`-in `UniqueViolation` →
+    `OperationNotPermittedError` naxışı ilə EYNİ fəlsəfə (xam DB istisnası
+    çağıran tərəfə sızmır), FƏRQLİ İSTİFADƏ: bu istisna orada olduğu kimi
+    İSTİFADƏÇİYƏ göstərilən bir rədd DEYİL — `ManualFineUseCase.issue()`
+    onu tutub SÜKUTLA mövcud cəriməni qaytarır (əməliyyat operatorun
+    nöqteyi-nəzərindən "uğurlu" görünür, çünki İKİNCİ klik elə buna görə
+    edilib). Ona görə AYRICA sinifdir — `OperationNotPermittedError`-u
+    təkrar işlətmək çağıran koda "bu, İSTİFADƏÇİ SƏHVİDİR" siqnalı verərdi,
+    halbuki əksinə, bu, sistemin GÖZLƏNİLƏN yarış-qoruma davranışıdır.
+    """
+
+    user_message = "Bu əməliyyat icra edilə bilmədi."
+
+
+class ConcurrentVerificationConflictError(KompasOSError):
+    """`uq_fines_one_live_auto_delay_per_leave` toqquşması — İKİ Kamera Operatoru
+    EYNİ gecikməni EYNİ ANDA təsdiqlədi (dövrə debatı, INF-01 çarpaz-sual).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `DuplicateFineSubmissionError`-DAN AYRI SİNİFDİR
+    ──────────────────────────────────────────────────────────────────────────
+    `uq_fines_one_live_auto_delay_per_leave` (`schema.sql`, `fines
+    (leave_request_id) WHERE source='AUTO_DELAY' AND status IN (...)`)
+    İDEMPOTENTLİK indeksi DEYİL — YARIŞ QAPAĞIdır. `idempotency_key`
+    "eyni məntiqi hadisənin təkrar göndərişi, mövcudu qaytar" mənasındadır
+    (operatorun İKİNCİ kliki), bu indeks isə "iki FƏRQLİ operatorun eyni anda
+    apardığı iki HƏQİQİ, MÜSTƏQİL cəhddən YALNIZ BİRİ udmalıdır" mənasındadır.
+    Fərq şərtdə görünür: indeks `REVERSED` statusunu QƏSDƏN İSTİSNA edir ki,
+    Saga kompensasiyasından sonra TƏKRAR təsdiq ƏBƏDİ bloklanmasın — bu,
+    `idempotency_key`-in "eyni açar = HƏMİŞƏ eyni nəticə" davranışı ilə TƏRSDİR.
+
+    Ona görə bu istisna `DuplicateFineSubmissionError`-un "tut, mövcudu
+    sükutla qaytar" naxışını TƏKRARLAMIR: `ManualFineUseCase.issue()`-in
+    etdiyi kimi tutulub uduzan operatora BAŞQA operatorun `Fine` obyektini
+    qaytarsaydıq, `LeaveVerificationUseCase.verify_return`-in Saga addımı
+    (`step_create_fine`) ÖZ yaratdığı obyekti yox, ÖZGƏNİN kontekstinə aid
+    obyekti geri verərdi — çağıran kodun gözlədiyi "bu addım MƏNİM cəriməmi
+    yaratdı" invariantı pozulardı.
+
+    Ona görə bu istisna QƏSDƏN HEÇ YERDƏ tutulmur: `step_create_fine`-dan
+    sərbəst yuxarı sızır, `SagaOrchestrator` onu adi addım uğursuzluğu kimi
+    tutub TƏRS sırada kompensasiya işə salır (`undo_update_status`,
+    `undo_create_fine`) — uduzan operatorun BÜTÜN `verify_return` çağırışı
+    geri qaytarılır, udan operatorun artıq COMMIT olunmuş status+cərimə
+    sətri isə TOXUNULMAZ qalır. Bu, məhz Saga naxışının həll etmək üçün
+    yarandığı ssenaridir (bax `schema.sql`-in indeks şərhi: "İndeks olmasa
+    nəticə eyni gecikməyə görə İKİ cərimə, yəni ikiqat pul kəsintisi olardı").
+    """
+
+    user_message = "Bu icazə artıq başqa operator tərəfindən təsdiqlənib."
 
 
 @dataclass(frozen=True)
@@ -161,6 +236,7 @@ class ManualFineUseCase:
         evidence_reference: str,
         occurred_on: date | None = None,
         fine_id: FineId | None = None,
+        idempotency_key: UUID | None = None,
     ) -> Fine:
         """`[+ Yeni Cərimə]` — manual cərimə qeydiyyatı.
 
@@ -175,6 +251,15 @@ class ManualFineUseCase:
                 `fine_id` tələb edir, cərimə isə növbə açarını sübut istinadı
                 kimi saxlayır — biri digərini gözləsəydi dövrə bağlanardı.
                 Verilmədikdə yenisi yaradılır.
+            idempotency_key: D7 audit tapıntısı. `fine_id`-dən FƏRQLİ olaraq
+                GUI FORMA AÇILANDA bir dəfə yaranır (hər klikdə YOX) və İKİ
+                klikin EYNİ olması GÖZLƏNİLİR — məhz bunu yaxalamaq üçündür.
+                Opsionaldır (`None`): mövcud çağıranlar (imza sındırılmır)
+                köhnə davranışı (yalnız `_find_recent_duplicate()` sürətli
+                yolu) alır, `None` "dedup zəmanəti YOXDUR" deməkdir, "ləğv
+                edildi" demək DEYİL — SEC-8-dəki səhvin TƏKRARI olmasın deyə
+                aydın yazılır: bu, GUI-nin hələ bu axına qoşulmaması ilə
+                bağlı KEÇİCİ vəziyyətdir, DAİMİ dizayn qərarı deyil.
         """
         self._require_module(tenant_id)
         now = self._clock.now()
@@ -199,6 +284,36 @@ class ManualFineUseCase:
         # Məbləğ KATALOQDAN gəlir — deaktiv növ istisna atır (anti-fraud).
         amount = fine_type.amount_for_new_fine()
 
+        duplicate = self._find_recent_duplicate(
+            employee_id=employee_id,
+            store_id=store_id,
+            fine_type_id=fine_type_id,
+            issued_by=operator.id,
+            now=now,
+        )
+        if duplicate is not None:
+            # SÜKUTLA "uğur" qaytarılır, İSTİSNA ATILMIR: operatorun nöqteyi-
+            # nəzərindən bu, İKİNCİ klik idi və EKRAN artıq "cərimə yazıldı"
+            # gözləyir. İstisna atsaydıq, ekran "xəta" göstərər, operator
+            # ÜÇÜNCÜ dəfə basardı — məhz qorunmaq istədiyimiz dövrəni
+            # GENİŞLƏNDİRƏRDİ.
+            #
+            # BU, SÜRƏTLİ YOLDUR (SELECT, yarış-təhlükəsiz DEYİL) — ƏSAS
+            # zəmanət aşağıdakı `DuplicateFineSubmissionError` tutmasındadır
+            # (DB unikal indeksi). Loq adı QƏSDƏN FƏRQLİDİR (D7): bu ikisi
+            # arasındakı NİSBƏT sistem sağlamlığı göstəricisidir — DB
+            # tutmasının tezliyi artarsa, SELECT pəncərəsi kifayət qədər
+            # sürətli deyil deməkdir.
+            _security_log.warning(
+                "MANUAL_FINE_DUPLICATE_SUBMISSION_IGNORED_FAST_PATH",
+                extra={
+                    "operator_id": str(operator.id),
+                    "employee_id": str(employee_id),
+                    "existing_fine_id": str(duplicate.id),
+                },
+            )
+            return duplicate
+
         fine = Fine(
             fine_id=fine_id or new_fine_id(),
             tenant_id=tenant_id,
@@ -211,8 +326,37 @@ class ManualFineUseCase:
             fine_type_id=fine_type_id,
             issued_by=operator.id,
             photo_evidence_url=evidence_reference,
+            idempotency_key=idempotency_key,
         )
-        self._fines.save(fine)
+        try:
+            self._fines.save(fine)
+        except DuplicateFineSubmissionError:
+            # SEC-7/D7: yarış şəraitində SELECT-i keçmiş, lakin DB unikal
+            # indeksinə DƏYMİŞ ikinci sorğu — `_find_recent_duplicate()`-in
+            # TUTA BİLMƏDİYİ dəqiq hal (iki sorğu SELECT-dən sonra, INSERT-dən
+            # əvvəl demək olar EYNİ anda gəlib). Bu tutma YALNIZ
+            # `idempotency_key` doludursa mümkündür (indeks şərti:
+            # `WHERE idempotency_key IS NOT NULL`) — `None` olduğu halda DB
+            # bu istisnanı ATA BİLMƏZ, ona görə aşağıdakı yoxlama proqramçı
+            # səhvini tutur, normal axını YOX.
+            if idempotency_key is None:  # pragma: no cover - DB zəmanətinin əksi
+                raise
+            existing = self._fines.get_by_idempotency_key(tenant_id, idempotency_key)
+            # `get_by_idempotency_key` `None` qaytarsa, bu, ZƏMANƏTİN ÖZÜNÜN
+            # pozulduğu deməkdir (indeks var, sətir tapılmır) — sükutla
+            # keçmək YERİNƏ aydın istisna atırıq, çünki bu, artıq gözlənilən
+            # bir hal deyil.
+            if existing is None:
+                raise
+            _security_log.warning(
+                "MANUAL_FINE_DUPLICATE_SUBMISSION_IGNORED_DB_RACE",
+                extra={
+                    "operator_id": str(operator.id),
+                    "employee_id": str(employee_id),
+                    "existing_fine_id": str(existing.id),
+                },
+            )
+            return existing
 
         self._audit.record(
             tenant_id=tenant_id,
@@ -277,6 +421,46 @@ class ManualFineUseCase:
                 user_message="Bu mağaza sizin nəzarətinizdə deyil.",
                 context={"operator_id": str(operator.id), "store_id": str(store_id)},
             )
+
+    def _find_recent_duplicate(
+        self,
+        *,
+        employee_id: EmployeeId,
+        store_id: StoreId,
+        fine_type_id: FineTypeId,
+        issued_by: EmployeeId,
+        now: datetime,
+    ) -> Fine | None:
+        """Son `DUPLICATE_SUBMISSION_WINDOW_SECONDS` saniyədə EYNİ operator,
+        EYNİ işçi, EYNİ mağaza, EYNİ cərimə növü ilə yazılmış `MANUAL_CAMERA`
+        cərimə axtarır (D7 audit tapıntısı).
+
+        YENİ REPOSİTORİYA METODU TƏLƏB ETMİR: mövcud `list_for_employee_month`
+        (İşçi Ana Ekranının "Cərimələrim" görünüşündə artıq istifadə olunur)
+        kifayətdir — işçinin bir aydakı cərimə sayı kiçikdir, əlavə sorğu
+        yükü əhəmiyyətsizdir.
+
+        AY SƏRHƏDİ QEYDİ: pəncərə cəmi bir neçə saniyədir, ona görə "əvvəlki
+        ayın son saniyələrində double-click" YALNIZ ayın 1-i 00:00:0X-də baş
+        verə bilər — bu, `now.day == 1` şərti YOXDUR, çünki nəticə YALNIZ
+        "nadir hallarda ikiqat cərimə YENƏ yaranır" deməkdir (D7-dən ƏVVƏLKİ
+        vəziyyətin ÖZÜ), yeni risk YARATMIR. Tam əhatə infra-nın xüsusi sorğu
+        yazmasını tələb edərdi — bu, ANCAQ o zaman doğrulanır.
+        """
+        candidates = self._fines.list_for_employee_month(
+            employee_id, year=now.year, month=now.month
+        )
+        for candidate in candidates:
+            if (
+                candidate.source is FineSource.MANUAL_CAMERA
+                and candidate.store_id == store_id
+                and candidate.fine_type_id == fine_type_id
+                and candidate.issued_by == issued_by
+                and abs((now - candidate.issued_at).total_seconds())
+                <= DUPLICATE_SUBMISSION_WINDOW_SECONDS
+            ):
+                return candidate
+        return None
 
     def _require_module(self, tenant_id: TenantId) -> None:
         if not self._toggles.is_enabled(tenant_id, FeatureModule.FINE_MODULE.value):
@@ -714,10 +898,13 @@ class FineAppealUseCase:
 
 __all__ = [
     "APPROVE_APPEAL_FLAG",
+    "DUPLICATE_SUBMISSION_WINDOW_SECONDS",
     "ISSUE_FINES_FLAG",
     "AppealDecision",
     "AppealNotFoundError",
     "AppealWindowClosedError",
+    "ConcurrentVerificationConflictError",
+    "DuplicateFineSubmissionError",
     "FineAppealUseCase",
     "FineNotFoundError",
     "FinePermissionError",

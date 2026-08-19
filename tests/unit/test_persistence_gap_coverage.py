@@ -20,10 +20,16 @@ import json
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from psycopg import errors as pg_errors
 
+from src.application.use_cases.fine_management import (
+    ConcurrentVerificationConflictError,
+    DuplicateFineSubmissionError,
+)
 from src.application.use_cases.user_management import CredentialWriter
 from src.domain.entities.appeal import AppealStatus, FineAppeal
 from src.domain.entities.attendance_sheet import (
@@ -32,6 +38,7 @@ from src.domain.entities.attendance_sheet import (
     SheetLine,
 )
 from src.domain.entities.exception_record import ExceptionRecord
+from src.domain.entities.fine import Fine, FineSource
 from src.domain.entities.shift import ShiftSwapRequest
 from src.domain.value_objects.exception_signals import ExceptionSeverity
 from src.domain.value_objects.identifiers import (
@@ -39,7 +46,9 @@ from src.domain.value_objects.identifiers import (
     EmployeeId,
     ExceptionId,
     FineId,
+    LeaveRequestId,
     ShiftSwapRequestId,
+    StoreId,
     SupportMessageId,
     SupportTicketId,
     TenantId,
@@ -64,7 +73,10 @@ from src.infrastructure.persistence.report_repositories import (
     PostgresReportFactProvider,
     _as_decimal,
 )
-from src.infrastructure.persistence.repositories import PostgresEmployeeRepository
+from src.infrastructure.persistence.repositories import (
+    PostgresEmployeeRepository,
+    PostgresFineRepository,
+)
 from src.infrastructure.persistence.support_repositories import (
     PostgresSupportTicketRepository,
 )
@@ -1393,3 +1405,149 @@ def test_clear_pin_lockout_resets_both_counter_and_deadline() -> None:
     assert "pin_failed_attempts = 0" in sql
     assert "pin_locked_until = NULL" in sql
     assert params == (ACTOR, TENANT)
+
+
+# --------------------------------------------------------------------------- #
+# `PostgresFineRepository.save()` — unikal indeks toqquşmasının BUDAQLANMASI
+# (INF-01, dövrə 1 çarpaz-sual)
+# --------------------------------------------------------------------------- #
+#
+# `fines`-də İKİ MÜSTƏQİL unikal indeks var və `save()` ONLARI FƏRQLİ
+# istisnalara çevirməlidir (bax `repositories.py::PostgresFineRepository.save`
+# başlığı): `uq_fines_manual_camera_idempotency_key` (D7, "eyni klikin
+# təkrarı") → `DuplicateFineSubmissionError`; `uq_fines_one_live_auto_delay_
+# per_leave` (SEC-1, "iki operator eyni anda") → `ConcurrentVerificationConflict
+# Error`. Real DB olmadan `error.diag.constraint_name`-i simulyasiya etmək
+# üçün `UniqueViolation`-ın alt sinfi lazımdır — `psycopg.errors.Diagnostic.
+# constraint_name`-in setter-i YOXDUR (yalnız server cavabından doldurulur),
+# `Error.diag`-in özü də read-only property-dir.
+
+
+class _FakeConstraintViolation(pg_errors.UniqueViolation):
+    """`error.diag.constraint_name`-i sabit dəyərlə qaytaran saxta xəta.
+
+    `pg_errors.UniqueViolation` alt sinfidir — `except pg_errors.UniqueViolation`
+    onu HƏQİQİ server xətası kimi tutur (`isinstance`), `diag` isə burada
+    override olunub, real `Diagnostic`-in `_pgconn`-a bağlı, setter-siz
+    davranışını KEÇİR.
+    """
+
+    def __init__(self, constraint_name: str | None) -> None:
+        super().__init__("duplicate key value violates unique constraint")
+        self._constraint_name = constraint_name
+
+    @property
+    def diag(self) -> Any:
+        return SimpleNamespace(constraint_name=self._constraint_name)
+
+
+class _RaisingCursor:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def __enter__(self) -> _RaisingCursor:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, _sql: str, _params: tuple[Any, ...]) -> None:
+        raise self._error
+
+
+class _RaisingConnection:
+    """`_BaseRepository._execute()`-in tələb etdiyi `cursor()` YALNIZ atır."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def cursor(self) -> _RaisingCursor:
+        return _RaisingCursor(self._error)
+
+
+def _auto_delay_fine() -> Fine:
+    """Minimal DÜZGÜN `AUTO_DELAY` cərimə — `leave_request_id` MƏCBURİDİR."""
+    return Fine(
+        fine_id=FineId(uuid.uuid4()),
+        tenant_id=TENANT,
+        employee_id=ACTOR,
+        store_id=StoreId(uuid.uuid4()),
+        source=FineSource.AUTO_DELAY,
+        amount=Money(Decimal("5.00")),
+        issued_at=NOW,
+        leave_request_id=LeaveRequestId(uuid.uuid4()),
+    )
+
+
+def _fine_repo(constraint_name: str | None) -> PostgresFineRepository:
+    return PostgresFineRepository(
+        _RaisingConnection(_FakeConstraintViolation(constraint_name)),  # type: ignore[arg-type]
+        _Context(),  # type: ignore[arg-type]
+    )
+
+
+def test_save_translates_the_idempotency_key_collision_into_duplicate_submission_error() -> None:
+    """D7: `uq_fines_manual_camera_idempotency_key` → `DuplicateFineSubmissionError`.
+
+    `ManualFineUseCase.issue()` bu istisnanı TUTUB mövcud sətri qaytarır —
+    davranış bu düzəlişdən ƏVVƏLKİ ilə HƏRFƏN eynidir (yalnız YENİ ÜÇÜNCÜ
+    budaqla YANLIŞ constraint-ə düşməməsi sübut olunur). Kontekstdə
+    `idempotency_key`-in ÖZÜ də yoxlanılır — `get_by_idempotency_key()`-ə
+    istinad edən diaqnostika MƏHZ ORADAN gəlir.
+    """
+    repo = _fine_repo("uq_fines_manual_camera_idempotency_key")
+    fine = _auto_delay_fine()
+
+    with pytest.raises(DuplicateFineSubmissionError) as excinfo:
+        repo.save(fine)
+
+    assert type(excinfo.value) is DuplicateFineSubmissionError
+    assert excinfo.value.context["idempotency_key"] == str(fine.idempotency_key)
+    assert excinfo.value.context["constraint"] == "uq_fines_manual_camera_idempotency_key"
+
+
+def test_save_translates_the_auto_delay_race_into_a_concurrent_verification_conflict() -> None:
+    """SEC-1: `uq_fines_one_live_auto_delay_per_leave` → `ConcurrentVerificationConflictError`.
+
+    Bu istisna `DuplicateFineSubmissionError`-a QARIŞDIRILMAMALIDIR: iki
+    FƏRQLİ operatorun eyni anda apardığı iki HƏQİQİ cəhddir, "eyni kliki
+    təkrarlamaq" DEYİL — `LeaveVerificationUseCase.verify_return`-in Saga
+    addımı bunu UĞURSUZ sayıb kompensasiya etməlidir, ona görə `repositories.
+    py` bunu HEÇ YERDƏ tutmur (bax `ConcurrentVerificationConflictError`
+    docstring-i). TİP DƏQİQ yoxlanılır (`type(...) is ...`) — ikisi ORTAQ
+    valideyndən (`KompasOSError`) törədiyi üçün sadə `isinstance` alt-sinif
+    qarışıqlığını TUTA BİLMƏZDİ.
+    """
+    repo = _fine_repo("uq_fines_one_live_auto_delay_per_leave")
+    fine = _auto_delay_fine()
+
+    with pytest.raises(ConcurrentVerificationConflictError) as excinfo:
+        repo.save(fine)
+
+    assert type(excinfo.value) is ConcurrentVerificationConflictError
+    assert not isinstance(excinfo.value, DuplicateFineSubmissionError)
+    assert excinfo.value.context["leave_request_id"] == str(fine.leave_request_id)
+
+
+@pytest.mark.parametrize("constraint_name", [None, "uq_something_unrelated"])
+def test_save_lets_an_unrecognized_unique_violation_propagate_raw(
+    constraint_name: str | None,
+) -> None:
+    """Naməlum (VƏ `None`) constraint YANLIŞ diaqnoza yığılmır — fail-loud budağı.
+
+    `None` AYRI HAL kimi yoxlanılır: `getattr(error.diag, "constraint_name",
+    None)` DƏYƏRİ artıq `None`-dur, `constraint == "uq_..."` müqayisələrinin
+    HEÇ BİRİ DOĞRU olmur — kodun "heç bir budağa düşmə" yolu YALNIZ adı
+    NAMƏLUM constraint-lə deyil, adı TAMAMİLƏ İTİRİLMİŞ diaqnostika ilə də
+    sınanır (məs. `search_path`/versiya fərqinə görə `constraint_name`-in
+    boş gəldiyi nəzəri hal). Gələcəkdə `fines`-ə ƏLAVƏ bir unikal indeks
+    gəlsə, bu test onun SƏHVƏN yuxarıdakı İKİ istisnadan birinə
+    düşməməsini də təmin edir.
+    """
+    repo = _fine_repo(constraint_name)
+
+    with pytest.raises(pg_errors.UniqueViolation) as excinfo:
+        repo.save(_auto_delay_fine())
+
+    assert not isinstance(excinfo.value, DuplicateFineSubmissionError)
+    assert not isinstance(excinfo.value, ConcurrentVerificationConflictError)

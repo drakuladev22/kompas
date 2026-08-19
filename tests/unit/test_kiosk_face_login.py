@@ -27,10 +27,15 @@ from typing import Any
 
 import pytest
 
+from src.domain.value_objects.machine_identity import MachineIdentityHash
 from tests.conftest import requires_qt
 
 TENANT = uuid.uuid4()
 STORE = uuid.uuid4()
+#: SEC-01/SEC-05 (dövrə 3) — bu fayldakı testlər `authenticate_by_face()`
+#: yolunu ölçür (`machine_key` YALNIZ PIN handshake-də işlədilir), amma
+#: konstruktor arqumenti YENƏ DƏ MƏCBURİDİR.
+MACHINE_KEY = MachineIdentityHash(digest="a" * 64)
 
 
 # --------------------------------------------------------------------------- #
@@ -240,6 +245,11 @@ def _use_case(distances: dict[Any, float], *, live: bool = True, **overrides: An
         "audit": object(),
         "clock": object(),
         "notifier": object(),
+        # `verify()`-in FACE_MISMATCH qolu bunu çağırır (SEC-7); bu fayldakı
+        # testlər YALNIZ `identify_for_login`/`login_available` çağırır, ona
+        # görə `object()` kifayətdir — `verify()` çağıran test olsaydı
+        # `.record` metodu tələb olunardı.
+        "security_events": object(),
     }
     kwargs.update(overrides)
     return FaceVerificationUseCase(**kwargs)
@@ -405,7 +415,9 @@ def test_face_login_is_blocked_when_the_gate_refuses(monkeypatch) -> None:  # ty
         ),
     )
 
-    controller = KioskController(_Context(), store_id=STORE)  # type: ignore[arg-type]
+    controller = KioskController(  # type: ignore[arg-type]
+        _Context(), store_id=STORE, machine_key=MACHINE_KEY
+    )
     outcome = controller.authenticate_by_face()
 
     assert outcome.succeeded is False
@@ -450,7 +462,9 @@ def test_face_login_opens_only_after_the_gate_allows(monkeypatch) -> None:  # ty
         lambda self, emp, ctx: FaceGate(allowed=True, message="", face={"outcome": "MATCH"}),
     )
 
-    controller = KioskController(_Context(), store_id=STORE)  # type: ignore[arg-type]
+    controller = KioskController(  # type: ignore[arg-type]
+        _Context(), store_id=STORE, machine_key=MACHINE_KEY
+    )
     outcome = controller.authenticate_by_face()
 
     assert outcome.succeeded is True

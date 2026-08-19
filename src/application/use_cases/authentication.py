@@ -35,25 +35,49 @@ qaldırır.
 
 LAZY PEPPER MIGRATION (SEC-005): uğurlu yoxlamadan sonra hash köhnə pepper
 versiyası ilə yaradılıbsa, avtomatik yenidən yazılır.
+
+──────────────────────────────────────────────────────────────────────────────
+SEC-011 SESSİYA MÜDDƏTİ — SEC-5 AUDİT TAPINTISININ DÜZƏLİŞİ
+──────────────────────────────────────────────────────────────────────────────
+`docs/security_decisions.md` SEC-011 "Tətbiq: schema.sql §17b" yazırdı, lakin
+`auth_sessions` cədvəli kod tərəfindən HEÇ VAXT yazılmır/oxunmurdu — sənəd
+qorunduğunu iddia edirdi, qoruma faktiki YOX idi (dövrə debatı, SEC-5).
+`SessionManagementUseCase` bu boşluğu bağlayır: `issue`/`validate`/`touch`/
+`revoke`. Əsas invariant `AuthSession.touch()`-dadır (`entities/auth_session.py`)
+— hərəkətsizlik pəncərəsi uzanır, mütləq tavan ƏSLA uzanmır.
 """
 
 from __future__ import annotations
 
+import hashlib
+import secrets
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import Enum
+from typing import Final
 
+from src.domain.entities.auth_session import AuthSession, SessionContext
 from src.domain.entities.employee import Employee
 from src.domain.interfaces.ports import (
     AuditTrail,
+    AuthSessionRepository,
     Clock,
     EmployeeRepository,
     Notifier,
+    PinThrottleRepository,
+    SecurityEventRepository,
     SystemLimits,
 )
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.authorization import SystemRole
 from src.domain.value_objects.credentials import Username
-from src.domain.value_objects.identifiers import EmployeeId, StoreId, TenantId
+from src.domain.value_objects.identifiers import (
+    EmployeeId,
+    StoreId,
+    TenantId,
+    new_session_id,
+)
+from src.domain.value_objects.machine_identity import MachineIdentityHash
 from src.infrastructure.security.hashing import HashingService, evaluate_pin_attempt
 from src.infrastructure.security.hashing import PinPolicy as HashPinPolicy
 from src.shared.exceptions import KompasOSError
@@ -91,6 +115,52 @@ class AccountLockedError(KompasOSError):
     """PIN lockout aktivdir (bölmə 2: 5 səhv → 15 dəqiqə)."""
 
     user_message = "Hesab müvəqqəti bloklanıb. Bir az sonra yenidən cəhd edin."
+
+
+class TerminalLockedError(KompasOSError):
+    """Terminal/maşın PIN throttle aktivdir (SEC-01/SEC-05, dövrə 3 audit).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ TERMİNAL-SƏVİYYƏLİ QORUMA LAZIMDIR — VƏ NİYƏ MƏHZ BURADA
+    ──────────────────────────────────────────────────────────────────────────
+    PIN ANONİMDİR: `authenticate()` bütün namizədləri sınayır, heç biri
+    uyğun gəlməyəndə HANSI işçinin cəhd etdiyini BİLMİR (mağazada onlarla
+    işçi ola bilər). Ona görə İŞÇİ-BAŞINA lockout (`AccountLockedError`,
+    `register_failure`) bu axında PRİNSİPCƏ ƏLÇATMAZDIR — sənəd "bloklama
+    işçi-başınadır" deyirdi, kod isə HEÇ VAXT bunu yaza bilmirdi, çünki
+    bloklanacaq KONKRET işçi yoxdur (bax `group_a_kiosk.py:364`). Bu, o
+    boşluğu bağlayan İKİNCİ, MÜSTƏQİL qatdır: sayğac konkret işçiyə yox,
+    `(tenant_id, machine_key)` cütünə bağlıdır — NİYƏ `store_id` DEYİL:
+    bax `MachineIdentityHash`-in öz modul başlığı (SEC-05).
+
+    ──────────────────────────────────────────────────────────────────────────
+    MESAJ NİYƏ İŞÇİ KİMLİYİNİ, İŞÇİ SAYINI VƏ DƏQİQ VAXTI AÇMIR (SEC-06)
+    ──────────────────────────────────────────────────────────────────────────
+    `AccountLockedError` ilə EYNİ ümumi tonda — "kim bloklandı" sualının
+    cavabı burada MƏNASIZ (terminal bloklanıb, konkret işçi deyil), amma
+    yenə də KONKRET SƏBƏBİ (neçə cəhd, kimin, hansı mağazada) açıqlamaq
+    sızma olardı. Qalan vaxt DƏQİQ saniyə ilə DEYİL, təxmini ifadə ilə
+    verilir — dəqiq ədəd hücumçuya "nə vaxt yenidən sınamaq" cədvəli verərdi.
+    """
+
+    user_message = "Bu terminalda ardıcıl yanlış PIN cəhdləri oldu. Bir az sonra yenidən cəhd edin."
+
+
+class TerminalThrottleUnavailableError(KompasOSError):
+    """Terminal PIN throttle sətri oxuna bilmədi — FAIL-CLOSED (SEC-06).
+
+    `_require_unlocked_throttle`-ın DB istisnasını tutub burada YENİDƏN
+    atması QƏSDƏNDİR: throttle-ın ÖZÜ oxuna bilmirsə, "bloklanıbmı?"
+    sualının cavabı BİLİNMİR — fail-OPEN (naməlum halı "bloklanmayıb" fərz
+    edib davam etmək) SEC-01-in bütün qorumasını sükutla ləğv edərdi. Bunun
+    əvəzinə PIN cəhdinin ÖZÜ rədd edilir: dayanmış kiosk DƏRHAL görünür
+    (mağaza işçisi dəstəyə zəng edir), halbuki sükutla söndürülmüş qoruma
+    aylarla görünməz qala bilərdi (bu auditin bütün mövzusu).
+    """
+
+    user_message = (
+        "Sistem hazır deyil. Bir az sonra yenidən cəhd edin və ya administratora bildirin."
+    )
 
 
 class LoginStage(str, Enum):
@@ -194,11 +264,19 @@ class AdminLoginUseCase:
         hashing: HashingService,
         clock: Clock,
         audit: AuditTrail,
+        security_events: SecurityEventRepository,
     ) -> None:
         self._employees = employees
         self._hashing = hashing
         self._clock = clock
         self._audit = audit
+        # SEC-7: kompozisiya kökündə YALNIZ `FailSoftSecurityEventRecorder`
+        # bağlanmalıdır (`src.shared.security_events`) — bax portun öz
+        # şərhi. MƏCBURİ arqumentdir (`None` fallback-ı YOXDUR): bu, EYNİ
+        # dövrə debatında "opsional = sükutla ləğv" səhvinin (SEC-8) TƏKRARI
+        # olardı — yazılmayan `security_events` SEC-016-nın bütün
+        # kompensasiya iddiasını yenidən boşaldardı.
+        self._security_events = security_events
 
     def login(
         self,
@@ -208,11 +286,20 @@ class AdminLoginUseCase:
         password: str,
         stored_hash: str | None,
         pepper_version: int = 1,
+        ip_address: str | None = None,
+        machine_name: str | None = None,
     ) -> LoginResult:
         """İstifadəçi adı + şifrə yoxlaması.
 
         `stored_hash` repo-dan AYRICA ötürülür: hash domen entity-sində
         saxlanılmır ki, təsadüfən log-a və ya DTO-ya düşməsin.
+
+        Args:
+            ip_address, machine_name: SEC-7 — `security_events` sətrinin
+                mənşə sahələri. OPSİONALDIR: `None` "bilinmir" deməkdir
+                (şəbəkə qatı bunu hələ ötürmür), sükutla ləğv etmək DEYİL —
+                sahə `security_events`-də NULL qala bilər, bu, sxemdə
+                artıq nəzərdə tutulub.
         """
         employee = self._employees.get_by_username(tenant_id, username)
 
@@ -223,13 +310,23 @@ class AdminLoginUseCase:
             stored_hash, password, pepper_version=pepper_version
         )
         if employee is None or not password_ok:
+            reason = "UNKNOWN_ACCOUNT" if employee is None else "BAD_PASSWORD"
             _security_log.warning(
                 "LOGIN_FAILED",
                 extra={
                     "username_attempt": str(username),
                     "tenant_id": str(tenant_id),
-                    "reason": "UNKNOWN_ACCOUNT" if employee is None else "BAD_PASSWORD",
+                    "reason": reason,
                 },
+            )
+            self._security_events.record(
+                tenant_id=tenant_id,
+                event_type="LOGIN_FAILED",
+                employee_id=employee.id if employee is not None else None,
+                username_attempt=str(username),
+                ip_address=ip_address,
+                machine_name=machine_name,
+                details={"reason": reason},
             )
             raise AuthenticationError(
                 "İstifadəçi adı və ya şifrə yanlışdır",
@@ -250,14 +347,23 @@ class AdminLoginUseCase:
                 needs_pepper_rehash=needs_rehash,
             )
 
-        self._record_login(employee, method="USERNAME_PASSWORD")
+        self._record_login(
+            employee, method="USERNAME_PASSWORD", ip_address=ip_address, machine_name=machine_name
+        )
         return LoginResult(
             employee=employee,
             stage=LoginStage.AUTHENTICATED,
             needs_pepper_rehash=needs_rehash,
         )
 
-    def _record_login(self, employee: Employee, *, method: str) -> None:
+    def _record_login(
+        self,
+        employee: Employee,
+        *,
+        method: str,
+        ip_address: str | None = None,
+        machine_name: str | None = None,
+    ) -> None:
         _security_log.info(
             "LOGIN_SUCCESS",
             extra={
@@ -273,6 +379,14 @@ class AdminLoginUseCase:
             entity_type="employees",
             entity_id=employee.id,
             after_state={"method": method},
+        )
+        self._security_events.record(
+            tenant_id=employee.tenant_id,
+            event_type="LOGIN_SUCCESS",
+            employee_id=employee.id,
+            ip_address=ip_address,
+            machine_name=machine_name,
+            details={"method": method},
         )
 
 
@@ -292,31 +406,63 @@ class PinHandshakeUseCase:
         clock: Clock,
         limits: SystemLimits,
         audit: AuditTrail,
+        security_events: SecurityEventRepository,
+        pin_throttle: PinThrottleRepository,
     ) -> None:
         self._employees = employees
         self._hashing = hashing
         self._clock = clock
         self._limits = limits
         self._audit = audit
+        self._security_events = security_events  # SEC-7 — bax `AdminLoginUseCase`-in şərhi
+        # SEC-01, dövrə 3 — bax `TerminalLockedError`-in şərhi VƏ `authenticate()`-in
+        # "TERMİNAL THROTTLE" bölməsi. MƏCBURİ arqumentdir (`None` fallback-ı
+        # YOXDUR) — SEC-7/SEC-8-dəki eyni dərs: yazılmayan asılılıq sükutla
+        # BÜTÜN qorumanı ləğv edərdi.
+        self._pin_throttle = pin_throttle
 
     def authenticate(
         self,
         *,
         tenant_id: TenantId,
         store_id: StoreId,
+        machine_key: MachineIdentityHash,
         pin: str,
         pin_hashes: dict[EmployeeId, tuple[str, int]],
+        ip_address: str | None = None,
+        machine_name: str | None = None,
     ) -> PinResult:
         """Mağazadakı işçilər arasında PIN sahibini tapır.
 
         Args:
             pin_hashes: `{employee_id: (hash, pepper_version)}` — repo-dan gəlir.
+            machine_key: Terminalın aparat kimliyinin heşi (SEC-05) — bax
+                `_require_unlocked_throttle`-ın şərhi. Çağıran (kiosk
+                kontrolleri) bunu XAM `MachineGuid`-i OXUMADAN, artıq
+                heşlənmiş şəkildə ötürür (`device_identity.py`-nin işi,
+                domen/tətbiq qatı `winreg` idxal ETMİR).
 
         PIN `employee_id`-yə bağlı hash-ləndiyi üçün (SEC-005) hər namizəd
         AYRICA yoxlanılır. Bu, mağazadakı işçi sayı qədər Argon2 hesablaması
         deməkdir — mağaza başına onlarla işçi olduğu üçün qəbul ediləndir.
+
+        ──────────────────────────────────────────────────────────────────────
+        TERMİNAL THROTTLE (SEC-01/SEC-05, dövrə 3) — NAMİZƏD DÖVRƏSİNDƏN ƏVVƏL
+        ──────────────────────────────────────────────────────────────────────
+        `_require_unlocked_throttle()` KİLİDLİ oxu ilə terminal ARTIQ
+        bloklanıbsa dərhal `TerminalLockedError` atır — namizəd dövrəsi HEÇ
+        BAŞLAMIR, yəni bloklanmış terminalda hər klaviatura basışı üçün
+        onlarla Argon2 hesablaması BOŞA getmir.
         """
         now = self._clock.now()
+        self._require_unlocked_throttle(
+            tenant_id,
+            machine_key,
+            store_id=store_id,
+            now=now,
+            ip_address=ip_address,
+            machine_name=machine_name,
+        )
         policy = self._pin_policy(tenant_id)
         candidates = self._employees.find_by_pin_candidates(tenant_id, store_id)
 
@@ -359,6 +505,11 @@ class PinHandshakeUseCase:
             employee.register_successful_pin_attempt()
             self._employees.save(employee)
             self._log_attempt(employee, success=True, reason="OK")
+            # SEC-01, dövrə 3 — TERMİNAL sayğacı BURADA QƏSDƏN TOXUNULMUR.
+            # "Uğurlu giriş sıfırlamalıdırmı?" qərarı `PinThrottleRepository`-
+            # nin öz şərhindədir (`ports.py`): sıfırlama olsaydı, hücumçu
+            # N-1 cəhd edib növbəti qanuni girişi gözləməklə sayğacı PULSUZ
+            # təmizləyərdi. Sabit pəncərə (DB-də) təbii decay verir.
 
             return PinResult(
                 employee=employee,
@@ -375,12 +526,41 @@ class PinHandshakeUseCase:
                 "candidate_count": len(candidates),
             },
         )
+        # `employee_id`/`username_attempt` YOXDUR: PIN heç bir işçiyə uyğun
+        # gəlmədi, yəni "kim cəhd etdi" sualının domen səviyyəsində cavabı
+        # yoxdur (bölmə 2-nin PIN-in özü identifikator olmaması qərarı).
+        self._security_events.record(
+            tenant_id=tenant_id,
+            event_type="PIN_FAILED",
+            ip_address=ip_address,
+            machine_name=machine_name,
+            details={"store_id": str(store_id), "candidate_count": len(candidates)},
+        )
+        # SEC-01, dövrə 3 — TERMİNAL sayğacı BURADA artırılır: bu, ANONİM
+        # uğursuzluqdur (heç bir işçiyə uyğun gəlmədi), yəni məhz throttle-ın
+        # qorumaq istədiyi hal. Artırma DB-də ATOMİKDİR (`record_failure`) —
+        # `_require_unlocked_throttle`-dakı kilidli oxu YALNIZ "bloklanıbmı?"
+        # sualına cavab verir, sayğacı ÖZÜ dəyişmir.
+        self._record_throttle_failure(
+            tenant_id,
+            machine_key,
+            store_id=store_id,
+            ip_address=ip_address,
+            machine_name=machine_name,
+        )
         raise AuthenticationError(
             "PIN heç bir işçiyə uyğun gəlmədi",
             user_message="PIN yanlışdır.",
         )
 
-    def register_failure(self, *, tenant_id: TenantId, employee: Employee) -> tuple[bool, int]:
+    def register_failure(
+        self,
+        *,
+        tenant_id: TenantId,
+        employee: Employee,
+        ip_address: str | None = None,
+        machine_name: str | None = None,
+    ) -> tuple[bool, int]:
         """Konkret işçi üçün səhv cəhdi qeyd edir (UI PIN sahibini bilirsə).
 
         Returns:
@@ -414,6 +594,24 @@ class PinHandshakeUseCase:
                     else None,
                 },
             )
+            # SEC-7 audit tapıntısı: bu HADİSƏ ƏVVƏL yalnız DB `audit_logs`-a
+            # düşürdü, `security.log` FAYL kanalına HEÇ VAXT — lockout məhz
+            # izlənməli hadisədir (qəbul edilmiş boşluq, bağlanır).
+            _security_log.warning(
+                "PIN_LOCKOUT",
+                extra={
+                    "employee_id": str(employee.id),
+                    "failed_attempts": decision.failed_attempts,
+                },
+            )
+            self._security_events.record(
+                tenant_id=tenant_id,
+                event_type="PIN_LOCKOUT",
+                employee_id=employee.id,
+                ip_address=ip_address,
+                machine_name=machine_name,
+                details={"failed_attempts": decision.failed_attempts},
+            )
         return decision.is_locked, decision.remaining_attempts
 
     def _pin_policy(self, tenant_id: TenantId) -> HashPinPolicy:
@@ -425,6 +623,147 @@ class PinHandshakeUseCase:
     def _limit_int(self, tenant_id: TenantId, key: SystemLimitKey) -> int:
         return self._limits.get_int(tenant_id, key.value, int(DEFAULT_LIMITS[key]))
 
+    def _require_unlocked_throttle(
+        self,
+        tenant_id: TenantId,
+        machine_key: MachineIdentityHash,
+        *,
+        store_id: StoreId,
+        now: datetime,
+        ip_address: str | None,
+        machine_name: str | None,
+    ) -> None:
+        """KİLİDLİ oxu — terminal ARTIQ bloklanıbsa `TerminalLockedError` atır.
+
+        ──────────────────────────────────────────────────────────────────────
+        FAIL-CLOSED (SEC-06 tövsiyəsi)
+        ──────────────────────────────────────────────────────────────────────
+        Throttle sətri OXUNA BİLMİRSƏ (DB nasazlığı) PIN cəhdi RƏDD EDİLİR —
+        fail-OPEN (yoxlamanı keçib davam etmək) YOX. Səbəb: sükutla
+        söndürülmüş qoruma məhz SEC-01-in ÖZÜDÜR (bu auditin bütün mövzusu)
+        və aylarla görünmədən qala bilər — halbuki dayanmış kiosk DƏRHAL
+        bildirilir (mağaza işçisi dərhal dəstəyə zəng edir). Səhv `critical`
+        səviyyəsində loglanır ki, monitorinqdə görünməz qalmasın.
+
+        ──────────────────────────────────────────────────────────────────────
+        KLON AŞKARLAMASI (team-lead-in əlavə tapşırığı)
+        ──────────────────────────────────────────────────────────────────────
+        `MachineIdentityHash` sysprep edilməmiş klon disk imicində N maşında
+        EYNİ ola bilər (Windows-un tanınmış qüsuru) — belə olduqda N mağaza
+        EYNİ throttle sətrini paylaşar, bir mağazanın yazı səhvləri hamısını
+        kilidləyə bilər. BLOKLAMIRIQ (kilid 15 dəq-dən sonra öz-özünə
+        sağalır, DAYANDIRICI DEYİL), AMMA sükutla keçmirik: sətirdə saxlanmış
+        `store_id` CARİ `store_id`-dən FƏRQLİDİRSƏ, bu, HƏMİN maşının BAŞQA
+        mağazadan da PIN cəhdi göndərdiyinin işarəsidir — bir dəfə iz
+        buraxılır və sətir YENİLƏNİR (təkrar siqnal göndərməmək üçün).
+        Qərarı VERƏN bu use case-dir, repo YOX (qat sırası: repo yalnız
+        saxlanmış dəyəri qaytarır).
+        """
+        try:
+            throttle = self._pin_throttle.get_for_update(tenant_id, machine_key)
+        except Exception as exc:
+            _security_log.critical(
+                "PIN_TERMINAL_THROTTLE_UNAVAILABLE",
+                extra={"tenant_id": str(tenant_id), "store_id": str(store_id)},
+                exc_info=True,
+            )
+            raise TerminalThrottleUnavailableError(
+                "Terminal PIN throttle sətri oxuna bilmədi",
+                context={"tenant_id": str(tenant_id), "store_id": str(store_id)},
+            ) from exc
+
+        if throttle is None:
+            return
+
+        if throttle.store_id != store_id:
+            _security_log.warning(
+                "SUSPECTED_CLONED_MACHINE_GUID",
+                extra={
+                    "tenant_id": str(tenant_id),
+                    "previous_store_id": str(throttle.store_id),
+                    "current_store_id": str(store_id),
+                },
+            )
+            self._security_events.record(
+                tenant_id=tenant_id,
+                event_type="SUSPECTED_CLONED_MACHINE_GUID",
+                ip_address=ip_address,
+                machine_name=machine_name,
+                details={
+                    "previous_store_id": str(throttle.store_id),
+                    "current_store_id": str(store_id),
+                },
+            )
+            self._pin_throttle.update_last_seen_store(tenant_id, machine_key, store_id=store_id)
+
+        if throttle.is_locked(now=now):
+            _security_log.warning(
+                "PIN_TERMINAL_LOCKED",
+                extra={
+                    "tenant_id": str(tenant_id),
+                    "store_id": str(store_id),
+                    "trigger": "REJECTED_WHILE_LOCKED",
+                },
+            )
+            self._security_events.record(
+                tenant_id=tenant_id,
+                event_type="PIN_TERMINAL_LOCKED",
+                ip_address=ip_address,
+                machine_name=machine_name,
+                details={
+                    "store_id": str(store_id),
+                    "trigger": "REJECTED_WHILE_LOCKED",
+                    "locked_until": throttle.locked_until.isoformat()
+                    if throttle.locked_until
+                    else None,
+                },
+            )
+            raise TerminalLockedError(
+                "Terminal PIN throttle aktivdir",
+                context={"tenant_id": str(tenant_id), "store_id": str(store_id)},
+            )
+
+    def _record_throttle_failure(
+        self,
+        tenant_id: TenantId,
+        machine_key: MachineIdentityHash,
+        *,
+        store_id: StoreId,
+        ip_address: str | None,
+        machine_name: str | None,
+    ) -> None:
+        """Anonim uğursuz cəhdi terminal sayğacına ATOMİK yazır — pəncərə/kilid
+        hesablaması DB trigger-indədir (bax `PinThrottleRepository.
+        record_failure`-in şərhi, TIME-1).
+
+        `_require_unlocked_throttle` bu çağırışdan ƏVVƏL ARTIQ "bloklanmayıb"
+        olduğunu təsdiqləyib — ona görə NƏTİCƏDƏ `locked_until` DOLUDURSA,
+        MƏHZ BU cəhd həddi keçdi (köhnə/yeni müqayisəsinə ehtiyac yoxdur).
+        """
+        result = self._pin_throttle.record_failure(tenant_id, machine_key, store_id=store_id)
+        if result.locked_until is not None:
+            _security_log.warning(
+                "PIN_TERMINAL_LOCKED",
+                extra={
+                    "tenant_id": str(tenant_id),
+                    "store_id": str(store_id),
+                    "trigger": "NEW_LOCKOUT",
+                    "failed_count": result.failed_count,
+                },
+            )
+            self._security_events.record(
+                tenant_id=tenant_id,
+                event_type="PIN_TERMINAL_LOCKED",
+                ip_address=ip_address,
+                machine_name=machine_name,
+                details={
+                    "store_id": str(store_id),
+                    "trigger": "NEW_LOCKOUT",
+                    "failed_count": result.failed_count,
+                    "locked_until": result.locked_until.isoformat(),
+                },
+            )
+
     @staticmethod
     def _log_attempt(employee: Employee, *, success: bool, reason: str) -> None:
         _security_log.info(
@@ -435,6 +774,263 @@ class PinHandshakeUseCase:
                 "reason": reason,
             },
         )
+
+
+# --------------------------------------------------------------------------- #
+# Sessiya müddəti (SEC-011)
+# --------------------------------------------------------------------------- #
+
+#: `secrets.token_urlsafe(32)` → 256 bit entropiya (SEC-5 müqaviləsi).
+SESSION_TOKEN_BYTES: Final = 32
+
+#: Uzaqdan sessiya ləğvini bağlayan flag — AYRICADIR, `can_reset_password`
+#: DEYİL (security2 verdikti, SEC-5 debatı).
+#:
+#: NİYƏ BİRLƏŞDİRİLMİR — layihənin ÖZ PRESEDENTİ buna qarşıdır: `can_reset_pin`
+#: və `can_reset_password` da "kimliyi sıfırlama" mənasında OXŞARDIR, amma
+#: BİRLƏŞDİRİLMƏYİB, çünki risk dairələri fərqlidir. Sessiya ləğvi ilə şifrə
+#: sıfırlanması arasındakı risk fərqi BUNDAN DA BÖYÜKDÜR: şifrəni sıfırlayan
+#: admin subyektin hesabına TAM giriş əldə edir (kimlik oğurluğu ekvivalenti —
+#: yeni şifrəni bilən istənilən kəs daxil ola bilər), sessiya ləğv edən isə
+#: YALNIZ məcburi yenidən-giriş tələb edir (məlumat itkisi YOXDUR, səlahiyyət
+#: artımı YOXDUR — subyekt sadəcə şifrəsi ilə YENİDƏN daxil olur).
+#: `can_reset_password` təkrar işlətmək desək, "şübhəli sessiyanı bağla"
+#: səlahiyyəti verən Root eyni zamanda subyektin hesabını ələ keçirmə
+#: səlahiyyəti də vermiş olardı — bu, tələb olunan səlahiyyətdən QAT-QAT
+#: genişdir (Least Privilege pozuntusu).
+#:
+#: Hardlock səviyyəsi `can_reset_password` ilə EYNİDİR (infra miqrasiyası),
+#: defolt olaraq HEÇ BİR rola avtomatik verilmir — Root əl ilə təyin edir.
+REVOKE_SESSION_FLAG = "can_revoke_sessions"
+
+_IDLE_TIMEOUT_KEYS: Final[dict[SessionContext, SystemLimitKey]] = {
+    SessionContext.ADMIN_PANEL: SystemLimitKey.ADMIN_PANEL_SESSION_IDLE_TIMEOUT_MINUTES,
+}
+_ABSOLUTE_TIMEOUT_KEYS: Final[dict[SessionContext, SystemLimitKey]] = {
+    SessionContext.ADMIN_PANEL: SystemLimitKey.ADMIN_PANEL_SESSION_ABSOLUTE_TIMEOUT_HOURS,
+    SessionContext.CAMERA_DASHBOARD: SystemLimitKey.CAMERA_DASHBOARD_SESSION_ABSOLUTE_TIMEOUT_HOURS,
+}
+
+
+def _hash_session_token(token: str) -> str:
+    """Sessiya tokeninin SHA-256 daycesti (SEC-011: DB açıq token saxlamır).
+
+    Argon2/pepper İŞLƏDİLMİR — bu, `hash_password`/`hash_pin`-dən QƏSDƏN
+    FƏRQLİDİR: token insanın seçdiyi aşağı-entropiyalı sirr DEYİL,
+    `secrets.token_urlsafe(32)`-nin 256 bitlik təsadüfi çıxışıdır. Yavaş
+    (Argon2) heşləmə burada FAYDA vermir (brute-force onsuz da praktik
+    deyil), YALNIZ hər `validate()` çağırışını lazımsız ləngidərdi — sessiya
+    yoxlaması HƏR sorğuda işləyən yoldur (bax `touch()` çağırış tezliyi).
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+class SessionExpiredError(KompasOSError):
+    """Sessiya etibarsızdır: müddəti bitib, ya da ləğv edilib (SEC-011)."""
+
+    user_message = "Sessiyanızın müddəti bitdi. Yenidən daxil olun."
+
+
+class SessionContextNotSupportedError(KompasOSError):
+    """`KIOSK` kontekstinə sessiya ISSUE edilmək İSTƏNİB (SEC-011: PIN, sessiya yox)."""
+
+    user_message = "Bu giriş növü sessiya tələb etmir."
+
+
+@dataclass(frozen=True)
+class IssuedSession:
+    """`issue()`-nin BİR DƏFƏLİK nəticəsi.
+
+    Açıq `token` YALNIZ burada mövcuddur — `AuthSession.token_hash` ondan
+    GERİ hesablana bilməz. GUI onu yaddaşda saxlayır, diskə YAZMIR (SEC-5
+    müqaviləsi, ui bölməsi).
+    """
+
+    session: AuthSession
+    token: str
+
+
+class SessionManagementUseCase:
+    """SEC-011 sessiya müddəti idarəsi — `auth_sessions` (schema.sql §17b).
+
+    Dörd əməliyyat: `issue` (giriş), `validate` (hər qorunan sorğu),
+    `touch` (fəaliyyət → hərəkətsizlik pəncərəsini uzadır), `revoke`
+    (çıxış/admin ləğvi). Əsas invariantın (`absolute_expiry` uzanmır) həqiqi
+    yeri `AuthSession.touch()`-dadır (entity) — bu sinif YALNIZ limitləri
+    `system_limits`-dən oxuyub entity-yə ötürür və audit yazır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    "MÜDDƏT BİTMƏSİ" AUDİTİ NİYƏ `revoke()`-Ə YÖNLƏNDİRİLİR
+    ──────────────────────────────────────────────────────────────────────────
+    SEC-5 müqaviləsi: "giriş, ləğv VƏ müddət bitməsi audit izi almalıdır."
+    Ayrıca "expired" bayrağı sxemdə YOXDUR (yalnız `revoked_at`), ona görə
+    `validate()` müddəti bitmiş, lakin HƏLƏ `revoked_at`-i boş olan sessiyanı
+    TAPAN KİMİ onu `revoked_by=None` ilə ləğv edir və BİR DƏFƏLİK audit yazır.
+    Növbəti `validate()` çağırışında `is_revoked` artıq `True`-dur — təkrar
+    audit YAZILMIR (sükutla dublikat yaratmadan, `SESSION_REVOKED`-in özü
+    kimi tək dəfəlik iz qalır).
+    """
+
+    def __init__(
+        self,
+        *,
+        sessions: AuthSessionRepository,
+        clock: Clock,
+        limits: SystemLimits,
+        audit: AuditTrail,
+    ) -> None:
+        self._sessions = sessions
+        self._clock = clock
+        self._limits = limits
+        self._audit = audit
+
+    def issue(
+        self,
+        *,
+        tenant_id: TenantId,
+        employee: Employee,
+        context: SessionContext,
+        machine_name: str | None = None,
+        ip_address: str | None = None,
+    ) -> IssuedSession:
+        """Girişdən SONRA çağırılır — token yaradır, `token_hash`-i yazır."""
+        if context not in _ABSOLUTE_TIMEOUT_KEYS:
+            raise SessionContextNotSupportedError(
+                f"'{context.value}' konteksti sessiya ilə idarə olunmur",
+                context={"context": context.value},
+            )
+        now = self._clock.now()
+        token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
+        absolute_expiry = now + self._absolute_timeout(tenant_id, context)
+        idle_expiry = (
+            now + self._idle_timeout(tenant_id, context)
+            if context.has_idle_timeout
+            else absolute_expiry
+        )
+        session = AuthSession(
+            id=new_session_id(),
+            tenant_id=tenant_id,
+            user_id=employee.id,
+            token_hash=_hash_session_token(token),
+            context=context,
+            issued_at=now,
+            expires_at=min(idle_expiry, absolute_expiry),
+            last_seen_at=now,
+            absolute_expiry=absolute_expiry,
+            machine_name=machine_name,
+            ip_address=ip_address,
+        )
+        self._sessions.save(session)
+        self._audit.record(
+            tenant_id=tenant_id,
+            actor_id=employee.id,
+            action="SESSION_ISSUED",
+            entity_type="auth_sessions",
+            entity_id=session.id,
+            after_state={
+                "context": context.value,
+                "expires_at": session.expires_at.isoformat(),
+                "absolute_expiry": absolute_expiry.isoformat(),
+            },
+        )
+        return IssuedSession(session=session, token=token)
+
+    def validate(self, *, tenant_id: TenantId, token: str) -> AuthSession:
+        """Hər qorunan sorğuda çağırılır. Etibarsızdırsa `SessionExpiredError`."""
+        now = self._clock.now()
+        session = self._sessions.get_by_token_hash(tenant_id, _hash_session_token(token))
+        if session is None:
+            raise SessionExpiredError("Sessiya tapılmadı", context={"tenant_id": str(tenant_id)})
+        if not session.is_valid(now=now):
+            self._expire_if_needed(tenant_id, session, now=now)
+            raise SessionExpiredError(
+                "Sessiyanın müddəti bitib və ya ləğv edilib",
+                context={"session_id": str(session.id)},
+            )
+        return session
+
+    def touch(self, *, tenant_id: TenantId, session: AuthSession) -> AuthSession:
+        """İstifadəçi fəaliyyəti — hərəkətsizlik pəncərəsini uzadır.
+
+        `CAMERA_DASHBOARD` üçün SÜKUTLA HEÇ NƏ YAZMIR: `AuthSession.touch()`
+        özü no-op edir (bax entity docstring-i), lazımsız DB yazısının
+        qarşısını burada, sorğu getmədən ALIRIQ (PERF-1/2/3 fəlsəfəsi).
+        """
+        if not session.context.has_idle_timeout:
+            return session
+        now = self._clock.now()
+        session.touch(now=now, idle_timeout=self._idle_timeout(tenant_id, session.context))
+        self._sessions.save(session)
+        return session
+
+    def revoke(
+        self,
+        *,
+        tenant_id: TenantId,
+        actor: Employee,
+        target: AuthSession,
+        reason: str,
+    ) -> None:
+        """Çıxış (özü) və ya admin uzaqdan ləğvi.
+
+        Özünü ləğv etmək HƏR KƏSƏ açıqdır — `CredentialResetUseCase`-dən
+        FƏRQLİ olaraq özü-özünü istisna ETMİR, çünki "Çıxış" düyməsi məhz
+        budur.
+        """
+        self._require_may_revoke(actor, target)
+        now = self._clock.now()
+        target.revoke(revoked_by=actor.id, reason=reason, now=now)
+        self._sessions.save(target)
+        self._audit.record(
+            tenant_id=tenant_id,
+            actor_id=actor.id,
+            action="SESSION_REVOKED",
+            entity_type="auth_sessions",
+            entity_id=target.id,
+            after_state={
+                "reason": target.revocation_reason,
+                "subject_user_id": str(target.user_id),
+            },
+        )
+
+    def _expire_if_needed(
+        self, tenant_id: TenantId, session: AuthSession, *, now: datetime
+    ) -> None:
+        if session.is_revoked:
+            # Artıq ləğv edilib (əl ilə və ya əvvəlki `_expire_if_needed` çağırışı
+            # ilə) — təkrar audit yazılmır, dublikat yaratmır.
+            return
+        session.revoke(revoked_by=None, reason="Sessiya müddəti bitdi (timeout)", now=now)
+        self._sessions.save(session)
+        self._audit.record(
+            tenant_id=tenant_id,
+            actor_id=session.user_id,
+            action="SESSION_EXPIRED",
+            entity_type="auth_sessions",
+            entity_id=session.id,
+            after_state={"reason": "IDLE_OR_ABSOLUTE_TIMEOUT"},
+        )
+
+    def _require_may_revoke(self, actor: Employee, target: AuthSession) -> None:
+        if actor.id == target.user_id:
+            return
+        if not actor.has_permission(REVOKE_SESSION_FLAG, now=self._clock.now()):
+            raise AuthenticationError(
+                f"'{REVOKE_SESSION_FLAG}' səlahiyyəti olmadan başqasının sessiyası "
+                f"ləğv edilə bilməz",
+                user_message="Bu əməliyyat üçün səlahiyyətiniz yoxdur.",
+                context={"actor_id": str(actor.id), "target_session_id": str(target.id)},
+            )
+
+    def _idle_timeout(self, tenant_id: TenantId, context: SessionContext) -> timedelta:
+        key = _IDLE_TIMEOUT_KEYS[context]
+        minutes = self._limits.get_int(tenant_id, key.value, int(DEFAULT_LIMITS[key]))
+        return timedelta(minutes=minutes)
+
+    def _absolute_timeout(self, tenant_id: TenantId, context: SessionContext) -> timedelta:
+        key = _ABSOLUTE_TIMEOUT_KEYS[context]
+        hours = self._limits.get_int(tenant_id, key.value, int(DEFAULT_LIMITS[key]))
+        return timedelta(hours=hours)
 
 
 # --------------------------------------------------------------------------- #
@@ -473,12 +1069,14 @@ class CredentialResetUseCase:
         clock: Clock,
         audit: AuditTrail,
         notifier: Notifier,
+        security_events: SecurityEventRepository,
     ) -> None:
         self._employees = employees
         self._hashing = hashing
         self._clock = clock
         self._audit = audit
         self._notifier = notifier
+        self._security_events = security_events  # SEC-7 — bax `AdminLoginUseCase`-in şərhi
 
     def reset_password(self, *, actor: Employee, subject: Employee) -> TemporaryCredential:
         """Admin-tier istifadəçi üçün müvəqqəti şifrə təyin edir."""
@@ -576,6 +1174,15 @@ class CredentialResetUseCase:
             entity_id=subject.id,
             after_state={"must_change_password": subject.must_change_password},
         )
+        # SEC-7, Tier 2: `audit_logs`-da ARTIQ var — `security_events` IP/
+        # cihaz qatını ƏLAVƏ edir (bura hələ ötürülmür, `None` qalır; UI
+        # bu axına qoşulanda doldurar).
+        self._security_events.record(
+            tenant_id=subject.tenant_id,
+            event_type=action,
+            employee_id=subject.id,
+            details={"actor_id": str(actor.id), "actor_role": actor.position.code},
+        )
         self._notifier.notify(
             tenant_id=subject.tenant_id,
             recipient_id=subject.id,
@@ -614,12 +1221,14 @@ class EmergencyAccessRecoveryUseCase:
         clock: Clock,
         audit: AuditTrail,
         notifier: Notifier,
+        security_events: SecurityEventRepository,
     ) -> None:
         self._employees = employees
         self._hashing = hashing
         self._clock = clock
         self._audit = audit
         self._notifier = notifier
+        self._security_events = security_events  # SEC-7 — bax `AdminLoginUseCase`-in şərhi
 
     def recover(
         self,
@@ -663,6 +1272,23 @@ class EmergencyAccessRecoveryUseCase:
                     "target_id": str(target.id),
                     "impact": "bərpa cəhdi rədd edildi",
                 },
+            )
+            # SEC-7 QƏRARI (team-lead-in tələb etdiyi əsaslandırma): bu ikisi
+            # ("tenant-ın ən ciddi hadisəsi") ÜÇÜN DƏ 1-ci şərt (DB yazısı
+            # əməliyyatı DAYANDIRMIR) DƏYİŞMİR — `FailSoftSecurityEventRecorder`
+            # EYNİ, UNİFORM siyasətlə çağırılır. Səbəb: bu qərarın ÖZÜ ARTIQ
+            # `self._audit.record()` (DB `audit_logs`, aşağıda, "audit
+            # istisna udmur") ilə SƏRT ZƏMANƏT altındadır — o, kompliyansı
+            # artıq TƏMİN EDİR. `security_events`-i BURADA ayrıca sərt etmək
+            # eyni əməliyyata İKİNCİ, LÜZUMSUZ uğursuzluq nöqtəsi əlavə edərdi:
+            # tenant-ın YEGANƏ bərpa yolu YALNIZ telemetriya cədvəli əlçatmaz
+            # olduğu üçün bloklanardı — bu, DB-yə bağlı DoS-un məhz bu
+            # ssenaridəki ən pis forması olardı (bərpa YOLUNUN ÖZÜ bağlanır).
+            self._security_events.record(
+                tenant_id=tenant_id,
+                event_type="EMERGENCY_RECOVERY_CONTACT_MISMATCH",
+                employee_id=target.id,
+                details={"impact": "bərpa cəhdi rədd edildi"},
             )
             raise AuthenticationError(
                 "Təqdim olunan əlaqə tenant-ın qeydiyyatdakı şirkət əlaqəsi ilə üst-üstə düşmür",
@@ -717,6 +1343,19 @@ class EmergencyAccessRecoveryUseCase:
             },
             reason="Bütün admin hesabları itirilib — Developer Panelindən bərpa",
         )
+        # SEC-7: `_audit.record()` yuxarıda ARTIQ sərt zəmanətdir (uğursuz
+        # olsa bütün əməliyyat geri qayıdır) — `security_events` UNİFORM
+        # fail-soft siyasəti ilə ƏLAVƏ yazılır, əsaslandırma yuxarı
+        # (`EMERGENCY_RECOVERY_CONTACT_MISMATCH` şərhi) ilə EYNİDİR.
+        self._security_events.record(
+            tenant_id=tenant_id,
+            event_type="EMERGENCY_ACCESS_RECOVERY",
+            employee_id=target.id,
+            details={
+                "developer_reference": developer_reference,
+                "verified_via": "COMPANY_CONTACT",
+            },
+        )
         self._notifier.notify(
             tenant_id=tenant_id,
             recipient_id=None,
@@ -738,15 +1377,23 @@ class EmergencyAccessRecoveryUseCase:
 __all__ = [
     "RESET_PASSWORD_FLAG",
     "RESET_PIN_FLAG",
+    "REVOKE_SESSION_FLAG",
+    "SESSION_TOKEN_BYTES",
     "AccountLockedError",
     "AdminLoginUseCase",
     "AuthenticationError",
     "CredentialResetUseCase",
     "EmergencyAccessRecoveryUseCase",
+    "IssuedSession",
     "LoginResult",
     "LoginStage",
     "PinHandshakeUseCase",
     "PinResult",
+    "SessionContextNotSupportedError",
+    "SessionExpiredError",
+    "SessionManagementUseCase",
     "TemporaryCredential",
     "TenantContact",
+    "TerminalLockedError",
+    "TerminalThrottleUnavailableError",
 ]

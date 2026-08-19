@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -229,7 +230,11 @@ def _channel_luminance(channel: int) -> float:
     srgb = channel / 255.0
     if srgb <= SRGB_LINEAR_THRESHOLD:
         return srgb / 12.92
-    return ((srgb + 0.055) / 1.055) ** 2.4
+    # `float ** float` mypy-də `Any` kimi nəticələnir (typeshed-in `__pow__`
+    # overload-ları qeyri-tam ədəd üstü üçün dəqiq tip vermir) — açıq
+    # `float(...)` çevrilməsi funksiyanın öz elan etdiyi qayıdış tipini
+    # (`no-any-return`) qoruyur, ədədi nəticəni DƏYİŞMİR.
+    return float(((srgb + 0.055) / 1.055) ** 2.4)
 
 
 def relative_luminance(color: str) -> float:
@@ -341,7 +346,25 @@ def load_tokens(explicit: Path | None) -> dict[str, dict[str, str]] | None:
     }
 
 
+def _ensure_utf8_stdio() -> None:
+    """Windows-un defolt konsol kodlaşdırmasını (cp1252) DÜZƏLDİR.
+
+    `scripts/apply_migrations.py::_ensure_utf8_stdio`-nun HƏRFİ nüsxəsi
+    (INFRA-1/3/4-ün DÖRDÜNCÜ təkrarı) — bu skript də Azərbaycan hərfli
+    ("uğurlu", "keçmir", s.) nəticələr yazır və `PYTHONIOENCODING`
+    təyin edilməyəndə (adi Windows terminalı) `UnicodeEncodeError` ilə
+    çökür. CLAUDE.md §2-nin CI qapısı (`check_contrast.py --include-high-
+    contrast`) MƏHZ bu skriptdir — çökmə "kontrast pozuntusu tapıldı" ilə
+    "skript özü çökdü" arasındakı fərqi gizlədərdi.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            with suppress(Exception):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description="WCAG AA kontrast yoxlaması")
     parser.add_argument("--tokens", type=Path, help="dizayn tokenlərinin JSON faylı")
     parser.add_argument("--pair", nargs=2, metavar=("FG", "BG"), help="tək cütü yoxla və çıx")

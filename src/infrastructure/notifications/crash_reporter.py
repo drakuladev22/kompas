@@ -90,10 +90,114 @@ _UUID_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE
 )
 
+# ─────────────────────────────────────────────────────────────────────────── #
+# SEC-03 (dövrə 3 audit) — SIRR nümunələri, `security`-nin siyahısı
+# ─────────────────────────────────────────────────────────────────────────── #
+#
+# NİYƏ AYRI QRUP: yuxarıdakı naxışlar İSTİFADƏÇİ (PII) məlumatını gizlədir —
+# bunlar isə SİSTEM sirlərini (DSN parolu, bot token-i, OAuth açarı). Fərq
+# sadəcə terminologiya deyil: PII sızması gizlilik pozuntusudur, sirr sızması
+# isə DƏRHAL BAŞQA sistemlərə (baza, Telegram, Google) giriş deməkdir — ona
+# görə bu qrup HƏMİŞƏ `_LONG_DIGITS`-dən (aşağıdakı `scrub()`) ƏVVƏL işə
+# düşməlidir: Telegram bot token-i (`123456789:AAF...`) rəqəm PREFİKSİ ilə
+# başlayır — `_LONG_DIGITS` birinci işləsəydi YALNIZ rəqəm hissəsini
+# gizlədərdi, `:AAF...`-dən sonrakı 35 simvollıq HƏQİQİ sirr AÇIQ QALARDI.
+#
+# FERNET AÇARI QƏSDƏN BURADA YOXDUR: heç bir kod yolu onu mətnə interpolyasiya
+# etmir (`EncryptionService` açarı yalnız bayt kimi, birbaşa `Fernet`/AESGCM
+# konstruktoruna ötürür — `str()`/f-string-ə heç vaxt düşmür), yəni stack-trace
+# ONU DAŞIYA BİLMƏZ; nümunə əlavə etmək YALANÇI TƏHLÜKƏSİZLİK hissi verərdi.
+#
+# BÜTÜN nümunələrdə YALNIZ SİRR hissəsi redaksiya olunur, ƏTRAF KONTEKST
+# (host, sxem, "authorization:" prefiksi, açar adı) QALIR — `_redact_captured`
+# HƏR pattern-in TƏK `(...)` qrupunu əvəz edir. Diaqnostik dəyər itməsin deyə:
+# "hansı DSN-ə qoşulmağa çalışırdı" sualının cavabı (host/db) itməməlidir,
+# yalnız "hansı PAROLLA" sualı cavabsız qalmalıdır.
+
+#: 1 (ƏN VACİB): DSN-lərin ümumi forması — `postgresql://user:PAROL@host/db`.
+_DSN_PASSWORD_PATTERN: Final[re.Pattern[str]] = re.compile(r"://[^/\s:@]+:([^@\s]+)@")
+#: 2: libpq conninfo boşluqlu forması — `host=... password=PAROL sslmode=...`.
+_LIBPQ_PASSWORD_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?i)password=(\S+)")
+#: 3: Telegram bot token-i — `bot_id:secret` (SEC-028/029, `telegram.py`).
+_TELEGRAM_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\b\d{6,10}:[A-Za-z0-9_-]{35}\b")
+#: 4: Google OAuth (Drive inteqrasiyası, `storage/oauth_flow.py`) — access VƏ
+#: refresh token formatları FƏRQLİDİR, ikisi də lazımdır.
+_GOOGLE_ACCESS_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\bya29\.[0-9A-Za-z_-]+\b")
+_GOOGLE_REFRESH_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\b1//[0-9A-Za-z_-]+\b")
+#: 5: HTTP Authorization başlığı — Supabase/ERP REST çağırışlarında (bir çox
+#: HTTP klienti istisna mətninə SORĞU başlıqlarını da qatır).
+#:
+#: `security`-nin verdiyi ilkin nümunə (`authorization:\s*\S+`) CANLI
+#: sınaqda BUG çıxardı: "Authorization: Bearer eyJ...sig" mətnində `\S+`
+#: YALNIZ "Bearer" sözünü tutur (boşluqdan SONRAKI həqiqi token TUTULMUR) —
+#: nəticə "authorization: <gizlədilib> eyJ...sig" olurdu, yəni SIRRİN ÖZÜ
+#: AÇIQ QALIRDI. Düzəliş: `.+` (sətir sonuna qədər) — "authorization:"-dan
+#: sonra HƏR ZAMAN sirr gəlir, sxem sözü ilə token arasında xətt çəkməyin
+#: MƏNASI yoxdur (aqressiv qara siyahı fəlsəfəsi). SIRA da MÜHÜMDÜR:
+#: `_BEARER_TOKEN_PATTERN` BURADAN ƏVVƏL işləyir ki, "Bearer xyz" TƏK
+#: uyğunluq kimi tutulsun — sonra bu pattern "authorization: <gizlədilib>"
+#: qalığına dəyəndə artıq redaksiya olunmuş yer-tutucunu YENİDƏN
+#: redaksiya edir (zərərsiz, no-op).
+_AUTHORIZATION_HEADER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?i)authorization:\s*(.+)")
+_BEARER_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9\-_.]+)\b")
+#: 6: ÜMUMİ açar=dəyər toru — yuxarıdakı XÜSUSİ formatların HEÇ BİRİNƏ
+#: uymayan, amma açar ADINDAN sirr olduğu bəlli olan hallar üçün son sərhəd
+#: (dict `repr()`-i, validasiya mesajı, s.). Açıq özəllik: "aqressiv qara
+#: siyahı" fəlsəfəsinin (modul başlığı) HƏRFİ tətbiqidir.
+_GENERIC_SECRET_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?i)\b(?:password|pwd|secret|token|api[_-]?key|client_secret)\s*[:=]\s*(\S+)"
+)
+#: 7: Argon2id heşi (PIN/şifrə, `HashingService`) — pepper-lə qorunsa da,
+#: heşin ÖZÜ leaked olanda offline hücumun BİRİNCİ girişi olur.
+_ARGON2_HASH_PATTERN: Final[re.Pattern[str]] = re.compile(r"\$argon2id\$v=\d+\$\S+")
+
+#: `(pattern, tam_uyğunluq_sirrdir_mi)` — İKİNCİ True olanda BÜTÜN uyğunluq
+#: (`(...)` qrupu YOX) redaksiya olunur: bu nümunələrdə saxlanacaq "ətraf
+#: kontekst" YOXDUR (bot ID-si tək başına mənasızdır, Argon2 prefiksi
+#: "bura heş var" deməkdən başqa məlumat vermir).
+_SECRET_PATTERNS: Final[tuple[tuple[re.Pattern[str], bool], ...]] = (
+    (_DSN_PASSWORD_PATTERN, False),
+    (_LIBPQ_PASSWORD_PATTERN, False),
+    (_TELEGRAM_TOKEN_PATTERN, True),
+    (_GOOGLE_ACCESS_TOKEN_PATTERN, True),
+    (_GOOGLE_REFRESH_TOKEN_PATTERN, True),
+    # `_BEARER_TOKEN_PATTERN` `_AUTHORIZATION_HEADER_PATTERN`-DƏN ƏVVƏL —
+    # sıra ŞƏRTDİR, bax `_AUTHORIZATION_HEADER_PATTERN` şərhi.
+    (_BEARER_TOKEN_PATTERN, False),
+    (_AUTHORIZATION_HEADER_PATTERN, False),
+    (_GENERIC_SECRET_PATTERN, False),
+    (_ARGON2_HASH_PATTERN, True),
+)
+
+
+def _redact_captured(pattern: re.Pattern[str], text: str) -> str:
+    """`pattern`-in TƏK `(...)` qrupunu `_REDACTED`-lə əvəz edir, QALANINI SAXLAYIR.
+
+    Sadə `pattern.sub(_REDACTED, text)` BÜTÜN uyğunluğu (qrupdan KƏNAR
+    kontekst daxil) itirərdi — DSN-də bu, host/sxem kimi DİAQNOSTİK dəyəri
+    silərdi (həddindən artıq təmizləmə, modul başlığının xəbərdarlıq etdiyi
+    ikinci qüsur növü). Mövqe əsaslı əvəzləmə (`str.replace` YOX) təkrarlanan
+    alt-sətir problemi yaratmır.
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        start, end = match.span(1)
+        full = match.group(0)
+        offset = match.start(0)
+        return full[: start - offset] + _REDACTED + full[end - offset :]
+
+    return pattern.sub(_replace, text)
+
 
 def scrub(text: str) -> str:
-    """Mətndən şəxsi məlumatı çıxarır (bax modul başlığı)."""
+    """Mətndən şəxsi məlumatı VƏ SİRRİ çıxarır (bax modul başlığı, SEC-03)."""
     cleaned = text
+    # SİRRLƏR ƏVVƏLCƏ: `_LONG_DIGITS` rəqəm-prefiksli token-ləri (Telegram)
+    # FRAQMENTLƏYƏRDİ (bax `_SECRET_PATTERNS` şərhi) — sıra TƏSADÜFİ deyil.
+    for pattern, whole_match in _SECRET_PATTERNS:
+        cleaned = (
+            pattern.sub(_REDACTED, cleaned) if whole_match else _redact_captured(pattern, cleaned)
+        )
     for pattern in _HOME_PATTERNS:
         cleaned = pattern.sub(rf"\1{_REDACTED}", cleaned)
     cleaned = _EMAIL_PATTERN.sub(_REDACTED, cleaned)

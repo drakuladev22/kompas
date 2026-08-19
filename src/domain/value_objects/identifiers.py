@@ -29,6 +29,10 @@ AttendanceRecordId = NewType("AttendanceRecordId", uuid.UUID)
 OverrideId = NewType("OverrideId", uuid.UUID)
 FineId = NewType("FineId", uuid.UUID)
 FineTypeId = NewType("FineTypeId", uuid.UUID)
+#: Aylıq İcmalın "[Bütün Filiallara Göndər]" partiyası (SEC-8 audit
+#: tapıntısı) — `fines.review_batch_id` bunu daşıyır, `monthly_fine_review_
+#: batches.id` ilə eynidir.
+FineReviewBatchId = NewType("FineReviewBatchId", uuid.UUID)
 LeaveTypeId = NewType("LeaveTypeId", uuid.UUID)
 AppealId = NewType("AppealId", uuid.UUID)
 TaskId = NewType("TaskId", uuid.UUID)
@@ -178,6 +182,10 @@ def new_fine_id() -> FineId:
     return FineId(uuid.uuid4())
 
 
+def new_fine_review_batch_id() -> FineReviewBatchId:
+    return FineReviewBatchId(uuid.uuid4())
+
+
 def new_task_id() -> TaskId:
     return TaskId(uuid.uuid4())
 
@@ -297,6 +305,7 @@ __all__ = [
     "FieldReportId",
     "FieldReportItemId",
     "FineId",
+    "FineReviewBatchId",
     "FineTypeId",
     "LeaveRequestId",
     "LeaveTypeId",
@@ -337,6 +346,7 @@ __all__ = [
     "new_field_report_id",
     "new_field_report_item_id",
     "new_fine_id",
+    "new_fine_review_batch_id",
     "new_leave_request_id",
     "new_open_shift_posting_id",
     "new_override_id",

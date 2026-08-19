@@ -73,6 +73,27 @@ def build_container(*, event_bus: EventBus | None = None) -> DIContainer:
     container.register_instance(EventBus, bus, override=True)
     container.register_singleton(EncryptionService, override=True)
     container.register_singleton(HashingService, override=True)
+    # NİYƏ BURADA HƏLƏ DƏ `InMemorySagaStateRepository` (D6 QƏRARI)
+    # -------------------------------------------------------------------------
+    # `PostgresSagaStateRepository` (infrastructure/persistence/saga_repository.py)
+    # HƏR ZAMAN bir `Connection` + `TenantContext` tələb edir — bunlar YALNIZ
+    # `PostgresUnitOfWork.__enter__()` daxilində, KONKRET bir tranzaksiya
+    # açılanda mövcud olur. Bu konteynerin özü isə heç bir baza bağlantısı
+    # AÇMIR — `run_self_check()`-in bütün digər yoxlamaları da (sxem/miqrasiya
+    # FAYLLARI, şifrələmə round-trip, hadisə avtobusu) TAMAMİLƏ bazasız işləyir,
+    # çünki bu CLI HƏLƏ Baza Bağlantısı qurulmamış təzə maşında da işə
+    # düşməlidir (bax modul başlığı, "python -m src.main"). Ona görə burada
+    # DI-level "Postgres versiyası" YOXDUR — bu, arxitektural boşluq deyil,
+    # bu KONKRET istehlakçının (statik CLI özünə-yoxlama) DB-siz işləmə
+    # TƏLƏBİNİN nəticəsidir (davamlılıq qərarıdır, təhlükəsizlik güzəşti DEYİL).
+    #
+    # HƏQİQİ istehsalat yolu (`LeaveVerificationUseCase`) `Postgres
+    # SagaStateRepository`-ni `composition.py`-də, SESSİYA-BAĞLI UoW-dan alır —
+    # bax connection.py `_build_repositories()`, açar `"saga_state"`. Bu
+    # konteynerdəki `InMemorySagaStateRepository` YALNIZ bu CLI-nin ÖZ
+    # `_check_pending_reconciliation()`-u üçün fallback rolunu oynayır; həmin
+    # funksiya İNDİ (aşağı bax) baza konfiqurasiya OLUNUBSA canlı `saga_
+    # instances`-i BİRBAŞA sorğulayır və bu qeydiyyatdan İSTİFADƏ ETMİR.
     container.register_factory(
         SagaStateRepository,  # type: ignore[type-abstract]
         InMemorySagaStateRepository,
@@ -144,13 +165,89 @@ def _check_event_bus(container: DIContainer) -> CheckResult:
 
 
 def _check_pending_reconciliation(container: DIContainer) -> CheckResult:
-    """İnsan müdaxiləsi gözləyən saga varmı (bölmə 1)."""
-    pending = container.resolve(SagaOrchestrator).pending_reconciliation()
+    """İnsan müdaxiləsi gözləyən saga varmı (bölmə 1).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `container.resolve(SagaOrchestrator)` İŞLƏDİLMİR (D6)
+    ──────────────────────────────────────────────────────────────────────────
+    Konteynerdəki `SagaOrchestrator` `InMemorySagaStateRepository`-yə bağlıdır
+    (bax `build_container` şərhi) — TƏZƏ qurulmuş konteynerin yaddaşı HƏMİŞƏ
+    boşdur, ona görə köhnə sorğu (`.pending_reconciliation()`) ÖZ-ÖZLÜYÜNDƏ
+    HƏMİŞƏ boş nəticə verirdi, canlı bazadan ASILI OLMAYARAQ — yəni bu yoxlama
+    faktiki heç nəyi YOXLAMIRDI. Real vəziyyət YALNIZ `saga_instances`
+    cədvəlindədir (istehsalat yazıcısı: `PostgresSagaStateRepository`,
+    `composition.py`-dəki sessiya-bağlı UoW-dan). Ona görə bu funksiya
+    KONTEYNERİ keçib BİRBAŞA (qısa-ömürlü, hovuzsuz) bağlantı açır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ BAZA/KİMLİK YOXDURSA ERROR YOX, INFO (fail-open — davamlılıq, TƏHLÜKƏSİZLİK DEYİL)
+    ──────────────────────────────────────────────────────────────────────────
+    Bu CLI hələ `%PROGRAMDATA%\\KompasOS\\connection.json`/`installation.json`
+    yaranmamış TƏZƏ maşında da işə düşməlidir (bax modul başlığı) — məhz
+    `_check_schema_file`-ın frozen-build halında etdiyi seçimin analoqu.
+    DSN/kimlik yoxdursa bu, NASAZLIQ deyil, "hələ quraşdırılmayıb" deməkdir.
+    Baza KONFİQURASİYA OLUNUB, lakin qoşula/sorğula BİLMİRİKSƏ isə `WARNING`
+    (`ok=False`) qaytarılır — bu, `--strict` altında `ERROR`-a keçir (istehsalat
+    buraxılışı DB əlçatmazlığını görməzdən gəlməməlidir), adi/inkişaf
+    işlədilişini isə DAYANDIRMIR.
+    """
+    from src.infrastructure.persistence.connection import build_dsn_from_env  # noqa: PLC0415
+    from src.shared.exceptions import ConfigurationError  # noqa: PLC0415
+    from src.shared.installation import (  # noqa: PLC0415
+        InstallationIdentityError,
+        resolve_installation_identity,
+    )
+
+    try:
+        dsn = build_dsn_from_env()
+        tenant_id = resolve_installation_identity(allow_generate=False).tenant_id
+    except (ConfigurationError, InstallationIdentityError):
+        return CheckResult(
+            "saga_pending_reconciliation",
+            True,
+            "INFO",
+            "Baza/kimlik hələ qurulmayıb — saga vəziyyəti yoxlanılmadı "
+            "(ilk quraşdırmadan əvvəl gözlənilən haldır)",
+        )
+
+    import psycopg  # noqa: PLC0415
+    from psycopg.rows import dict_row  # noqa: PLC0415
+
+    try:
+        with (
+            psycopg.connect(dsn, connect_timeout=10, row_factory=dict_row) as conn,
+            conn.cursor() as cur,
+        ):
+            # `SET` (`SET LOCAL` YOX) — bu, hovuzsuz, TƏK istifadəlik bağlantıdır
+            # və `with` bloku bitər-bitməz bağlanır; pool-a sızma riski yoxdur.
+            cur.execute("SET search_path TO kompasos, public")
+            cur.execute("SET app.tenant_id = %s", (str(tenant_id),))
+            # `tenant_id = %s` AÇIQ ŞƏRTİ RLS-ə ƏLAVƏ ikinci qatdır (CLAUDE.md
+            # §6) — `current_tenant_id()` yuxarıdakı `SET`-dən gəlir, amma
+            # ikisi eyni MƏNBƏDƏN (bu funksiyanın öz dəyişəni) olduğu üçün
+            # uyğunsuzluq riski yoxdur, təkrar isə ucuzdur.
+            cur.execute(
+                "SELECT count(*) AS n FROM saga_instances "
+                "WHERE tenant_id = %s AND status = 'PENDING_RECONCILIATION'",
+                (str(tenant_id),),
+            )
+            row = cur.fetchone()
+            pending_count = int(row["n"]) if row else 0
+    except psycopg.Error as exc:
+        return CheckResult(
+            "saga_pending_reconciliation",
+            False,
+            "WARNING",
+            f"Saga vəziyyəti yoxlanıla bilmədi (baza əlçatmazdır): {exc}",
+        )
+
     return CheckResult(
         "saga_pending_reconciliation",
-        not pending,
-        "ERROR" if pending else "INFO",
-        f"{len(pending)} saga insan müdaxiləsi gözləyir" if pending else "Gözləyən saga yoxdur",
+        pending_count == 0,
+        "ERROR" if pending_count else "INFO",
+        f"{pending_count} saga insan müdaxiləsi gözləyir"
+        if pending_count
+        else "Gözləyən saga yoxdur",
     )
 
 

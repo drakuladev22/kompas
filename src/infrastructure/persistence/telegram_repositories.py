@@ -16,6 +16,14 @@ AAD (KONTEKST) NİYƏ KİRAYƏÇİ İD-Sİdir
 bir kirayəçinin token sətrini digərinin sətrinə köçürmək (baza faylına
 birbaşa çıxışı olan hücumçu üçün mümkün əməliyyat) deşifrə mərhələsində
 uğursuz olur. Kontekstsiz şifrələmə bu köçürməni sükutla qəbul edərdi.
+
+`tenant_id` BURADA `self._tenant`-dəndir (metod arqumentindən DEYİL) — bax
+sinif başlığındakı "İKİNCİ-QAT" bölməsi. `save()`-in şifrələdiyi kontekstlə
+`load()`/`describe()`-in deşifrə etdiyi kontekst EYNİ mənbədən (bağlantının
+`TenantContext`-i) gəlməlidir, əks halda arqument təsadüfən fərqli
+ötürülən bir çağırış AAD uyğunsuzluğu ÜZÜNDƏN deşifrəni sükutla
+uğursuz edərdi (bax `load()` və `describe()`-dəki "DEŞİFRƏ UĞURSUZLUĞU"
+şərhi) — düzgün sətir tapılsa belə.
 """
 
 from __future__ import annotations
@@ -48,7 +56,34 @@ def _context_of(tenant_id: TenantId) -> str:
 
 
 class PostgresTelegramConfigRepository(_BaseRepository):
-    """Kirayəçi başına BİR sətir + dəyişiklik arxivi."""
+    """Kirayəçi başına BİR sətir + dəyişiklik arxivi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    `tenant_id` ARQUMENTİ İKİNCİ-QAT ÜÇÜN DEYİL — `self._tenant` ƏSAS MƏNBƏDİR
+    ──────────────────────────────────────────────────────────────────────────
+    CLAUDE.md §6 "Repository" naxışı `self._tenant`-i RLS-ə ƏLAVƏ ikinci qat
+    kimi tələb edir (bax `support_repositories.py`-dakı eyni naxış — entity
+    ID-si ilə çağırılan metodlar `self._tenant`-i ƏLAVƏ `WHERE` şərti kimi
+    işlədir). Əvvəl bu sinif hər metodda ÇAĞIRANIN ötürdüyü `tenant_id`
+    arqumentini birbaşa `WHERE`/`INSERT`-ə yazırdı — RLS bu cədvəl üçün TƏK
+    qalan qoruma idi.
+
+    İndi BEŞ metodun (`load`/`describe`/`save`/`set_active`/`archive`)
+    hamısı `self._tenant`-i (bağlantının ÖZ `TenantContext`-i, çağırandan
+    ASILI OLMAYAN mənbə) işlədir. `tenant_id` arqumenti imza uyğunluğu üçün
+    QALIR (`TelegramConfigRepository` Protocol-u onu tələb edir, çağıran isə
+    `composition.py`-dır — `ui` sahəsi, buradan toxunulmur), amma sorğunun
+    NƏTİCƏSİNƏ artıq TƏSİR ETMİR.
+
+    ARQUMENT İLƏ `self._tenant` FƏRQLİ OLARSA NƏ BAŞ VERİR: sorğu/yazı YENƏ
+    `self._tenant`-ə görə gedir — çağıran səhvən başqa kirayəçinin ID-sini
+    ötürsə belə, bu repo YALNIZ ÖZ bağlantısının kirayəçisinə aid sətri
+    oxuyur/dəyişir, arqumentdəkini HEÇ VAXT. Praktiki fərq HAZIRDA yoxdur
+    (yeganə çağırış yeri, `composition.py:2501`, həmişə `self._tenant_id`
+    ötürür), amma bu dəyişiklik gələcək bir çağırış səhvini SÜKUTLA
+    cross-tenant sızıntıya çevirmək əvəzinə zərərsiz nəticəsizliyə (boş
+    oxu / toxunmayan yazı) çevirir.
+    """
 
     def __init__(
         self,
@@ -68,19 +103,20 @@ class PostgresTelegramConfigRepository(_BaseRepository):
         self._encryption = encryption
 
     def load(self, tenant_id: TenantId) -> TelegramSettings | None:
+        # `tenant_id` bu sorğuda İŞLƏNMİR — bax sinif başlığı.
         row = self._fetch_one(
             """
             SELECT bot_token_encrypted, chat_id, is_active
             FROM telegram_config
             WHERE tenant_id = %s
             """,
-            (tenant_id,),
+            (self._tenant,),
         )
         if not row:
             return None
         try:
             token = self._encryption.decrypt(
-                row["bot_token_encrypted"], context=_context_of(tenant_id)
+                row["bot_token_encrypted"], context=_context_of(self._tenant)
             )
         except Exception:
             # DEŞİFRƏ UĞURSUZLUĞU ÇÖKMƏ DEYİL: açar dəyişdirilibsə (yeni
@@ -103,6 +139,7 @@ class PostgresTelegramConfigRepository(_BaseRepository):
         onunla öz botunu tanıya bilməzdi. Deşifrə uğursuz olarsa maska boş
         qalır — «qurulub, amma oxunmur» vəziyyəti gizlədilmir.
         """
+        # `tenant_id` bu sorğuda İŞLƏNMİR — bax sinif başlığı.
         row = self._fetch_one(
             """
             SELECT c.bot_token_encrypted, c.chat_id, c.is_active, c.updated_at,
@@ -111,13 +148,13 @@ class PostgresTelegramConfigRepository(_BaseRepository):
             LEFT JOIN employees e ON e.id = c.updated_by
             WHERE c.tenant_id = %s
             """,
-            (tenant_id,),
+            (self._tenant,),
         )
         if not row:
             return None
         try:
             token = self._encryption.decrypt(
-                row["bot_token_encrypted"], context=_context_of(tenant_id)
+                row["bot_token_encrypted"], context=_context_of(self._tenant)
             )
         except Exception:
             _error_log.exception("TELEGRAM_TOKEN_DECRYPT_FAILED")
@@ -142,7 +179,10 @@ class PostgresTelegramConfigRepository(_BaseRepository):
         updated_by: EmployeeId,
         at: datetime,
     ) -> None:
-        sealed = self._encryption.encrypt(bot_token, context=_context_of(tenant_id))
+        # `tenant_id` YAZILAN sətrin açarı üçün İŞLƏNMİR — bax sinif başlığı:
+        # yeni sətir də HƏMİŞƏ bağlantının ÖZ kirayəçisinə (`self._tenant`)
+        # aid yaranır, arqumentin dəyərindən asılı olmayaraq.
+        sealed = self._encryption.encrypt(bot_token, context=_context_of(self._tenant))
         self._execute(
             """
             INSERT INTO telegram_config
@@ -155,19 +195,20 @@ class PostgresTelegramConfigRepository(_BaseRepository):
                 updated_by          = EXCLUDED.updated_by,
                 updated_at          = EXCLUDED.updated_at
             """,
-            (tenant_id, sealed, chat_id, is_active, updated_by, at),
+            (self._tenant, sealed, chat_id, is_active, updated_by, at),
         )
 
     def set_active(
         self, tenant_id: TenantId, *, is_active: bool, updated_by: EmployeeId, at: datetime
     ) -> None:
+        # `tenant_id` bu sorğuda İŞLƏNMİR — bax sinif başlığı.
         self._execute(
             """
             UPDATE telegram_config
             SET is_active = %s, updated_by = %s, updated_at = %s
             WHERE tenant_id = %s
             """,
-            (is_active, updated_by, at, tenant_id),
+            (is_active, updated_by, at, self._tenant),
         )
 
     def archive(self, tenant_id: TenantId, *, replaced_by: EmployeeId, at: datetime) -> bool:
@@ -176,6 +217,8 @@ class PostgresTelegramConfigRepository(_BaseRepository):
         `INSERT ... SELECT` istifadə olunur: şifrəli dəyər DEŞİFRƏ EDİLMƏDƏN
         köçürülür. Deşifrə edib yenidən şifrələsəydik, açıq token bir anlıq
         prosesin yaddaşına düşərdi — halbuki arxiv üçün buna ehtiyac yoxdur.
+
+        `tenant_id` bu sorğuda İŞLƏNMİR — bax sinif başlığı.
         """
         affected = self._execute(
             """
@@ -185,7 +228,7 @@ class PostgresTelegramConfigRepository(_BaseRepository):
             FROM telegram_config
             WHERE tenant_id = %s
             """,
-            (replaced_by, at, tenant_id),
+            (replaced_by, at, self._tenant),
         )
         return affected > 0
 

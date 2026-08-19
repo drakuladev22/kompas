@@ -28,6 +28,8 @@ from __future__ import annotations
 from enum import Enum
 from typing import Final
 
+from src.domain.entities.base import DomainRuleError
+
 #: Widget-dən mesaj yazmaq — DEFOLT bütün rollarda (Satıcı daxil).
 #:
 #: Kanal seçimindən ASILI DEYİL: hər iki kanal eyni widget-dən açılır və
@@ -187,6 +189,57 @@ class SupportTicketStatus(str, Enum):
         """
         return self is not SupportTicketStatus.CLOSED
 
+    def assert_transition_allowed(self, target: SupportTicketStatus) -> None:
+        """`self`-dən `target`-ə keçid QANUNİDİRMİ (D-R2-03 audit tapıntısı,
+        dövrə 2).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ BURADA, `SupportTicketUseCase.set_status`-DA YOX
+        ──────────────────────────────────────────────────────────────────────
+        DÖRD düymənin («Gözləmədəyə Keç», «Həll Olundu», «Bağla», «Yenidən
+        Aç») hamısı EYNİ use case metodundan keçirdi, LAKİN həmin metod
+        `status`-u HEÇ BİR keçid qaydası olmadan qəbul edirdi — ekranı yan
+        keçən çağırış `CLOSED` bir müraciəti birbaşa `OPEN`-a, elə həmin
+        anda YENƏ `CLOSED`-ə apara bilərdi, heç bir domen xətası atılmadan.
+        Qayda CLAUDE.md §6-nın "domen qaydası entity-də" prinsipinə görə
+        BURADA yaşayır — `SupportTicket` üçün ayrıca `AggregateRoot`
+        YOXDUR (bu subsistem yüngüldür, `Fine`/`LeaveRequest`-dən fərqli),
+        ona görə status DƏYƏR OBYEKTİNİN ÖZÜ ən yaxın domen evidir.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ EYNİ-STATUSA KEÇİD XƏTA DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Düymənin təkrar basılması (ikiqat klik) İSTİFADƏÇİ səhvidir, SİSTEM
+        pozuntusu deyil — ona görə `target is self` sükutla keçilir, aşağıdakı
+        cədvələ HEÇ MÜRACİƏT OLUNMUR. Audit sətrinin TƏKRARLANMAMASI isə bu
+        metodun işi DEYİL (bura yalnız "icazəlidirmi?" sualına cavab verir) —
+        `SupportTicketUseCase.set_status` çağırmadan ƏVVƏL bərabərliyi yoxlayıb
+        heç nə yazmadan qayıdır (bax orada yazılan şərh).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `CLOSED → OPEN` AÇIQDIR
+        ──────────────────────────────────────────────────────────────────────
+        Müştəri bağlanmış müraciəti YENİDƏN qaldıra bilməlidir — bu, real iş
+        axınıdır (bax `SupportTicketUseCase.send_message`-dəki "AVTOMATİK
+        KEÇİD 1": işçi HƏR hansı statusda cavab yazsa söhbət `OPEN`-a qayıdır,
+        `CLOSED` daxil). Cədvəl bunu `OPEN`-ın DA `CLOSED`-in tək icazəli
+        hədəfi olması ilə güzgüləyir.
+
+        DB TRİGGER-İ TƏLƏB OLUNMUR: CLAUDE.md §5-in "hər qayda İKİ yerdə"
+        tələbi struktur təhlükəsizlik zəmanətlərinə (bölmə 5: anti-fraud,
+        hardlock, TIME-1) aiddir — dəstək müraciətinin vəziyyət maşını pul/
+        səlahiyyət kəsişməsi deyil, ona görə ikinci qat MƏQSƏDLİ OLARAQ
+        yoxdur (`schema.sql`-də `support_tickets` üzərində CHECK/trigger
+        QƏSDƏN əlavə edilmədi).
+        """
+        if target is self:
+            return
+        if target not in _ALLOWED_STATUS_TRANSITIONS[self]:
+            raise DomainRuleError(
+                f"'{self.value}' statusundan '{target.value}'-a birbaşa keçid icazəli deyil",
+                context={"from": self.value, "to": target.value},
+            )
+
     @classmethod
     def parse(cls, raw: str | SupportTicketStatus) -> SupportTicketStatus:
         """Bazadan gələn sətri statusa çevirir.
@@ -223,6 +276,20 @@ _STATUS_RANK: Final[dict[SupportTicketStatus, int]] = {
     SupportTicketStatus.WAITING: 1,
     SupportTicketStatus.RESOLVED: 2,
     SupportTicketStatus.CLOSED: 3,
+}
+
+#: `SupportTicketStatus.assert_transition_allowed`-in mənbəyi (D-R2-03).
+#: Özünə-keçid (məs. `OPEN`→`OPEN`) QƏSDƏN BURADA YOXDUR — o, `assert_
+#: transition_allowed`-də AYRICA, xəta ATMADAN qısa-yolla həll olunur.
+_ALLOWED_STATUS_TRANSITIONS: Final[dict[SupportTicketStatus, frozenset[SupportTicketStatus]]] = {
+    SupportTicketStatus.OPEN: frozenset(
+        {SupportTicketStatus.WAITING, SupportTicketStatus.RESOLVED, SupportTicketStatus.CLOSED}
+    ),
+    SupportTicketStatus.WAITING: frozenset(
+        {SupportTicketStatus.OPEN, SupportTicketStatus.RESOLVED, SupportTicketStatus.CLOSED}
+    ),
+    SupportTicketStatus.RESOLVED: frozenset({SupportTicketStatus.OPEN, SupportTicketStatus.CLOSED}),
+    SupportTicketStatus.CLOSED: frozenset({SupportTicketStatus.OPEN}),
 }
 
 

@@ -12,7 +12,7 @@ lazımsız yükləyərdi (bax SEC-003).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from src.application.use_cases.leave_verification import (
     ModuleDisabledError,
@@ -41,7 +41,7 @@ from src.domain.value_objects.identifiers import (
     TenantId,
     new_attendance_record_id,
 )
-from src.domain.value_objects.scheduling import LatenessAssessment
+from src.domain.value_objects.scheduling import LatenessAssessment, resolve_work_date
 from src.shared.logger import get_logger
 
 _log = get_logger(__name__)
@@ -97,7 +97,7 @@ class MorningCheckInUseCase:
         """`[İşə Başladım]` — status `🟡 Giriş Təsdiqi Gözləyir`."""
         self._require_module(tenant_id, FeatureModule.CAMERA_VERIFICATION)
         requested_at, ntp_ok = self._verified_now(tenant_id, operation="STEP_A")
-        day = work_date or requested_at.date()
+        day = work_date or self._resolve_work_date(employee_id, at=requested_at)
 
         record = self._attendance.get_for_day(employee_id, day)
         if record is None:
@@ -154,7 +154,7 @@ class MorningCheckInUseCase:
     ) -> CheckInOutcome:
         """`[İşçini Təsdiqlə]` — günün rəsmi başlama vaxtı qeydə alınır."""
         verified_at, _ = self._verified_now(tenant_id, operation="STEP_C_VERIFY")
-        day = work_date or verified_at.date()
+        day = work_date or self._resolve_work_date(employee_id, at=verified_at)
         # Kilidli oxu: `[Təsdiqlə]` və `[Rədd Et]` eyni sətrə yazır. Kilidsiz
         # halda hər iki operator `PENDING_VERIFICATION` görür, hər ikisi audit
         # yazır və DB-də yalnız sonuncu status qalır — audit jurnalı ilə
@@ -200,7 +200,7 @@ class MorningCheckInUseCase:
         Status `⚪`-ya qayıdır və HR_Admin/Store Manager-ə DƏRHAL bildiriş gedir.
         """
         rejected_at, _ = self._verified_now(tenant_id, operation="STEP_C_REJECT")
-        day = work_date or rejected_at.date()
+        day = work_date or self._resolve_work_date(employee_id, at=rejected_at)
         # Kilidli oxu — `verify()` ilə eyni səbəb (paralel təsdiq/rədd yarışı).
         record = self._require_record_locked(employee_id, day)
         self._require_camera_permission(operator_id, record)
@@ -400,6 +400,22 @@ class MorningCheckInUseCase:
                 context={"drift_seconds": drift, "operation": operation},
             )
         return moment, False
+
+    def _resolve_work_date(self, employee_id: EmployeeId, *, at: datetime) -> date:
+        """`work_date` ötürülmədikdə iş gününü TƏYİN EDİR (D10 audit tapıntısı).
+
+        ƏVVƏL sadəcə `at.date()` idi — gecə növbəsi (22:00–06:00) işçisi
+        GECƏYARIDAN SONRA daxil olanda YANLIŞ təqvim gününə yazılırdı, çünki
+        onun növbəsi ƏVVƏLKİ günə təyin olunub (bax `work_norm.py`: "növbə
+        HƏMİŞƏ başladığı günə yazılır"). İki namizəd günün (bugün, dünən)
+        HƏLL OLUNMUŞ cədvəlini BİR sorğuda (`schedules_for`, PERF-1/2/3)
+        gətirib xalis domen funksiyasına (`resolve_work_date`) ötürür — TƏXMİN
+        YOX, DƏQİQ `TimeRange.covers()` yoxlaması (bax funksiyanın öz şərhi).
+        """
+        today = at.date()
+        yesterday = today - timedelta(days=1)
+        schedules = self._shifts.schedules_for(employee_id, (today, yesterday))
+        return resolve_work_date(at, schedules=schedules)
 
     def _require_module(self, tenant_id: TenantId, module: FeatureModule) -> None:
         if not self._toggles.is_enabled(tenant_id, module.value):

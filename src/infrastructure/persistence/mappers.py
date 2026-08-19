@@ -38,6 +38,7 @@ from src.domain.value_objects.identifiers import (
     AttendanceRecordId,
     EmployeeId,
     FineId,
+    FineReviewBatchId,
     FineTypeId,
     LeaveRequestId,
     LeaveTypeId,
@@ -343,6 +344,17 @@ def fine_from_row(row: Row) -> Fine:
     fine.reversed_at = row.get("reversed_at")
     fine.reversal_reason = row.get("reversal_reason")
     fine.exported_period = row.get("exported_period")
+    # SEC-8: sütun ARTIQ SELECT-dədir (`PostgresFineRepository._SELECT`) —
+    # əvvəllər burada heç toxunulmurdu, yəni "bu cərimə hansı partiyada nəşr
+    # olundu?" sualı bərpa olunmuş obyektdə HƏMİŞƏ cavabsız qalırdı, halbuki
+    # `publish()`/`discard_in_review()` onu yaddaşda düzgün təyin edirdi.
+    fine.review_batch_id = (
+        FineReviewBatchId(row["review_batch_id"]) if row.get("review_batch_id") else None
+    )
+    # D7: `idempotency_key` xam `uuid.UUID`-dir (`FineId` kimi domen NewType-i
+    # DEYİL) — psycopg sütunu artıq düzgün tiplə qaytarır, çevirməyə ehtiyac
+    # yoxdur (bax `fine.py:57`-dəki idxal).
+    fine.idempotency_key = row.get("idempotency_key")
     # M-6: TÖRƏMƏ sütun (`fines`-də saxlanmır) — sorğu onu `fine_appeals`
     # üzərindən `EXISTS(...)` ilə hesablayır. Sütun gəlmirsə (məs. yalnız
     # `fines`-i seçən köhnə/xarici sorğu) `False` qalır; həmin yolda export
@@ -375,6 +387,12 @@ def fine_to_params(fine: Fine) -> dict[str, Any]:
         "reviewed_by": fine.reviewed_by,
         "review_decision_reason": fine.review_decision_reason,
         "exported_period": fine.exported_period,
+        # SEC-8: əvvəllər BURADA da YOX idi — `save()` onu heç vaxt bazaya
+        # göndərmirdi (bax `PostgresFineRepository.save`-in şərhi).
+        "review_batch_id": fine.review_batch_id,
+        # D7: ikiqat manual cərimə göndərişinin qarşısını alan açar
+        # (migrations/074) — `None` `AUTO_DELAY`/köhnə sətirlər üçün normaldır.
+        "idempotency_key": fine.idempotency_key,
     }
 
 

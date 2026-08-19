@@ -77,6 +77,7 @@ if TYPE_CHECKING:
     from src.domain.policies import BreakAllowance
     from src.domain.value_objects.catalogs import LeaveType
     from src.domain.value_objects.identifiers import EmployeeId, LeaveTypeId, StoreId
+    from src.domain.value_objects.machine_identity import MachineIdentityHash
     from src.presentation.composition import ApplicationContext, Session
 
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
@@ -155,9 +156,20 @@ class FaceGate:
 class KioskController:
     """İşçi Ana Ekranının arxa tərəfi."""
 
-    def __init__(self, context: ApplicationContext, *, store_id: StoreId) -> None:
+    def __init__(
+        self,
+        context: ApplicationContext,
+        *,
+        store_id: StoreId,
+        machine_key: MachineIdentityHash,
+    ) -> None:
         self._context = context
         self._store_id = store_id
+        # SEC-01/SEC-05 (dövrə 3) — BİR DƏFƏ, KONSTRUKTORDA hesablanır (bax
+        # `app.py::_build_kiosk_controller`, `store_id`-nin EYNİ naxışı):
+        # maşın kimliyi sessiya ərzində DƏYİŞMİR, hər PIN cəhdində registry-
+        # dən yenidən oxumaq lazımsız I/O olardı.
+        self._machine_key = machine_key
 
     # -------------------------------- PIN ------------------------------------ #
 
@@ -165,6 +177,8 @@ class KioskController:
         """PIN handshake — uğurlu olduqda işçi və onun cari statusu qaytarılır."""
         try:
             with self._context.session() as session:
+                import socket  # noqa: PLC0415
+
                 from src.application.use_cases.authentication import (  # noqa: PLC0415
                     PinHandshakeUseCase,
                 )
@@ -173,6 +187,9 @@ class KioskController:
                 )
                 from src.infrastructure.timekeeping.clock import (  # noqa: PLC0415
                     SystemClock,
+                )
+                from src.shared.security_events import (  # noqa: PLC0415
+                    FailSoftSecurityEventRecorder,
                 )
 
                 employees = session.uow.employees
@@ -198,12 +215,34 @@ class KioskController:
                     clock=SystemClock(),
                     limits=session.limits,
                     audit=session.uow.audit,
+                    # SEC-7 — SARILMIŞ forma MƏCBURİDİR (bax `app.py::
+                    # _SessionScopedLogin.login` eyni şərhi): xam repo
+                    # bağlansaydı `security_events` yazı xətası PIN girişini
+                    # DAYANDIRARDI — kassa növbəsində bu, DOĞRUDAN-DOĞRUYA
+                    # xidmət kəsintisidir.
+                    security_events=FailSoftSecurityEventRecorder(
+                        session.uow.repository("security_events")
+                    ),
+                    # SEC-01 (dövrə 3) — XAM repo, SARILMIR: `security_events`-
+                    # dən FƏRQLİ, terminal PIN throttle TƏHLÜKƏSİZLİK QAPISININ
+                    # ÖZÜDÜR. Fail-soft bükücü onu `security_events` kimi
+                    # "yazı uğursuz olsa keç" edərdi — nəticədə throttle
+                    # sükutla söndürülmüş olardı, məhz SEC-7-nin qadağan
+                    # etdiyi hal ("təhlükəsizlik qapısını fail-soft mənbədən
+                    # qidalandırmaq olmaz").
+                    pin_throttle=session.uow.repository("pin_throttle"),
                 )
                 result = use_case.authenticate(
                     tenant_id=self._context.tenant_id,
                     store_id=self._store_id,
+                    # SEC-01/SEC-05 (dövrə 3) — konstruktorda BİR DƏFƏ oxunub
+                    # (bax `__init__`, `_build_kiosk_controller`).
+                    machine_key=self._machine_key,
                     pin=pin,
                     pin_hashes=pin_hashes,
+                    # `ip_address` naməlum (masaüstü tətbiq, HTTP sorğusu
+                    # yoxdur) — uydurmaqdansa `None`.
+                    machine_name=socket.gethostname(),
                 )
                 # Uğursuz cəhdin sayğacı da yazılmalıdır (lockout, bölmə 2).
                 session.commit()

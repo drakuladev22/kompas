@@ -257,10 +257,17 @@ class TelegramApiClient:
     def get_updates(self, token: str, *, offset: int) -> list[dict[str, Any]]:
         """Yeni yenilikləri gətirir.
 
-        `timeout=0` (qısa sorğu) QƏSDƏNdir: uzun sorğu (long polling) fon
-        sapını 30 saniyəyə qədər saxlayardı və tətbiq bağlananda həmin sap
-        gözləməkdə qalardı. Qısa sorğu + `TELEGRAM_POLL_INTERVAL_SECONDS`
-        eyni gecikməni verir, lakin hər dövr sərbəst bitir.
+        `timeout=0` (qısa sorğu) QƏSDƏNdir: Telegram-ın öz `long polling`-i
+        (uzun sorğu) 30 saniyəyə qədər bloklayardı. Qısa sorğu +
+        `TELEGRAM_POLL_INTERVAL_SECONDS` eyni gecikməni verir, lakin hər
+        dövr sərbəst bitir.
+
+        D3-02 (dövrə 3 audit): bu çağırışın ÖZÜ real HTTP sorğusudur və
+        `httpx.Client`-in taymautuna (`TELEGRAM_REQUEST_TIMEOUT_SECONDS`,
+        fallback 15 san) qədər bloklaya bilər. Çağıran
+        (`presentation/controllers/support_inbox.py::poll_telegram`) bunu
+        İNDİ `BackgroundTask` daxilində, fon sapında çağırır (əvvəl GUI
+        sapında sinxron idi — UI-02/D3-01 ilə eyni qüsur sinfi idi).
 
         `allowed_updates` yalnız `message`: bot qrupa əlavə olunanda gələn
         onlarla xidmət yeniliyi (`my_chat_member` və s.) növbəni doldurar və

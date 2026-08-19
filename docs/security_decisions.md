@@ -363,7 +363,8 @@ bir neçə əsas biznes qaydası görünmədən sönərdi.
 
 ## SEC-011 — Sessiya idarəetməsi
 
-**Vəziyyət:** Qəbul edildi
+**Vəziyyət:** Qəbul edildi — **TƏTBİQ OLUNUB** (bax aşağıda "FAKTİKİ VƏZİYYƏT
+(dövrə 1 audit)" — client-tərəfli uzaqdan-ləğv gecikməsi ilə, CRITICAL deyil)
 
 **Problem.** Bölmə 2: *"Kamera_Nəzarətçisi … növbə boyu sessiya açıq qalır."*
 Müddət və ləğv mexanizmi göstərilmir — gecə növbəsinə qalan açıq sessiya
@@ -380,7 +381,38 @@ ertəsi gün başqasının əlinə keçə bilər.
   əməliyyat üçün PIN);
 - `revoked_at`/`revoked_by` — admin uzaqdan ləğv edə bilir.
 
-**Tətbiq:** `schema.sql` §17b, TEST 16.
+**FAKTİKİ VƏZİYYƏT (dövrə 2/3 audit, SEC-5, 2026-08-19) — TARİXİ QEYD, BU
+BOŞLUQ AŞAĞIDAKI "dövrə 1 audit" BƏNDİNDƏ BAĞLANIB, sətir SİLİNMİR ki, tapılma
+→ düzəliş zənciri görünsün:** `schema.sql` §17b
+`auth_sessions` cədvəlini tam təyin edir, LAKİN heç bir tətbiq qatı ona
+YAZMIR — giriş axını (`application/use_cases/authentication.py`) token
+yaratmır, `token_hash` yazmır, `expires_at`/`absolute_expiry` yoxlamır.
+`presentation/controllers/profile.py:341-420` cədvəldən OXUYUR, amma yazan
+tərəf olmadığı üçün istifadəçiyə HƏMİŞƏ boş sessiya siyahısı göstərilir.
+Nəticə: yuxarıdakı bütün müddət/ləğv zəmanətləri sənədləşdirilib, LAKİN
+işləmir — panel/kamera dashboard sessiyası heç vaxt vaxt bitimi ilə bağlanmır.
+Düzəliş SEC-5 iş müqaviləsi ilə (`domain`+`infra`+`ui`) davam edir; bu bənd
+kodu yazan agentlər tərəfindən "Tətbiq" sətri ilə YENİLƏNMƏLİDİR.
+
+**FAKTİKİ VƏZİYYƏT (dövrə 1 audit, security, 2026-08-19):** Yuxarıdakı boşluq
+BAĞLANDI — `SessionManagementUseCase` (`authentication.py`) indi `issue`/
+`validate`/`touch`/`revoke` yazır, `PostgresAuthSessionRepository` DB-yə
+bağlanıb, `SessionGuard` (`presentation/controllers/session_guard.py`) client
+tərəfini idarə edir. **Qalan, ŞÜURLU məhdudiyyət:** uzaqdan ləğv (`revoke`,
+`can_revoke_sessions`) DƏRHAL deyil — subyekt tərəf yalnız növbəti dırnaqlanmış
+fəaliyyət callback-ində (`SessionGuard._maybe_touch`, throttle = MAX(60 san.,
+hərəkətsizlik pəncərəsinin 1/6-sı; defolt 30 dəq. üçün ~5 dəq.) `validate()`
+çağırır və ləğvi öyrənir. Yəni admin sessiyanı uzaqdan bağlasa, subyekt sonrakı
+1-5 dəqiqə ərzində panelə davam edə bilər. Bu, PERF-1/2/3 fəlsəfəsi ilə uyğun,
+şüurlu trade-off-dur (hər siçan hərəkətində DB gediş-gəlişi UI-1-in düzəltdiyi
+donmanı YENİDƏN yaradardı) — CRITICAL deyil, lakin Root panelində "dərhal
+bağlanır" gözləntisi YARADILMAMALIDIR; "növbəti fəaliyyətdə bağlanır" düzgün
+ifadədir.
+
+**Tətbiq:** `schema.sql` §17b, `src/application/use_cases/authentication.py`
+(`SessionManagementUseCase`), `src/infrastructure/persistence/auth_session_repository.py`,
+`src/presentation/controllers/session_guard.py`, `src/presentation/app.py`
+(`_touch_session`), `migrations/072` (`can_revoke_sessions` + Root limitləri).
 
 ---
 
@@ -419,8 +451,16 @@ diff-inə düşməsin.
 **Vəziyyət:** Qəbul edildi
 
 `HashingService._verify` hesab mövcud olmasa belə **dummy hash** yoxlayır —
-cavab vaxtı "bu e-poçt sistemdə var/yoxdur" məlumatını sızdırmır. TOTP kod
-müqayisəsi `secrets.compare_digest` ilə sabit vaxtlıdır.
+cavab vaxtı "bu e-poçt sistemdə var/yoxdur" məlumatını sızdırmır.
+
+**SƏNƏD DÜZƏLİŞİ (dövrə 3 audit, 2026-08-19):** Bu bənd əvvəllər "TOTP kod
+müqayisəsi `secrets.compare_digest` ilə sabit vaxtlıdır" da deyirdi — həmin
+sətir artıq SƏHVDİR: TOTP/2FA SEC-016 ilə TAMAMILƏ ÇIXARILIB (bax SEC-004
+LƏĞV qeydi), `totp.py` faylı repoda YOXDUR. Sətir silindi ki, mövcud olmayan
+bir qoruma "aktivdir" kimi görünməsin. Qalan iddia (şifrə üçün dummy-hash
+sabit vaxt) `hashing.py:486-493`-də TƏSDİQLƏNDİ.
+
+**Tətbiq:** `src/infrastructure/security/hashing.py` (`verify_password`, `_verify`).
 
 ---
 
@@ -477,6 +517,28 @@ ikinci maneə idi; o maneə artıq yoxdur. Qalan tədbirlər: Argon2id +
 `must_change_password`, `security_events` qeydiyyatı, sessiya limitləri
 (SEC-011), enumeration qorunması (SEC-014). Kompensasiya tam deyil — bu,
 qəbul edilmiş biznes riskidir.
+
+**DÜZƏLİŞ (dövrə 3 dərin audit, 2026-08-19) — TARİXİ QEYD, BU İKİ BOŞLUQ
+DÖVRƏ 1 AUDİTİNDƏ (aşağıya bax) BAĞLANIB, sətir SİLİNMİR ki, tapılma →
+düzəliş zənciri görünsün.** O anda yuxarıdakı DÖRD kompensasiya tədbirindən
+YALNIZ İKİSİ kodda REAL idi: Argon2id+pepper (SEC-005) və enumeration
+qorunması (SEC-014). Qalan İKİSİ (`security_events` qeydiyyatı, sessiya
+limitləri) HAZIR DEYİLDİ.
+
+**FAKTİKİ VƏZİYYƏT (dövrə 1 audit, security, 2026-08-19) — QALAN İKİSİ DƏ
+İNDİ BAĞLIDIR:**
+- `security_events` qeydiyyatı — `FailSoftSecurityEventRecorder.record()`
+  (`src/shared/security_events.py`) 11 çağırış nöqtəsində işləyir
+  (`authentication.py` ×7 — login uğuru/uğursuzluğu, PIN uğursuzluğu,
+  lockout, sessiya issue/revoke/expiry; `dual_control_guard.py` ×2;
+  `face_control.py` ×1; `permission_guards.py` ×1). Cədvəl artıq DOLUR.
+- sessiya limitləri (SEC-011) — TƏTBİQ OLUNUB (yuxarıda SEC-011 bəndinin
+  "dövrə 1 audit" qeydinə bax; qalan yeganə məhdudiyyət uzaqdan-ləğvin
+  1-5 dəq. gecikməsidir, CRITICAL deyil).
+
+Yəni 2FA-nın çıxarılmasını əsaslandıran "qalan tədbirlər" siyahısının
+DÖRDÜ DƏ indi kodda REAL-dır — dövrə 3-ün qaldırdığı "qərarın əsası
+yenidən qiymətləndirilməlidir" narahatlığı bu baxımdan aradan qalxıb.
 
 **Niyə `email` sütunu silinmədi, ADI DƏYİŞDİRİLDİ.** Tələb həm "email
 identifikator kimi çıxarılsın", həm "yeni nullable `notification_email`
@@ -1108,6 +1170,158 @@ selektor yaratmaq QSS-i ekranın daxili quruluşuna bağlayardı.
 
 **Tətbiq:** `presentation/shell/window.py`, `presentation/screens/group_a_entry.py`,
 `presentation/shell/admin_shell.py`, `tests/unit/test_theme_switch_prelogin.py`.
+
+---
+
+## SEC-032 — Bərpa Konsolu bypass-ı: deşifrə orakulu riski (dövrə 1 audit, RECOVERY-1/"SEC-2")
+
+**Vəziyyət:** Qəbul edildi — düzəliş `ui` tərəfindən icra olunur (Qayda A + Qayda B)
+
+**Problem.** `recovery_console.may_open()` `Ctrl+Shift+K` qapısını `configured=True`
+maşında `actor=None` ikən DƏ açır — YALNIZ `DATABASE_UNREACHABLE`/
+`CREDENTIALS_MISSING` hallarında (toyuq-yumurta arqumenti: baza əlçatmazdırsa
+səlahiyyət ümumiyyətlə yoxlana bilmir). Bu qapının ARXASINDAKI əməliyyatlar
+İSƏ əvvəllər YALNIZ autentifikasiyalı `Root` üçün nəzərdə tutulmuşdu və audit
+zamanı YENİDƏN gözdən keçirilmədi.
+
+`RecoveryConsoleController._settings_from()` ekranın boş `password` sahəsini
+"dəyişmə" kimi oxuyub `connection_file.load_settings()`-in DEŞİFRƏ ETDİYİ
+(DPAPI maşın açarı ilə şifrələnmiş) **istehsalat DB parolunu** geri qaytarır —
+`host`/`port`/`username` isə İSTİFADƏÇİNİN yazdığı sərbəst dəyərdir. Nəticə:
+`_on_test`/`_on_check`/`_on_provision` (hətta `_on_save`) bu parolu
+`ConnectionSettings.dsn()` üzərindən İXTİYARİ hosta göndərir. **Deşifrə
+orakulu:** DB kabelini çıxarmaq/kimlikləri korlamaq kifayətdir ki, fiziki
+girişi olan hər kəs autentifikasiyasız şəkildə konsolu açsın, `host` sahəsinə
+öz serverini yazsın, parolu boş buraxsın və "Bağlantını Yoxla" ilə istehsalat
+DB parolunu açıq mətnlə öz serverinə göndərsin.
+
+**Qərar — İKİ QAYDA birlikdə (biri təkbaşına kifayət etmir):**
+
+* **Qayda A** — saxlanmış parol YALNIZ `host`/`port`/`username` DƏYİŞMƏYİBSƏ
+  bərpa edilir; dəyişibsə boş sahə "sil" deyil, "parolu AÇIQ yaz" tələbinə
+  çevrilir.
+* **Qayda B** — Qayda A TƏK BAŞINA YETƏRLİ DEYİL: `installer/KompasOS.iss:127`
+  `%PROGRAMDATA%\KompasOS`-a `Permissions: users-modify` verir (QƏSDƏN —
+  paylaşılan kassa PC-sində kassir B-nin proqramı kassir A-nın yazdığı
+  `connection.json`-u yeniləyə bilməsi üçün, bax faylın öz şərhi). Yəni adi
+  istifadəçi hüquqlu hücumçu `connection.json`-un `host` sahəsini əl ilə (GUI-
+  dan kənar) redaktə edib öz serverinə yönəldə, `password_encrypted`-ə
+  TOXUNMADAN — konsol açılanda Qayda A-nın müqayisəsi "eyni hədəf" görər və
+  keçər. Ona görə: **konsol `actor=None` bypass-ı ilə açılıbsa, saxlanmış
+  parol HEÇ VAXT deşifrə edilmir** — nə test/check/provision, nə də save
+  üçün (gecikdirilmiş sızmanın qarşısı: host dəyişib parolu saxlayan bir
+  `save` növbəti açılışda tətbiqi hücumçunun serverinə bağlayardı).
+  Autentifikasiyalı `Root` üçün "boş = dəyişmə" erqonomikası TOXUNULMADAN
+  qalır — Qayda B YALNIZ `actor is None` yolunu əhatə edir.
+
+**AÇIQ SUAL (bu dövrədə HƏLL EDİLMİR, bax `docs/open_questions.md` OQ-003):**
+`ConnectionSettings.dsn()` defolt `sslmode=require` işlədir — bu, nəqliyyatı
+şifrələyir, LAKİN server sertifikatını DOĞRULAMIR (`verify-full` DEYİL).
+Yəni Qayda A/B-dən ASILI OLMAYARAQ, `_on_test` kimi əməliyyatlar TLS-in
+özü ilə "bu, HƏQİQƏTƏN bizim serverimizdir" iddiasını yoxlamır — TLS yalnız
+dinləyicini pasiv dinləməkdən qoruyur, saxta serverdən YOX. `verify-full`-a
+keçid (kök sertifikat idarəsi, quraşdırma mürəkkəbliyi) ayrıca qərar tələb
+edir.
+
+**Tətbiq:** `src/presentation/controllers/recovery_console.py`
+(`_settings_from`, `_on_test`/`_on_check`/`_on_provision`/`_on_save`),
+`installer/KompasOS.iss:127` (ACL-in ÖZÜ QALIR — layihənin şüurlu qərarıdır,
+yalnız üzərinə Qayda A/B əlavə olunur).
+
+---
+
+## SEC-033 — Kiosk PIN throttle-u `store_id`-ə YOX, `machine_guid` hash-inə bağlanır (dövrə 3 audit, SEC-01/SEC-05)
+
+**Vəziyyət:** Qəbul edildi — kod YAZILIR (dövrə 3, `domain`+`infra`)
+
+**Problem — SEC-01: PIN lockout mövcud deyildi.** `PinHandshakeUseCase.
+register_failure()` heç bir kontroller tərəfindən çağırılmırdı (yalnız
+testlərdən) — PIN brute-force MƏHDUDLAŞDIRILMIRDI. Struktur səbəb: PIN
+mağaza-daxili bütün namizədlər üzərində sınanır (bölmə 2-nin "PIN özü
+identifikator deyil" qərarı), yəni yanlış cəhddə HANSI İŞÇİNİN bloklanacağı
+sualının cavabı YOXDUR — işçi-səviyyəli lockout bura tətbiq oluna BİLMƏZ.
+Həll TERMİNAL/MAĞAZA-səviyyəli throttle olmalı idi.
+
+**[SEC-05] — `store_id` açar KİMİ RƏDD EDİLDİ.** İlk dizayn `store_pin_
+throttle` cədvəlinin PK-sini `(tenant_id, store_id)` təklif edirdi. Audit
+zamanı üzə çıxdı ki, kiosk-un `store_id`-si YALNIZ `KOMPASOS_STORE_ID`
+mühit dəyişənindən gəlir (`.env.example`, `presentation/app.py::
+_build_kiosk_controller`) və HEÇ BİR DB-bağlı yoxlamadan (device_registry,
+aparat izi) keçmir. İstehsalatda `.env` faylı OLMAMALIDIR (`main.py::
+_check_dotenv` bunu yoxlayır) — yəni dəyər İSTİFADƏÇİ-SƏVİYYƏLİ Windows
+mühit dəyişəni (`HKCU\Environment`) kimi saxlanılmalıdır, bu isə ADMİN
+HÜQUQU TƏLƏB ETMİR. Nəticə: fiziki/yerli girişi olan hücumçu `KOMPASOS_
+STORE_ID`-i istənilən UUID-ə dəyişib tətbiqi YENİDƏN başlada bilər (reboot
+LAZIM DEYİL) və throttle cədvəlində HƏR DƏFƏ sıfır-sayğaclı YENİ sətir alar
+— `store_id`-ə bağlı throttle PRAKTİKİ SIFIR qoruma verirdi.
+
+**Niyə `device_id` DƏ rədd edildi.** Alternativ namizəd `device.json`-dakı
+`device_id` UUID-i idi (DEVICE-1). CLAUDE.md §8-in özü təsdiqləyir: "silinsə
+cihaz YENİ qeydiyyat yaradır" — yəni `device_registry.register_self()`
+`device_id is None` olanda (fayl silinəndə) FİNGERPRINT-ə görə mövcud sətri
+AXTARMADAN birbaşa YENİ təsadüfi `device_id` yaradır
+(`device_registry.py:198`). `device_id` `store_id` qədər asan olmasa da,
+EYNİ sinif zəiflik daşıyır: bir faylın silinməsi qədər ucuz sıfırlama.
+
+**Qərar — `machine_guid` (SHA-256 hash-i) açar, `store_id` YALNIZ
+məlumat sütunu.**
+
+* `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography\MachineGuid`
+  (`device_identity.py`) — registry-dən, subprocess-siz, ~0.5 ms (hər PIN
+  cəhdində oxumaq UCUZDUR) və **`HKLM`-dədir** — dəyişmək üçün Windows
+  ADMİN hüququ tələb olunur, sadə istifadəçi sessiyasından mümkün deyil.
+  Ucuzluq və müqavimət eyni anda təmin olunur.
+* TAM `collect_fingerprint()` (anakart/disk/SMBIOS seriyaları,
+  `HARDWARE_PROBE_TIMEOUT_SECONDS=8.0`) İŞLƏDİLMİR — hər PIN cəhdi üçün
+  8 saniyəyə qədər gecikmə YARARSIZ olardı; `machine_guid` TƏK BAŞINA
+  "izin lövbəri" kimi kifayət edir (bax `device_identity.py`-nin öz
+  başlığı: bu, kimlik deyil, dəyişiklik detektorudur).
+* Dəyər XAM saxlanmır, SHA-256 HASH-İ saxlanılır — cədvəl aparat
+  inventarına çevrilməsin.
+* `store_id` PK-DAN ÇIXARILDI, sütun kimi QALIR (yalnız diaqnostika/audit
+  üçün) — SEC-05-in özünü təkrarlamamaq üçün açarın hissəsi OLA BİLMƏZ.
+
+**QƏBUL EDİLƏN RESİDUAL RİSK — klonlanmış disk/VM imici toqquşması.**
+`MachineGuid` Windows QURULUŞU zamanı yaranır və DİSK KLONLAMASINDA
+(Clonezilla/FOG/VM template, `sysprep /generalize` İCRA EDİLMƏYİBSƏ)
+SÜRƏTLƏ eyni qalır — bir neçə fiziki/virtual maşın EYNİ dəyəri daşıya
+bilər. `store_id` açardan çıxarıldığı üçün belə bir toqquşmada BİRDƏN ÇOX
+mağaza EYNİ throttle sətrini PAYLAŞAR:
+
+* **Öz-özünə DoS:** klonlanmış mağazalarda EYNİ ANDA baş verən tamamilə
+  qanuni, ünsiyyətsiz PIN səhvləri BİRLƏŞİB həddi hücumçusuz keçə bilər.
+* **Gücləndirilmiş hücum:** bir mağazada bilərəkdən brute-force digər
+  bütün klonlanmış mağazaları da kilidləyər — tək-nöqtəli fiziki giriş
+  çox-nöqtəli kəsintiyə çevrilir.
+* **MƏHDUDLAŞDIRICI AMİL (nəticəni yumşaldır):** kilid MÜDDƏTLİDİR
+  (`locked_until = now + KIOSK_STORE_PIN_LOCKOUT_MINUTES`, defolt 15 dəq) və
+  öz-özünə sağalır — ən pis nəticə "N mağaza 15 dəqiqə PIN girişindən
+  məhrum qalır", DAİMİ kəsinti DEYİL. Orijinal vəziyyətdə (SEC-01-dən
+  ƏVVƏL) qoruma AYLARLA yox idi; bu residual isə FƏRQLİ və MƏHDUD bir
+  nasazlıq rejimidir, "daha pis" deyil.
+
+**Yumşaltma (bloklayıcı deyil, iki qatlı):**
+1. **Sənəd/operativ tədbir** — çox-mağazalı müştəri eyni Windows imicini
+   klonlayırsa `sysprep /generalize /oobe` (və ya ekvivalent) MƏCBURİDİR;
+   bu, quraşdırma sənədinə (`docs/build_and_release.md`, `infra`) əlavə
+   olunur.
+2. **Aşkarlama** — `store_pin_throttle` repozitoriyası cari sətirdəki
+   SAXLANMIŞ `store_id`-i qaytarır, use case (DOMEN QATI, repo YOX — DB
+   yazısı domen hadisəsi deyil) onu İNDİKİ `store_id` ilə müqayisə edir;
+   fərqlidirsə `security_events`-ə `SUSPECTED_CLONED_MACHINE_GUID` yazılır
+   və sətir yenilənir. Məqsəd: toqquşma SÜKUTLA baş verməsin — SEC-01-in
+   ÖZÜNÜN dərsi ("sükutla söndürülmüş qoruma aylarla görünmür") burada
+   TƏKRARLANMASIN.
+
+**NİYƏ `store_id` GERİ AÇARA QAYTARILMADI:** bu, SEC-05-i BİRBAŞA yenidən
+açardı — hücumçu yenidən `store_id`-i dəyişməklə qaça bilərdi. İki risk
+arasında (trivial sıfırlama vs. məhdud-müddətli klon-toqquşması) `machine_
+guid`-in tərəfi seçildi.
+
+**Tətbiq:** `src/infrastructure/config/device_identity.py`
+(`compute_machine_guid_hash` və ya ekvivalent), yeni `store_pin_throttle`
+cədvəli (`database/migrations/`, `infra`), `PinHandshakeUseCase`
+(`domain`), `docs/build_and_release.md` (`infra`, sysprep tələbi).
 
 ---
 

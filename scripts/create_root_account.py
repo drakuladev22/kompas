@@ -56,6 +56,7 @@ import getpass
 import os
 import sys
 import uuid
+from contextlib import suppress
 from pathlib import Path
 from typing import Final
 
@@ -87,6 +88,24 @@ def _load_dotenv() -> None:
             continue
         key, _, value = line.partition("=")
         os.environ.setdefault(key.strip(), value.strip())
+
+
+def _ensure_utf8_stdio() -> None:
+    """Windows-un defolt konsol kodlaşdırmasını (cp1252) DÜZƏLDİR.
+
+    `scripts/apply_migrations.py::_ensure_utf8_stdio`-nun HƏRFİ nüsxəsi.
+    Bu skript SEC-024 bootstrap addımıdır — ən həssas skriptlərdən biri — və
+    sətir 266-dakı "OK — `Root` hesabı yaradıldı" təsdiqi məhz hesab BAZAYA
+    YAZILDIQDAN (COMMIT-dən) SONRA çap olunur. `PYTHONIOENCODING`
+    təyin edilməyəndə həmin çap `UnicodeEncodeError` ilə çökür — yəni Root
+    hesabı FAKTİKİ yaradılır, operator isə traceback görüb əks nəticə zənn
+    edə, əməliyyatı TƏKRARLAMAĞA cəhd edə bilər (nəticədə `--force` tələb
+    olunan ikinci Root axtarışı).
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            with suppress(Exception):
+                stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def _prompt_password(minimum: int) -> str:
@@ -155,6 +174,7 @@ def _resolve_tenant(explicit: str | None) -> uuid.UUID:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description="Təchizatçının `Root` hesabını yaradır")
     parser.add_argument("--username", default="developer", help="Giriş identifikatoru")
     parser.add_argument("--first-name", default="Texniki", help="Ad")

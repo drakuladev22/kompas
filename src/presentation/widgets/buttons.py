@@ -16,24 +16,34 @@ Qt `QIcon`-un rəngini QSS ilə dəyişə bilmir — ikon hazır piksel şəklid
 Maketdə isə aktiv naviqasiya ikonu amber, passiv ikon bozdur. Ona görə
 `NavButton` vəziyyət dəyişəndə ikonu YENİDƏN ÇƏKİR (`icons.render`), rəngi
 konstruktorda verilən cütdən götürərək.
+
+──────────────────────────────────────────────────────────────────────────────
+KLAVİATURA-YALNIZ FOKUS HALQASI (`KeyFocusRingMixin`) `focus_ring.py`-A KÖÇDÜ
+──────────────────────────────────────────────────────────────────────────────
+D11 (dövrə 2/3 audit): mixin əvvəl BURADA yaşayırdı, indi `primitives.py`
+(`FilterChip`, `LinkLabel`, `ClickableCard`), `data_table.py` (`TableRow`)
+və `screens/group_g.py` (`NotificationItem`) tərəfindən DƏ işlədilir.
+Bu fayl `primitives.py`-dan idxal etdiyi üçün (`plain_label`) mixin buraya
+qala bilməzdi — dövri idxal yaranardı. Bax `focus_ring.py` modul başlığı.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, Final
+from typing import TYPE_CHECKING, ClassVar
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, QSize, Qt
+from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QPushButton, QSizePolicy, QWidget
 
 from src.presentation.theme.manager import refresh_widget_style
 from src.presentation.theme.tokens import ThemeMode, theme_tokens
 from src.presentation.widgets import icons, metrics
+from src.presentation.widgets.focus_ring import KeyFocusRingMixin
 from src.presentation.widgets.primitives import plain_label
 from src.presentation.widgets.safe_text import plain_tooltip
 
 if TYPE_CHECKING:
-    from PySide6.QtGui import QEnterEvent, QFocusEvent, QResizeEvent
+    from PySide6.QtGui import QEnterEvent, QResizeEvent
 
 
 def _apply_font(button: QPushButton, *, size: int, weight: QFont.Weight) -> None:
@@ -55,8 +65,13 @@ def action_button(
     Args:
         icon_name: Soldakı ikon (maketdə `+`, `refresh` və s.).
         icon_color: İkonun rəngi — adətən `--color-action-text`.
+
+    Qaytarılan tip `QPushButton` OLARAQ QALIR (`_KeyFocusRingButton` onun alt
+    sinfidir, `isinstance` keçir) — FOCUS-1/D11: halqa YALNIZ klaviatura
+    modallığında görünür (bax `_KeyFocusRingButton`, `qss.py`-dəki
+    `[variant="action"][keyfocus="true"]`).
     """
-    button = QPushButton(text, parent)
+    button = _KeyFocusRingButton(text, parent)
     button.setProperty("variant", "action")
     button.setCursor(Qt.CursorShape.PointingHandCursor)
     _apply_font(button, size=14, weight=QFont.Weight.DemiBold)
@@ -69,8 +84,11 @@ def action_button(
 
 
 def secondary_button(text: str, *, parent: QWidget | None = None) -> QPushButton:
-    """İkinci dərəcəli düymə — "Keçən aya bax", "Dəstəyə yaz"."""
-    button = QPushButton(text, parent)
+    """İkinci dərəcəli düymə — "Keçən aya bax", "Dəstəyə yaz".
+
+    FOCUS-1/D11: bax `action_button` başlığı — eyni izah.
+    """
+    button = _KeyFocusRingButton(text, parent)
     button.setProperty("variant", "secondary")
     button.setCursor(Qt.CursorShape.PointingHandCursor)
     _apply_font(button, size=14, weight=QFont.Weight.Normal)
@@ -337,187 +355,6 @@ class NavButton(QPushButton):
         return handle.devicePixelRatio() if handle is not None else 1.0
 
 
-#: Tətbiq obyektinə bağlanan izləyicinin adı — ikinci nüsxə qurulmasın deyə.
-_INPUT_TRACKER_NAME: Final = "kompasos.input_modality"
-
-
-class _InputModalityTracker(QObject):
-    """Sonuncu istifadəçi girişi KLAVİATURADAN idimi — `:focus-visible` ekvivalenti.
-
-    ──────────────────────────────────────────────────────────────────────────
-    NİYƏ FOKUS SƏBƏBİ TƏK BAŞINA KİFAYƏT ETMİR (FOCUS-1)
-    ──────────────────────────────────────────────────────────────────────────
-    Qt fokuslu widget-i SÖNDÜRƏNDƏ (`setEnabled(False)`) fokusu zəncirin
-    növbəti elementinə `focusNextPrevChild()` ilə ötürür və o, səbəb kimi
-    `TabFocusReason` yazır — yəni HƏQİQİ `Tab` basılışı ilə fərqlənmir.
-
-    Bu, layihədə real nasazlıq idi: istifadəçi «Daxil Ol» düyməsini SİÇANLA
-    basır, `set_busy(True)` düyməni söndürür, fokus başlıq zolağındakı tema
-    düyməsinə sıçrayır və orada portağal halqa yanır. Eyni hadisə ekran
-    əvəzlənməsində də baş verirdi — o hal `FramelessWindow.set_content`-də
-    ƏLLƏ təmizlənirdi, lakin siyahı uzanırdı: hər yeni `setEnabled(False)`
-    çağırışı üçün ayrıca təmizləmə yazmaq lazım gələcəkdi.
-
-    Ona görə sual DƏYİŞDİRİLİR: «fokus necə gəldi?» əvəzinə «istifadəçi son
-    olaraq nə ilə işləyirdi?». Brauzerlərin `:focus-visible` qaydası da
-    məhz bunu edir. Nəticədə hər söndürmə/əvəzlənmə halı BİR yerdə həll
-    olunur.
-
-    Başlanğıc dəyər `True`-dur: hələ heç bir giriş hadisəsi olmayıb, yəni
-    modallıq NAMƏLUMDUR. Belə halda halqanı GÖSTƏRMƏK seçilir — klaviatura
-    istifadəçisi üçün görünməyən fokus, siçan istifadəçisi üçün artıq
-    halqadan pis nasazlıqdır.
-    """
-
-    _KEYBOARD_EVENTS: ClassVar[frozenset[QEvent.Type]] = frozenset(
-        {QEvent.Type.KeyPress, QEvent.Type.ShortcutOverride}
-    )
-    _POINTER_EVENTS: ClassVar[frozenset[QEvent.Type]] = frozenset(
-        {
-            QEvent.Type.MouseButtonPress,
-            QEvent.Type.MouseButtonDblClick,
-            QEvent.Type.TouchBegin,
-            QEvent.Type.Wheel,
-        }
-    )
-
-    def __init__(self, parent: QObject | None = None) -> None:
-        super().__init__(parent)
-        self.keyboard = True
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt adı
-        """Hadisəni YALNIZ QEYD EDİR — heç birini udmur (`False` qaytarır)."""
-        kind = event.type()
-        if kind in self._KEYBOARD_EVENTS:
-            self.keyboard = True
-        elif kind in self._POINTER_EVENTS:
-            self.keyboard = False
-        return False
-
-
-def input_modality_tracker() -> _InputModalityTracker | None:
-    """Tətbiqə bağlı izləyici — ilk çağırışda qurulur.
-
-    Quraşdırma başlanğıc kodunda DEYİL, burada olur: `QApplication` bəzi
-    testlərdə və dizayn önizləməsində fərqli yollarla yaradılır, izləyicini
-    isə fokus halqasını işlədən HƏR yol tələb edir. `findChild` ikinci nüsxənin
-    qarşısını alır və valideynlik obyektin ömrünü tətbiqə bağlayır.
-
-    `None` qaytarır: `QApplication` yoxdursa (yalnız domen testləri) fokus
-    modallığı sualının mənası da yoxdur.
-    """
-    app = QCoreApplication.instance()
-    if app is None:
-        return None
-    tracker = app.findChild(_InputModalityTracker, _INPUT_TRACKER_NAME)
-    if tracker is None:
-        tracker = _InputModalityTracker(app)
-        tracker.setObjectName(_INPUT_TRACKER_NAME)
-        app.installEventFilter(tracker)
-    return tracker
-
-
-class KeyFocusRingMixin:
-    """Fokus halqasını YALNIZ klaviatura fokusunda göstərən davranış.
-
-    ──────────────────────────────────────────────────────────────────────────
-    NİYƏ AYRICA MİXİN
-    ──────────────────────────────────────────────────────────────────────────
-    Qt pəncərə göstəriləndə fokusu fokus-zəncirinin BİRİNCİ elementinə verir.
-    Başlıq zolağı tərtibatın ən üstündədir, yəni tətbiq açılan kimi oradakı
-    ilk düymə fokus alır — və adi `:focus` qaydası halqanı ŞƏRTSİZ çəkir.
-    İstifadəçi heç nəyə toxunmadan ekranda işıqlı kvadrat görür.
-
-    Davranış əvvəl YALNIZ `WindowButton`-da vardı. Başlıq zolağına tema
-    düyməsi əlavə olunanda eyni problem onda təkrarlandı — məhz buna görə
-    məntiq İKİNCİ NÜSXƏ kimi köçürülmür, ortaq bazaya çıxarılır
-    (`CLAUDE.md` §5: eyni qaydanın iki nüsxəsi sürüşür).
-
-    QSS tərəfi `[keyfocus="true"]` seçicisinə baxır; xüsusiyyət burada
-    saxlanılır.
-    """
-
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        """İzləyicini QURULMA ANINDA quraşdırır — ilk klikdən ÇOX ƏVVƏL.
-
-        Tənbəl qurma (yalnız `focusInEvent`-də) kifayət etmirdi: izləyici o
-        vaxta qədər mövcud olmur, yəni istifadəçinin BİRİNCİ siçan basılışı
-        qeydə düşmür və elə həmin basılışın yaratdığı fokus sıçrayışı
-        «klaviatura» sayılırdı. Halqa məhz ilk dəfə görünürdü.
-
-        Bu sinifdən törəyən düymələr pəncərə örtüyü ilə birlikdə qurulur,
-        yəni quraşdırma nöqtəsi kifayət qədər erkəndir.
-        """
-        super().__init__(*args, **kwargs)
-        input_modality_tracker()
-
-    #: Fokusun KLAVİATURADAN gəldiyini bildirən səbəblər.
-    KEYBOARD_FOCUS_REASONS: ClassVar[frozenset[Qt.FocusReason]] = frozenset(
-        {
-            Qt.FocusReason.TabFocusReason,
-            Qt.FocusReason.BacktabFocusReason,
-            Qt.FocusReason.ShortcutFocusReason,
-        }
-    )
-
-    def focusInEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt adlandırması
-        """Halqa yalnız `Tab`/`Shortcut` ilə gələn fokusda çəkilir.
-
-        `ActiveWindow` səbəbi MÖVCUD vəziyyəti saxlayır: istifadəçi `Tab`-la bu
-        düyməyə çatıb `Alt`+`Tab` ilə başqa proqrama keçib qayıdarsa, halqa
-        yerində qalmalıdır — həmin halda fokus həqiqətən klaviaturadadır.
-
-        Səbəbdən ƏLAVƏ giriş modallığı da yoxlanılır (FOCUS-1) — səbəbin özü
-        siçanla yaranan sıçrayışı `Tab`-dan ayıra bilmir; izahı
-        `_InputModalityTracker`-dədir.
-        """
-        if event.reason() is not Qt.FocusReason.ActiveWindowFocusReason:
-            self._set_key_focus(self._reason_is_keyboard(event.reason()))
-        super().focusInEvent(event)  # type: ignore[misc]
-
-    def _reason_is_keyboard(self, reason: Qt.FocusReason) -> bool:
-        if reason not in self.KEYBOARD_FOCUS_REASONS:
-            return False
-        tracker = input_modality_tracker()
-        return tracker is None or tracker.keyboard
-
-    def focusOutEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt adlandırması
-        """Fokus getdi — halqa da getməlidir.
-
-        `ActiveWindow` burada İSTİSNA DEYİL: pəncərə arxa plana keçəndə halqanı
-        saxlamaq lazımdır, çünki qayıdışda eyni səbəblə geri gəlir və yuxarıdakı
-        şərt onu olduğu kimi buraxır.
-        """
-        if event.reason() is not Qt.FocusReason.ActiveWindowFocusReason:
-            self._set_key_focus(False)
-        super().focusOutEvent(event)  # type: ignore[misc]
-
-    def clear_key_focus_ring(self) -> None:
-        """Halqanı söndürür — fokusun ÖZÜNƏ toxunmadan.
-
-        ──────────────────────────────────────────────────────────────────────
-        NİYƏ AYRICA ÇAĞIRIŞ LAZIM OLDU
-        ──────────────────────────────────────────────────────────────────────
-        Fokuslu widget MƏHV olanda (ekran əvəzlənir) Qt fokusu zəncirin
-        növbəti elementinə `TabFocusReason` ilə ötürür — yəni HƏQİQİ `Tab`
-        basılışı ilə EYNİ səbəb kodu ilə. `focusInEvent` ikisini ayırd edə
-        bilmir və halqa çəkilirdi: istifadəçi «Yenidən cəhd et» düyməsini
-        SİÇANLA basandan sonra başlıq zolağındakı tema düyməsinin
-        işıqlandığını görürdü.
-
-        Ayrım məlumatı yalnız ekranı əvəz EDƏN tərəfdədir
-        (`FramelessWindow.set_content`), ona görə qərar oraya verilir.
-        """
-        self._set_key_focus(False)
-
-    def _set_key_focus(self, active: bool) -> None:
-        value = "true" if active else "false"
-        if self.property("keyfocus") == value:  # type: ignore[attr-defined]
-            return
-        self.setProperty("keyfocus", value)  # type: ignore[attr-defined]
-        refresh_widget_style(self)  # type: ignore[arg-type]
-
-
 class KeyFocusIconButton(KeyFocusRingMixin, QPushButton):
     """Halqası YALNIZ klaviatura fokusunda çıxan ikon düyməsi.
 
@@ -570,6 +407,33 @@ class KeyFocusIconButton(KeyFocusRingMixin, QPushButton):
         self.setAccessibleName(accessible_name or tooltip)
         if accessible_description:
             self.setAccessibleDescription(accessible_description)
+
+
+class _KeyFocusRingButton(KeyFocusRingMixin, QPushButton):
+    """`QPushButton` + fokus halqası YALNIZ klaviatura modallığında (FOCUS-1/D11).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ YENİ SİNİF, `KeyFocusIconButton`-UN ÖZÜ DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    `KeyFocusIconButton` ikon-only, sabit-ölçülü düymələr üçündür (başlıq
+    zolağı/sol panel) — konstruktoru `icon_name`, `width`/`height` kimi bu
+    kontekstə xas arqumentlər tələb edir. `action_button()`/`secondary_button()`
+    isə mətn, opsional ikon, DƏYİŞKƏN ölçü qəbul edir — həmin konstruktoru
+    məcburi işlətmək tamamilə əlaqəsiz parametrlər tələb edərdi. Bu sinif
+    YALNIZ mixin-in verdiyi `[keyfocus]` davranışını əlavə edir; qalan hər
+    şeyi (`variant`, ölçü, kursor, ikon) çağıran fabrik funksiyası
+    (`action_button`/`secondary_button`) əvvəlki kimi ÖZÜ təyin edir —
+    paralel iyerarxiya YOX, TƏK əlavə qat.
+
+    `isinstance(x, QPushButton)` HƏMİŞƏ `True`-dur (birbaşa varis) — çağıran
+    kodun heç biri (`.clicked.connect(...)`, `QPushButton` tipli sahələr)
+    dəyişməli DEYİL.
+    """
+
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        # Başlanğıc dəyər AÇIQ yazılır — eyni səbəb `KeyFocusIconButton`-da.
+        self.setProperty("keyfocus", "false")
 
 
 class WindowButton(KeyFocusRingMixin, QPushButton):

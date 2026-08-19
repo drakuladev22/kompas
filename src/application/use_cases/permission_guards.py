@@ -35,7 +35,7 @@ from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
-    from src.domain.interfaces.ports import AuditTrail, Clock
+    from src.domain.interfaces.ports import AuditTrail, Clock, SecurityEventRepository
     from src.domain.value_objects.identifiers import TenantId
 
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
@@ -94,9 +94,20 @@ class PermissionHierarchyGuardUseCase:
         *,
         audit: AuditTrail | None = None,
         clock: Clock | None = None,
+        security_events: SecurityEventRepository | None = None,
     ) -> None:
         self._audit = audit
         self._clock = clock
+        # `audit` İLƏ EYNİ NAXIŞ, EYNİ SƏBƏBDƏN OPSİONALDIR (SEC-7): bu sinfin
+        # TƏK instansı HƏM `is_allowed()` (UI-da elementi gizlətmək üçün,
+        # sükutla `bool` qaytarır — real "cəhd" DEYİL, render-zamanı
+        # qabiliyyət yoxlamasıdır), HƏM `apply()` (real yazma) tərəfindən
+        # işlədilir. `security_events`-i BURADA, ümumi `_deny()`-də yazsaydıq,
+        # HƏR gizlədilən menyu maddəsi "PERMISSION_CHANGE_DENIED" hadisəsi
+        # kimi qeydə düşərdi — bu, siyahını mənasız SƏS-KÜYLƏ doldurardı və
+        # HƏQİQİ rədd cəhdlərini gizlədərdi. Ona görə yazı YALNIZ `apply()`-in
+        # ÖZÜNDƏ, `assert_allowed()` istisna ATANDA baş verir (aşağı).
+        self._security_events = security_events
 
     def assert_allowed(self, request: PermissionChangeRequest) -> None:
         """Bütün qoruyucuları sıra ilə tətbiq edir."""
@@ -132,7 +143,23 @@ class PermissionHierarchyGuardUseCase:
             PermissionAuditUnavailableError: `audit` verilməyibsə. Səssiz
                 davam etmək bölmə 3-ün audit tələbini sükutla pozardı.
         """
-        self.assert_allowed(request)
+        try:
+            self.assert_allowed(request)
+        except AuthorizationError as exc:
+            # SEC-7, Tier 2: BURADA yazılır, ümumi `_deny()`-də YOX — bax
+            # konstruktorun şərhi (səs-küy qarşısı).
+            if self._security_events is not None:
+                self._security_events.record(
+                    tenant_id=(tenant_id if tenant_id is not None else request.subject.tenant_id),
+                    event_type="PERMISSION_CHANGE_DENIED",
+                    employee_id=request.actor.id,
+                    details={
+                        **exc.context,
+                        "subject_id": str(request.subject.id),
+                        "effect": request.effect.value,
+                    },
+                )
+            raise
         if self._audit is None or self._clock is None:
             raise PermissionAuditUnavailableError(
                 "İcazə dəyişikliyi audit mənbəyi olmadan tətbiq edilə bilməz",

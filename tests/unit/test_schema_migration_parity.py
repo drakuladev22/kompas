@@ -72,6 +72,27 @@ _TABLE = re.compile(
     r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\s*\((.*?)\n\);",
     re.IGNORECASE | re.DOTALL,
 )
+#: INF2-01 (dövrə 2 audit): `CREATE TRIGGER` HANSI funksiyaya bağlandığını
+#: (VƏ hansı cədvələ, hansı zamanlamada) daşıyır — bu, `_FUNCTION` regex-inin
+#: GÖRMƏDİYİ bir səviyyədir: funksiyanın ÖZÜ hər iki yerdə eyni ola bilər,
+#: lakin trigger onu FƏRQLİ cədvələ/hadisəyə bağlaya bilər. `DROP TRIGGER`
+#: qəsdən İSTİSNADIR (bu pattern yalnız `CREATE` ilə başlayır) — `DROP
+#: TRIGGER IF EXISTS ...;` ilə başlayan cütlər (013/056/063/068/072 naxışı)
+#: sükutla keçilir, onların yalnız `CREATE` yarısı müqayisə olunur.
+_TRIGGER = re.compile(
+    r"CREATE\s+TRIGGER\s+([a-z_][a-z0-9_]*)\s+(.*?);",
+    re.IGNORECASE | re.DOTALL,
+)
+#: Adlı `CONSTRAINT`-lər (FK/CHECK/UNIQUE `ALTER TABLE` ilə əlavə olunanlar) —
+#: `_TABLE`-in `CREATE TABLE ( ... )` daxilindəki SƏTİR-daxili `CONSTRAINT`-i
+#: artıq tuturdu, bu isə YARADILDIQDAN SONRA `ALTER TABLE` ilə əlavə olunan
+#: (DB-1-in "qayda sonradan gücləndirildi" ssenarisinin constraint analoqu)
+#: hallara aiddir.
+_CONSTRAINT = re.compile(
+    r"ALTER\s+TABLE\s+(?:ONLY\s+)?[a-z_][a-z0-9_]*\s+ADD\s+CONSTRAINT\s+"
+    r"([a-z_][a-z0-9_]*)\s+(.*?);",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _strip_comments(sql: str) -> str:
@@ -98,10 +119,24 @@ def _collect(pattern: re.Pattern[str], text: str, *, group: int = 0) -> dict[str
 
 
 def _definitions(text: str) -> dict[str, str]:
+    # INF2-01 (dövrə 2 audit) tapdı: `_TRIGGER` regex-i `016_appeal_window_
+    # and_open_leave_parity.sql`-in ŞƏRHLƏNMİŞ (`--` ilə başlayan), YALNIZ
+    # illüstrativ DOWN-nümunəsindəki `CREATE TRIGGER trg_fine_appeal_window
+    # BEFORE INSERT ON fines` sətrini HƏQİQİ tərif kimi tutdu — çünki
+    # `_strip_comments()` yalnız MATCH TAPILANDAN SONRA, hər body üzərində
+    # AYRICA çağırılırdı, `finditer` isə RAW (şərhli) mətndə axtarırdı.
+    # Nəticə: fayl sırasına görə bu SAXTA uyğunluq HƏQİQİ (sətir 85-86)
+    # tərifi SİLİRDİ (`_collect`-in `found[name] = ...` son-udan-udur
+    # naxışı). Düzəliş: şərhlər `finditer`-dən ƏVVƏL, BÜTÜN mətndən
+    # çıxarılır — `_FUNCTION`/`_INDEX`/`_TABLE` da EYNİ zəifliyi daşıyırdı,
+    # sadəcə heç bir mövcud şərh onların formasına düşmürdü (indiyədək).
+    stripped = _strip_comments(text)
     return {
-        **_collect(_FUNCTION, text),
-        **_collect(_INDEX, text, group=2),
-        **_collect(_TABLE, text, group=2),
+        **_collect(_FUNCTION, stripped),
+        **_collect(_INDEX, stripped, group=2),
+        **_collect(_TABLE, stripped, group=2),
+        **_collect(_TRIGGER, stripped),
+        **_collect(_CONSTRAINT, stripped),
     }
 
 

@@ -35,12 +35,16 @@ parametrindən doldurulur, ona görə kontroller sessiyanı MÜTLƏQ
 keçərdi və qayda yalnız bir yerdə qalardı.
 
 ──────────────────────────────────────────────────────────────────────────────
-HARDLOCK XANALARI GÖRÜNÜR, LAKİN BASILA BİLMİR
+VERİLƏ BİLMƏYƏN XANALAR GÖRÜNÜR, LAKİN BASILA BİLMİR (D3)
 ──────────────────────────────────────────────────────────────────────────────
 `PermissionMatrixScreen` onları `setEnabled(False)` ilə qurur və bu, QƏSDƏN
 belədir (bax sinif docstring-i): "sənin görməyə icazən yoxdur" deyil, "bu
 icazə heç kim tərəfindən dəyişdirilə bilməz". Kontroller həmin qərara
-TOXUNMUR — sadəcə `hardlock` bayrağını kataloqdan olduğu kimi ötürür.
+TOXUNMUR — sadəcə `PermissionFlag.is_grantable_to()` nəticəsini kataloqdan
+olduğu kimi ötürür. Bu, YALNIZ statik hardlock səviyyəsini (əvvəlki naxış)
+deyil, ROLA görə anti-fraud/kamera-tip istisnalarını da əhatə edir — əks
+halda checkbox "Yadda Saxla"-ya qədər aktiv görünürdü (bax `_flag_groups`
+başlığı).
 
 ──────────────────────────────────────────────────────────────────────────────
 AKTORDA OLMAYAN İCAZƏ DƏ BASILA BİLMİR
@@ -335,12 +339,28 @@ def _flag_groups(
             olmadığı çağırışlar üçündür (maket/test); belə halda heç bir xana
             ƏLAVƏ olaraq deaktiv edilmir. Bu, təhlükəsizlik güzəşti deyil —
             sahə yalnız GÖRÜNTÜNÜ idarə edir, yazını isə use case rədd edir.
-    """
-    from src.domain.value_objects.authorization import HardlockLevel  # noqa: PLC0415
 
+    ──────────────────────────────────────────────────────────────────────────
+    DÖRDÜNCÜ SAHƏ — İNDİ SADƏCƏ `hardlock` DEYİL, `is_grantable_to()` (D3)
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl `flag.hardlock is not HardlockLevel.NONE` idi — yəni flag-in ÖZ
+    statik hardlock səviyyəsi, ROL nəzərə alınmadan. Kamera-tipli/anti-fraud-
+    istisna edilən rol üçün (məs. `can_approve_dual_control_override`)
+    checkbox buna görə AKTİV görünürdü: admin işarələyir, "Yadda Saxla"
+    basır, YALNIZ SONRA `_apply_flags`-dəki SEC-001/vəzifə-ayrılığı qaydası
+    onu rədd edirdi (bax `_on_saved`) — "görmək = səlahiyyət" qapı BURADA
+    bir addım gecikirdi.
+    `PermissionFlag.is_grantable_to()` (`authorization.py`, TOXUNULMUR — hazır
+    funksiya) EYNİ qaydanı (hardlock SƏVİYYƏSİ + anti-fraud + kamera-tip
+    istisnaları + SEC-001) ROLA GÖRƏ yoxlayır, ona görə köhnə hardlock
+    yoxlamasını ƏVƏZ edir, ONA ƏLAVƏ olunmur — ikisini yanaşı saxlasaydıq
+    üçüncü nüsxə yaranardı (bölmə 3).
+    """
     labels = _flag_labels(session)
     granted = set(position.granted_flags)
     now = datetime.now(UTC)
+    role = position.effective_system_role
+    is_camera = bool(position.is_camera_type)
 
     grouped: dict[str, list[tuple[str, str, bool, bool, bool]]] = {}
     for flag in session.uow.repository("permission_flags").list_all():
@@ -350,7 +370,7 @@ def _flag_groups(
                 flag.code,
                 labels.get(flag.code, flag.code),
                 flag.code in granted,
-                flag.hardlock is not HardlockLevel.NONE,
+                not flag.is_grantable_to(role, is_camera_type_role=is_camera),
                 actor is None or actor.has_permission(flag.code, now=now),
             )
         )

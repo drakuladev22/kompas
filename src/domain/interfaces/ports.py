@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol, runtime_checkable
+from uuid import UUID
 
 from src.domain.annual_leave_rules import AnnualLeaveRolloverInput
 from src.domain.attrition_rules import AttritionRiskScore
@@ -22,6 +23,7 @@ from src.domain.entities.annual_leave import AnnualLeaveBalance, AnnualLeaveRequ
 from src.domain.entities.appeal import FineAppeal
 from src.domain.entities.attendance_record import AttendanceRecord
 from src.domain.entities.attendance_sheet import AttendanceFact, DailyAttendanceSheet
+from src.domain.entities.auth_session import AuthSession
 from src.domain.entities.employee import Employee
 from src.domain.entities.employee_document import EmployeeDocument
 from src.domain.entities.exception_record import ExceptionRecord
@@ -97,6 +99,7 @@ from src.domain.value_objects.identifiers import (
     PositionId,
     RedemptionId,
     RewardId,
+    SessionId,
     ShiftSwapRequestId,
     StoreId,
     StoreTemplateId,
@@ -115,7 +118,10 @@ from src.domain.value_objects.licensing import (
     CrashReport,
     LicenseSnapshot,
 )
+from src.domain.value_objects.machine_identity import MachineIdentityHash
 from src.domain.value_objects.overtime import OvertimeEntry, WorkedSpan
+from src.domain.value_objects.pin_throttle import TerminalPinThrottle
+from src.domain.value_objects.scheduling import TimeRange
 from src.domain.value_objects.staffing_signals import (
     StaffingPatternSuggestion,
     StoreDayHeadcount,
@@ -423,6 +429,32 @@ class AuditTrail(Protocol):
 
 
 @runtime_checkable
+class SecurityEventRepository(Protocol):
+    """`security_events` yazıcısı (SEC-7, `schema.sql` §16) — GİRİŞ/İCAZƏ hadisələri.
+
+    `AuditTrail` İLƏ EYNİ NAXIŞDA — ayrıca dataclass YOX, açıq keyword
+    arqumentlər — çünki hər ikisi ÇOX SAYDA fərqli use case-dən çağırılan,
+    YALNIZ-YAZAN (append-only) köməkçi sinklərdir. Fərqli davranış: `AuditTrail`
+    uğursuzluqda əməliyyatı geri qaytarır ("audit istisna udmur", CLAUDE.md §5),
+    bu port İSƏ FAIL-SOFT-dur — istehsalatda YALNIZ `src.shared.security_events.
+    FailSoftSecurityEventRecorder` bağlanmalıdır (kompozisiya kökündə), xam
+    implementasiya BİRBAŞA use case-ə verilməməlidir.
+    """
+
+    def record(
+        self,
+        *,
+        tenant_id: TenantId,
+        event_type: str,
+        employee_id: EmployeeId | None = None,
+        username_attempt: str | None = None,
+        ip_address: str | None = None,
+        machine_name: str | None = None,
+        details: dict[str, object] | None = None,
+    ) -> None: ...
+
+
+@runtime_checkable
 class EventPublisher(Protocol):
     """Aqreqatların topladığı hadisələri yayımlayır (tranzaksiyadan SONRA)."""
 
@@ -561,6 +593,134 @@ class EmployeeRepository(Protocol):
 
 
 @runtime_checkable
+class AuthSessionRepository(Protocol):
+    """`auth_sessions` sətrinin davamlı saxlanması (SEC-011, schema.sql §17b).
+
+    NİYƏ `ports.py`-DA, `authentication.py`-nın YANINDA DEYİL (CLAUDE.md §3):
+    qaytardığı `AuthSession` domen tipidir (`entities/auth_session.py`) —
+    port yalnız domen tipi qaytardığı üçün BURADA yaşayır, `ReportFactProvider`
+    (`use_cases/reporting.py`) ilə TƏRS haldır (o, tətbiq strukturu qaytarır).
+    """
+
+    def save(self, session: AuthSession) -> None:
+        """Upsert (`id` ilə) — `issue()` yeni sətir yaradır, `touch()`/`revoke()`
+        mövcudu yeniləyir. `token_hash` UNIQUE-dir; toqquşma davranışı infra
+        implementasiyasının qərarıdır (SEC-5 müqaviləsi, infra bölməsi)."""
+        ...
+
+    def get(self, session_id: SessionId) -> AuthSession | None:
+        """Admin-in uzaqdan ləğv axını üçün — id ilə birbaşa tapır."""
+        ...
+
+    def get_by_token_hash(self, tenant_id: TenantId, token_hash: str) -> AuthSession | None:
+        """`validate()`/`touch()` üçün. AÇIQ token DEYİL, onun SHA-256 heşi ilə
+        axtarır — açıq token bu port sərhədindən HEÇ VAXT keçmir."""
+        ...
+
+    def list_recent_for_user(
+        self, tenant_id: TenantId, user_id: EmployeeId, *, limit: int = 10
+    ) -> list[AuthSession]:
+        """Profil ekranının "Sessiyalarım" siyahısı — ən yeni ƏVVƏL, aktiv/
+        bağlı FƏRQİ QOYULMADAN (bağlı sətir də "nə vaxt, hansı cihazdan"
+        sualının cavabıdır).
+
+        `limit=10`: `PANEL_LIMIT` (`notification_repositories.py`) presedenti
+        ilə EYNİ kateqoriya — ekran görünüşünün dizayn sabitidir, biznes/
+        siyasət həddi DEYİL (Root-a verilmir, CLAUDE.md §5)."""
+        ...
+
+
+@runtime_checkable
+class PinThrottleRepository(Protocol):
+    """`store_pin_throttle` sətrinin davamlı saxlanması (SEC-01/SEC-05, dövrə 3).
+
+    NİYƏ `ports.py`-DA: qaytardığı `TerminalPinThrottle` domen tipidir
+    (`value_objects/pin_throttle.py`) — `AuthSessionRepository` ilə EYNİ
+    əsaslandırma (CLAUDE.md §3).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AÇAR `machine_key`-dir, `store_id` DEYİL (SEC-05)
+    ──────────────────────────────────────────────────────────────────────────
+    `store_id` `KOMPASOS_STORE_ID` mühit dəyişənindən gəlir və ADMIN HÜQUQU
+    OLMADAN dəyişdirilə bilər (`HKCU\\Environment`) — açar olsaydı, hücumçu
+    həddə yaxınlaşanda onu dəyişib TƏZƏ sayğac alardı. `MachineIdentityHash`
+    (Windows `MachineGuid`, `HKEY_LOCAL_MACHINE`, admin-only) əvəzinə işlədilir
+    — bax onun öz modul başlığı. `store_id` sətrin MƏLUMAT sahəsidir (klon
+    aşkarlaması üçün, bax `PinHandshakeUseCase`-in "KLON AŞKARLAMASI" bölməsi).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ PƏNCƏRƏ/KİLİD ARİFMETİKASI İSTEHSALATDA DB TRİGGER-İNDƏDİR, PYTHON-DAN
+    ÇAĞIRILMIR (AMMA DOMENDƏ SPESİFİKASİYA OLARAQ MÖVCUDDUR)
+    ──────────────────────────────────────────────────────────────────────────
+    TIME-1: server-vaxtına bağlı hesablama client-in göndərdiyi dəyərdən
+    ASILI OLA BİLMƏZ. `record_failure()` YALNIZ NƏTİCƏNİ (`failed_count`,
+    `window_started_at`, `locked_until`) qaytarır — HANSI dəyərin
+    göndəriləcəyini YOX, çünki göndərilən HƏR HANSI vaxt dəyəri trigger
+    tərəfindən İGNORED olunur (infra qərarı).
+
+    Sabit-pəncərə SEMANTİKASININ ÖZÜ isə (dövrə 4 düzəlişi) `TerminalPinThrottle.
+    advance_after_failure()`-də İCRA OLUNAN SPESİFİKASİYA kimi yazılıb —
+    istehsalat kodu bunu ÇAĞIRMIR, AMMA sınaq sahtəsi (`InMemoryPinThrottle`)
+    çağırır və infra-nın SQL trigger-i EYNİ qaydaları TƏKRARLAMALIDIR
+    (CLAUDE.md §7: "sütun yox, qayda dəyişirsə hər iki yer"). Bax onun öz
+    modul başlığı — "sayğac ƏBƏDİ kilid" qüsuru MƏHZ bu qaydanın YAZILI
+    olmamasından yaranmışdı.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `get_for_update` MƏCBURİDİR (`RowLockingLeaveRequests`-in isinstance-
+    optional naxışından FƏRQLİ OLARAQ)
+    ──────────────────────────────────────────────────────────────────────────
+    `LeaveRequest`-də kilidsiz oxu qəbul edilə bilirdi, çünki DB-dəki qismən
+    unikal indeks İKİNCİ, MÜSTƏQİL qoruma qatı idi. Burada belə ikinci qat
+    YOXDUR — `get_for_update` protokolun ADİ (məcburi) üzvüdür.
+
+    ──────────────────────────────────────────────────────────────────────────
+    UĞURLU GİRİŞDƏ SIFIRLAMA YOXDUR — BU PROTOKOLDA "RESET" METODU QƏSDƏN YOXDUR
+    ──────────────────────────────────────────────────────────────────────────
+    ARCHITECT-in qərarı (security-nin arqumenti ilə): sıfırlama olsaydı,
+    hücumçu N-1 cəhd edib növbəti QANUNİ girişi gözləməklə sayğacı PULSUZ
+    təmizləyərdi. Sabit pəncərə (`TerminalPinThrottle.window_started_at`/
+    `advance_after_failure`) təbii decay verir — sıfırlama İSTİFADƏÇİ-
+    səviyyəli `PinSecurityState`-də mənalıdır (orada HƏMİN ŞƏXS öz kimliyini
+    sübut edir), BURADA yox (kim uğurla girsə də, DİGƏR işçilərin PIN-inə
+    qarşı davam edən sınaq HƏLƏ mümkündür).
+    """
+
+    def get_for_update(
+        self, tenant_id: TenantId, machine_key: MachineIdentityHash
+    ) -> TerminalPinThrottle | None:
+        """`SELECT ... FOR UPDATE` — sətir tapılmadıqda `None` (bu maşında
+        HƏLƏ heç bir uğursuz PIN cəhdi qeydə alınmayıb). `PinHandshakeUseCase.
+        authenticate()` PIN yoxlaması İLƏ EYNİ tranzaksiyada çağırır."""
+        ...
+
+    def record_failure(
+        self, tenant_id: TenantId, machine_key: MachineIdentityHash, *, store_id: StoreId
+    ) -> TerminalPinThrottle:
+        """Atomik artırma (`INSERT ... ON CONFLICT DO UPDATE ... RETURNING`) —
+        DB trigger sabit-pəncərə hesablamasını ÖZÜ edir (bax `TerminalPinThrottle.
+        advance_after_failure`-in eyni qaydaları — trigger onlarla UYĞUN
+        olmalıdır). `store_id` HƏR çağırışda YENİLƏNİR (son görülən mağaza)
+        — klon aşkarlamasının mənbəyi budur.
+
+        VACİB: bu metod `save()`-in uğursuzluğunu UDMUR — çağıran (`PinHandshake
+        UseCase`) əməliyyatı geri qaytarmalıdır ki, sayğac YAZILMADAN "PIN
+        yanlışdır" göstərmək SEC-01-in kök səbəbinin (sükutla söndürülmüş
+        qoruma) TƏKRARI olmasın."""
+        ...
+
+    def update_last_seen_store(
+        self, tenant_id: TenantId, machine_key: MachineIdentityHash, *, store_id: StoreId
+    ) -> None:
+        """Klon aşkarlanandan (`get_for_update`-in qaytardığı `store_id`
+        CARİ `store_id`-dən FƏRQLİDİR) SONRA sətri yeniləyir ki, EYNİ klon
+        HƏR PIN cəhdində TƏKRAR siqnal göndərməsin — YALNIZ dəyişiklik anında
+        bir dəfə. Sətir ARTIQ mövcud olmalıdır (bu metod yalnız `get_for_update`
+        DOLU sətir qaytarandan sonra çağırılır)."""
+        ...
+
+
+@runtime_checkable
 class PositionRepository(Protocol):
     def get(self, position_id: PositionId) -> Position | None: ...
 
@@ -656,6 +816,21 @@ class RowLockingLeaveRequests(Protocol):
         """`SELECT ... FOR UPDATE` — sətri tranzaksiya sonuna qədər kilidləyir."""
         ...
 
+    def find_open_for_employee_locked(self, employee_id: EmployeeId) -> LeaveRequest | None:
+        """`find_open_for_employee`-nin STEP 2 (`claim_return`) üçün kilidli variantı
+        (D-R2-02 audit tapıntısı, dövrə 2).
+
+        STEP 2-də İKİ eyni-anlı çağırış (işçinin cihazda ikiqat toxunması / şəbəkə
+        təkrarı) hər ikisi kilidsiz oxuda `OUTSIDE` görüb entity-səviyyəli
+        `_require_status` qoruğunu KEÇƏ bilirdi — nəticə `LEAVE_RETURN_CLAIMED`-in
+        İKİQAT audit yazısı VƏ `return_claimed_time`-ın son-commit-edən sorğuya
+        görə qeyri-deterministik (last-write-wins) qalması idi; bu sahə isə
+        `resolved_return_time()` vasitəsilə gecikmə/cərimə hesabına birbaşa
+        daxil olur. STEP 3-ün (`get_for_update`) elə buradakı eyni əsaslandırması
+        keçərlidir — YALNIZ açar fərqlidir (`request_id` deyil, `employee_id`,
+        çünki STEP 2 anında sorğunun ID-si hələ çağırana ötürülmür)."""
+        ...
+
 
 @runtime_checkable
 class AttendanceRepository(Protocol):
@@ -703,7 +878,19 @@ class FineRepository(Protocol):
         """Bölmə 6 LOCK MEXANİZMİ: pəncərə bağlı VƏ REVERSED deyil."""
         ...
 
-    def save(self, fine: Fine) -> None: ...
+    def save(self, fine: Fine) -> None:
+        """D7 audit tapıntısı: `idempotency_key` doludursa VƏ eyni
+        `(tenant_id, idempotency_key)` cütü ARTIQ mövcuddursa, implementasiya
+        `DuplicateFineSubmissionError` atmalıdır (`fine_management.py`) —
+        xam `UniqueViolation` YOX (`PostgresLeaveRequestRepository.save()`
+        ilə EYNİ naxış)."""
+        ...
+
+    def get_by_idempotency_key(self, tenant_id: TenantId, key: UUID) -> Fine | None:
+        """D7: `DuplicateFineSubmissionError` tutulduqdan SONRA mövcud
+        cərimənin ÖZÜNÜ tapmaq üçün — `save()`-in atdığı istisna hansı sətrin
+        toqquşduğunu daşımır, bu metod onu AYRICA sorğulayır."""
+        ...
 
 
 @runtime_checkable
@@ -960,6 +1147,23 @@ class ShiftRepository(Protocol):
     def get_assignment(
         self, employee_id: EmployeeId, work_date: date
     ) -> ShiftAssignment | None: ...
+
+    def schedules_for(
+        self, employee_id: EmployeeId, days: tuple[date, date]
+    ) -> dict[date, TimeRange]:
+        """D10 audit tapıntısı: verilmiş İKİ gün üçün İş Rejiminin (`WorkMode`
+        HƏLL OLUNMUŞ) `TimeRange`-ləri, BİR sorğuda.
+
+        `MorningCheckInUseCase`-in gecə-növbəsi gün-təyini üçündür (bax
+        `scheduling.resolve_work_date`): çağıran `(bugün, dünən)` cütünü
+        verir, nəticə YALNIZ sabit saatlı (`WorkMode.schedule is not None`)
+        VƏ iş günü olan (istirahət deyil) günləri ehtiva edir — digərləri
+        sözlükdə YOXDUR (açar-yoxdursa "bu gün üçün əhatə sual doğurmur").
+
+        NİYƏ İKİ AYRI `scheduled_start()` ÇAĞIRIŞI DEYİL: PERF-1/2/3 dərsi —
+        iki gediş-gəliş əvəzinə bir sorğu (`shift_date IN (%s, %s)`).
+        """
+        ...
 
     def list_range(
         self,
@@ -2599,6 +2803,7 @@ __all__ = [
     "AttendanceRepository",
     "AttritionRiskScoreRepository",
     "AuditTrail",
+    "AuthSessionRepository",
     "BehaviorBaselineRepository",
     "BulkImportLogRepository",
     "CameraAssignmentRepository",
@@ -2642,6 +2847,7 @@ __all__ = [
     "POSThresholdRepository",
     "PerformanceReviewRepository",
     "PermissionFlagRepository",
+    "PinThrottleRepository",
     "PositionRepository",
     "RangeScopedFineReader",
     "ReadOnlyModeController",
@@ -2651,6 +2857,7 @@ __all__ = [
     "SalesDataConnector",
     "SalesPointsRepository",
     "ScheduledJobRepository",
+    "SecurityEventRepository",
     "ShiftRepository",
     "ShiftSwapRepository",
     "StoreTemplateRepository",

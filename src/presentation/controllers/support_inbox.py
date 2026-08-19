@@ -91,6 +91,13 @@ class SupportInboxController:
         # istinadsız `BackgroundTask` zibil yığanı tərəfindən siqnal
         # çatmamış silinə bilər.
         self._task: Any = None
+        # D3-02 (dövrə 3 audit) — Telegram sorğu dövrəsinin AYRI istinadı.
+        # `self._task`-DAN QƏSDƏN AYRIDIR: o, əlavə endirməsi (`_on_attachment`)
+        # üçün işlədilir və eyni anda YALNIZ BİR belə iş gözlənilir. Poll
+        # dövrəsinin ÖZ sahəsi olmasa, `is_running` yoxlaması (bax
+        # `poll_telegram`) əlavə endirməsinin gedişini "poll hələ işləyir"
+        # kimi səhv oxuya bilərdi.
+        self._poll_task: Any = None
         # Naviqasiya sayğacı YALNIZ girişdə doldurulsaydı, cavab yazıb
         # statusu dəyişdikdən sonra sol paneldəki rəqəm KÖHNƏ qalardı və
         # istifadəçi «hələ də 3 iş var» sanardı. Geri çağırış hər oxunuşdan
@@ -362,42 +369,95 @@ class SupportInboxController:
 
     # ----------------------------- Telegram → proqram ------------------------ #
 
-    def poll_telegram(self, screen: SupportInboxScreen) -> int:
-        """Telegram-dan gələn cavabları söhbətlərə yazır. Nəticə: sayı.
+    def poll_telegram(self, screen: SupportInboxScreen) -> None:
+        """Telegram-dan gələn cavabları söhbətlərə yazır — İŞ FON SAPINDADIR (D3-02).
 
-        Uğursuzluq SÜKUTLA buraxılır: bu, istifadəçinin başlatdığı əməliyyat
-        deyil, arxa fondakı dövrədir və hər taymer tetiklənməsində xəta
-        sətri göstərmək bölməni oxunmaz edərdi. Səbəb jurnaldadır.
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ KÖÇÜRÜLDÜ
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəl `self._poller.poll()` BURADA, GUI sapında, SİNXRON çağırılırdı.
+        `TelegramApiClient.get_updates()`-in `timeout=0` (qısa sorğu) seçimi
+        UZUN sorğunun (Telegram-ın öz `long polling`-i, 30 saniyəyə qədər)
+        qarşısını alır (bax `infrastructure/notifications/telegram.py::
+        get_updates`) — LAKİN qısa sorğunun ÖZÜ də real HTTP çağırışıdır və
+        `httpx.Client`-in taymautu (`TELEGRAM_REQUEST_TIMEOUT_SECONDS`,
+        fallback 15 san) qədər bloklaya bilər. Bu, UI-02/D3-01 ilə EYNİ qüsur
+        sinfidir: taymer (`_start_polling`, defolt hər 20 san) GUI sapında
+        şəbəkə çağırışı edir — Telegram/internet yavaşlayanda «Texniki
+        Dəstək» bölməsi bir neçə saniyəliyə donurdu.
+
+        `job()` özü İKİ ORİJİNAL try/except-i SAXLAYIR (`TELEGRAM_POLL_
+        FAILED`/`TELEGRAM_REPLY_DELIVERY_FAILED`) — heç vaxt istisna
+        ATMIR (D3-01-dəki `run_evidence_uploads()` ilə EYNİ naxış), ona görə
+        `run_job`-un `on_failure`-u YALNIZ son qoruyucudur.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ AYRI `self._poll_task` (`self._task` YOX)
+        ──────────────────────────────────────────────────────────────────────
+        `self._task` əlavə endirməsi (`_on_attachment`) üçün işlədilir.
+        Poll dövrəsi ÖZ sahəsini istifadə edir ki, "əvvəlki dövrə hələ
+        qaçır?" yoxlaması əlavə endirməsinin gedişini SƏHV oxumasın (bax
+        `__init__`).
         """
         if self._poller is None:
-            return 0
-        try:
-            replies = self._poller.poll()
-        except Exception:
-            _error_log.exception("TELEGRAM_POLL_FAILED")
-            return 0
-        if not replies:
-            return 0
+            return
+        if self._poll_task is not None and self._poll_task.is_running:
+            # Əvvəlki dövrə HƏLƏ QAÇIR — YENİ dövrə BAŞLADILMIR (D3-01-dəki
+            # EYNİ naxış, `app.py::_drain_upload_queue`).
+            return
 
-        delivered = 0
-        try:
-            with self._context.session(user_id=self._actor.id) as session:
-                for reply in replies:
-                    ticket_id = session.support_inbox.deliver_telegram_reply(
-                        tenant_id=session.tenant_id,
-                        body=reply.body,
-                        reference=reply.reference,
-                        telegram_message_id=reply.reply_to_message_id,
-                    )
-                    if ticket_id is not None:
-                        delivered += 1
-                session.commit()
-        except Exception:
-            _error_log.exception("TELEGRAM_REPLY_DELIVERY_FAILED")
-            return 0
-        if delivered:
+        poller = self._poller
+        context = self._context
+        actor = self._actor
+
+        def job() -> object:
+            # FON SAPINDA icra olunur.
+            try:
+                replies = poller.poll()
+            except Exception:
+                _error_log.exception("TELEGRAM_POLL_FAILED")
+                return 0
+            if not replies:
+                return 0
+
+            delivered = 0
+            try:
+                with context.session(user_id=actor.id) as session:
+                    for reply in replies:
+                        ticket_id = session.support_inbox.deliver_telegram_reply(
+                            tenant_id=session.tenant_id,
+                            body=reply.body,
+                            reference=reply.reference,
+                            telegram_message_id=reply.reply_to_message_id,
+                        )
+                        if ticket_id is not None:
+                            delivered += 1
+                    session.commit()
+            except Exception:
+                _error_log.exception("TELEGRAM_REPLY_DELIVERY_FAILED")
+                return 0
+            return delivered
+
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        self._poll_task = run_job(
+            job,
+            on_success=lambda delivered: self._on_telegram_polled(screen, delivered),
+            on_failure=self._on_telegram_poll_task_failed,
+            owner=screen,
+            name="TELEGRAM_POLL",
+            executor=self._executor,
+        )
+
+    def _on_telegram_polled(self, screen: SupportInboxScreen, delivered: object) -> None:
+        """Dövrə bitdi — ƏSAS SAPDA çağırılır. Yalnız YENİ cavab varsa yeniləyir."""
+        count = delivered if isinstance(delivered, int) else 0
+        if count:
             self.refresh(screen)
-        return delivered
+
+    def _on_telegram_poll_task_failed(self, error: BaseException) -> None:
+        """`job()` ÖZÜ istisna udur (bax `poll_telegram` başlığı) — bura NORMALDA düşmür."""
+        _error_log.error("TELEGRAM_POLL_TASK_FAILED", exc_info=error)
 
 
 def _row(thread: SupportThread) -> dict[str, Any]:

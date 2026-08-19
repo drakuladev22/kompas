@@ -172,9 +172,21 @@ class SupportInboxScreen(Screen):
         self._status_buttons: dict[str, QPushButton] = {}
         self._counts: dict[SupportTicketStatus, int] = dict.fromkeys(SupportTicketStatus, 0)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(metrics.CARD_SPACING)
+        # ────────────────────────────────────────────────────────────────
+        # LAYOUT BAZADAN GƏLİR — İKİNCİSİNİ QURMAQ EKRANI BOŞALDIR (LAYOUT-1)
+        # ────────────────────────────────────────────────────────────────
+        # `Screen.__init__` `self` üzərində ARTIQ `QVBoxLayout` qurur. İkinci
+        # `QVBoxLayout(self)` Qt tərəfindən QURULMUR — konsola «which already
+        # has a layout» xəbərdarlığı yazılır və həmin layout-a əlavə edilən
+        # BÜTÜN vidjetlər valideynsiz qalır. Nəticə: ekran istisnasız qurulur,
+        # lakin TAM BOŞ görünür — yəni ən pis nasazlıq növü, çünki nə log, nə
+        # də xəta mesajı var.
+        #
+        # `body()` bazanın məzmun layout-udur; kənar boşluğu da baza verir
+        # (`CONTENT_PADDING_H/V`), ona görə burada ayrıca margin TƏYİN
+        # EDİLMİR — əks halda bu ekran qalan 38 ekrandan fərqli doldurma ilə
+        # görünərdi.
+        layout = self.body()
 
         header = QHBoxLayout()
         header.addWidget(title_label(channel.section_title_az))

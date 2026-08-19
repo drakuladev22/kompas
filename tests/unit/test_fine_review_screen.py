@@ -90,6 +90,7 @@ from tests.fixtures.fakes import (
     FakeClock,
     FakeSystemLimits,
     RecordingAudit,
+    RecordingFineReviewBatches,
     RecordingNotifier,
 )
 
@@ -347,6 +348,7 @@ def _build(
         audit=RecordingAudit(),  # type: ignore[arg-type]
         notifier=RecordingNotifier(),  # type: ignore[arg-type]
         limits=FakeSystemLimits(),  # type: ignore[arg-type]
+        review_batches=RecordingFineReviewBatches(),  # type: ignore[arg-type]
     )
     review = _SpyReview(use_case, publish_error)
     session = _Session(_Uow(repo, _Connection()), review, journal)
@@ -509,6 +511,7 @@ def test_unreadable_list_does_not_crash_the_screen() -> None:
                 audit=RecordingAudit(),  # type: ignore[arg-type]
                 notifier=RecordingNotifier(),  # type: ignore[arg-type]
                 limits=FakeSystemLimits(),  # type: ignore[arg-type]
+                review_batches=RecordingFineReviewBatches(),  # type: ignore[arg-type]
             )
         ),
         journal,

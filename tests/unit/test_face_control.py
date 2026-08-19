@@ -109,6 +109,7 @@ from tests.fixtures.fakes import (
     InMemoryFaceVerificationLog,
     RecordingAudit,
     RecordingNotifier,
+    RecordingSecurityEvents,
 )
 
 pytestmark = pytest.mark.unit
@@ -220,6 +221,7 @@ class _Gate:
         self.log = InMemoryFaceVerificationLog()
         self.audit = RecordingAudit()
         self.notifier = RecordingNotifier()
+        self.security_events = RecordingSecurityEvents()
         self.use_case = FaceVerificationUseCase(
             profiles=profiles,
             verification_log=self.log,
@@ -232,6 +234,7 @@ class _Gate:
             audit=self.audit,
             clock=clock,
             notifier=self.notifier,
+            security_events=self.security_events,
         )
 
     def verify(

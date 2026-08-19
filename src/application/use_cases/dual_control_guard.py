@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.domain.interfaces.ports import EmployeeRepository, Notifier
+from src.domain.interfaces.ports import EmployeeRepository, Notifier, SecurityEventRepository
 from src.domain.value_objects.authorization import DUAL_CONTROL_APPROVAL_FLAG
 from src.domain.value_objects.identifiers import TenantId
 from src.shared.logger import LogChannel, get_logger
@@ -56,9 +56,20 @@ class DeadlockCheckResult:
 class DualControlDeadlockGuardUseCase:
     """Dual-control təsdiqçisinin mövcudluğunu yoxlayır."""
 
-    def __init__(self, employees: EmployeeRepository, notifier: Notifier | None = None) -> None:
+    def __init__(
+        self,
+        employees: EmployeeRepository,
+        notifier: Notifier | None = None,
+        *,
+        security_events: SecurityEventRepository | None = None,
+    ) -> None:
         self._employees = employees
         self._notifier = notifier
+        # `notifier` İLƏ EYNİ NAXIŞ (SEC-7) — bu sinfin çağırışları HƏMİŞƏ
+        # REAL vəziyyət yoxlamasıdır (permission_guards.is_allowed()-dəki
+        # kimi UI-probe DUALLIĞI YOXDUR), ona görə `check()` içində
+        # QEYD-ŞƏRTSİZ yazılır — `notifier`in ÖZÜ də elə çağırılır.
+        self._security_events = security_events
 
     def check(self, tenant_id: TenantId) -> DeadlockCheckResult:
         """Aktiv təsdiqçi sayını yoxlayır və lazım gələrsə xəbərdarlıq göndərir."""
@@ -74,6 +85,15 @@ class DualControlDeadlockGuardUseCase:
                 "impact": "30+ dəqiqəlik vaxt düzəlişləri təsdiqsiz qalacaq",
             },
         )
+        if self._security_events is not None:
+            self._security_events.record(
+                tenant_id=tenant_id,
+                event_type="DUAL_CONTROL_DEADLOCK_RISK",
+                details={
+                    "flag": DUAL_CONTROL_APPROVAL_FLAG,
+                    "impact": "30+ dəqiqəlik vaxt düzəlişləri təsdiqsiz qalacaq",
+                },
+            )
         if self._notifier is not None:
             self._notifier.notify(
                 tenant_id=tenant_id,
@@ -106,6 +126,12 @@ class DualControlDeadlockGuardUseCase:
                     "remaining_after_change": max(0, result.approver_count - 1),
                 },
             )
+            if self._security_events is not None:
+                self._security_events.record(
+                    tenant_id=tenant_id,
+                    event_type="DUAL_CONTROL_LAST_APPROVER_REMOVED",
+                    details={"remaining_after_change": max(0, result.approver_count - 1)},
+                )
             return DeadlockCheckResult(
                 approver_count=max(0, result.approver_count - 1),
                 is_healthy=False,

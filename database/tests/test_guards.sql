@@ -33,6 +33,17 @@ DECLARE
     v_failed     BOOLEAN;
     v_message    TEXT;
     v_passed     INTEGER := 0;
+
+    -- TEST 35-39 (SEC-01/SEC-05, terminal PIN throttle trigger) üçün:
+    v_tenant2        UUID;
+    v_store2         UUID;
+    v_machine_a      TEXT := 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    v_machine_b      TEXT := 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    v_machine_c      TEXT := 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+    v_failed_count   INTEGER;
+    v_locked_until   TIMESTAMPTZ;
+    v_window_started TIMESTAMPTZ;
+    v_now            TIMESTAMPTZ := now();
 BEGIN
     -- ---------------------------------------------------------------- setup
     INSERT INTO license_tenants (tenant_name, license_key_hash, status, company_contact_email)
@@ -1037,9 +1048,240 @@ BEGIN
     v_passed := v_passed + 1;
     RAISE NOTICE 'TEST 34 ✓ sönük kompensasiya yeni istisnanı bloklayır, açıq modul buraxır';
 
+    -- =========================================================================
+    -- TEST 35-39: TERMİNAL PIN THROTTLE TRIGGER-İ (SEC-01/SEC-05, migrations/075)
+    -- =========================================================================
+    -- `enforce_store_pin_throttle_lockout()` pəncərə/kilid ARİFMETİKASINI DB
+    -- TRİGGER-İNDƏ aparır (TIME-1) — Python tərəfindəki testlər (`tests/unit/
+    -- test_authentication.py`) sahtə repo ilə işlədiyi üçün bu riyaziyyatı
+    -- HEÇ VAXT ÖRTMÜR. Bu testlər `qa`-nın tapdığı boşluğu bağlayır (dövrə 3).
+    --
+    -- Mövcud `v_tenant`/`v_store` YENİDƏN İSTİFADƏ OLUNUR (TEST 35-38) —
+    -- `store_pin_throttle` yuxarıdakı 34 testin TOXUNMADIĞI TAMAMİLƏ AYRI
+    -- cədvəldir, çarpaz çirklənmə riski yoxdur. YALNIZ TEST 39 (çox-kirayəçi
+    -- təcridi) üçün AYRICA `v_tenant2`/`v_store2` yaradılır.
+    --
+    -- "VAXT KEÇMƏSİ" SİMULYASİYASI: `KIOSK_STORE_PIN_LOCKOUT_MINUTES` defolt
+    -- 15-dir və `make_interval(mins => ...)` YALNIZ TAM ədəd qəbul edir —
+    -- real vaxt gözləmək (60+ saniyə) testi yavaş/kövrək edərdi. Əvəzinə
+    -- `ALTER TABLE ... DISABLE/ENABLE TRIGGER` ilə sətri BİRBAŞA (trigger-i
+    -- keçərək) keçmişə aid dəyərlərlə saxtalaşdırırıq.
+    --
+    -- DƏQİQ SƏRHƏD (`now() = locked_until`, TEST 37): Postgres-də `now()`
+    -- TRANZAKSİYA DAXİLİNDƏ SABİTDİR (`clock_timestamp()`-dən FƏRQLİ) —
+    -- `locked_until`-u BİRBAŞA `now()`-a bərabər təyin etsək, trigger-in
+    -- İÇİNDƏKİ `now()` çağırışı da EYNİ dəyəri görür — real vaxt gözləməyə
+    -- ehtiyac yoxdur.
+
+    -- TEST tenant-ın PIN həddini 3-ə ENDİRİRİK (defolt 20-dir) ki, TEST 35
+    -- 20 dəfə INSERT/UPDATE etmədən DETERMİNİST işləsin — riyaziyyat hər iki
+    -- ədədlə EYNİDİR, sınanan MƏNTİQ (hədd-1/hədd/hədd+1) ədəddən asılı deyil.
+    UPDATE system_limits SET limit_value = '3'
+     WHERE tenant_id = v_tenant AND limit_key = 'KIOSK_STORE_PIN_MAX_FAILED_ATTEMPTS';
+
+    -- =====================================================================
+    -- TEST 35: HƏDD-1 → kilidlənmir; HƏDD → kilidlənir; HƏDD+1 → DONUR
+    -- =====================================================================
+    INSERT INTO store_pin_throttle (tenant_id, machine_key, store_id, failed_count)
+    VALUES (v_tenant, v_machine_a, v_store, 1)
+    ON CONFLICT (tenant_id, machine_key) DO UPDATE SET
+        failed_count = store_pin_throttle.failed_count + 1,
+        store_id     = EXCLUDED.store_id
+    RETURNING failed_count, locked_until INTO v_failed_count, v_locked_until;
+    IF v_failed_count <> 1 OR v_locked_until IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST 35a UĞURSUZ: cəhd 1-də failed_count=% locked_until=%',
+            v_failed_count, v_locked_until;
+    END IF;
+
+    -- Cəhd 2 (HƏDD-1, hədd=3)
+    INSERT INTO store_pin_throttle (tenant_id, machine_key, store_id, failed_count)
+    VALUES (v_tenant, v_machine_a, v_store, 1)
+    ON CONFLICT (tenant_id, machine_key) DO UPDATE SET
+        failed_count = store_pin_throttle.failed_count + 1,
+        store_id     = EXCLUDED.store_id
+    RETURNING failed_count, locked_until INTO v_failed_count, v_locked_until;
+    IF v_failed_count <> 2 OR v_locked_until IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST 35b UĞURSUZ (hədd-1): failed_count=% locked_until=% (kilidlənmiş olmamalı idi)',
+            v_failed_count, v_locked_until;
+    END IF;
+
+    -- Cəhd 3 (HƏDD, hədd=3) — İNDİ kilidlənməlidir
+    INSERT INTO store_pin_throttle (tenant_id, machine_key, store_id, failed_count)
+    VALUES (v_tenant, v_machine_a, v_store, 1)
+    ON CONFLICT (tenant_id, machine_key) DO UPDATE SET
+        failed_count = store_pin_throttle.failed_count + 1,
+        store_id     = EXCLUDED.store_id
+    RETURNING failed_count, locked_until INTO v_failed_count, v_locked_until;
+    IF v_failed_count <> 3 OR v_locked_until IS NULL THEN
+        RAISE EXCEPTION 'TEST 35c UĞURSUZ (hədd): failed_count=% locked_until=% (kilidlənməli idi)',
+            v_failed_count, v_locked_until;
+    END IF;
+
+    -- Cəhd 4 (HƏDD+1, ARTIQ kilidli) — sayğac DONMALI, locked_until UZANMAMALI.
+    -- `pg_sleep()` LAZIM DEYİL: `now()` bu TRANZAKSİYA daxilində SABİTDİR —
+    -- `locked_until` bir addım əvvəl elə HƏMİN `now()` + interval kimi
+    -- hesablanıb, ona görə `locked_until > now()` HƏR HALDA TRİVİAL doğrudur.
+    DECLARE
+        v_locked_until_before TIMESTAMPTZ := v_locked_until;
+    BEGIN
+        INSERT INTO store_pin_throttle (tenant_id, machine_key, store_id, failed_count)
+        VALUES (v_tenant, v_machine_a, v_store, 1)
+        ON CONFLICT (tenant_id, machine_key) DO UPDATE SET
+            failed_count = store_pin_throttle.failed_count + 1,
+            store_id     = EXCLUDED.store_id
+        RETURNING failed_count, locked_until INTO v_failed_count, v_locked_until;
+        IF v_failed_count <> 3 THEN
+            RAISE EXCEPTION 'TEST 35d UĞURSUZ (hədd+1): sayğac DONMADI, failed_count=% (3 olmalı idi)',
+                v_failed_count;
+        END IF;
+        IF v_locked_until <> v_locked_until_before THEN
+            RAISE EXCEPTION 'TEST 35d UĞURSUZ (hədd+1): locked_until UZANDI (əvvəl=%, indi=%)',
+                v_locked_until_before, v_locked_until;
+        END IF;
+    END;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 35 ✓ hədd-1 kilidsiz, hədd kilidli, hədd+1 donmuş (sayğac=3, kilid sabit)';
+
+    -- =====================================================================
+    -- TEST 36: PƏNCƏRƏNİN BİTMƏSİ İLƏ SIFIRLANMA (`locked_until` keçib)
+    -- =====================================================================
+    ALTER TABLE store_pin_throttle DISABLE TRIGGER trg_store_pin_throttle_lockout;
+    UPDATE store_pin_throttle
+       SET window_started_at = v_now - INTERVAL '20 minutes',
+           locked_until      = v_now - INTERVAL '1 second'
+     WHERE tenant_id = v_tenant AND machine_key = v_machine_a;
+    ALTER TABLE store_pin_throttle ENABLE TRIGGER trg_store_pin_throttle_lockout;
+
+    INSERT INTO store_pin_throttle (tenant_id, machine_key, store_id, failed_count)
+    VALUES (v_tenant, v_machine_a, v_store, 1)
+    ON CONFLICT (tenant_id, machine_key) DO UPDATE SET
+        failed_count = store_pin_throttle.failed_count + 1,
+        store_id     = EXCLUDED.store_id
+    RETURNING failed_count, locked_until, window_started_at
+      INTO v_failed_count, v_locked_until, v_window_started;
+    IF v_failed_count <> 1 OR v_locked_until IS NOT NULL THEN
+        RAISE EXCEPTION
+            'TEST 36 UĞURSUZ: pəncərə bitdikdən sonra sıfırlanmadı (failed_count=%, locked_until=%)',
+            v_failed_count, v_locked_until;
+    END IF;
+    IF v_window_started < v_now THEN
+        RAISE EXCEPTION 'TEST 36 UĞURSUZ: window_started_at server vaxtına YENİLƏNMƏDİ (%)',
+            v_window_started;
+    END IF;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 36 ✓ pəncərə (locked_until keçib) bitəndə sayğac 1-ə sıfırlanır';
+
+    -- =====================================================================
+    -- TEST 37: DƏQİQ SƏRHƏD — `now() = locked_until` ARTIQ "bloklanmayıb"
+    --   sayılmalıdır (domendəki `is_locked()`-in `now < locked_until` SƏRT
+    --   şərti ilə TUTARLI, bax miqrasiyanın "SƏRHƏD" şərhi)
+    -- =====================================================================
+    INSERT INTO store_pin_throttle (tenant_id, machine_key, store_id, failed_count)
+    VALUES (v_tenant, v_machine_b, v_store, 1)
+    ON CONFLICT (tenant_id, machine_key) DO UPDATE SET
+        failed_count = store_pin_throttle.failed_count + 1, store_id = EXCLUDED.store_id;
+    INSERT INTO store_pin_throttle (tenant_id, machine_key, store_id, failed_count)
+    VALUES (v_tenant, v_machine_b, v_store, 1)
+    ON CONFLICT (tenant_id, machine_key) DO UPDATE SET
+        failed_count = store_pin_throttle.failed_count + 1, store_id = EXCLUDED.store_id;
+    INSERT INTO store_pin_throttle (tenant_id, machine_key, store_id, failed_count)
+    VALUES (v_tenant, v_machine_b, v_store, 1)
+    ON CONFLICT (tenant_id, machine_key) DO UPDATE SET
+        failed_count = store_pin_throttle.failed_count + 1, store_id = EXCLUDED.store_id
+    RETURNING failed_count, locked_until INTO v_failed_count, v_locked_until;
+    IF v_locked_until IS NULL THEN
+        RAISE EXCEPTION 'TEST 37 SETUP UĞURSUZ: v_machine_b kilidlənmədi (failed_count=%)', v_failed_count;
+    END IF;
+
+    -- `locked_until`-u DƏQİQ `now()`-a (tranzaksiyanın SABİT `now()`-u) təyin
+    -- edirik — trigger-in İÇİNDƏKİ `now()` DƏ EYNİ dəyəri görəcək.
+    ALTER TABLE store_pin_throttle DISABLE TRIGGER trg_store_pin_throttle_lockout;
+    UPDATE store_pin_throttle
+       SET locked_until = now(), window_started_at = now() - INTERVAL '2 minutes'
+     WHERE tenant_id = v_tenant AND machine_key = v_machine_b;
+    ALTER TABLE store_pin_throttle ENABLE TRIGGER trg_store_pin_throttle_lockout;
+
+    INSERT INTO store_pin_throttle (tenant_id, machine_key, store_id, failed_count)
+    VALUES (v_tenant, v_machine_b, v_store, 1)
+    ON CONFLICT (tenant_id, machine_key) DO UPDATE SET
+        failed_count = store_pin_throttle.failed_count + 1, store_id = EXCLUDED.store_id
+    RETURNING failed_count, locked_until INTO v_failed_count, v_locked_until;
+    IF v_failed_count <> 1 OR v_locked_until IS NOT NULL THEN
+        RAISE EXCEPTION
+            'TEST 37 UĞURSUZ: now()=locked_until anında "hələ kilidlidir" sayıldı (failed_count=%, locked_until=%) — domendəki is_locked() (now < locked_until, SƏRT) ilə TUTARSIZ olardı',
+            v_failed_count, v_locked_until;
+    END IF;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 37 ✓ now() = locked_until anında DB DƏ "bloklanmayıb" qərarına gəlir (domenlə tutarlı sərhəd)';
+
+    -- =====================================================================
+    -- TEST 38: `update_last_seen_store`-un EKVİVALENTİ SAYĞACA TOXUNMUR
+    -- =====================================================================
+    INSERT INTO store_pin_throttle (tenant_id, machine_key, store_id, failed_count)
+    VALUES (v_tenant, v_machine_c, v_store, 1)
+    ON CONFLICT (tenant_id, machine_key) DO UPDATE SET
+        failed_count = store_pin_throttle.failed_count + 1, store_id = EXCLUDED.store_id;
+    INSERT INTO store_pin_throttle (tenant_id, machine_key, store_id, failed_count)
+    VALUES (v_tenant, v_machine_c, v_store, 1)
+    ON CONFLICT (tenant_id, machine_key) DO UPDATE SET
+        failed_count = store_pin_throttle.failed_count + 1, store_id = EXCLUDED.store_id
+    RETURNING failed_count INTO v_failed_count;
+    IF v_failed_count <> 2 THEN
+        RAISE EXCEPTION 'TEST 38 SETUP UĞURSUZ: failed_count=% (2 olmalı idi)', v_failed_count;
+    END IF;
+
+    -- `update_last_seen_store()`-un EKVİVALENTİ: `failed_count` SET
+    -- siyahısında HEÇ YOXDUR — bax `pin_throttle_repository.py`.
+    UPDATE store_pin_throttle
+       SET store_id = v_store
+     WHERE tenant_id = v_tenant AND machine_key = v_machine_c
+     RETURNING failed_count, locked_until INTO v_failed_count, v_locked_until;
+    IF v_failed_count <> 2 OR v_locked_until IS NOT NULL THEN
+        RAISE EXCEPTION
+            'TEST 38 UĞURSUZ: store_id-yeniləməsi sayğaca TOXUNDU (failed_count=%, locked_until=%)',
+            v_failed_count, v_locked_until;
+    END IF;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 38 ✓ store_id-yalnız yeniləmə sayğacı/kiliddən TOXUNULMAZ saxlayır';
+
+    -- =====================================================================
+    -- TEST 39: ÇOX-KİRAYƏÇİ TƏCRİDİ — EYNİ machine_key, FƏRQLİ tenant_id
+    -- =====================================================================
+    INSERT INTO license_tenants (tenant_name, license_key_hash, status, company_contact_email)
+    VALUES ('GUARD-TEST-THROTTLE-2', 'test', 'AKTIV', 'guard-throttle2@test.local')
+    RETURNING tenant_id INTO v_tenant2;
+    PERFORM seed_tenant_defaults(v_tenant2);
+    INSERT INTO stores (tenant_id, code, name, brand)
+    VALUES (v_tenant2, 'T-902', 'Throttle Mağaza 2', 'Yataş')
+    RETURNING id INTO v_store2;
+
+    -- v_machine_a artıq v_tenant-da KİLİDLİDİR (TEST 35-in nəticəsi). Eyni
+    -- açarla v_tenant2-də YENİ, AÇIQ sətir gözlənilir.
+    INSERT INTO store_pin_throttle (tenant_id, machine_key, store_id, failed_count)
+    VALUES (v_tenant2, v_machine_a, v_store2, 1)
+    ON CONFLICT (tenant_id, machine_key) DO UPDATE SET
+        failed_count = store_pin_throttle.failed_count + 1, store_id = EXCLUDED.store_id
+    RETURNING failed_count, locked_until INTO v_failed_count, v_locked_until;
+    IF v_failed_count <> 1 OR v_locked_until IS NOT NULL THEN
+        RAISE EXCEPTION
+            'TEST 39 UĞURSUZ: v_tenant-in kilidi v_tenant2-yə SIZDI (failed_count=%, locked_until=%)',
+            v_failed_count, v_locked_until;
+    END IF;
+    -- Əks istiqamət: v_tenant-dakı sətir HƏLƏ DƏ kilidli qalmalıdır.
+    SELECT failed_count, locked_until INTO v_failed_count, v_locked_until
+      FROM store_pin_throttle
+     WHERE tenant_id = v_tenant AND machine_key = v_machine_a;
+    IF v_failed_count <> 3 OR v_locked_until IS NULL THEN
+        RAISE EXCEPTION
+            'TEST 39 UĞURSUZ: v_tenant-in sətri v_tenant2 yazısından SONRA dəyişdi (failed_count=%, locked_until=%)',
+            v_failed_count, v_locked_until;
+    END IF;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 39 ✓ eyni machine_key, fərqli tenant_id → tam təcrid olunmuş sətirlər';
+
     RAISE NOTICE '';
     RAISE NOTICE '===========================================';
-    RAISE NOTICE 'BÜTÜN GUARD TESTLƏRİ UĞURLU: %/34', v_passed;
+    RAISE NOTICE 'BÜTÜN GUARD TESTLƏRİ UĞURLU: %/39', v_passed;
     RAISE NOTICE '===========================================';
 
     -- Test məlumatlarının təmizlənməsi
@@ -1058,6 +1300,12 @@ BEGIN
     DELETE FROM fines WHERE tenant_id = v_tenant;
     DELETE FROM leave_requests WHERE tenant_id = v_tenant;
     DELETE FROM face_control_exemptions WHERE tenant_id = v_tenant;
+    -- TEST 35-39 (`store_pin_throttle`): FK-si `ON DELETE CASCADE`-dir, yəni
+    -- aşağıdakı `license_tenants` silinməsi bunu ÖZÜ təmizləyərdi — açıq
+    -- silmək YALNIZ oxunaqlılıq üçündür, faylın qalan hissəsinin "AÇIQ SIRA"
+    -- konvensiyasına uyğun.
+    DELETE FROM store_pin_throttle WHERE tenant_id IN (v_tenant, v_tenant2);
+    DELETE FROM license_tenants WHERE tenant_id = v_tenant2;
     DELETE FROM license_tenants WHERE tenant_id = v_tenant;
 END
 $$;

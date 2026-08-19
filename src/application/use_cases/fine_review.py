@@ -31,18 +31,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING
-from uuid import UUID, uuid4
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from src.domain.entities.fine import Fine, FineStatus
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
+from src.domain.value_objects.identifiers import new_fine_review_batch_id
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
     from src.domain.interfaces.ports import AuditTrail, Clock, Notifier, SystemLimits
-    from src.domain.value_objects.identifiers import FineId, TenantId
+    from src.domain.value_objects.identifiers import EmployeeId, FineId, FineReviewBatchId, TenantId
 
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
@@ -79,7 +79,7 @@ class FineDecision:
 class PublishResult:
     """Kütləvi nəşrin nəticəsi — audit və UI təsdiq mesajı üçün."""
 
-    batch_id: UUID
+    batch_id: FineReviewBatchId
     review_month: str
     published: list[FineId] = field(default_factory=list)
     discarded: list[FineId] = field(default_factory=list)
@@ -89,8 +89,47 @@ class PublishResult:
         return len(self.published) + len(self.discarded)
 
 
+@dataclass(frozen=True)
+class FineReviewBatch:
+    """`monthly_fine_review_batches` sətrinin güzgüsü (SEC-8 audit tapıntısı).
+
+    Sadə audit sətridir — heç bir keçidi/qaydası yoxdur, `PublishResult` kimi
+    BU FAYLDA yaşayır (`ports.py`-DA DEYİL): CLAUDE.md §3-ün `ReportFactProvider`
+    əsaslandırması ilə eyni — bu, TƏTBİQ qatının strukturudur, domen tipi deyil.
+    """
+
+    id: FineReviewBatchId
+    tenant_id: TenantId
+    reviewed_by: EmployeeId
+    review_month: str
+    pushed_at: datetime
+    total_kept_count: int
+    total_reversed_count: int
+
+
+@runtime_checkable
+class FineReviewBatchRepository(Protocol):
+    """`monthly_fine_review_batches`-in yazma portu (SEC-8)."""
+
+    def save(self, batch: FineReviewBatch) -> None: ...
+
+
 class MonthlyFineReviewUseCase:
-    """Aylıq icmal + kütləvi nəşr."""
+    """Aylıq icmal + kütləvi nəşr.
+
+    ──────────────────────────────────────────────────────────────────────────
+    `review_batches` MƏCBURİDİR — `fines` REPOSİTORİYASI İSƏ YENƏ DƏ YOXDUR
+    ──────────────────────────────────────────────────────────────────────────
+    Bu, `publish_batch`-ın "repository almır" qərarını POZMUR — həmin qərar
+    YALNIZ `Fine` sətirlərinə aiddir (çağıran onları oxuyub yazır, bax
+    `controllers/fine_review.py`). `monthly_fine_review_batches` isə FƏRQLİ
+    bir yazıdır: HEÇ bir mövcud `Fine` obyektinin üstündə yaşamır, TƏK
+    mənbəyi bu use case-in ÖZÜdür (SEC-8 audit tapıntısı — "bu cərimə hansı
+    partiyada nəşr olundu?" sualı əvvəllər cavabsız idi, çünki batch sətri
+    HEÇ VAXT yazılmırdı, `batch_id` yalnız yaddaşda yaranırdı).
+    `limits` ilə EYNİ səbəbdən `None` fallback-ı YOXDUR: audit sətri
+    yazılmayan bir "nəşr" səssizcə iz itirmiş olardı.
+    """
 
     def __init__(
         self,
@@ -99,6 +138,7 @@ class MonthlyFineReviewUseCase:
         audit: AuditTrail,
         notifier: Notifier,
         limits: SystemLimits,
+        review_batches: FineReviewBatchRepository,
     ) -> None:
         self._clock = clock
         self._audit = audit
@@ -108,6 +148,7 @@ class MonthlyFineReviewUseCase:
         # olmayan bir nəşr işçinin etiraz hüququnu səssizcə 72 saata
         # sabitləyərdi — ona görə asılılıq açıq tələb olunur.
         self._limits = limits
+        self._review_batches = review_batches
 
     # ------------------------------ görünmə ---------------------------------- #
 
@@ -167,7 +208,7 @@ class MonthlyFineReviewUseCase:
                 user_message="Bu ay üçün göndəriləcək cərimə yoxdur.",
             )
 
-        batch_id = uuid4()
+        batch_id = new_fine_review_batch_id()
         result = PublishResult(batch_id=batch_id, review_month=review_month)
         # Limit BİR DƏFƏ oxunur: eyni "[Bütün Filiallara Göndər]" basışında
         # nəşr olunan cərimələrin pəncərəsi eyni uzunluqda olmalıdır. Hər
@@ -186,7 +227,12 @@ class MonthlyFineReviewUseCase:
                         user_message="Silinən cərimə üçün səbəb yazılmalıdır.",
                         context={"fine_id": str(fine_id)},
                     )
-                fine.discard_in_review(reviewed_by=actor.id, reviewed_at=now, reason=reason)
+                fine.discard_in_review(
+                    reviewed_by=actor.id,
+                    reviewed_at=now,
+                    reason=reason,
+                    review_batch_id=batch_id,
+                )
                 result.discarded.append(fine_id)
             else:
                 # Pəncərə uzunluğu TENANT-dan gəlir, `Fine` sinfinin
@@ -197,6 +243,7 @@ class MonthlyFineReviewUseCase:
                     reviewed_by=actor.id,
                     published_at=now,
                     appeal_window_hours=window_hours,
+                    review_batch_id=batch_id,
                 )
                 result.published.append(fine_id)
 
@@ -239,6 +286,23 @@ class MonthlyFineReviewUseCase:
         *,
         now: datetime,
     ) -> None:
+        # SEC-8: batch sətri BURADA davamlı yazılır — əvvəllər `batch_id`
+        # yalnız yaddaşda yaranıb istinadsız qalırdı (`entity_id=None` bunun
+        # izi idi, indi HƏQİQİ sətrə işarə edir). Audit sətrindən ƏVVƏL
+        # yazılır: batch əlçatmaz olsa (DB nasazlığı) `self._audit.record()`
+        # də uğursuz olacaq (eyni tranzaksiya, eyni bağlantı) — bu, İKİSİNİN
+        # DƏ rollback edilməsini TƏMİN edir, yarımçıq iz qalmır.
+        self._review_batches.save(
+            FineReviewBatch(
+                id=result.batch_id,
+                tenant_id=tenant_id,
+                reviewed_by=actor.id,
+                review_month=result.review_month,
+                pushed_at=now,
+                total_kept_count=len(result.published),
+                total_reversed_count=len(result.discarded),
+            )
+        )
         _audit_log.warning(
             "MONTHLY_FINES_PUBLISHED",
             extra={
@@ -254,7 +318,7 @@ class MonthlyFineReviewUseCase:
             actor_id=actor.id,
             action="MONTHLY_FINES_PUBLISHED",
             entity_type="monthly_fine_review_batches",
-            entity_id=None,
+            entity_id=result.batch_id,
             after_state={
                 "batch_id": str(result.batch_id),
                 "review_month": result.review_month,
@@ -296,6 +360,8 @@ def _require_month(value: str) -> None:
 __all__ = [
     "PUBLISH_FINES_FLAG",
     "FineDecision",
+    "FineReviewBatch",
+    "FineReviewBatchRepository",
     "FineReviewError",
     "MonthlyFineReviewUseCase",
     "PublishResult",

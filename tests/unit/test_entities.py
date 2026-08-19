@@ -34,6 +34,7 @@ from src.domain.value_objects import (
     DUAL_CONTROL_APPROVAL_FLAG,
     AuthorizationError,
     HardlockLevel,
+    InvalidMoneyError,
     Money,
     PermissionEffect,
     PermissionFlag,
@@ -898,6 +899,23 @@ def test_reduced_amount_must_be_lower() -> None:
             reason="Səhv azaltma cəhdi edilir",
             new_amount=Money.parse("20.00"),
         )
+
+
+def test_fine_reverse_rejects_negative_new_amount() -> None:
+    """D-R2-01 audit tapıntısı: mənfi `new_amount` ƏVVƏL `is_positive`
+    budağının içindəki ölü `require_non_negative()` çağırışını YAN keçib
+    sükutla tam ləğvə (`REVERSED`) çevrilirdi — indi budaqdan ASILI OLMADAN
+    açıq `DomainRuleError` atılır."""
+    fine = make_manual_fine()
+    with pytest.raises(InvalidMoneyError, match="mənfi ola bilməz"):
+        fine.reverse(
+            decided_by=APPROVER,
+            decided_at=at(11, 0),
+            reason="Mənfi məbləğ ilə səhv çağırış",
+            new_amount=Money.parse("-5.00"),
+        )
+    # Status DƏYİŞMƏYİB — istisna əməliyyatı YARIMÇIQ buraxmayıb.
+    assert fine.status is FineStatus.PUBLISHED
 
 
 def test_fine_cannot_be_reversed_twice() -> None:

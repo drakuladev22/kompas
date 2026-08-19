@@ -45,6 +45,7 @@ from tests.fixtures.fakes import (
     FakeClock,
     FakeSystemLimits,
     RecordingAudit,
+    RecordingFineReviewBatches,
     RecordingNotifier,
 )
 
@@ -119,6 +120,7 @@ def review_uc() -> tuple[MonthlyFineReviewUseCase, RecordingAudit, RecordingNoti
         audit=audit,  # type: ignore[arg-type]
         notifier=notifier,  # type: ignore[arg-type]
         limits=FakeSystemLimits(),  # type: ignore[arg-type]
+        review_batches=RecordingFineReviewBatches(),  # type: ignore[arg-type]
     )
     return use_case, audit, notifier
 
@@ -236,6 +238,7 @@ def test_publish_batch_uses_the_tenant_appeal_window_not_the_class_default() -> 
         audit=RecordingAudit(),  # type: ignore[arg-type]
         notifier=RecordingNotifier(),  # type: ignore[arg-type]
         limits=limits,  # type: ignore[arg-type]
+        review_batches=RecordingFineReviewBatches(),  # type: ignore[arg-type]
     )
     actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
     # Repository-dən bərpa olunmuş cərimə ilə eyni vəziyyət: sahə defoltdadır.
@@ -266,6 +269,7 @@ def test_published_window_is_frozen_and_ignores_a_later_limit_change() -> None:
         audit=RecordingAudit(),  # type: ignore[arg-type]
         notifier=RecordingNotifier(),  # type: ignore[arg-type]
         limits=limits,  # type: ignore[arg-type]
+        review_batches=RecordingFineReviewBatches(),  # type: ignore[arg-type]
     )
     actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
     fine = make_fine(created=CREATED)
@@ -302,6 +306,94 @@ def test_unpublished_fine_window_counts_as_open() -> None:
     fine = make_fine(created=CREATED)
 
     assert fine.is_appeal_window_open(now=CREATED + timedelta(days=365)) is True
+
+
+# --------------------------------------------------------------------------- #
+# 3.5. SEC-8 — Aylıq İcmal partiyası DAVAMLI yazılır
+# --------------------------------------------------------------------------- #
+# Auditdə tapılan qüsur: `batch_id` yalnız yaddaşda yaranırdı, heç bir sətrə
+# yazılmırdı — "bu cərimə hansı partiyada nəşr olundu?" sualı cavabsız idi.
+# Aşağıdakı testlər TAPINTININ ÖZÜNÜ ölçür: sadəcə `review_batches=` arqumenti
+# ötürülür-ötürülmür yox, HƏQİQƏTƏN saxlanılan sətir və `Fine.review_batch_id`
+# ARASINDAKI körpü.
+
+
+def test_publish_batch_persists_the_batch_row_and_stamps_every_fine() -> None:
+    """`FineReviewBatch` saxlanılır VƏ hər `Fine.review_batch_id` ONA işarə edir."""
+    batches = RecordingFineReviewBatches()
+    use_case = MonthlyFineReviewUseCase(
+        clock=FakeClock(PUSHED),  # type: ignore[arg-type]
+        audit=RecordingAudit(),  # type: ignore[arg-type]
+        notifier=RecordingNotifier(),  # type: ignore[arg-type]
+        limits=FakeSystemLimits(),  # type: ignore[arg-type]
+        review_batches=batches,  # type: ignore[arg-type]
+    )
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+    kept = make_fine(created=CREATED)
+    discarded = make_fine(created=CREATED)
+
+    result = use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={kept.id: kept, discarded.id: discarded},
+        decisions=[
+            FineDecision(
+                fine_id=discarded.id, decision=ReviewDecision.DISCARD, reason="Səhv qeyd edilib"
+            )
+        ],
+    )
+
+    # SƏTİR HƏQİQƏTƏN yazılıb — əvvəl bu sətir HEÇ VAXT icra olunmurdu.
+    assert len(batches.saved) == 1
+    batch = batches.saved[0]
+    assert batch.id == result.batch_id
+    assert batch.tenant_id == TENANT
+    assert batch.reviewed_by == actor.id
+    assert batch.review_month == "2026-08"
+    assert batch.pushed_at == PUSHED
+    assert batch.total_kept_count == 1
+    assert batch.total_reversed_count == 1
+
+    # Körpü: hər İKİ nəticə (saxlanan VƏ silinən) HƏMİN partiyaya işarə edir.
+    assert kept.review_batch_id == result.batch_id
+    assert discarded.review_batch_id == result.batch_id
+
+
+def test_a_failing_batch_save_stops_the_whole_publish_and_skips_the_audit_entry() -> None:
+    """`_record()` partiyanı audit sətrindən ƏVVƏL yazır — bax modul şərhi.
+
+    `review_batches.save()` istisna atsa (DB nasazlığı), `_record()`-un
+    QALAN sətri (`self._audit.record(...)`) İCRA OLUNMUR — eyni funksiyada,
+    həmin sətirdən DƏRHAL sonradır və aradakı heç bir `try/except` yoxdur.
+    İstisna `publish_batch()`-dən İSTİSNASIZ ÇIXIR ki, çağıran (kontroller)
+    sessiyanı GERİ QAYTARSIN — əks halda `Fine.publish()`-in artıq etdiyi
+    yaddaş-daxili dəyişikliklər (`review_batch_id`, status) hər hansı YARIM-
+    tranzaksiya ilə DB-yə düşə bilərdi, batch sətri isə YOX.
+    """
+    batches = RecordingFineReviewBatches()
+    batches.failure = RuntimeError("baza əlçatmazdır")
+    audit = RecordingAudit()
+    use_case = MonthlyFineReviewUseCase(
+        clock=FakeClock(PUSHED),  # type: ignore[arg-type]
+        audit=audit,  # type: ignore[arg-type]
+        notifier=RecordingNotifier(),  # type: ignore[arg-type]
+        limits=FakeSystemLimits(),  # type: ignore[arg-type]
+        review_batches=batches,  # type: ignore[arg-type]
+    )
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+    fine = make_fine(created=CREATED)
+
+    with pytest.raises(RuntimeError, match="baza əlçatmazdır"):
+        use_case.publish_batch(
+            actor=actor,
+            tenant_id=TENANT,
+            review_month="2026-08",
+            fines={fine.id: fine},
+            decisions=[],
+        )
+
+    assert audit.entries == []  # audit sətri YAZILMADI — batch-dan sonrakı addım
 
 
 # --------------------------------------------------------------------------- #

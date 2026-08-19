@@ -771,17 +771,20 @@ class PermissionMatrixScreen(Screen):
         role_create_requested: "Yeni Vəzifə".
 
     ──────────────────────────────────────────────────────────────────────
-    HARDLOCK QIFILLARI NİYƏ GÖRÜNÜR AMMA BASILA BİLMİR
+    QIFILLI XANALAR NİYƏ GÖRÜNÜR AMMA BASILA BİLMİR
     ──────────────────────────────────────────────────────────────────────
     Adətən bu layihədə "icazən yoxdursa, element ÜMUMİYYƏTLƏ yoxdur"
-    prinsipi işləyir (bax `navigation.py`). Burada isə ƏKSİNƏ: hardlock
-    icazələr qıfıl ikonu ilə GÖRÜNÜR.
+    prinsipi işləyir (bax `navigation.py`). Burada isə ƏKSİNƏ: bu ROLA
+    verilə bilməyən icazələr qıfıl ikonu ilə GÖRÜNÜR.
 
     Səbəb fərqlidir — bu, "sənin görməyə icazən yoxdur" deyil, "bu icazə
     heç kim tərəfindən dəyişdirilə bilməz" deməkdir. Onu gizlətsək, admin
     həmin icazənin ümumiyyətlə mövcud olmadığını düşünər və nə üçün
-    işlədiyini başa düşməzdi. Maket də bunu izah edir: "Qıfıllı icazələr
-    hardlock-dur — yalnız ROOT İdarə Mərkəzindən dəyişdirilir."
+    işlədiyini başa düşməzdi. Qıfıl İKİ fərqli qaydanın BİRLƏŞMİŞ nəticəsidir
+    (`PermissionFlag.is_grantable_to()`, bax `permission_matrix.py::
+    _flag_groups`): statik hardlock səviyyəsi VƏ rola-görə anti-fraud/kamera-
+    tip istisnaları (SEC-001 daxil). İkisini ayrı göstərsəydik, admin eyni
+    "mən niyə bunu dəyişə bilmirəm?" sualına İKİ fərqli yerdə baxmalı olardı.
 
     ──────────────────────────────────────────────────────────────────────
     İKİNCİ DEAKTİV NÖV: AKTORDA OLMAYAN İCAZƏ
@@ -975,7 +978,11 @@ class PermissionMatrixScreen(Screen):
         """Matrisi qurur.
 
         Args:
-            groups: (kateqoriya adı, [(flag, etiket, aktiv, hardlock, aktorda_var)]).
+            groups: (kateqoriya adı, [(flag, etiket, aktiv, locked, aktorda_var)]).
+                `locked` — D3: `PermissionFlag.is_grantable_to()`-nun BİRLƏŞMİŞ
+                nəticəsi (statik hardlock + rola-görə anti-fraud/kamera-tip
+                istisnaları), köhnə xalis "hardlock" sahəsini ƏVƏZ edir (bax
+                `permission_matrix.py::_flag_groups`).
 
         ──────────────────────────────────────────────────────────────────────
         BEŞİNCİ SAHƏ — `aktorda_var` (aktorun ÖZÜNDƏ olan flag)
@@ -1005,17 +1012,25 @@ class PermissionMatrixScreen(Screen):
             grid.setHorizontalSpacing(24)
             grid.setVerticalSpacing(10)
 
-            for index, (flag, label, enabled, hardlock, actor_owns) in enumerate(items):
+            for index, (flag, label, enabled, locked, actor_owns) in enumerate(items):
                 total_count += 1
                 if enabled:
                     active_count += 1
 
                 box = QCheckBox(label)
                 box.setChecked(enabled)
-                if hardlock:
+                if locked:
+                    # `locked` İNDİ `PermissionFlag.is_grantable_to()`-dan gəlir
+                    # (D3) — statik hardlock SƏVİYYƏSİ VƏ rola-görə anti-fraud/
+                    # kamera-tip istisnalarının (SEC-001 daxil) BİRLƏŞMİŞ
+                    # nəticəsidir, ona görə tooltip mətni ÜMUMİ yazılıb (bax
+                    # `permission_matrix.py::_flag_groups`).
                     box.setEnabled(False)
                     box.setIcon(icons.icon("lock", self.theme.color("--color-text-muted")))
-                    box.setToolTip("Hardlock — yalnız ROOT İdarə Mərkəzindən dəyişdirilir")
+                    box.setToolTip(
+                        "Hardlock və ya vəzifə ayrılığı qaydası — bu icazə bu "
+                        "rola verilə bilməz (dəyişdirilə bilməz)"
+                    )
                 elif not actor_owns:
                     # QIFIL İKONU QOYULMUR — səbəb fərqlidir və istifadəçi ikiuclu
                     # siqnal almamalıdır: qıfıl "heç kim dəyişə bilməz", boz xana

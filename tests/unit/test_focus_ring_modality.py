@@ -31,11 +31,8 @@ from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 
-from src.presentation.widgets.buttons import (
-    KeyFocusIconButton,
-    action_button,
-    input_modality_tracker,
-)
+from src.presentation.widgets.buttons import KeyFocusIconButton, action_button
+from src.presentation.widgets.focus_ring import input_modality_tracker
 
 pytestmark = pytest.mark.unit
 

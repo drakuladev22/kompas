@@ -37,9 +37,10 @@ class PostgresAnnouncementRepository(_BaseRepository):
     # -------------------------------- oxu ------------------------------------- #
 
     def get(self, tenant_id: TenantId, announcement_id: AnnouncementId) -> Announcement | None:
+        # INF2-02: bax `repositories.py::_require_matching_tenant` şərhi.
         row = self._fetch_one(
             f"{self._SELECT} WHERE id = %s AND tenant_id = %s",
-            (announcement_id, tenant_id),
+            (announcement_id, self._require_matching_tenant(tenant_id)),
         )
         if row is None:
             return None
@@ -49,7 +50,7 @@ class PostgresAnnouncementRepository(_BaseRepository):
         """Admin panelinin siyahısı — YARADAN görür, əhatədən ASILI OLMADAN."""
         rows = self._fetch_all(
             f"{self._SELECT} WHERE tenant_id = %s ORDER BY created_at DESC LIMIT %s",
-            (tenant_id, limit),
+            (self._require_matching_tenant(tenant_id), limit),
         )
         return self._attach_targets(rows)
 
@@ -73,7 +74,7 @@ class PostgresAnnouncementRepository(_BaseRepository):
                   )
             ORDER BY a.created_at DESC
             """,  # noqa: S608 — sabit sətir, dəyərlər %s ilə bağlanır
-            (tenant_id, created_after, store_id),
+            (self._require_matching_tenant(tenant_id), created_after, store_id),
         )
         return self._attach_targets(rows)
 
@@ -120,6 +121,7 @@ class PostgresAnnouncementRepository(_BaseRepository):
         deactivated_at: datetime,
     ) -> bool:
         """ŞƏRTLİ `UPDATE ... WHERE is_active` (`OpenShiftPostingRepository.cancel` naxışı)."""
+        # INF2-02: bax `repositories.py::_require_matching_tenant` şərhi.
         affected = self._execute(
             """
             UPDATE announcements
@@ -131,7 +133,13 @@ class PostgresAnnouncementRepository(_BaseRepository):
                AND tenant_id = %s
                AND is_active
             """,
-            (deactivated_at, deactivated_by, deactivated_at, announcement_id, tenant_id),
+            (
+                deactivated_at,
+                deactivated_by,
+                deactivated_at,
+                announcement_id,
+                self._require_matching_tenant(tenant_id),
+            ),
         )
         return affected == 1
 

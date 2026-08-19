@@ -8,10 +8,12 @@ testlər "metod çağırıldımı" deyil, "NƏTİCƏ DÜZGÜNDÜRMÜ" yoxlayır.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from typing import Any
 
 from src.domain.entities.attendance_record import AttendanceRecord, CheckInStatus
+from src.domain.entities.auth_session import AuthSession
 from src.domain.entities.employee import Employee
 from src.domain.entities.fine import Fine, FineSource, FineStatus
 from src.domain.entities.leave_request import LeaveRequest, LeaveStatus
@@ -23,9 +25,12 @@ from src.domain.value_objects.identifiers import (
     FineId,
     LeaveRequestId,
     LeaveTypeId,
+    SessionId,
     StoreId,
     TenantId,
 )
+from src.domain.value_objects.machine_identity import MachineIdentityHash
+from src.domain.value_objects.pin_throttle import TerminalPinThrottle
 
 
 class FakeClock:
@@ -108,6 +113,54 @@ class RecordingNotifier:
         return [str(m["category"]) for m in self.messages]
 
 
+class RecordingEventBus:
+    """`EventBus`-un sınaq əvəzedicisi — D2 reqressiyası üçün.
+
+    Real `EventBus` (`shared/event_bus.py`) abunəçi qeydiyyatı, prioritet
+    sırası və MRO üzrə dispatch daşıyır — bunların heç biri `leave_verification.
+    py::_publish_events`-in ÖZ məntiqinə aid deyil (o, sadəcə `publish()`-i
+    çağırır və istisnanı udur). Ona görə tam `EventBus` qurmaq testi predmetdən
+    uzaqlaşdırardı; bu sahtə yalnız "NƏ yayıldı" və "yayım neçə dəfə çağırıldı"
+    sualına cavab verir.
+    """
+
+    def __init__(self) -> None:
+        self.published: list[Any] = []
+        #: `publish()`-in UĞURSUZLUĞUNU simulyasiya edir (defolt: uğurlu).
+        #: `leave_verification._publish_events` bunu udmalıdır — Saga artıq
+        #: `COMPLETED`-dir, yayım nasazlığı əməliyyatı geri qaytarmamalıdır.
+        self.failure: Exception | None = None
+
+    async def publish(self, event: Any) -> None:
+        if self.failure is not None:
+            raise self.failure
+        self.published.append(event)
+
+    def names(self) -> list[str]:
+        return [str(getattr(e, "event_name", type(e).__name__)) for e in self.published]
+
+
+class RecordingFineReviewBatches:
+    """`FineReviewBatchRepository`-in sınaq əvəzedicisi — SEC-8 reqressiyası.
+
+    `MonthlyFineReviewUseCase.__init__`-də `review_batches` MƏCBURİDİR
+    (`fine_review.py`-dəki başlığa bax: opsional `None` "partiya sətri
+    yazılmadan nəşr" halını sükutla yaradardı). Bu sahtə `RecordingEventBus`
+    ilə EYNİ naxışdır: yalnız NƏ saxlanıldığını yazır və `save()`-in
+    UĞURSUZLUĞUNU simulyasiya edə bilir (`_record()`-un audit sətrindən
+    ƏVVƏL yazdığı üçün — istisna `publish_batch()`-i bütövlükdə kəsməlidir).
+    """
+
+    def __init__(self) -> None:
+        self.saved: list[Any] = []
+        self.failure: Exception | None = None
+
+    def save(self, batch: Any) -> None:
+        if self.failure is not None:
+            raise self.failure
+        self.saved.append(batch)
+
+
 class RecordingAudit:
     def __init__(self) -> None:
         self.entries: list[dict[str, Any]] = []
@@ -130,6 +183,95 @@ class RecordingAudit:
 
     def actions(self) -> list[str]:
         return [str(e["action"]) for e in self.entries]
+
+
+class RecordingSecurityEvents:
+    """`SecurityEventRepository`-in sınaq əvəzedicisi (SEC-7).
+
+    Real port FAIL-SOFT-dur (`ports.py::SecurityEventRepository` başlığı) —
+    yəni istehsalatda bu yazı çökəndə əməliyyat GERİ QAYTARILMIR. Sahtə
+    ONA GÖRƏ `RecordingAudit`-dən FƏRQLİ olaraq `failure` sahəsi DAŞIMIR:
+    fail-soft davranışı ölçmək lazım olsa, `ports.py`-nin öz şərhindəki
+    `FailSoftSecurityEventRecorder`-in ÖZÜ test olunmalıdır, bu xam sahtə
+    yox (istehsalatda da xam implementasiya BİRBAŞA use case-ə verilmir).
+    """
+
+    def __init__(self) -> None:
+        self.entries: list[dict[str, Any]] = []
+
+    def record(self, **kwargs: Any) -> None:
+        self.entries.append(kwargs)
+
+    def event_types(self) -> list[str]:
+        return [str(e["event_type"]) for e in self.entries]
+
+
+class InMemoryPinThrottle:
+    """`PinThrottleRepository`-nin sınaq əvəzedicisi (SEC-01/SEC-05, dövrə 3-4).
+
+    `InMemoryLeaveRequests.get_for_update`-lə EYNİ fəlsəfə (yaddaşda həqiqi
+    kilid MƏNASIZDIR, YALNIZ çağırış qeydi) — `PinThrottleRepository` isə
+    `RowLockingLeaveRequests`-dən FƏRQLİ olaraq `@runtime_checkable` DEYİL
+    (sadə Protocol, opsional qabiliyyət yoxdur), ona görə burada `isinstance`
+    tələsi YARANMIR — sahtə YALNIZ strukturca uyğun olmalıdır.
+
+    PƏNCƏRƏ/KİLİD ARİFMETİKASI BURADA YAZILMIR — `TerminalPinThrottle.
+    advance_after_failure()` ÇAĞIRILIR
+    ──────────────────────────────────────────────────────────────────────
+    Real yol DB trigger-idir (TIME-1: server-vaxtına bağlı hesablama
+    client-dən asılı ola bilməz) — AMMA `advance_after_failure()` (dövrə 4)
+    həmin triggerin İCRA OLUNAN SPESİFİKASİYASIDIR, yan-təsirsiz domen
+    metodudur (`pin_throttle.py`-nin öz başlığı). Sahtə TƏK yerdən oxuyur:
+    riyaziyyatı TƏKRAR YAZMIR, `TerminalPinThrottle`-un özünə həvalə edir —
+    pəncərə-bitmə sərhədi (mənim ARCHITECT-ə göndərdiyim siyahının 1-2-ci
+    bəndi) buna görə İNDİ BURADA da (Python səviyyəsində) düzgün modellənir;
+    SQL trigger-in ÖZÜNÜN eyni nəticəni verdiyi isə `database/tests/`-in
+    ayrıca işidir (`infra`).
+    """
+
+    def __init__(self, *, clock: FakeClock, limits: FakeSystemLimits | None = None) -> None:
+        self.rows: dict[tuple[TenantId, str], TerminalPinThrottle] = {}
+        self.locked_reads: list[tuple[TenantId, str]] = []
+        self._clock = clock
+        self._limits = limits or FakeSystemLimits()
+
+    def get_for_update(
+        self, tenant_id: TenantId, machine_key: MachineIdentityHash
+    ) -> TerminalPinThrottle | None:
+        self.locked_reads.append((tenant_id, machine_key.digest))
+        return self.rows.get((tenant_id, machine_key.digest))
+
+    def record_failure(
+        self, tenant_id: TenantId, machine_key: MachineIdentityHash, *, store_id: StoreId
+    ) -> TerminalPinThrottle:
+        key = (tenant_id, machine_key.digest)
+        existing = self.rows.get(key)
+        now = self._clock.now()
+        max_attempts = self._limits.get_int(tenant_id, "KIOSK_STORE_PIN_MAX_FAILED_ATTEMPTS", 20)
+        lockout_minutes = self._limits.get_int(tenant_id, "KIOSK_STORE_PIN_LOCKOUT_MINUTES", 15)
+        base = existing or TerminalPinThrottle(
+            tenant_id=tenant_id,
+            machine_key=machine_key,
+            store_id=store_id,
+            failed_count=0,
+            window_started_at=None,
+            locked_until=None,
+            updated_at=now,
+        )
+        row = base.advance_after_failure(
+            now=now, max_attempts=max_attempts, lockout_minutes=lockout_minutes
+        )
+        if row.store_id != store_id:  # `advance_after_failure` `store_id`-ə TOXUNMUR
+            row = replace(row, store_id=store_id)
+        self.rows[key] = row
+        return row
+
+    def update_last_seen_store(
+        self, tenant_id: TenantId, machine_key: MachineIdentityHash, *, store_id: StoreId
+    ) -> None:
+        key = (tenant_id, machine_key.digest)
+        existing = self.rows[key]
+        self.rows[key] = replace(existing, store_id=store_id)
 
 
 class InMemoryLeaveRequests:
@@ -157,6 +299,18 @@ class InMemoryLeaveRequests:
     def find_open_for_employee(self, employee_id: EmployeeId) -> LeaveRequest | None:
         for request in self.items.values():
             if request.employee_id == employee_id and request.status.is_open:
+                return request
+        return None
+
+    def find_open_for_employee_locked(self, employee_id: EmployeeId) -> LeaveRequest | None:
+        """`RowLockingLeaveRequests` — STEP 2 (`claim_return`) üçün kilidli-oxu qabiliyyəti.
+
+        `get_for_update`-lə EYNİ fəlsəfə (yaddaşda həqiqi kilid yoxdur, YALNIZ
+        çağırış qeydi) — sadəcə axtarış açarı `request_id` deyil, `employee_id`.
+        """
+        for request in self.items.values():
+            if request.employee_id == employee_id and request.status.is_open:
+                self.locked_reads.append(request.id)
                 return request
         return None
 
@@ -277,6 +431,46 @@ class InMemoryFines:
                     f"İcazə sorğusuna ({fine.leave_request_id}) artıq diri "
                     f"AUTO_DELAY cəriməsi bağlıdır"
                 )
+
+
+class InMemoryAuthSessions:
+    """`AuthSessionRepository`-in sınaq əvəzedicisi (SEC-011 / SEC-5).
+
+    `get_by_token_hash` AÇIQ tokenlə DEYİL, onun heşi ilə axtarır — port
+    sərhədi elə buna görə qurulub (bax `ports.py::AuthSessionRepository`);
+    sahtə heç vaxt açıq tokeni SAXLAMIR, çünki ona referans belə almır.
+    """
+
+    def __init__(self) -> None:
+        self.items: dict[SessionId, AuthSession] = {}
+        #: HƏR `save()` çağırışını sayır — `items`-in UZUNLUĞUNDAN fərqli
+        #: olaraq eyni sessiyanın TƏKRAR yazılıb-yazılmadığını (məs.
+        #: `touch()`-un CAMERA_DASHBOARD-da YAZI GÖNDƏRMƏMƏSİ, PERF-1/2/3)
+        #: göstərir — upsert eyni `id`-yə düşdüyü üçün `len(items)` bunu
+        #: gizlədərdi.
+        self.saves: list[SessionId] = []
+
+    def save(self, session: AuthSession) -> None:
+        self.items[session.id] = session
+        self.saves.append(session.id)
+
+    def get(self, session_id: SessionId) -> AuthSession | None:
+        return self.items.get(session_id)
+
+    def get_by_token_hash(self, tenant_id: TenantId, token_hash: str) -> AuthSession | None:
+        for session in self.items.values():
+            if session.tenant_id == tenant_id and session.token_hash == token_hash:
+                return session
+        return None
+
+    def list_recent_for_user(
+        self, tenant_id: TenantId, user_id: EmployeeId, *, limit: int = 10
+    ) -> list[AuthSession]:
+        matches = [
+            s for s in self.items.values() if s.tenant_id == tenant_id and s.user_id == user_id
+        ]
+        matches.sort(key=lambda s: s.issued_at, reverse=True)
+        return matches[:limit]
 
 
 class InMemoryAttendance:
@@ -518,6 +712,7 @@ __all__ = [
     "FakeShifts",
     "FakeSystemLimits",
     "InMemoryAttendance",
+    "InMemoryAuthSessions",
     "InMemoryBreakUsage",
     "InMemoryEmployees",
     "InMemoryExceptions",
@@ -527,7 +722,10 @@ __all__ = [
     "InMemoryFines",
     "InMemoryLeaveRequests",
     "RecordingAudit",
+    "RecordingEventBus",
+    "RecordingFineReviewBatches",
     "RecordingNotifier",
+    "RecordingSecurityEvents",
 ]
 
 

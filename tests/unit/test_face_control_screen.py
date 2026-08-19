@@ -356,9 +356,14 @@ class _Context:
 
 def _kiosk(gate: _FaceGateStub) -> tuple[KioskController, _KioskSession]:
     from src.domain.value_objects.identifiers import StoreId
+    from src.domain.value_objects.machine_identity import MachineIdentityHash
 
     session = _KioskSession(gate)
-    controller = KioskController(_Context(session), store_id=StoreId(uuid.uuid4()))  # type: ignore[arg-type]
+    controller = KioskController(  # type: ignore[arg-type]
+        _Context(session),
+        store_id=StoreId(uuid.uuid4()),
+        machine_key=MachineIdentityHash(digest="a" * 64),
+    )
     return controller, session
 
 

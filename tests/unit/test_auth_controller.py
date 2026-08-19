@@ -265,12 +265,18 @@ def test_real_use_case_rejects_bad_passwords(password: str) -> None:
     class _Audit:
         def record(self, *args: object, **kwargs: object) -> None: ...
 
+    class _SecurityEvents:
+        """SEC-7: `AdminLoginUseCase` indi `security_events`-i MƏCBURİ tələb edir."""
+
+        def record(self, *args: object, **kwargs: object) -> None: ...
+
     employees = _FakeEmployees(person)
     use_case = AdminLoginUseCase(
         employees=employees,  # type: ignore[arg-type]
         hashing=hashing,
         clock=_Clock(),  # type: ignore[arg-type]
         audit=_Audit(),  # type: ignore[arg-type]
+        security_events=_SecurityEvents(),  # type: ignore[arg-type]
     )
     controller = AuthController(
         login_use_case=use_case,
@@ -299,12 +305,18 @@ def test_real_use_case_accepts_the_correct_password() -> None:
     class _Audit:
         def record(self, *args: object, **kwargs: object) -> None: ...
 
+    class _SecurityEvents:
+        """SEC-7: `AdminLoginUseCase` indi `security_events`-i MƏCBURİ tələb edir."""
+
+        def record(self, *args: object, **kwargs: object) -> None: ...
+
     employees = _FakeEmployees(person)
     use_case = AdminLoginUseCase(
         employees=employees,  # type: ignore[arg-type]
         hashing=hashing,
         clock=_Clock(),  # type: ignore[arg-type]
         audit=_Audit(),  # type: ignore[arg-type]
+        security_events=_SecurityEvents(),  # type: ignore[arg-type]
     )
     controller = AuthController(
         login_use_case=use_case,

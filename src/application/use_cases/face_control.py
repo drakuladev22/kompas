@@ -144,6 +144,7 @@ if TYPE_CHECKING:
         FaceVerificationLogRepository,
         FeatureToggles,
         Notifier,
+        SecurityEventRepository,
         SystemLimits,
     )
     from src.domain.value_objects.exception_signals import RuleEvaluationContext
@@ -815,6 +816,7 @@ class FaceVerificationUseCase:
         audit: AuditTrail,
         clock: Clock,
         notifier: Notifier,
+        security_events: SecurityEventRepository,
     ) -> None:
         self._profiles = profiles
         self._verification_log = verification_log
@@ -827,6 +829,12 @@ class FaceVerificationUseCase:
         self._audit = audit
         self._clock = clock
         self._notifier = notifier
+        # SEC-7, Tier 1 — `verify()` HƏMİŞƏ real doğrulama cəhdidir (UI-probe
+        # DUALLIĞI YOXDUR, `permission_guards.is_allowed()`-dən FƏRQLİ), ona
+        # görə MƏCBURİDİR (`None` fallback-ı yoxdur — "audit istisna udmur"
+        # fəlsəfəsi ilə eyni əsaslandırma: FACE_MISMATCH SEC-016-nın bioloji
+        # təsdiq qapısındakı ƏN CİDDİ siqnaldır, sükutla yazılmamalıdır).
+        self._security_events = security_events
 
     def verify(  # noqa: PLR0911
         self,
@@ -1330,6 +1338,21 @@ class FaceVerificationUseCase:
                 "confidence_score": confidence,
             },
             reason="Kioskdakı şəxsin üzü PIN sahibinin qeydiyyatlı üzü ilə uyğun gəlmədi",
+        )
+        # SEC-7, Tier 1: `audit_logs`-dan ƏLAVƏ — `security_events` GİRİŞ-SƏVİYYƏLİ
+        # sorğulanma üçündür (SIEM-tərzi). BAL YAZILIR, VEKTOR YOX — yuxarıdakı
+        # eyni məhdudiyyət.
+        self._security_events.record(
+            tenant_id=tenant_id,
+            event_type="FACE_MISMATCH",
+            employee_id=employee.id,
+            details={
+                "trigger_context": trigger_context.value,
+                "attempts": decision.failed_attempts,
+                "lockout": decision.is_locked,
+                "matched_other": str(matched) if matched else None,
+                "confidence": confidence,
+            },
         )
         # İLK DƏFƏDƏN DƏRHAL BİLDİRİŞ (bənd 3) — hədd gözlənilmir.
         self._notifier.notify(

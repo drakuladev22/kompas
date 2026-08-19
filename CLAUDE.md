@@ -9,7 +9,7 @@ Bu fayl kodun necə yazıldığını izah edir — NƏ yazılacağını spesifik
 
 `kompasos.md`, `kompas1.md`, `kompasos11.md`, `uxui.md`, `facecontrol.md`,
 `nahar.md`, `Rootpanel.md`, `audit.md`, `1c.md`, `design.md`, `test.md` —
-hamısı repozitoriyadan ÇIXARILIB. Kodda və agent təlimatlarında onlara olan
+hamısı repozitoriyadan ÇIXARILIB. Kodda və şərhlərdə onlara olan
 istinadlar QALIR və qəsdəndir: hər şərh hansı tələbin hansı sənəddən gəldiyini
 göstərir — bu, "niyə belədir" sualının cavabıdır və faylın mövcudluğundan asılı
 deyil.
@@ -98,7 +98,7 @@ Hər dəyişiklikdən sonra HAMISI keçməlidir:
 ```bash
 .venv/Scripts/python.exe -m ruff check src/ tests/ scripts/
 .venv/Scripts/python.exe -m ruff format src/ tests/ scripts/
-.venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (320 fayl)
+.venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (365 fayl)
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 5350 test, 49 skip
 .venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast
 ```
@@ -134,10 +134,20 @@ yoxdur. Windows konsolunda Azərbaycan hərfləri üçün `PYTHONIOENCODING=utf-
 altında bu maşında **atlanır** (monospace şrift həll olunmur) — mühit
 xüsusiyyətidir, reqressiya deyil.
 
-**Coverage qapısının ölçmədiyi qat:** `pyproject.toml`-dakı
-`omit = ["*/presentation/*"]` bütün təqdimat qatını — o cümlədən 11 yazı
-kontrollerini — hər coverage hesabatından çıxarır. Onları ölçmək üçün
-müvəqqəti `--cov-config` lazımdır.
+**Təqdimat qatı ARTIQ coverage-dən çıxarılmır.** `pyproject.toml:269`-da
+`omit` yalnız `*/__init__.py`-dır — köhnə `omit = ["*/presentation/*"]` istisnası
+silinib (səbəbi həmin faylın şərhindədir: yazı kontrollerləri sırf Python
+məntiqidir və istisna məhz ən riskli yolları hər hesabatdan çıxarırdı).
+`--cov-config` DAHA LAZIM DEYİL — `--cov=src.presentation.controllers` birbaşa işləyir.
+
+**LAKİN ölçülən ≠ örtülən.** Dövrə-2 auditinin ölçüsü: kontroller qatı cəmi
+**57%** (6159 sətir), və **10 kontroller LİTERAL 0%-dir** — `announcements`,
+`attrition_risk`, `devices`, `employee_documents`, `open_shift`,
+`performance_review`, `plugin_page`, `pos_threshold`, `sales_points`, `tasks`.
+Onlardan **8-i `.commit()` çağıran həqiqi YAZI yoludur**, 5-inin adı `tests/`
+daxilində ÜMUMİYYƏTLƏ çəkilmir. `test_screen_binding_coverage.py` bəzilərini
+ADLA xatırladır, amma ÇAĞIRMIR — görünüş aldadıcıdır. Yeni kontroller yazarkən
+bu siyahıya baxın: qat «test edilib» görünür, o yollar isə edilməyib.
 
 ---
 
@@ -285,6 +295,7 @@ sonra əlavə olunur:
 | `SHORT_CODE_LENGTH = 6`, `SHORT_CODE_ALPHABET` | `devices.py` | İnsan erqonomikasının ölçüsü: kod TELEFONLA söylənilir. Root onu 3-ə endirsəydi toqquşma real olardı, 20-yə qaldırsaydı kodun bütün mənası itərdi |
 | `SHORT_CODE_ATTEMPTS = 5` | `device_registry.py` | Riyazi zərurət, siyasət deyil — sonsuz dövrədən qoruyan tavan |
 | `HARDWARE_PROBE_TIMEOUT_SECONDS = 8.0` | `device_identity.py` | Tətbiqin AÇILIŞ yolundadır: Root dəyərini oxumaq üçün baza lazımdır, baza isə hələ açılmayıb — dövri asılılıq |
+| `DUPLICATE_SUBMISSION_WINDOW_SECONDS = 10` | `fine_management.py` | Bir kliklə iki göndəriş arasındakı insan reaksiya pəncərəsi, siyasət deyil. ƏSAS zəmanət DB-nin unikal indeksidir (`uq_fines_manual_camera_idempotency_key`, miqrasiya 074) — bu sabit YALNIZ ona çatmadan qayıdan sürətli-yoldur. Root onu sıfıra endirsəydi yalnız sürətli-yol itərdi, zəmanət yox; böyütsəydi ayrı-ayrı HƏQİQİ cərimələr duplikat sayılardı |
 
 Bu sabitlər üçün şərh şablonu FƏRQLİDİR: «fallback» yazılmır, **niyə Root
 parametri olmadığı** yazılır.
@@ -418,7 +429,7 @@ qalmır, qərara çevrilir.
 
 | Nə | Harada |
 |---|---|
-| İcazə flag kataloqu — **54 flag** (36 `schema.sql`-də: 34 spesifikasiyadan + `can_publish_fines`, `can_manage_drive_connection`; qalan 18 miqrasiyalarda: 021 +6, 038 +6, 047 +1, 056 +1, 063 +1 `can_manage_devices`, 068 +3 dəstək kanalları) | `database/schema.sql` §22 + miqrasiyalar |
+| İcazə flag kataloqu — **55 flag** (36 `schema.sql`-də: 34 spesifikasiyadan + `can_publish_fines`, `can_manage_drive_connection`; qalan 19 miqrasiyalarda: 021 +6, 038 +6, 047 +1, 056 +1, 063 +1 `can_manage_devices`, 068 +3 dəstək kanalları, 072 +1 `can_revoke_sessions`; **069 həmin üçünü MÖVCUD kirayəçilərə də verir** — flag əlavə edən miqrasiya `positions.tenant_id IS NULL` süzgəci İŞLƏTMƏMƏLİDİR) | `database/schema.sql` §22 + miqrasiyalar |
 | Miqrasiya icraçısı və reyestri | `scripts/apply_migrations.py`, `migrations/061` |
 | Özünə-host lisenziya sətri (SEC-023) | `migrations/065`, `tests/unit/test_license_bootstrap_privilege.py` |
 | Server-lövbərli vaxt + manipulyasiya aşkarlaması | `src/infrastructure/timekeeping/server_time.py`, `migrations/062` |
@@ -440,9 +451,11 @@ qalmır, qərara çevrilir.
 | Panel girişində «Üzlə daxil ol» | `src/presentation/controllers/face_login.py` (SEC-026) |
 | Gizli bərpa konsolu (`Ctrl+Shift+K`) | `presentation/screens/recovery_console.py`, `controllers/recovery_console.py` (RECOVERY-1) |
 | Tema keçidinin giriş-öncəsi ekranlara ötürülməsi (THEME-1) | `presentation/shell/window.py` → məzmunun `apply_theme` metodu |
-| Fokus halqasının giriş modallığı (FOCUS-1) | `presentation/widgets/buttons.py` (`input_modality_tracker`) |
+| Fokus halqasının giriş modallığı (FOCUS-1) | `presentation/widgets/focus_ring.py` (`input_modality_tracker`); `buttons.py` onu YALNIZ İSTİFADƏ edir — D11-də dövri idxaldan qaçmaq üçün ayrıldı |
 | Bloklamadan əvvəl ekranı çəkdirmə (UX-1) | `presentation/controllers/ui_feedback.py` (`flush_ui`) |
-| Sessiyanın gediş-gəliş büdcəsi (PERF-1/2) | `docs/performance_notes.md`, `tests/unit/test_session_roundtrips.py` |
+| Sessiyanın gediş-gəliş büdcəsi (PERF-1/2/3) | `docs/performance_notes.md`, `tests/unit/test_session_roundtrips.py`, `test_read_batch_scope.py` |
+| Açılış oxularının toplusu (PERF-3) | `ApplicationContext.read_batch()` — sapa görə ayrı, YALNIZ oxu |
+| `Screen` törəməsi ikinci layout QURMUR (LAYOUT-1) | `tests/unit/test_screen_layout_ownership.py` — pozulsa ekran BOŞ render olunur |
 | İki-kanallı dəstək (daxili / texniki) | `domain/value_objects/support.py`, `use_cases/support_chat.py`, `migrations/068` (CHAT-1) |
 | Dəstək gələnlər qutusu (İKİ bölmə, BİR ekran) | `presentation/screens/support_inbox.py`, `controllers/support_inbox.py` |
 | Müraciət statusu (Açıq/Gözləmədə/Həll olundu/Bağlandı) | `SupportTicketStatus` (`value_objects/support.py`) — nişan YALNIZ `OPEN` sayır |

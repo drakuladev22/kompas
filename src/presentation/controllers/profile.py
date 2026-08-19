@@ -38,7 +38,10 @@ from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from src.domain.entities.employee import Employee
+    from src.domain.value_objects.identifiers import SessionId
     from src.presentation.composition import ApplicationContext, Session
     from src.presentation.screens.group_g import ProfileScreen
 
@@ -54,9 +57,20 @@ PASSWORD_POLICY_NOTE = (
 class ProfileController:
     """Profil ekranını canlı hesab məlumatına və `users` use case-inə bağlayır."""
 
-    def __init__(self, context: ApplicationContext, actor: Employee) -> None:
+    def __init__(
+        self,
+        context: ApplicationContext,
+        actor: Employee,
+        *,
+        current_session_id: SessionId | None = None,
+    ) -> None:
         self._context = context
         self._actor = actor
+        # `None` OLA BİLƏR: `issue()` `_start_session_guard`-da uğursuz
+        # olubsa (bax `app.py` başlığı) — bu halda "Digər sessiyaları bağla"
+        # heç bir sətri CARİ kimi İSTİSNA edə bilmir, ona görə `_on_close_
+        # sessions` `None`-u "heç biri cari deyil" kimi oxuyur.
+        self._current_session_id = current_session_id
 
     # ------------------------------- qoşulma --------------------------------- #
 
@@ -93,7 +107,7 @@ class ProfileController:
                     password_note=PASSWORD_POLICY_NOTE,
                 )
                 screen.set_role_info(_role_rows(session, employee))
-                screen.set_sessions(_session_rows(session, employee))
+                screen.set_sessions(_session_rows(session, employee, now=self._context.clock.now()))
                 # #20 Performans Qiymətləndirməsi (kompasos11.md Faza 8) —
                 # SƏLAHİYYƏT TƏLƏB OLUNMUR (`list_own` işçinin ÖZ tarixçəsidir,
                 # bax use case başlığı).
@@ -180,31 +194,53 @@ class ProfileController:
         )
 
     def _on_close_sessions(self, screen: ProfileScreen) -> None:
-        """Aktiv sessiyaların sayını göstərir.
+        """«Digər sessiyaları bağla» — CARİ sessiya İSTİSNA, qalanları LƏĞV EDİR.
 
-        Sessiya sətirlərini LƏĞV ETMİR: ləğv təhlükəsizlik əməliyyatıdır və
-        audit tələb edir, tətbiqdə isə `auth_sessions`-a YAZAN tərəf hələ
-        yoxdur (giriş axını token buraxmır). Ləğvi burada, use case-dən
-        kənarda yazsaydıq, audit izi olmayan bir təhlükəsizlik əməliyyatı
-        yaratmış olardıq.
+        ──────────────────────────────────────────────────────────────────────
+        SEC-011/SEC-5: İNDİ HƏQİQİ LƏĞVDİR
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəl bu metod YALNIZ sayı göstərirdi (`auth_sessions`-a YAZAN tərəf
+        yox idi). `SessionManagementUseCase.revoke()` indi mövcuddur — ləğv
+        USE CASE-İN ÖZÜNDƏ audit yazır (`SESSION_REVOKED`), kontroller burada
+        yalnız hədəf sətirləri seçir və çağırır.
+
+        CARİ sessiya (`self._current_session_id`) İSTİSNA edilir — düymənin
+        adı "DİGƏR sessiyaları bağla"dır, özünü çıxarmaq FƏRQLİ, gözlənilməz
+        hərəkət olardı (istifadəçi bu düyməni basıb öz ekranının bağlandığını
+        görsəydi, bunu nasazlıq sanardı).
         """
+        others: list[Any] = []
         try:
             with self._context.session(user_id=self._actor.id) as session:
-                active = _active_session_count(session, self._actor)
+                now = self._context.clock.now()
+                rows = session.uow.repository("auth_sessions").list_recent_for_user(
+                    session.tenant_id, self._actor.id
+                )
+                others = [
+                    row
+                    for row in rows
+                    if row.id != self._current_session_id
+                    and row.revoked_at is None
+                    and row.expires_at > now
+                ]
+                for target in others:
+                    session.sessions.revoke(
+                        tenant_id=session.tenant_id,
+                        actor=self._actor,
+                        target=target,
+                        reason="İstifadəçi 'Digər sessiyaları bağla' düyməsini basdı",
+                    )
+                session.commit()
         except Exception:
-            _error_log.exception("PROFILE_SESSIONS_FAILED")
+            _error_log.exception("PROFILE_SESSIONS_CLOSE_FAILED")
             _inform(screen, "Sessiyalar", "Sessiya məlumatı oxuna bilmədi.")
             return
 
-        if active == 0:
+        if not others:
             _inform(screen, "Sessiyalar", "Başqa aktiv sessiya yoxdur.")
             return
-        _inform(
-            screen,
-            "Sessiyalar",
-            f"{active} aktiv sessiya qeydə alınıb. Onları bağlamaq üçün "
-            "administratorunuza müraciət edin.",
-        )
+        _inform(screen, "Sessiyalar", f"{len(others)} sessiya bağlandı.")
+        self.refresh(screen)
 
 
 # --------------------------------------------------------------------------- #
@@ -337,35 +373,36 @@ def _store_scope_text(session: Session, employee: Any) -> str:
     return f"{names[0]} və daha {len(names) - 1}"
 
 
-def _session_rows(session: Session, employee: Any) -> list[tuple[str, str, str]]:
+def _session_rows(session: Session, employee: Any, *, now: datetime) -> list[tuple[str, str, str]]:
     """`auth_sessions` sətirləri — (vaxt, cihaz, vəziyyət).
 
-    Siyahı boş qayıda bilər və bu, XƏTA DEYİL: giriş axını hələ sessiya
-    sətri yazmır (bax `_on_close_sessions`). Boş kart "tarixçə yoxdur"
-    deməkdir və uydurma sətir göstərməkdən dürüstdür.
+    Siyahı boş qayıda bilər və bu, XƏTA DEYİL: hesab hələ heç vaxt giriş
+    etməyibsə (nəzəri hal — `refresh` özü giriş etmiş aktoru göstərir) və ya
+    `issue()` bu girişdə uğursuz olubsa (`app.py::_start_session_guard`
+    başlığı) boş qalır. Boş kart "tarixçə yoxdur" deməkdir və uydurma sətir
+    göstərməkdən dürüstdür.
+
+    ──────────────────────────────────────────────────────────────────────
+    BİRBAŞA SQL ƏVƏZ OLUNDU — `AuthSessionRepository.list_recent_for_user`
+    ──────────────────────────────────────────────────────────────────────
+    SEC-5/D5: presentation qatı `application/use_cases`-i keçən yol idi.
+    `now` HƏLƏ DƏ ÇAĞIRANDAN (`ApplicationContext.clock`) gəlir — bu funksiya
+    ÖZÜ `datetime.now(UTC)` çağıraRDI, TIME-1 pozuntusu olardı: sessiyanın
+    "aktivdirmi" qərarı YERLİ saata bağlı olardı və Windows saatını geri
+    çəkməklə süni uzadıla bilərdi (bax `session_guard.py` modul başlığı —
+    eyni sinif təhlükə).
     """
-    rows = session.uow.connection.execute(
-        """
-        SELECT issued_at, machine_name, revoked_at, expires_at
-          FROM auth_sessions
-         WHERE tenant_id = %s AND user_id = %s
-         ORDER BY issued_at DESC
-         LIMIT 10
-        """,
-        (session.tenant_id, employee.id),
-    ).fetchall()
+    rows = session.uow.repository("auth_sessions").list_recent_for_user(
+        session.tenant_id, employee.id
+    )
 
-    from datetime import UTC, datetime  # noqa: PLC0415
-
-    now = datetime.now(UTC)
     result: list[tuple[str, str, str]] = []
     for row in rows:
-        issued = row["issued_at"]
-        alive = row["revoked_at"] is None and row["expires_at"] > now
+        alive = row.revoked_at is None and row.expires_at > now
         result.append(
             (
-                f"{issued:%d.%m %H:%M}" if issued else "—",
-                str(row["machine_name"] or "Naməlum cihaz"),
+                f"{row.issued_at:%d.%m %H:%M}",
+                str(row.machine_name or "Naməlum cihaz"),
                 # Mətn `ProfileScreen.set_sessions`-in tanıdığı dəyərdir:
                 # yalnız «Aktiv sessiya» yaşıl nişan alır.
                 "Aktiv sessiya" if alive else "Bağlanıb",
@@ -400,19 +437,20 @@ def _performance_rows(session: Session, employee: Any) -> list[dict[str, str]]:
     return rows
 
 
-def _active_session_count(session: Session, employee: Any) -> int:
-    from datetime import UTC, datetime  # noqa: PLC0415
+def _active_session_count(session: Session, employee: Any, *, now: datetime) -> int:
+    """Aktiv sessiya sayı — `now` ÇAĞIRAN tərəfdən gəlir (bax `_session_rows`,
+    eyni TIME-1 əsaslandırması).
 
-    row = session.uow.connection.execute(
-        """
-        SELECT count(*) AS total
-          FROM auth_sessions
-         WHERE tenant_id = %s AND user_id = %s
-           AND revoked_at IS NULL AND expires_at > %s
-        """,
-        (session.tenant_id, employee.id, datetime.now(UTC)),
-    ).fetchone()
-    return int((row or {}).get("total") or 0)
+    `AuthSessionRepository`-nin `count(*)`-a bərabər ayrıca metodu YOXDUR —
+    `list_recent_for_user`-in son 10 sətri üzərində sayılır (`settings.py`-
+    dəki "Bütün sessiyaları bağla" mesajının göstərdiyi rəqəm). 10-dan çox
+    aktiv sessiya nəzəri haldır (bir istifadəçi eyni anda bu qədər cihazdan
+    girməz) və köhnə `count(*)`-dan fərqli olsa da, praktiki fərqi yoxdur.
+    """
+    rows = session.uow.repository("auth_sessions").list_recent_for_user(
+        session.tenant_id, employee.id
+    )
+    return sum(1 for row in rows if row.revoked_at is None and row.expires_at > now)
 
 
 __all__ = ["PASSWORD_POLICY_NOTE", "ProfileController"]

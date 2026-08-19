@@ -243,7 +243,20 @@ class Employee(AggregateRoot):
                 # `has_permission` onu yalnız override kimi görür.
                 continue
             try:
-                flag.assert_grantable_to(position.effective_system_role)
+                # `is_camera_type_role` AÇIQ ÖTÜRÜLMƏLİDİR: CUSTOM kamera-tipli
+                # rol (`Position.is_camera_type=True`) `effective_system_role`
+                # ilə yalnız prioritetinə görə ən yaxın SİSTEM roluna (məs.
+                # `HR_ADMIN`) düşür və həmin sistem rolunun özü kamera-tipli
+                # DEYİL. Parametr ötürülməsə `assert_grantable_to` bunu adi
+                # rol sayır və SEC-001-in "kamera-tipli rol dual-control
+                # təsdiqini daşıya bilməz" bloku YAN KEÇİLİR — `grant()`
+                # (`position.py`) və `_assert_flag_grantable_to_subject`
+                # (`permission_guards.py`) bu parametri artıq ötürür, burada
+                # unudulmuşdu.
+                flag.assert_grantable_to(
+                    position.effective_system_role,
+                    is_camera_type_role=position.is_camera_type,
+                )
             except AuthorizationError:
                 del self._overrides[flag_code]
                 removed.append(flag_code)

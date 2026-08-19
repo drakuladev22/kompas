@@ -93,8 +93,11 @@ class PostgresOpenShiftPostingRepository(_BaseRepository):
         limit: int = 100,
     ) -> list[OpenShiftPosting]:
         """`idx_open_shift_postings_open` indeksinin sorğusu — ən yaxın tarix əvvəldə."""
+        # INF2-02: `tenant_id` arqumenti bağlantının ÖZ kontekstiylə UYĞUN
+        # olmalıdır — uyğunsuzluqda GURULTULU xəta (bax `_require_matching_
+        # tenant` şərhi, `repositories.py`).
         clauses = ["tenant_id = %s", "status = 'OPEN'"]
-        params: list[Any] = [tenant_id]
+        params: list[Any] = [self._require_matching_tenant(tenant_id)]
         if store_id is not None:
             clauses.append("store_id = %s")
             params.append(store_id)
@@ -119,12 +122,18 @@ class PostgresOpenShiftPostingRepository(_BaseRepository):
         self, tenant_id: TenantId, slot: OpenShiftSlot
     ) -> OpenShiftPosting | None:
         """`uq_open_shift_one_open_per_slot` indeksinin oxu tərəfi."""
+        # INF2-02: bax `list_open`-dəki eyni izah.
         row = self._fetch_one(
             f"""{self._SELECT}
             WHERE tenant_id = %s AND store_id = %s AND shift_date = %s
               AND work_mode_id = %s AND status = 'OPEN'
             """,
-            (tenant_id, slot.store_id, slot.shift_date, slot.work_mode_id),
+            (
+                self._require_matching_tenant(tenant_id),
+                slot.store_id,
+                slot.shift_date,
+                slot.work_mode_id,
+            ),
         )
         return _row_to_posting(row) if row else None
 

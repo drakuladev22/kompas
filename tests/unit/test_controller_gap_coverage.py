@@ -22,6 +22,7 @@ from __future__ import annotations
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Final
 
 import pytest
@@ -40,6 +41,7 @@ from src.domain.value_objects.identifiers import (
     StoreId,
     TenantId,
 )
+from src.domain.value_objects.machine_identity import MachineIdentityHash
 from src.presentation.controllers.camera_queue import CameraQueueController, _combine
 from src.presentation.controllers.kiosk import KioskController, KioskOutcome
 from src.presentation.controllers.profile import (
@@ -58,12 +60,15 @@ from src.presentation.controllers.support_chat import (
 )
 from src.presentation.widgets.worker_status import WorkerStatus
 from src.shared.exceptions import KompasOSError
+from tests.fixtures.fakes import FakeClock
 
 pytestmark = pytest.mark.unit
 
 TENANT: Final = TenantId(uuid.uuid4())
 STORE: Final = StoreId(uuid.uuid4())
 NOW: Final = datetime(2026, 8, 10, 14, 10, tzinfo=UTC)
+#: SEC-01/SEC-05 (dövrə 3) — `KioskController` üçün sahtə terminal kimliyi.
+MACHINE_KEY: Final = MachineIdentityHash(digest="a" * 64)
 
 
 class _DeniedError(KompasOSError):
@@ -71,12 +76,22 @@ class _DeniedError(KompasOSError):
 
 
 class _Context:
-    """`ApplicationContext.session()` müqaviləsinin minimal təkrarı."""
+    """`ApplicationContext.session()` müqaviləsinin minimal təkrarı.
 
-    def __init__(self, session: Any, *, tenant_id: TenantId = TENANT) -> None:
+    `clock` TIME-1 ilə əlavə olundu: `profile.py::refresh`/`_on_sessions` artıq
+    `self._context.clock.now()` çağırır (`_session_rows`/`_active_session_count`
+    ÖZLƏRİ `datetime.now(UTC)` çağırmır — bax `profile.py` başlığı). Defolt
+    modul-səviyyəli `NOW` sabitinə bağlıdır ki, sessiya sətirlərini `NOW`-a
+    NİSBƏTƏN quran testlər (bax `test_session_rows_mark_only_live_sessions_
+    as_active`) determinstik qalsın — real saat ÇAĞIRILSAYDI, sərhəd
+    yaxınlığındakı sətirlər nəzəri cəhətdən uçucu (flaky) ola bilərdi.
+    """
+
+    def __init__(self, session: Any, *, tenant_id: TenantId = TENANT, now: datetime = NOW) -> None:
         self._session = session
         self.tenant_id = tenant_id
         self.opened = 0
+        self.clock = FakeClock(now)
 
     @contextmanager
     def session(self, *, user_id: Any = None) -> Any:
@@ -197,7 +212,10 @@ class _KioskSession:
 
 def _kiosk(session: _KioskSession) -> tuple[KioskController, _Context]:
     context = _Context(session)
-    return KioskController(context, store_id=STORE), context  # type: ignore[arg-type]
+    controller = KioskController(  # type: ignore[arg-type]
+        context, store_id=STORE, machine_key=MACHINE_KEY
+    )
+    return controller, context
 
 
 def test_kiosk_outcome_failed_is_the_inverse_of_succeeded() -> None:
@@ -316,7 +334,9 @@ class _PinSession:
 
 def test_a_broken_pin_lookup_never_crashes_the_kiosk_screen() -> None:
     session = _PinSession()
-    controller = KioskController(_Context(session), store_id=STORE)  # type: ignore[arg-type]
+    controller = KioskController(  # type: ignore[arg-type]
+        _Context(session), store_id=STORE, machine_key=MACHINE_KEY
+    )
 
     outcome = controller.authenticate("1234")
 
@@ -1560,6 +1580,23 @@ class _RoutedConnection:
         return _Cursor(self.store_rows)
 
 
+class _AuthSessionsRepo:
+    """`AuthSessionRepository.list_recent_for_user`-in minimal təkrarı (SEC-5/D5).
+
+    `profile.py::_session_rows` artıq XAM SQL yox, bu portu çağırır (bax
+    onun modul şərhi). Sətirlər hələ də sözlük kimi ötürülür (mövcud
+    testlərin fixture-u budur) — `SimpleNamespace` onları `row.issued_at`
+    kimi ATRİBUT girişinə çevirir, çünki real `AuthSession` dataclass-ıdır,
+    sözlük deyil.
+    """
+
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self._rows = rows
+
+    def list_recent_for_user(self, tenant_id: Any, user_id: Any, *, limit: int = 10) -> list[Any]:
+        return [SimpleNamespace(**row) for row in self._rows]
+
+
 class _ProfileUow:
     def __init__(
         self,
@@ -1572,8 +1609,11 @@ class _ProfileUow:
         self.employees = _QueueEmployees(employee)
         self.connection = _RoutedConnection(store_rows=store_rows, session_rows=session_rows)
         self._flags = _FlagCatalog(flags)
+        self._auth_sessions = _AuthSessionsRepo(session_rows)
 
     def repository(self, name: str) -> Any:
+        if name == "auth_sessions":
+            return self._auth_sessions
         return self._flags
 
 
@@ -1707,9 +1747,23 @@ def test_a_store_that_no_longer_exists_reads_as_unassigned() -> None:
 
 
 def test_session_rows_mark_only_live_sessions_as_active() -> None:
-    """Ləğv edilmiş və vaxtı keçmiş sessiya «Bağlanıb» olmalıdır."""
+    """Ləğv edilmiş və vaxtı keçmiş sessiya «Bağlanıb» olmalıdır.
+
+    `now` REAL saat DEYİL, modul-səviyyəli `NOW` sabitidir — `_Context`-in
+    `clock`-u da DEFOLT olaraq elə HƏMİN dəyəri qaytarır (bax `_Context`
+    başlığı), ona görə sətirlərin nisbi vaxtları (`NOW - saat`) və
+    kontrollerin oxuduğu "indi" HƏMİŞƏ eyni referansdadır — sərhəd
+    yaxınlığında uçuculuq (flaky) riski YOXDUR.
+
+    ÜÇÜNCÜ sətir SEC-5/D5-dən ƏVVƏL `issued_at=None` idi ("tarixi olmayan
+    sətir tire göstərir"). Bu artıq DOMEN-səviyyəsində QEYRİ-MÜMKÜNDÜR:
+    `AuthSession.__post_init__` `require_aware(issued_at, ...)` çağırır —
+    sətir REPO-dan gəldiyi andan e`tibarən HƏMİŞƏ aware datetime daşıyır.
+    Sətir indi "REVOKE edilməyib, LAKİN `expires_at` keçib" sərhədini
+    (passiv müddət bitməsi, sətir 2-nin "AÇIQ ləğv" halından FƏRQLİ) ölçür.
+    """
     employee = _profile_employee()
-    now = datetime.now(UTC)
+    now = NOW
     rows = [
         {
             "issued_at": now - timedelta(hours=1),
@@ -1724,7 +1778,7 @@ def test_session_rows_mark_only_live_sessions_as_active() -> None:
             "expires_at": now + timedelta(hours=8),
         },
         {
-            "issued_at": None,
+            "issued_at": now - timedelta(days=3),
             "machine_name": "KASSA-02",
             "revoked_at": None,
             "expires_at": now - timedelta(minutes=1),
@@ -1741,7 +1795,7 @@ def test_session_rows_mark_only_live_sessions_as_active() -> None:
     states = [row[2] for row in screen.sessions]
     assert states == ["Aktiv sessiya", "Bağlanıb", "Bağlanıb"]
     assert screen.sessions[1][1] == "Naməlum cihaz"
-    assert screen.sessions[2][0] == "—", "Tarixi olmayan sətir tire göstərir"
+    assert screen.sessions[2][0] == f"{now - timedelta(days=3):%d.%m %H:%M}"
 
 
 def test_a_refused_profile_view_shows_the_domain_reason() -> None:

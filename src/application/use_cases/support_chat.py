@@ -966,9 +966,22 @@ class SupportInboxUseCase(_SupportBase):
         `[Həll Olundu]`, `[Bağla]`, `[Yenidən Aç]`). Hər biri üçün ayrı metod
         yazsaydıq, audit sətri və taymer sütunu dörd yerdə təkrarlanardı və
         biri unudulduqda söhbət avtomatikadan sükutla düşərdi.
+
+        KEÇİD QAYDASI BURADA DEYİL (D-R2-03, dövrə 2): "hansı statusdan
+        hansına keçilə bilər" sualının cavabı `SupportTicketStatus.
+        assert_transition_allowed`-dədir (CLAUDE.md §6: domen qaydası
+        entity-də/dəyər obyektində, use case-də yox) — bu metod YALNIZ
+        səlahiyyəti yoxlayır və domen qərarını tətbiq edir.
         """
         self._require_view(tenant_id, actor, channel)
-        self._require_channel_thread(ticket_id, channel)
+        thread = self._require_channel_thread(ticket_id, channel)
+        current = thread.ticket_status
+        current.assert_transition_allowed(status)
+        if current is status:
+            # Düymənin təkrar basılması İSTİFADƏÇİ səhvidir, SİSTEM
+            # pozuntusu deyil (bax domen metodunun öz şərhi) — nə DB yazısı,
+            # nə audit sətri təkrarlanır, sadəcə cari vəziyyət qaytarılır.
+            return thread
         self._tickets.set_status(ticket_id, status=status, at=self._clock.now())
         self._audit.record(
             tenant_id=tenant_id,

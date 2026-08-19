@@ -923,6 +923,45 @@ class SystemLimitKey(str, Enum):
     # HƏMİŞƏ tək sütuna yığır (bax `dashboard_layout.collapse_to_single_column`)
     # — yəni Root böyük ədəd yazsa belə dar ekranda düzülüş sınmır.
     DASHBOARD_GRID_COLUMNS = "DASHBOARD_GRID_COLUMNS"
+    # --- SEC-011 sessiya müddətləri (dövrə debatı, SEC-5 audit tapıntısı) --- #
+    #
+    # `schema.sql` §17b (`auth_sessions` cədvəlinin şərhi) açıq deyir:
+    # "Dəyərlər system_limits-dən oxunur" — sənəd HƏMİŞƏ bunu vəd edib, kod isə
+    # sətri heç vaxt yazmamışdı (SEC-5 tapıntısı). ÜÇÜ DƏ ROOT PARAMETRİDİR:
+    # müştəridən müştəriyə (bank filialı vs kiçik mağaza) qəbul edilən risk
+    # fərqlənir, sabit ədəd bunu koda "yazılı qanuna" çevirərdi.
+    #
+    # Hərəkətsizlik pəncərəsi (`ADMIN_PANEL`) — `touch()` bunu `last_seen_at`-ə
+    # görə uzadır, `absolute_expiry`-ni ƏSLA aşmır (`entities/auth_session.py`).
+    ADMIN_PANEL_SESSION_IDLE_TIMEOUT_MINUTES = "ADMIN_PANEL_SESSION_IDLE_TIMEOUT_MINUTES"
+    # Mütləq tavan (`ADMIN_PANEL`) — hərəkətsizlik pəncərəsi nə qədər uzansa da
+    # bu andan sonra sessiya bitir. SEC-011-in bütün mənası bu iki həddin
+    # MÜSTƏQİL olmasıdır (biri "istifadəçi işləyirmi", digəri "nə qədər vaxtdır
+    # açıqdır" sualına cavab verir).
+    ADMIN_PANEL_SESSION_ABSOLUTE_TIMEOUT_HOURS = "ADMIN_PANEL_SESSION_ABSOLUTE_TIMEOUT_HOURS"
+    # `CAMERA_DASHBOARD`-un YEGANƏ həddi — hərəkətsizlik yoxlaması YOXDUR
+    # (`SessionContext.has_idle_timeout`), çünki operator ekrana BAXIR,
+    # klikləmir. 12 saat bir NÖVBƏNİN uzunluğudur — gecə növbəsi bitəndə
+    # sessiya da bitməlidir, əks halda ertəsi növbənin operatoru əvvəlkinin
+    # açıq sessiyasını miras alardı (SEC-5-in kəşf etdiyi məhz bu ssenari).
+    CAMERA_DASHBOARD_SESSION_ABSOLUTE_TIMEOUT_HOURS = (
+        "CAMERA_DASHBOARD_SESSION_ABSOLUTE_TIMEOUT_HOURS"
+    )
+    # --- SEC-01/SEC-05 terminal PIN throttle (dövrə 3-4 audit tapıntısı) --- #
+    #
+    # `PIN_MAX_FAILED_ATTEMPTS`/`PIN_LOCKOUT_MINUTES` (yuxarıda) İŞÇİ-BAŞINA
+    # sayğacdır və PIN ANONİM olduğu üçün canlı kiosk axınında YAZILMIR
+    # (`PinHandshakeUseCase.authenticate()` "heç bir namizədə uyğun gəlmədi"
+    # halında HANSI işçinin cəhd etdiyini bilmir — bax `group_a_kiosk.py:364`).
+    # Bu İKİ açar AYRI, TERMİNAL-səviyyəli qoruma qatıdır: sayğac
+    # `(tenant_id, machine_guid_hash)` cütünə bağlıdır (SEC-05 — `store_id`
+    # admin hüququ olmadan dəyişdirilə bilən mühit dəyişənindən gəlir, açar
+    # ola bilməzdi, bax `MachineIdentityHash`-in öz modul başlığı), konkret
+    # işçiyə DEYİL. Müştəridən müştəriyə qəbul edilən risk (kassa növbəsinin
+    # sıxlığı, terminalın fiziki əlçatanlığı) FƏRQLƏNİR, ona görə ROOT
+    # PARAMETRİDİR.
+    KIOSK_STORE_PIN_MAX_FAILED_ATTEMPTS = "KIOSK_STORE_PIN_MAX_FAILED_ATTEMPTS"
+    KIOSK_STORE_PIN_LOCKOUT_MINUTES = "KIOSK_STORE_PIN_LOCKOUT_MINUTES"
 
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
@@ -1492,6 +1531,28 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # ilk gündən görünməz qalardı; 3+ isə 1280px minimum pəncərədə kartları
     # 380px-dən dar edərdi (başlıqlar kəsilir).
     SystemLimitKey.DASHBOARD_GRID_COLUMNS: "2",
+    # SEC-011 sənədləşdirilmiş tövsiyə (schema.sql §17b COMMENT-i) — bax
+    # `SystemLimitKey`-dəki üç açarın şərhi.
+    SystemLimitKey.ADMIN_PANEL_SESSION_IDLE_TIMEOUT_MINUTES: "30",
+    SystemLimitKey.ADMIN_PANEL_SESSION_ABSOLUTE_TIMEOUT_HOURS: "8",
+    SystemLimitKey.CAMERA_DASHBOARD_SESSION_ABSOLUTE_TIMEOUT_HOURS: "12",
+    # SEC-01 dövrə 3-4: BU, YALNIZ FALLBACK-dir — həqiqi mənbə
+    # `system_limits`-dir (CLAUDE.md §5), infra-nın seed miqrasiyası (075)
+    # ilə HƏRFƏN EYNİ dəyər saxlanmalıdır (dövrə 4-də bir dəfə uyğunsuzluq
+    # tapılıb düzəldilib: burada "10" idi, miqrasiyada "15" — DB-2 auditinin
+    # xəbərdarlıq etdiyi eyni qüsur sinfi).
+    #
+    # `20` səhv/`15` dəqiqə: sayğac artıq SABİT-PƏNCƏRƏ modelindədir
+    # (`TerminalPinThrottle.advance_after_failure`, uğurda SIFIRLANMIR) —
+    # ona görə həddin özü aqreqat TAM pəncərəni tutmalıdır: növbə dəyişimi
+    # (30 işçi 10 dəqiqə ərzində PIN yazır) adi typo axınından yalançı
+    # bloklanma yaratmamalıdır. `20/15` hücumçunu ~1.3 cəhd/dəqiqə sürətinə
+    # salır — fiziki iştirak tələb edən 10⁴-lük PIN fəzasında praktiki
+    # taramanı mümkünsüz edir, hər cəhd isə audit-ə düşür. `15` dəqiqə İŞÇİ-
+    # BAŞINA lockout müddəti (`PIN_LOCKOUT_MINUTES`) ilə EYNİDİR — bu alt-
+    # sistemdə artıq QƏBUL EDİLMİŞ "soyuma müddəti" ölçüsüdür.
+    SystemLimitKey.KIOSK_STORE_PIN_MAX_FAILED_ATTEMPTS: "20",
+    SystemLimitKey.KIOSK_STORE_PIN_LOCKOUT_MINUTES: "15",
 }
 
 

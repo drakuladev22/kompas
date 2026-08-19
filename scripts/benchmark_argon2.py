@@ -21,14 +21,31 @@ import statistics
 import sys
 import time
 from dataclasses import dataclass
+from typing import TypedDict
 
 from argon2 import PasswordHasher, Type
 
+
+class Argon2Params(TypedDict):
+    """`**params` açılışı mypy-a `dict[str, int]`-dən dəqiq keçmir.
+
+    Adi `dict[str, int]` ilə `PasswordHasher(**params, ...)` mypy-ı "expected
+    str" xətası verirdi — mypy `**` açılışında lüğətin İSTƏNİLƏN açarı ola
+    biləcəyini fərz edir və `encoding: str` parametri ilə toqquşdurur.
+    `TypedDict` açarları qabaqcadan sabitləyir, ona görə açılış dəqiq
+    yoxlanılır və `PasswordHasher`-in özü DƏYİŞMİR.
+    """
+
+    time_cost: int
+    memory_cost: int
+    parallelism: int
+
+
 #: İstehsalat parametrləri (`hashing.py` ilə eyni).
-PRODUCTION = {"time_cost": 3, "memory_cost": 64 * 1024, "parallelism": 4}
+PRODUCTION: Argon2Params = {"time_cost": 3, "memory_cost": 64 * 1024, "parallelism": 4}
 
 #: Sınanan alternativlər — hamısı OWASP-ın qəbul etdiyi diapazondadır.
-CANDIDATES: list[dict[str, int]] = [
+CANDIDATES: list[Argon2Params] = [
     {"time_cost": 3, "memory_cost": 64 * 1024, "parallelism": 4},  # istehsalat
     {"time_cost": 2, "memory_cost": 64 * 1024, "parallelism": 4},
     {"time_cost": 3, "memory_cost": 32 * 1024, "parallelism": 4},
@@ -41,7 +58,7 @@ SAMPLES = 5
 
 @dataclass
 class Measurement:
-    params: dict[str, int]
+    params: Argon2Params
     hash_ms: float
     verify_ms: float
 

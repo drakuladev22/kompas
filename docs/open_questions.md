@@ -74,6 +74,64 @@ azaldılma qərarı `security_decisions.md`-də qeyd olunmalıdır.
 
 ---
 
+## OQ-003 — `ConnectionSettings.dsn()` `sslmode=require`, `verify-full` DEYİL
+
+**Vəziyyət:** açıq · **Təsir:** DB bağlantısının server-şəxsiyyət doğrulaması
+(dövrə 1 audit, SEC-032 ilə birgə tapıldı)
+
+`connection_file.py::ConnectionSettings.dsn()` defolt `sslmode=require`
+işlədir — bu, nəqliyyatı ŞİFRƏLƏYİR, LAKİN server sertifikatını doğru
+Kök Sertifikat Orqanına qarşı DOĞRULAMIR. Yəni `psycopg.connect()` özü-
+imzalı sertifikatlı SAXTA bir Postgres serverinə TLS handshake-i
+problemsiz tamamlayır — TLS yalnız PASSİV dinləməyə (MITM-in ilk formasına)
+qarşı qoruyur, aktiv saxta-server ssenarisinə YOX (bax SEC-032: Bərpa
+Konsolu bypass-ı ilə birgə bu, parolun saxta hosta göndərilməsini
+ASANLAŞDIRIR — server özünü "doğru" kimi göstərmək üçün heç bir maneə
+YOXDUR).
+
+**Nə üçün bu dövrədə həll edilmir:** `verify-full`-a keçid kök sertifikat
+idarəsini (Supabase-in CA zəncirinin paylanması/yenilənməsi, özünə-host
+quraşdırmalarda müştərinin öz sertifikatı) tələb edir — quraşdırma
+mürəkkəbliyi artırır və SEC-032-nin (Qayda A+B) əhatə etdiyi konkret hücum
+zəncirindən AYRI, daha geniş qərardır.
+
+**Növbəti addım:** Faza 3-də (və ya SEC-032-nin təqib tapşırığı kimi)
+`sslrootcert` + `sslmode=verify-full` keçidi qiymətləndirilməlidir; xüsusən
+Bərpa Konsolu axını üçün (orada host İSTİFADƏÇİ tərəfindən yazılır, ən
+yüksək risk səthidir).
+
+---
+
+## OQ-004 — Evidence spool-un yetim fayl SWEEP/RECONCILE mexanizmi yoxdur
+
+**Vəziyyət:** açıq · **Təsir:** disk yeri (dövrə 2 audit, INF2-03)
+
+`EvidenceUploadQueue.enqueue()` (`src/infrastructure/storage/upload_queue.py`)
+İNDİ `spool_path.write_bytes()`-in `OSError`-unu (disk dolu, icazə itib)
+tutub yarımçıq/sıfır-baytlıq faylı `unlink(missing_ok=True)` ilə TƏMİZLƏYİR
+— bu, HƏMİN KONKRET uğursuzluq yolunun ÖZÜNÜ örtür. Amma bu, YALNIZ BİR
+mənbədir: yetim spool faylı NƏZƏRİ olaraq başqa yollarla da yarana bilər
+(məs. proses `write_bytes`-dən SONRA, `INSERT`-dən ƏVVƏL — yəni sətir 623-ün
+açdığı tranzaksiyaya çatmadan — çökürsə; və ya DB sətri sonradan silinirsə/
+DB bərpa olunursa, spool isə YOX).
+
+Ümumi bir "sweep" (DB-də sətri OLMAYAN spool faylını tap və sil) HƏLƏ
+YAZILMAYIB, çünki üç sual həll edilməyib:
+
+1. **KİM işlədir?** Açılışda bir dəfə, yoxsa dövri fon işi (`scheduled_
+   job_repository.py`-nin naxışı)?
+2. **Hansı YAŞ həddi ilə?** Çox gənc faylı silmək YARIŞ vəziyyəti yaradar —
+   `enqueue()` hələ `INSERT`-i BİTİRMƏMİŞ ola bilər (`write_bytes()` və
+   sonrakı `INSERT` ARASINDA, bax sətir 619-621 şərhi, ayrı tranzaksiyalar
+   deyil, amma nəzəri pəncərə mövcuddur).
+3. **Xəta halında nə edilir?** Səhvən YAŞAYAN (DB sətri olan, amma sweep-in
+   TAPMADIĞI) faylı silmək SÜBUT itkisidir (cərimə şəkli).
+
+**Növbəti addım:** dizayn qərarı (`kim/nə vaxt/hansı yaş həddi`) ARDINCA
+tapşırıq kimi yazılmalıdır — bu OQ ÖZÜ qərar deyil, YALNIZ boşluğun İZİDİR.
+
+---
+
 ## Bağlanmış suallar
 
 | # | Sual | Qərar | Tarix |

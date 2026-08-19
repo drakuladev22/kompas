@@ -43,6 +43,10 @@ from src.domain.value_objects.catalogs import MAX_LEAVE_DURATION_MINUTES, LeaveT
 # görünməz qaldı, çünki həmin yolu yalnız `DATABASE_URL` tələb edən inteqrasiya
 # testləri gəzirdi — indi vahid test də onu gəzir (bax `test_config_repositories`).
 from src.domain.value_objects.identifiers import TenantId
+
+# `TenantId` ilə EYNİ səbəbdən RUNTIME idxaldır: `schedules_for()` `TimeRange(...)`-i
+# BİLAVASİTƏ QURUR (D10), `TYPE_CHECKING` bloku olsaydı `NameError` atardı.
+from src.domain.value_objects.scheduling import TimeRange
 from src.infrastructure.persistence.repositories import _BaseRepository
 from src.shared.logger import get_logger
 
@@ -507,6 +511,39 @@ class PostgresShiftRepository(_BaseRepository):
             (employee_id, work_date, self._tenant),
         )
         return row["starts_at"] if row else None
+
+    def schedules_for(
+        self, employee_id: EmployeeId, days: tuple[date, date]
+    ) -> dict[date, TimeRange]:
+        """D10: verilmiş İKİ gün üçün `TimeRange`-lər, BİR sorğuda.
+
+        `scheduled_start()`-un EYNİ JOIN-i (`shift_assignments` + `work_modes`,
+        `NOT is_off_day`), lakin `shift_date IN (%s, %s)` ilə iki günü BİR
+        gediş-gəlişdə oxuyur (PERF-1/2/3 — `MorningCheckInUseCase.start_day()`
+        VASİTƏSİLƏ kiosk girişinin YEGANƏ real yoludur, iki ayrı sorğu HƏR
+        girişdə əlavə gecikmə deməkdir).
+
+        Nəticə sözlüyündə YALNIZ plan olan VƏ istirahət olmayan günlər var —
+        `work_modes.start_time`/`end_time` `NOT NULL`-dur (schema.sql §-),
+        yəni "sabit saatı yoxdur" halı BURADA sətrin ÖZÜNÜN olmaması ilə
+        ifadə olunur (açar-yoxdur), `None` dəyərlə YOX.
+        """
+        rows = self._fetch_all(
+            """
+            SELECT sa.shift_date, wm.start_time, wm.end_time
+            FROM shift_assignments sa
+            JOIN work_modes wm ON wm.id = sa.work_mode_id
+            WHERE sa.employee_id = %s
+              AND sa.tenant_id = %s
+              AND sa.shift_date IN (%s, %s)
+              AND NOT sa.is_off_day
+            """,
+            (employee_id, self._tenant, days[0], days[1]),
+        )
+        return {
+            row["shift_date"]: TimeRange(start=row["start_time"], end=row["end_time"])
+            for row in rows
+        }
 
     # ------------------------- Shift Matrix (bölmə 3) ------------------------ #
 

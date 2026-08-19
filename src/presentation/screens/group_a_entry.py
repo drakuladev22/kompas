@@ -1144,8 +1144,14 @@ class FatalStartupScreen(QWidget):
 
     Müştərinin gördüyü ekran indi QƏSDƏN kasıbdır: mesaj + «Yenidən Cəhd Et» +
     dəstək ünvanı. Eyni imkan TEXNİKDƏDİR: `Ctrl+Shift+K` → Bərpa Konsolu
-    (qapı `controllers/recovery_console.may_open`-dadır). Nasazlığın NÖVÜ
-    ötürülməkdə davam edir (DB-4 Faza 4) — `app.py` ona görə qərar verir.
+    (qapı `controllers/recovery_console.may_open`-dadır) — LAKİN (SEC-2)
+    YALNIZ bu ekranı gətirən nasazlıq NÖVÜ `DATABASE_UNREACHABLE` VƏ YA
+    `CREDENTIALS_MISSING`-dirsə: bu, əslində «toyuq-yumurta» — səlahiyyət
+    bazadadır, baza isə məhz buna görə əlçatmazdır. `CREDENTIALS_INVALID`
+    (saxlanmış parol səhvdir, server İŞLƏKDİR) və `IDENTITY_UNAVAILABLE`
+    bu istisnaya DÜŞMÜR — orada baza özü işlək ola bilər, yəni toyuq-yumurta
+    arqumenti keçərli deyil və qapı BAĞLI qalır. Nasazlığın NÖVÜ ötürülməkdə
+    davam edir (DB-4 Faza 4) — `app.py` ona görə qərar verir.
 
     Signals:
         retry_requested: «Yenidən cəhd et» basıldı.

@@ -899,6 +899,7 @@ def _kiosk_controller(
     *,
     error: Exception | None = None,
 ) -> Any:
+    from src.domain.value_objects.machine_identity import MachineIdentityHash
     from src.presentation.controllers.kiosk import KioskController
 
     resolved = status or {
@@ -910,7 +911,8 @@ def _kiosk_controller(
         ),
     }
     context = _StubContext(_StubSession(entries, resolved), error=error)
-    return KioskController(context, store_id=STORE)  # type: ignore[arg-type]
+    machine_key = MachineIdentityHash(digest="a" * 64)
+    return KioskController(context, store_id=STORE, machine_key=machine_key)  # type: ignore[arg-type]
 
 
 def test_the_kiosk_offers_the_marked_break_types_in_declaration_order() -> None:
