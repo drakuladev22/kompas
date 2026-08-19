@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections import Counter
 from functools import cache
 from pathlib import Path
 from typing import Final
@@ -119,8 +120,16 @@ NEVER_RAISED: Final[dict[str, str]] = {
 }
 
 
+@cache
 def _declared() -> dict[str, Path]:
-    """`ekran_faylı.Sinif.siqnal` → fayl yolu."""
+    """`ekran_faylı.Sinif.siqnal` → fayl yolu.
+
+    KEŞLƏNİR — `_is_consumed` onu HƏR siqnal üçün (`_ambiguous_names` vasitəsilə)
+    çağırır. Keşsiz variantda ~157 siqnal × ~20 ekran faylı = 3000-dən çox AST
+    parse-ı olurdu və qapı tək başına ~45 saniyə çəkirdi; tam dəst yükü altında
+    isə `--timeout=60`-ı aşıb bütün icranı ASIRDI. Qaytarılan sözlük yalnız
+    OXUNUR (heç bir çağıran onu dəyişmir), ona görə paylaşılan nüsxə təhlükəsizdir.
+    """
     found: dict[str, Path] = {}
     for path in sorted(_SCREENS.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -283,10 +292,12 @@ def _is_screen_class(qualified: str, own_file: Path) -> bool:
     return False
 
 
-def _ambiguous_names() -> set[str]:
-    """Birdən çox ekran sinfində eyni adla təyin olunan siqnallar."""
+@cache
+def _ambiguous_names() -> frozenset[str]:
+    """Birdən çox ekran sinfində eyni adla təyin olunan siqnallar (keşlənir)."""
     names = [key.rsplit(".", 1)[1] for key in _declared()]
-    return {name for name in names if names.count(name) > 1}
+    counts = Counter(names)
+    return frozenset(name for name, total in counts.items() if total > 1)
 
 
 def _raised(path: Path) -> set[str]:
