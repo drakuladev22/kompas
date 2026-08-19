@@ -957,6 +957,10 @@ class TestOverlapGuard:
             )
 
         assert harness.balances.get(employee.id, year=2026).used_days == Decimal("0.00")
+        # `request.approve()` `AnnualLeaveDecidedEvent`-i toplamışdı, lakin
+        # yazı uğursuz oldu — `discard_events()` onu atmalıdır (CLAUDE.md §3:
+        # "Rollback halında hadisə heç vaxt yayılmır").
+        assert request.has_pending_events is False
 
     def test_ust_uste_dusen_sorgu_formada_erken_kesilir(self) -> None:
         """Qapağı ƏVƏZ ETMİR — istifadəçi səbəbi formanı doldurmadan görür."""

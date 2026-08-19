@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import ast
 import re
+from functools import cache
 from pathlib import Path
 from typing import Final
 
@@ -61,11 +62,8 @@ LOCAL_ONLY: Final[dict[str, str]] = {
     "group_c.ShiftSwapScreen.selected": (
         "seçim `_current`-ə yazılır və `approved`/`rejected` onu işlədir"
     ),
-    "group_c.DailyRosterScreen.draft_saved": "qaralama ekranın öz vəziyyətindədir",
     "group_c.ShiftPlanningScreen.template_selected": "şablon ekranda tətbiq olunur",
     "group_e.SupportChatWidget.closed": "`close_panel` paneli özü gizlədir",
-    "group_f.FineAppealInboxScreen.accepted": "sətir vəziyyəti ekranda yenilənir",
-    "group_f.FineAppealInboxScreen.rejected": "sətir vəziyyəti ekranda yenilənir",
     "group_f.TaskCard.approved": "`TasksScreen` onu öz siqnalına relay edir",
     "group_f.TaskCard.rejected": "`TasksScreen` onu öz siqnalına relay edir",
     "group_i.WidgetRow.moved": "`DashboardBuilderScreen` eyni faylda dinləyir",
@@ -90,7 +88,18 @@ LOCAL_ONLY: Final[dict[str, str]] = {
 }
 
 #: HƏQİQƏTƏN ölü — səbəb yazılıb. Bu siyahı QISALMALIDIR.
-PENDING_CONSUMER: Final[dict[str, str]] = {}
+#:
+#: Aşağıdakı beşi sinif-agah yoxlama (bax `_consumers`) əlavə olunanda üzə
+#: çıxdı: hər biri ADI başqa ekranda bağlanmış siqnaldır, ona görə köhnə,
+#: ada-görə yoxlama onları «bağlanıb» sayırdı. Heç biri sadə naqil işi DEYİL —
+#: hər biri arxasında OLMAYAN bir axın tələb edir, ona görə uydurma bağlantı
+#: yazmaqdansa iş maddəsi kimi GÖRÜNƏN saxlanılır.
+PENDING_CONSUMER: Final[dict[str, str]] = {
+    "group_c.ShiftPlanningScreen.publish_requested": (
+        "«Planı Yayımla» düyməsi SİLİNDİ (bax `NEVER_RAISED`) — nə yayan, nə "
+        "dinləyən ucu var; siqnal ekranın gələcək müqaviləsi kimi saxlanılır"
+    ),
+}
 
 
 #: Elan olunub, lakin onu YAYACAQ element ekranda YOXDUR.
@@ -98,7 +107,16 @@ PENDING_CONSUMER: Final[dict[str, str]] = {}
 #: `PENDING_CONSUMER`-dən fərqi: orada bağlantının DİNLƏYƏN ucu yoxdur, burada
 #: isə YAYAN ucu. İkisi ayrı saxlanılır, çünki düzəlişləri də ayrıdır — biri
 #: kontroller tələb edir, digəri ekranda bir idarəedici.
-NEVER_RAISED: Final[dict[str, str]] = {}
+NEVER_RAISED: Final[dict[str, str]] = {
+    "group_c.ShiftPlanningScreen.publish_requested": (
+        "«Planı Yayımla» düyməsi SİLİNDİ: `ShiftPlanningUseCase`-də nəşr "
+        "anlayışı yoxdur, matris `apply_assignment` ilə dərhal yazılır. Düymə "
+        "yalnız işləmirdi DEYİL, yanlış model öyrədirdi (menecer «hələ "
+        "yayımlanmayıb» sanıb sınaq dəyişikliyi edə bilərdi). Siqnal ekranın "
+        "müqaviləsi kimi saxlanılır — həqiqi nəşr axını əlavə olunanda "
+        "düymə geri qayıdacaq"
+    ),
+}
 
 
 def _declared() -> dict[str, Path]:
@@ -141,6 +159,136 @@ def _consumers() -> dict[str, set[Path]]:
     return sites
 
 
+@cache
+def _function_scopes(path: Path) -> tuple[str, ...]:
+    """Faylın hər funksiyasının mənbə mətni — bir dəfə hesablanır.
+
+    `ast.get_source_segment` hər çağırışda faylı yenidən sətirlərə bölür; 400+
+    fayl × 150+ siqnal üçün bu, qapını dəqiqələrlə uzadırdı. Sətir aralığı ilə
+    kəsmək eyni nəticəni verir və bir dəfə keşlənir.
+    """
+    source = path.read_text(encoding="utf-8")
+    lines = source.splitlines()
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:  # pragma: no cover - `src/` həmişə parse olunur
+        return (source,)
+    scopes = [
+        "\n".join(lines[node.lineno - 1 : (node.end_lineno or node.lineno)])
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    ]
+    # Modul səviyyəsindəki bağlantılar üçün faylın ÖZÜ də əhatə sayılır.
+    scopes.append(source)
+    return tuple(scopes)
+
+
+def _connect_scopes(path: Path, signal: str) -> list[str]:
+    """`.<signal>.connect(` çağırışını ƏHATƏ EDƏN funksiyaların mənbə mətni.
+
+    Fayl bütövlükdə yoxlansaydı nəticə YANILDICI olardı: `app.py` onlarla ekran
+    sinfinin adını çəkir, ona görə «fayl bu sinfi çəkir» şərti orada HƏMİŞƏ
+    doğrudur. Nümunə: `closed` siqnalı həm `SupportChatWidget`-də, həm
+    `RecoveryConsoleScreen`-də var; `app.py` yalnız ikincisini bağlayır, lakin
+    birincinin adını da başqa yerdə çəkir — fayl səviyyəsində yoxlama ikisini
+    də «bağlanıb» sayardı.
+
+    Funksiya səviyyəsi layihənin FAKTİKİ quruluşuna uyğundur: `app.py`-də
+    `_attach_*` metodu `isinstance` yoxlamasında sinfi çəkir, kontrollerdə isə
+    `attach(self, screen: XScreen)` imzası. Hər ikisi funksiyanın İÇİNDƏDİR.
+
+    Faylın ÖZÜ də siyahıdadır (modul səviyyəli bağlantılar üçün), lakin O,
+    yalnız funksiya tapılmayanda fərq yaradır — `app.py` kimi fayllarda
+    funksiya əhatəsi həmişə daha dardır.
+    """
+    needle = f".{signal}.connect("
+    scopes = _function_scopes(path)
+    inside_functions = [scope for scope in scopes[:-1] if needle in scope]
+    if inside_functions:
+        return inside_functions
+    whole_file = scopes[-1]
+    return [whole_file] if needle in whole_file else []
+
+
+def _is_consumed(
+    qualified: str,
+    own_file: Path,
+    consumers: dict[str, set[Path]],
+    *,
+    when_unprovable: bool,
+) -> bool:
+    """Siqnalın HƏQİQİ dinləyicisi varmı — AD TOQQUŞMASINI nəzərə alaraq.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ SADƏCƏ AD KİFAYƏT ETMİR
+    ──────────────────────────────────────────────────────────────────────────
+    Qt-də `screen.approved.connect(...)` sətrindən `screen`-in TİPİNİ statik
+    çıxarmaq mümkün deyil, ona görə qapı əvvəlcə yalnız ADA baxırdı. Nəticədə
+    eyni adlı siqnal bir ekranda bağlananda DİGƏRLƏRİ də «bağlanıb» sayılırdı.
+    Bu kor nöqtə real qüsur gizlədib: `ShiftSwapScreen.approved`/`.rejected` və
+    `DailyRosterScreen.approve_requested` heç yerə bağlı deyildi, halbuki eyni
+    adlar `TasksScreen`/`annual_leave` tərəfində bağlı olduğu üçün qapı
+    susurdu — düymələr isə istehsalatda sadəcə heç nə etmirdi.
+
+    Ona görə ad toqquşan siqnallar üçün ƏLAVƏ şərt qoyulur: consume-edən fayl
+    ekranın SİNİF ADINI da çəkməlidir. Kontroller onu onsuz da çəkir (`app.py`
+    `isinstance` yoxlaması, `TYPE_CHECKING` idxalı), ona görə bu şərt işləyən
+    bağlantıları pozmur — yalnız «başqa ekranın eyni adlı siqnalı» səhv
+    müsbətini kəsir.
+    """
+    name = qualified.rsplit(".", 1)[1]
+    outside = consumers.get(name, set()) - {own_file}
+    if not outside:
+        return False
+    if name not in _ambiguous_names():
+        return True
+    if not _is_screen_class(qualified, own_file):
+        # DAXİLİ WIDGET (`QueueRow`, `TopicChip`, dialoq, `QWidget` əsaslı
+        # kiosk ekranı): onu kontroller yox, VALİDEYN emal edir — çox vaxt elə
+        # öz faylında, `self.X`-ə relay edərək. Burada sahiblik STATİK olaraq
+        # SÜBUT EDİLƏ BİLMİR, ona görə cavabı çağıran tərəf seçir:
+        #
+        #   * «sənədləşdirilməyib?» yoxlaması `True` verir — sübutsuz halda
+        #     əlavə sənəd tələb etmək səs-küy yaradardı;
+        #   * «siyahı köhnəlib?» yoxlaması `False` verir — sübutsuz halda
+        #     «artıq bağlanıb» demək YANLIŞ «düzəldildi» siqnalı olardı.
+        return when_unprovable
+
+    screen_class = qualified.split(".")[1]
+    module_stem = qualified.split(".", maxsplit=1)[0]
+    for path in outside:
+        # KONTROLLER EKRANLA EYNİ ADI DAŞIYIR (`screens/recovery_console.py` ↔
+        # `controllers/recovery_console.py`). Belə kontroller `screen: Any`
+        # yazsa da sahiblik şübhəsizdir — ad uyğunluğu sinif adından güclüdür.
+        if path.stem == module_stem:
+            return True
+        if any(screen_class in scope for scope in _connect_scopes(path, name)):
+            return True
+    return False
+
+
+@cache
+def _is_screen_class(qualified: str, own_file: Path) -> bool:
+    """Siqnalı təyin edən sinif `Screen` törəməsidirmi.
+
+    Ayrım vacibdir: `Screen` törəməsini KONTROLLER bağlayır (ona görə sinif
+    adını tələb etmək olar), daxili widget-i isə valideyn ekranın ÖZÜ — və o,
+    çox vaxt sinif adını çəkmir, sadəcə `row.x.connect(self.x)` yazır.
+    """
+    class_name = qualified.split(".")[1]
+    tree = ast.parse(own_file.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            return any("Screen" in ast.dump(base) for base in node.bases)
+    return False
+
+
+def _ambiguous_names() -> set[str]:
+    """Birdən çox ekran sinfində eyni adla təyin olunan siqnallar."""
+    names = [key.rsplit(".", 1)[1] for key in _declared()]
+    return {name for name in names if names.count(name) > 1}
+
+
 def _raised(path: Path) -> set[str]:
     """Fayl daxilində `emit` olunan və ya relay edilən siqnal adları."""
     text = path.read_text(encoding="utf-8")
@@ -179,9 +327,7 @@ def test_every_screen_signal_is_consumed_or_declared_local() -> None:
     undocumented: list[str] = []
 
     for qualified, path in _declared().items():
-        name = qualified.rsplit(".", 1)[1]
-        outside = consumers.get(name, set()) - {path}
-        if outside:
+        if _is_consumed(qualified, path, consumers, when_unprovable=True):
             continue
         if qualified in LOCAL_ONLY or qualified in PENDING_CONSUMER:
             continue
@@ -204,28 +350,20 @@ def test_the_registries_do_not_list_signals_that_are_already_connected() -> None
     declared = _declared()
     stale: list[str] = []
 
-    # AD TOQQUŞMASI: `_consumers` siqnalı ADINA görə tapır, çünki Qt-də
-    # `screen.x.connect(...)` sətrindən `screen`-in TİPİNİ statik çıxarmaq
-    # mümkün deyil. Eyni ad iki ekranda varsa (məs. `appeal_requested` həm
-    # `EmployeeHomeScreen`-də, həm `SalesPointsScreen`-də), birinin bağlanması
-    # digərini də "bağlanıb" göstərərdi. Belə hallarda köhnəlmə SÜBUT
-    # EDİLƏ BİLMİR, ona görə iddia edilmir — səhv müsbət «düzəldildi» siqnalı
-    # vermək, siyahını bir az uzun saxlamaqdan daha zərərlidir.
-    ambiguous = {
-        key.rsplit(".", 1)[1]
-        for key in declared
-        if sum(1 for other in declared if other.rsplit(".", 1)[1] == key.rsplit(".", 1)[1]) > 1
-    }
-
+    # AD TOQQUŞMASI ARTIQ İSTİSNA DEYİL. Əvvəl eyni adlı siqnallar bu
+    # yoxlamadan TAMAMİLƏ atlanırdı: `screen.x.connect(...)` sətrindən
+    # `screen`-in tipini çıxarmaq mümkün olmadığı üçün köhnəlmə sübut edilə
+    # bilmirdi. Nəticədə siyahı «bir dəfə ölü olmuş» adların arxivinə
+    # çevrilirdi — məhz `FineAppealInboxScreen.accepted` belə saxlanmışdı və
+    # onun səbəbi («sətir vəziyyəti ekranda yenilənir») FAKTİKİ olaraq YANLIŞ
+    # idi: ekran heç nə etmirdi. `_is_consumed` sinif adını da tələb etdiyi
+    # üçün indi ad toqquşan hallarda da qərar verilə bilir.
     for qualified in list(LOCAL_ONLY) + list(PENDING_CONSUMER):
-        if qualified.rsplit(".", 1)[1] in ambiguous:
-            continue
         path = declared.get(qualified)
         if path is None:
             stale.append(f"{qualified} (belə siqnal artıq yoxdur)")
             continue
-        name = qualified.rsplit(".", 1)[1]
-        if consumers.get(name, set()) - {path}:
+        if _is_consumed(qualified, path, consumers, when_unprovable=False):
             stale.append(f"{qualified} (artıq bağlanıb)")
 
     assert stale == [], f"Siyahılar köhnəlib: {sorted(stale)}"

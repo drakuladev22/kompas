@@ -56,6 +56,8 @@ from src.presentation.widgets.responsive import LayoutMode
 from src.presentation.widgets.states import EmptyState, ErrorState, LoadingState
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from src.presentation.theme.manager import ThemeManager
 
 #: Skeleton bu müddətdən əvvəl göstərilmir (maketdən).
@@ -243,6 +245,7 @@ class Screen(QWidget):
         secondary_text: str = "",
         details: list[tuple[str, str]] | None = None,
         footnote: str = "",
+        on_retry: Callable[[], None] | None = None,
     ) -> ErrorState:
         return self._switcher.show_error(
             title=title,
@@ -252,6 +255,7 @@ class Screen(QWidget):
             secondary_text=secondary_text,
             details=details,
             footnote=footnote,
+            on_retry=on_retry,
         )
 
     def show_content(self) -> None:
@@ -430,16 +434,36 @@ class ContentSwitcher(QWidget):
         secondary_text: str = "",
         details: list[tuple[str, str]] | None = None,
         footnote: str = "",
+        on_retry: Callable[[], None] | None = None,
     ) -> ErrorState:
+        """Xəta vəziyyəti.
+
+        ──────────────────────────────────────────────────────────────────────
+        `on_retry` VERİLMƏYİBSƏ ƏSAS DÜYMƏ ÜMUMİYYƏTLƏ ÇƏKİLMİR (UI-R4-01)
+        ──────────────────────────────────────────────────────────────────────
+        `ErrorState.primary_clicked` siqnalı bütün layihədə CƏMİ BİR yerdə
+        bağlanmışdı, halbuki `show_error` 200-dən çox yerdən çağırılır və hər
+        dəfə «Yenidən Cəhd Et» yazılmış düymə çəkirdi. Yəni istifadəçi oxu və
+        ya yazı uğursuzluğunda tam ekran xəta görürdü, düyməni basırdı və HEÇ
+        NƏ olmurdu: siyahı artıq silinmişdi, geri qayıtmağın yeganə yolu isə
+        başqa ekrana keçib qayıtmaq idi.
+
+        Düyməni sükutla ölü saxlamaqdansa ÇƏKMƏMƏK seçildi — bu, ekranların
+        «görmək = səlahiyyətin olması» qaydası ilə eyni məntiqdir: işləməyən
+        element boz DEYİL, ümumiyyətlə render olunmur. Təkrar cəhdin MƏNASI
+        olan yerlər isə `on_retry` ötürür və düymə həqiqətən işləyir.
+        """
         state = ErrorState(
             self._theme,
             title=title,
             message=message,
             icon_name=icon_name,
-            primary_text=primary_text,
+            primary_text=primary_text if on_retry is not None else "",
             secondary_text=secondary_text,
             details=details,
         )
+        if on_retry is not None:
+            state.primary_clicked.connect(on_retry)
         if footnote:
             state.set_footnote(footnote)
         self._present(state)

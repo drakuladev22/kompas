@@ -2440,9 +2440,9 @@ class RootControlScreen(Screen):
         button_layout.setContentsMargins(0, 0, 0, 0)
         button_layout.setSpacing(12)
         button_layout.addWidget(stretch())
-        test = secondary_button("Test Mesajı Göndər")
-        test.clicked.connect(self.telegram_test_requested)
-        button_layout.addWidget(test)
+        self._telegram_test_button = secondary_button("Test Mesajı Göndər")
+        self._telegram_test_button.clicked.connect(self.telegram_test_requested)
+        button_layout.addWidget(self._telegram_test_button)
         replace = action_button("Botu Dəyiş")
         replace.clicked.connect(self._on_telegram_save)
         button_layout.addWidget(replace)
@@ -2488,6 +2488,25 @@ class RootControlScreen(Screen):
         self._telegram_message.setText(text)
         colour = "--color-danger" if error else "--color-text-muted"
         self._telegram_message.setStyleSheet(f"color: {self._theme.color(colour)};")
+
+    def set_telegram_busy(self, busy: bool) -> None:
+        """«Test Mesajı Göndər» fonda qaçarkən düymə söndürülür (UX-1/UI-4).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ BU SETER LAZIM OLDU
+        ──────────────────────────────────────────────────────────────────────
+        Test Telegram-a HƏQİQİ şəbəkə sorğusudur (`TELEGRAM_REQUEST_TIMEOUT_
+        SECONDS`, defolt 15 san, Root 120 san-a qədər böyüdə bilər) və
+        kontroller onu artıq `background_task.run_job` ilə fon sapında icra
+        edir (bax `controllers/root_control.py::_on_telegram_test`). Düymə
+        özü isə əvvəl HEÇ SÖNDÜRÜLMÜRDÜ — iş fona keçəndən sonra bu, artıq
+        donma yaratmır, lakin təkrar kliklə iki paralel Telegram sorğusu
+        göndərmək mümkün qalırdı. `ErpServersScreen`-dəki `set_busy` ilə eyni
+        naxış: deaktivlik GÖRÜNƏN qatdır, kontrollerdəki `BackgroundTask.
+        is_running` isə klaviatura qısayolunu da tutur.
+        """
+        self._telegram_test_button.setEnabled(not busy)
+        self._telegram_test_button.setText("Göndərilir…" if busy else "Test Mesajı Göndər")
 
     def telegram_inputs(self) -> dict[str, object]:
         """Sahələrin cari məzmunu — testlər və kontroller üçün."""

@@ -494,6 +494,30 @@ class AnnualLeaveBalance(AggregateRoot):
 
 
 def _non_negative(value: Decimal) -> Decimal:
+    """Mənfi dəyəri SƏSSİZCƏ sıfıra endirir — `consume()`-dəki `raise` İLƏ QƏSDƏN FƏRQLİDİR.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ BURADA SÜKUTLU SIFIRLAMA, `consume()`-DA İSƏ AÇIQ İSTİSNA
+    ──────────────────────────────────────────────────────────────────────────
+    `consume()` İSTİFADƏÇİ ƏMƏLİYYATINI yoxlayır (təsdiq zamanı balansdan
+    çıxılan gün) — mənfi dəyər ORADA proqramçı/UI səhvinin ƏLAMƏTİDİR və
+    əməliyyat DƏRHAL AYDIN mesajla dayandırılmalıdır (istifadəçi düyməni basıb,
+    nəticə gözləyir — CLAUDE.md §6).
+
+    Bu funksiya isə YALNIZ `__init__`/`set_entitlement()`-dən çağırılır —
+    SİSTEM-HESABLANMIŞ dəyər qəbul edir: `AnnualLeaveBalance` DB SƏTRİNDƏN
+    hidratasiya olunanda (`annual_leave_repository.py::_row_to_balance`)
+    işə düşür. Bu yol ARTIQ DB `chk_annual_leave_balance_not_negative`
+    `CHECK`-i ilə qorunur (sinif başlığı) — normal işləyən sistemdə BURAYA
+    mənfi dəyər HEÇ VAXT ÇATMAMALIDIR. Əgər çatarsa (köhnə/korlanmış sətir,
+    əl ilə SQL, miqrasiya səhvi), `raise` seçilsəydi HR balans ekranını
+    sadəcə AÇMAQ tətbiqi qəzalandırardı — mühafizə mövqeyi isə YALNIZ
+    BALANSI AZALDA bilir (heç vaxt artırmır), yəni TƏHLÜKƏSİZ tərəfə düşür:
+    işçi əskik gün görər, artıq gün ALA BİLMƏZ. Ona görə `adjust_balance()`
+    (use case, İSTİFADƏÇİ girişi) əvvəlcədən açıq `raise` edir, BURADA isə
+    son sətir sükutla 0-a düşür — iki qapı EYNİ NƏTİCƏNİ fərqli səviyyələrdə
+    həll edir.
+    """
     return quantize_days(value) if value > 0 else _ZERO
 
 

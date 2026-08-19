@@ -105,8 +105,15 @@ class FakeFeatureToggles:
 class RecordingNotifier:
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
+        #: Bildirişin UĞURSUZLUĞUNU simulyasiya edir (defolt: uğurlu) —
+        #: `RecordingAudit.failure`/`InMemoryLeaveRequests.save_failure` ilə
+        #: EYNİ naxış: "yazı addımlarından biri çöksə, ondan SONRAKI addım
+        #: (məs. hadisə yayımı) icra olunmamalıdır" ssenarisini sınamaq üçün.
+        self.failure: Exception | None = None
 
     def notify(self, **kwargs: Any) -> None:
+        if self.failure is not None:
+            raise self.failure
         self.messages.append(kwargs)
 
     def categories(self) -> list[str]:
@@ -132,6 +139,17 @@ class RecordingEventBus:
         self.failure: Exception | None = None
 
     async def publish(self, event: Any) -> None:
+        if self.failure is not None:
+            raise self.failure
+        self.published.append(event)
+
+    def publish_sync(self, event: Any) -> None:
+        """`leave_verification.py::_publish_events_sync`-in çağırdığı sinxron yol.
+
+        `publish()` ilə EYNİ sahtə davranış — real `EventBus.publish_sync()`-in
+        Qt-slot xüsusiyyətlərini (running loop aşkarlanması və s.) təkrarlamır,
+        çünki bunlar `_publish_events_sync`-in ÖZ məntiqinə aid deyil.
+        """
         if self.failure is not None:
             raise self.failure
         self.published.append(event)

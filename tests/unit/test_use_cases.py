@@ -511,6 +511,140 @@ async def test_a_publish_failure_does_not_undo_the_verification(ctx: Ctx) -> Non
     assert bus.published == []  # istisna `append`-dən ƏVVƏL atılıb
 
 
+# --------------------------------------------------------------------------- #
+# D2 (davamı) — STEP 1/STEP 2/override/timeout ÖZ hadisələrini yaymırdı
+# --------------------------------------------------------------------------- #
+# `team-lead` qərarı: bu use case event bus-a HƏQİQƏTƏN qoşulan YEGANƏ
+# yerdir (`composition.py`), ona görə `request_leave`/`claim_return`/
+# `apply_override`/`escalate_timeouts`-un öz hadisələri `main.py`-dakı
+# universal audit dinləyicisinə HEÇ VAXT çatmırdı — yalnız `verify_return`-un
+# `LeaveVerifiedEvent`-i çatırdı. Aşağıdakı testlər hər metod üçün İKİ halı
+# yoxlayır: [uğur] hadisə yayılır, [istisna] yazı addımlarından biri çökəndə
+# hadisə HEÇ VAXT yayılmır (`request.discard_events()` çağırılmasa da,
+# istisna `_publish_events_sync`-ə çatmadan yuxarı sızır).
+
+
+def test_request_leave_publishes_its_event_after_a_successful_write(ctx: Ctx) -> None:
+    bus = RecordingEventBus()
+
+    request = ctx.leave_uc(event_bus=bus).request_leave(
+        tenant_id=TENANT,
+        employee_id=WORKER,
+        store_id=STORE,
+        leave_type_id=LUNCH,
+        employee_is_in_store=True,
+    )
+
+    assert bus.names() == ["LeaveRequestedEvent"]
+    (event,) = bus.published
+    assert event.employee_id == WORKER
+    assert request.has_pending_events is False
+
+
+def test_request_leave_does_not_publish_when_the_audit_write_fails(ctx: Ctx) -> None:
+    bus = RecordingEventBus()
+    ctx.audit.failure = RuntimeError("Audit yazısı çökdü")
+
+    with pytest.raises(RuntimeError, match="Audit yazısı çökdü"):
+        ctx.leave_uc(event_bus=bus).request_leave(
+            tenant_id=TENANT,
+            employee_id=WORKER,
+            store_id=STORE,
+            leave_type_id=LUNCH,
+            employee_is_in_store=True,
+        )
+
+    assert bus.published == []
+
+
+def test_claim_return_publishes_its_event_after_a_successful_write(ctx: Ctx) -> None:
+    bus = RecordingEventBus()
+    open_leave(ctx)
+    ctx.clock.set(at(13, 0))
+
+    request = ctx.leave_uc(event_bus=bus).claim_return(tenant_id=TENANT, employee_id=WORKER)
+
+    assert bus.names() == ["LeaveReturnClaimedEvent"]
+    assert request.has_pending_events is False
+
+
+def test_claim_return_does_not_publish_when_the_audit_write_fails(ctx: Ctx) -> None:
+    bus = RecordingEventBus()
+    open_leave(ctx)
+    ctx.clock.set(at(13, 0))
+    ctx.audit.failure = RuntimeError("Audit yazısı çökdü")
+
+    with pytest.raises(RuntimeError, match="Audit yazısı çökdü"):
+        ctx.leave_uc(event_bus=bus).claim_return(tenant_id=TENANT, employee_id=WORKER)
+
+    assert bus.published == []
+
+
+def test_apply_override_publishes_its_event_after_a_successful_write(ctx: Ctx) -> None:
+    bus = RecordingEventBus()
+    open_leave(ctx)
+    ctx.clock.set(at(13, 0))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+
+    request = ctx.leave_uc(event_bus=bus).apply_override(
+        tenant_id=TENANT,
+        operator_id=OPERATOR,
+        request_id=next(iter(ctx.leave_requests.items)),
+        overridden_time=at(12, 50),
+        reason="Kameradan təsdiqləndi, işçi 12:50-də qayıtdı",
+    )
+
+    assert bus.names() == ["ManualTimeOverrideEvent"]
+    assert request.has_pending_events is False
+
+
+def test_apply_override_does_not_publish_when_the_audit_write_fails(ctx: Ctx) -> None:
+    bus = RecordingEventBus()
+    open_leave(ctx)
+    ctx.clock.set(at(13, 0))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    ctx.audit.failure = RuntimeError("Audit yazısı çökdü")
+
+    with pytest.raises(RuntimeError, match="Audit yazısı çökdü"):
+        ctx.leave_uc(event_bus=bus).apply_override(
+            tenant_id=TENANT,
+            operator_id=OPERATOR,
+            request_id=next(iter(ctx.leave_requests.items)),
+            overridden_time=at(12, 50),
+            reason="Kameradan təsdiqləndi, işçi 12:50-də qayıtdı",
+        )
+
+    assert bus.published == []
+
+
+def test_escalate_timeouts_publishes_its_event_after_a_successful_write(ctx: Ctx) -> None:
+    bus = RecordingEventBus()
+    open_leave(ctx)
+    ctx.clock.set(at(13, 0))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    ctx.clock.set(at(13, 46))
+
+    count = ctx.leave_uc(event_bus=bus).escalate_timeouts(TENANT)
+
+    assert count == 1
+    assert bus.names() == ["VerificationTimeoutEscalatedEvent"]
+
+
+def test_escalate_timeouts_does_not_publish_when_the_notification_fails(ctx: Ctx) -> None:
+    """Bildiriş `save()`-dən SONRA, yayımdan ƏVVƏL gəlir — çöksə yayım baş vermir."""
+    bus = RecordingEventBus()
+    open_leave(ctx)
+    ctx.clock.set(at(13, 0))
+    ctx.leave_uc().claim_return(tenant_id=TENANT, employee_id=WORKER)
+    ctx.clock.set(at(13, 46))
+    ctx.notifier.failure = RuntimeError("Bildiriş kanalı çökdü")
+
+    with pytest.raises(RuntimeError, match="Bildiriş kanalı çökdü"):
+        ctx.leave_uc(event_bus=bus).escalate_timeouts(TENANT)
+
+    assert bus.published == []
+
+
 async def test_compensated_fine_does_not_block_a_new_verification(ctx: Ctx) -> None:
     """Kompensasiyadan sonra TƏKRAR təsdiq bloklanmır.
 

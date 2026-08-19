@@ -1904,6 +1904,70 @@ CREATE TRIGGER trg_grantor_owns_flag_position
     FOR EACH ROW EXECUTE FUNCTION enforce_grantor_owns_flag();
 
 
+-- `ROOT_ONLY` FLAG-İN DELETE İLƏ GERİ ALINMASI (DB-6, migrations/076)
+-- ---------------------------------------------------------------------------
+-- `enforce_permission_hardlock()` GRANT (INSERT/UPDATE) yolunu səviyyə-1
+-- flag üçün `positions.code = 'ROOT'` sətrinə MƏHDUDLAŞDIRIR, amma REVOKE
+-- `PostgresPositionRepository._sync_flags()`/`PostgresEmployeeRepository.
+-- _sync_overrides()`-də DELETE-dir — BEFORE INSERT OR UPDATE trigger-lər
+-- DELETE-i görmür. Aktor `NEW.granted_by` sütunundan YOX (DELETE-də `NEW`
+-- yoxdur), sessiya kontekstindən (`app.user_id`) oxunur — `_sync_flags()`-in
+-- ÖZÜNÜN artıq işlətdiyi mənbə (bax `repositories.py`). Hədəf sətrin
+-- "Root-a məxsusluğu" ayrıca yoxlanmır: yuxarıdakı GRANT qapısı artıq bunu
+-- İNVARİANT edib — `ROOT_ONLY` flag daşıyan hər sətir onsuz da Root-undur.
+CREATE OR REPLACE FUNCTION enforce_root_only_flag_revoke() RETURNS TRIGGER AS $$
+DECLARE
+    v_level      SMALLINT;
+    v_actor_code TEXT;
+BEGIN
+    SELECT hardlock_level INTO v_level FROM permission_flags WHERE code = OLD.flag_code;
+    -- Flag artıq kataloqdan silinibsə (`ON DELETE CASCADE`) `v_level` NULL
+    -- olur — `COALESCE(..., 0)` bunu "adi flag" kimi oxuyur, bloklamır.
+    IF COALESCE(v_level, 0) <> 1 THEN
+        RETURN OLD;
+    END IF;
+
+    SELECT p.code INTO v_actor_code
+      FROM employees e
+      JOIN positions p ON p.id = e.position_id
+     WHERE e.id = NULLIF(current_setting('app.user_id', TRUE), '')::uuid;
+
+    -- Sessiya kontekstsiz (seed/planlayıcı/DOWN-rollback) — `enforce_grantor_
+    -- owns_flag()`/`enforce_hierarchy_guard()` ilə EYNİ qərar: bloklamır.
+    IF v_actor_code IS NULL THEN
+        RETURN OLD;
+    END IF;
+
+    IF v_actor_code <> 'ROOT' THEN
+        RAISE EXCEPTION
+            'HARDLOCK (səviyyə 1): ROOT_ONLY flag-in "%" geri alınması '
+            'yalnız Root tərəfindən edilə bilər (bölmə 3)', OLD.flag_code;
+    END IF;
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION enforce_root_only_flag_revoke() IS
+    'DB-6 (migrations/076): `enforce_permission_hardlock()`-un DELETE tərəfi. '
+    'GRANT (INSERT/UPDATE) YOLUNU səviyyə-1 flag üçün artıq `enforce_permission_'
+    'hardlock()` `positions.code = ''ROOT''` sətrinə MƏHDUDLAŞDIRIR — bu funksiya '
+    'REVOKE (DELETE) yolunu bağlayır: `_sync_flags()`/`_sync_overrides()` geri '
+    'alınan flag-ləri DELETE ilə silir, mövcud İKİ trigger isə (`enforce_'
+    'permission_hardlock`, `enforce_grantor_owns_flag`) BEFORE INSERT OR UPDATE '
+    'olduğu üçün DELETE-i görmür.';
+
+DROP TRIGGER IF EXISTS trg_root_only_revoke_position ON position_permissions;
+CREATE TRIGGER trg_root_only_revoke_position
+    BEFORE DELETE ON position_permissions
+    FOR EACH ROW EXECUTE FUNCTION enforce_root_only_flag_revoke();
+
+DROP TRIGGER IF EXISTS trg_root_only_revoke_override ON user_permission_overrides;
+CREATE TRIGGER trg_root_only_revoke_override
+    BEFORE DELETE ON user_permission_overrides
+    FOR EACH ROW EXECUTE FUNCTION enforce_root_only_flag_revoke();
+
+
 -- STRICT HIERARCHY GUARD: yalnız CİDDİ ŞƏKİLDƏ aşağı prioritetli istifadəçiyə
 CREATE OR REPLACE FUNCTION enforce_hierarchy_guard() RETURNS TRIGGER AS $$
 DECLARE

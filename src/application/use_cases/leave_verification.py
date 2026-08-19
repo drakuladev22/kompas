@@ -228,7 +228,14 @@ class LeaveVerificationUseCase:
         leave_type_id: LeaveTypeId | None,
         employee_is_in_store: bool,
     ) -> LeaveRequest:
-        """`[İcazə İstəyirəm]` — NTP-yə qarşı yoxlanılmış möhür yazılır."""
+        """`[İcazə İstəyirəm]` — NTP-yə qarşı yoxlanılmış möhür yazılır.
+
+        `LeaveRequestedEvent` yalnız BÜTÜN yazılar (sorğu, fasilə sayğacı,
+        audit) uğurla bitdikdən SONRA yayılır — istisna aşağı hər hansı
+        nöqtədə atılsa, çağıran tərəf (GUI sessiyası) tranzaksiyanı geri
+        qaytarır və hadisə heç vaxt yaranmamış kimi qalır (`verify_return`-un
+        "commit-dən sonra yayım" naxışı, modul başlığı).
+        """
         self._require_module(tenant_id, FeatureModule.CAMERA_VERIFICATION)
         requested_time, ntp_ok = self._verified_now(tenant_id, operation="STEP_1")
 
@@ -319,6 +326,7 @@ class LeaveVerificationUseCase:
                 ),
                 is_critical=False,
             )
+        self._publish_events_sync(request.collect_events())
         return request
 
     # ------------------------------ STEP 2 ---------------------------------- #
@@ -334,6 +342,9 @@ class LeaveVerificationUseCase:
         ilə gecikmə/cərimə hesabına birbaşa daxil olur). `verify_return`-un
         (STEP 3) kilidli oxusu ilə EYNİ əsaslandırma — bax `_require_request_
         locked`.
+
+        `LeaveReturnClaimedEvent` yazı+audit uğurla bitdikdən SONRA yayılır —
+        istisna halında heç vaxt yayılmır (`request_leave` ilə eyni naxış).
         """
         claimed_at, _ = self._verified_now(tenant_id, operation="STEP_2")
         request = self._require_open_request_locked(employee_id)
@@ -348,6 +359,7 @@ class LeaveVerificationUseCase:
             entity_id=request.id,
             after_state={"claimed_at": claimed_at.isoformat()},
         )
+        self._publish_events_sync(request.collect_events())
         return request
 
     # ------------------------------ STEP 3 ---------------------------------- #
@@ -570,7 +582,12 @@ class LeaveVerificationUseCase:
         overridden_time: datetime,
         reason: str,
     ) -> LeaveRequest:
-        """`[Vaxtı Əllə Təyin Et]` — 30+ dəqiqə dual-control-a düşür."""
+        """`[Vaxtı Əllə Təyin Et]` — 30+ dəqiqə dual-control-a düşür.
+
+        `ManualTimeOverrideEvent` yazı+audit+bildiriş uğurla bitdikdən SONRA
+        yayılır — istisna halında heç vaxt yayılmır (`request_leave` ilə eyni
+        naxış).
+        """
         # Yazma axını — kilidli oxu (təsdiqlə override eyni sətrə yazır).
         request = self._require_request_locked(request_id)
         self._require_camera_permission(
@@ -624,6 +641,7 @@ class LeaveVerificationUseCase:
                 ),
                 is_critical=True,
             )
+        self._publish_events_sync(request.collect_events())
         return request
 
     def approve_dual_control(
@@ -811,7 +829,13 @@ class LeaveVerificationUseCase:
     # ----------------------------- TIMEOUT ---------------------------------- #
 
     def escalate_timeouts(self, tenant_id: TenantId) -> int:
-        """45 dəqiqədən çox gözləyən sorğuları eskalasiya edir (bölmə 4)."""
+        """45 dəqiqədən çox gözləyən sorğuları eskalasiya edir (bölmə 4).
+
+        Hər sorğunun `VerificationTimeoutEscalatedEvent`-i o sorğunun YAZI+
+        bildiriş addımı uğurla bitdikdən SONRA yayılır — istisna həmin
+        dövrədə atılsa (növbəti sorğuya keçmədən) heç vaxt yayılmır
+        (`request_leave` ilə eyni naxış).
+        """
         now = self._clock.now()
         timeout = self._limit_int(tenant_id, SystemLimitKey.VERIFICATION_TIMEOUT_MINUTES)
         escalated = 0
@@ -834,6 +858,7 @@ class LeaveVerificationUseCase:
                 ),
                 is_critical=True,
             )
+            self._publish_events_sync(request.collect_events())
 
         if escalated:
             _log.warning(
@@ -892,6 +917,29 @@ class LeaveVerificationUseCase:
         for event in events:
             try:
                 await self._event_bus.publish(event)
+            except Exception:
+                _log.exception(
+                    "LEAVE_VERIFICATION_EVENT_PUBLISH_FAILED",
+                    extra={"event": event.event_name},
+                )
+
+    def _publish_events_sync(self, events: tuple[DomainEvent, ...]) -> None:
+        """`_publish_events`-in SİNXRON metodlar üçün EKVİVALENTİ.
+
+        `request_leave`/`claim_return`/`apply_override`/`escalate_timeouts`
+        `async def` DEYİL (GUI kontrolleri onları sinxron çağırır — bax
+        `CLAUDE.md`: "Funksiya imzasını dəyişsən ui-yə DƏRHAL xəbər ver"),
+        ona görə `EventBus.publish()` (`await` tələb edir) YERİNƏ
+        `EventBus.publish_sync()` işlədilir (`event_bus.py`-nin öz Qt-slot
+        istifadəsi üçün nəzərdə tutduğu yol). Uğursuzluq YENƏ istisna atmır,
+        `verify_return`-dakı EYNİ əsaslandırma: bu nöqtədə DB yazısı ARTIQ
+        edilib, hadisə yalnız telemetriya kanalıdır.
+        """
+        if self._event_bus is None:
+            return
+        for event in events:
+            try:
+                self._event_bus.publish_sync(event)
             except Exception:
                 _log.exception(
                     "LEAVE_VERIFICATION_EVENT_PUBLISH_FAILED",

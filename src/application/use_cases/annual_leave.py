@@ -501,6 +501,17 @@ class AnnualLeaveUseCase:
             # yolda rollback onsuz da işləyir; bu blok tranzaksiyasız
             # çağırışlarda balansın sükutla azalmış qalmamasını təmin edir.
             self._release_quietly(employee_id=request.employee_id, year=year, days=deducted)
+            # `request.approve()` `AnnualLeaveDecidedEvent`-i ARTIQ toplayıb —
+            # yazı UĞURSUZ olduğu üçün bu hadisə HEÇ VAXT baş verməmiş kimi
+            # atılmalıdır (`AggregateRoot.discard_events()`, CLAUDE.md §3:
+            # "Rollback halında hadisə heç vaxt yayılmır"). Bu use case-ə
+            # Event Bus qoşulmasa da (`_drain()` naxışı BURADA YOXDUR —
+            # bax dövrə-4 auditinin nəticəsi: o cür çağırışlar nəticəsiz
+            # idi), `discard_events()` fərqlidir: o, aqreqatın ÖZ
+            # invariantını qoruyur — çağıran gələcəkdə bu obyekti YENİDƏN
+            # istifadə etsə (məs. eyni instansı başqa yazıya versə),
+            # köhnə/etibarsız hadisə YENİ yazıyla qarışıb yayılmamalıdır.
+            request.discard_events()
             raise
 
         # Planlanmış növbələr AUDİTDƏN ƏVVƏL oxunur ki, "təsdiq neçə iş gününü

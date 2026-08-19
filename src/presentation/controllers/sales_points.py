@@ -25,6 +25,7 @@ etiraz düyməsi SƏTİRDƏDİR.
 
 from __future__ import annotations
 
+from time import monotonic
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -46,6 +47,9 @@ class SalesPointsController:
     def __init__(self, context: ApplicationContext, actor: Employee) -> None:
         self._context = context
         self._actor = actor
+        #: `reward_id` → (son işlədilmiş `redemption_id`, `monotonic()` anı).
+        #: Bax `_redemption_id_for` — ikiqat klik qoruması.
+        self._recent: dict[str, tuple[RedemptionId, float]] = {}
 
     def attach(self, screen: SalesPointsScreen) -> None:
         screen.reward_requested.connect(lambda key: self._on_reward(screen, key))
@@ -61,6 +65,8 @@ class SalesPointsController:
         mükafat təsdiqlənir). Qərarı use case verir.
         """
 
+        redemption_id = self._redemption_id_for(reward_id)
+
         def run(session: Session) -> None:
             session.sales_points.request_reward(
                 tenant_id=session.tenant_id,
@@ -68,10 +74,46 @@ class SalesPointsController:
                 reward_id=RewardId(UUID(reward_id)),
                 # `redemption_id` ÇAĞIRAN TƏRƏFDƏN gəlir: use case-in özü
                 # yaratsaydı, təkrar göndərmə (ikiqat klik) İKİ sətir yazardı.
-                redemption_id=RedemptionId(uuid4()),
+                redemption_id=redemption_id,
             )
 
         self._write(screen, run, failure="Mükafat sorğusu göndərilmədi")
+
+    def _redemption_id_for(self, reward_id: str) -> RedemptionId:
+        """İkiqat klikdə EYNİ `redemption_id` — yəni iki sətir yox, bir sətir.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ SADƏCƏ `uuid4()` KİFAYƏT ETMİRDİ
+        ──────────────────────────────────────────────────────────────────────
+        Yuxarıdakı şərh «çağıran tərəf id yaradır, ona görə ikiqat klik iki
+        sətir yazmır» deyirdi. Halbuki `uuid4()` məhz KLİK içində çağırılırdı:
+        hər klik YENİ id verirdi, yəni qoruma ÖLÜ idi və iki klik iki gözləyən
+        mükafat sorğusu yaradırdı. Hər sorğu isə balansı bloklayır və menecerdən
+        ayrıca qərar tələb edir — işçi bir mükafat istəyib, menecer iki görür.
+
+        Həqiqi zəmanət bazadadır: `save_redemption` `ON CONFLICT (id) DO UPDATE`
+        edir, yəni EYNİ id ilə ikinci yazı yeni sətir yaratmır. Burada yalnız
+        həmin id-nin qısa müddət ərzində SABİT qalması təmin olunur.
+
+        Pəncərə `fine_management.DUPLICATE_SUBMISSION_WINDOW_SECONDS` ilə eyni
+        məntiqdədir (CLAUDE.md §5 «Root parametri DEYİL» siyahısı): bu, insan
+        reaksiya pəncərəsidir, siyasət deyil. `monotonic()` işlədilir, `now()`
+        yox — ölçülən müddətdir, vaxt möhürü deyil; Windows saatı dəyişsə də
+        sürüşmür.
+        """
+        from src.application.use_cases.fine_management import (  # noqa: PLC0415
+            DUPLICATE_SUBMISSION_WINDOW_SECONDS,
+        )
+
+        now = monotonic()
+        previous = self._recent.get(reward_id)
+        if previous is not None and now - previous[1] < DUPLICATE_SUBMISSION_WINDOW_SECONDS:
+            self._recent[reward_id] = (previous[0], now)
+            return previous[0]
+
+        fresh = RedemptionId(uuid4())
+        self._recent[reward_id] = (fresh, now)
+        return fresh
 
     # ------------------------------- etiraz ---------------------------------- #
 
@@ -115,6 +157,8 @@ class SalesPointsController:
             screen.show_error(
                 title=failure,
                 message=getattr(exc, "user_message", "Yenidən cəhd edin."),
+                # UI-R4-01: `on_retry` olmadan «Yenidən Cəhd Et» ÇƏKİLMİR.
+                on_retry=lambda: self.refresh(screen),
             )
             return
         self.refresh(screen)
@@ -134,6 +178,7 @@ class SalesPointsController:
             screen.show_error(
                 title="Xal məlumatı oxuna bilmədi",
                 message=getattr(exc, "user_message", "Yenidən cəhd edin."),
+                on_retry=lambda: self.refresh(screen),
             )
 
 

@@ -212,17 +212,72 @@ class DailyAttendanceSheetUseCase:
 
     # ------------------------------- təsdiq ---------------------------------- #
 
+    def save_draft_note(
+        self,
+        *,
+        tenant_id: TenantId,
+        actor: Employee,
+        store_id: StoreId,
+        note: str,
+        sheet_date: date | None = None,
+    ) -> SheetView:
+        """«Qaralama Saxla» — tabelə aid ümumi qeyd, TƏSDİQ ETMƏDƏN.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ AYRICA METOD
+        ──────────────────────────────────────────────────────────────────────
+        `DailyRosterScreen`-də İKİ düymə var: «Tabeli Təsdiqlə» və «Qaralama
+        Saxla». İkincisinin arxasında HEÇ NƏ yox idi — domendəki
+        `set_manager_note()` YALNIZ `confirm()` içindən çağırıla bilirdi, yəni
+        menecer qeydini saxlamaq üçün tabeli TƏSDİQLƏMƏK məcburiyyətində
+        qalırdı. Təsdiq isə geri qaytarıla bilmir (`_require_open`), ona görə
+        «hələ yoxlayıram, qeydimi itirməyim» halının yolu yox idi.
+
+        Səlahiyyət `confirm`-dəki İLƏ EYNİ deyil VƏ QƏSDƏN elədir: qeyd yazmaq
+        tabeli imzalamaq deyil — mağazaya girişi olan hər kəs kontekst qeydi
+        qoya bilər (`annotate_line` da eyni qapıdadır). İmza isə
+        `FILL_ATTENDANCE_FLAG` tələb edir.
+        """
+        day = sheet_date or self._clock.now().date()
+        self._require_store_access(actor, store_id)
+
+        sheet = self._require_sheet(store_id, day)
+        sheet.set_manager_note(note)
+        self._sheets.save(sheet)
+
+        self._audit.record(
+            tenant_id=tenant_id,
+            actor_id=actor.id,
+            action="ATTENDANCE_SHEET_NOTE_SAVED",
+            entity_type="daily_attendance_sheets",
+            entity_id=sheet.id,
+            after_state={"sheet_date": day.isoformat()},
+            reason=sheet.manager_note,
+        )
+        return SheetView(
+            sheet=sheet,
+            mismatches=sheet.mismatched_lines,
+            is_editable=not sheet.is_confirmed,
+        )
+
     def confirm(
         self,
         *,
         tenant_id: TenantId,
         actor: Employee,
         store_id: StoreId,
-        sheet_date: date,
+        sheet_date: date | None = None,
         manager_note: str = "",
     ) -> SheetView:
-        """Store Manager tabeli təsdiqləyir; uyğunsuzluq varsa HR-a bildiriş."""
+        """Store Manager tabeli təsdiqləyir; uyğunsuzluq varsa HR-a bildiriş.
+
+        `sheet_date` VERİLMƏYƏ BİLƏR — `open_sheet` ilə eyni defolt (`Clock`-un
+        bugünü). Ekran həmişə bugünkü tabeli göstərir və tarixi ekran qatında
+        yenidən hesablasaydıq, gecə yarısı keçidində GUI-nin tarixi ilə
+        use case-in tarixi ayrıla bilərdi.
+        """
         now = self._clock.now()
+        sheet_date = sheet_date or now.date()
         self._require_store_access(actor, store_id)
         if not actor.has_permission(FILL_ATTENDANCE_FLAG, now=now):
             raise SheetPermissionError(

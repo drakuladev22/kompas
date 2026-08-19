@@ -424,6 +424,10 @@ class _ProfileScreen:
             "password_note": password_note,
         }
 
+    def set_identity(self, full_name: str) -> None:
+        """«Ləğv Et» sahələri SON OXUNMUŞ ada qaytarsın deyə lazımdır."""
+        self.identity = full_name
+
     def set_role_info(self, rows: list[tuple[str, str]]) -> None:
         self.role_rows = rows
 

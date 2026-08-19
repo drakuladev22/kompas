@@ -165,6 +165,20 @@ HYBRID_BOUND: Final[dict[str, str]] = {
     "shift_planning": "_attach_open_shift_market",
     "dashboard": "_attach_dashboard_benchmark",
     "reports": "_attach_report_export",
+    # Aşağıdakı ÜÇÜ dövrə-4 auditində əlavə olundu. Hər üçü `_binders()`-də
+    # ARTIQ VAR idi (yəni ekran DOLURDU), lakin `_attach_*` bağlaması YOX idi
+    # — düymələr siqnal yayırdı, dinləyən yox idi:
+    #
+    #   * `fine_appeals` — «Qəbul Et»/«Rədd Et»: işçinin REAL PUL kəsintisinə
+    #     qarşı etirazı heç vaxt qərar almırdı və 72 saat sonra «HR cavab
+    #     vermədi» statusuna düşürdü;
+    #   * `daily_roster` — «Tabeli Təsdiqlə»: imzasız tabel norma üstü saatları
+    #     `overtime_log`-a yazdırmır;
+    #   * `shift_swaps` — «Təsdiqlə»/«Rədd Et»: sorğu `PENDING` qalır, matris
+    #     köhnə qalır və işçi razılaşdığı gün üçün planlaşdırılmış görünür.
+    "fine_appeals": "_attach_fine_appeals",
+    "daily_roster": "_attach_daily_roster",
+    "shift_swaps": "_attach_shift_swaps",
 }
 
 #: Kontrolleri olmayan, lakin örtüyə birbaşa bağlanan ekran: Ayarlar temanı

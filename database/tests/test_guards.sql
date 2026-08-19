@@ -1279,9 +1279,93 @@ BEGIN
     v_passed := v_passed + 1;
     RAISE NOTICE 'TEST 39 ✓ eyni machine_key, fərqli tenant_id → tam təcrid olunmuş sətirlər';
 
+    -- =====================================================================
+    -- TEST 40-41: DB-6 (migrations/076) — `ROOT_ONLY` FLAG-İN DELETE İLƏ
+    --   GERİ ALINMASI YALNIZ ROOT TƏRƏFİNDƏN EDİLƏ BİLƏR
+    -- =====================================================================
+    -- `seed_tenant_defaults()` ARTIQ `v_pos_root`-a `can_manage_permissions`-i
+    -- (hardlock=1) `granted_by = NULL` ilə vermişdi (§23 seed-in kopyası) —
+    -- YENİ sətir INSERT etməyə EHTİYAC YOXDUR, mövcud sətri işlədirik.
+
+    -- TEST 40: `position_permissions` — CEO (Root DEYİL) silə BİLMƏZ.
+    PERFORM set_config('app.user_id', v_ceo::TEXT, TRUE);
+    v_failed := FALSE;
+    BEGIN
+        DELETE FROM position_permissions
+         WHERE position_id = v_pos_root AND flag_code = 'can_manage_permissions';
+    EXCEPTION WHEN OTHERS THEN
+        v_failed := TRUE;
+    END;
+    IF NOT v_failed THEN
+        RAISE EXCEPTION 'TEST 40a UĞURSUZ: CEO ROOT-un can_manage_permissions sətrini SİLDİ!';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM position_permissions
+         WHERE position_id = v_pos_root AND flag_code = 'can_manage_permissions'
+    ) THEN
+        RAISE EXCEPTION 'TEST 40a UĞURSUZ: istisnaya baxmayaraq sətir artıq yoxdur!';
+    END IF;
+
+    -- Root ÖZÜ silə bilməlidir (blok "heç kim silə bilməz" demir, "yalnız
+    -- Root silə bilər" deyir).
+    PERFORM set_config('app.user_id', v_root::TEXT, TRUE);
+    BEGIN
+        DELETE FROM position_permissions
+         WHERE position_id = v_pos_root AND flag_code = 'can_manage_permissions';
+    EXCEPTION WHEN OTHERS THEN
+        RAISE EXCEPTION 'TEST 40b UĞURSUZ: Root ÖZÜ belə sətri silə bilmədi (%)', SQLERRM;
+    END;
+    IF EXISTS (
+        SELECT 1 FROM position_permissions
+         WHERE position_id = v_pos_root AND flag_code = 'can_manage_permissions'
+    ) THEN
+        RAISE EXCEPTION 'TEST 40b UĞURSUZ: Root sildi, amma sətir HƏLƏ mövcuddur!';
+    END IF;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 40 ✓ position_permissions: ROOT_ONLY flag-in DELETE-i yalnız Root-a icazəlidir';
+
+    -- TEST 41: `user_permission_overrides` — EYNİ qapı fərdi override yolunda.
+    INSERT INTO user_permission_overrides (user_id, flag_code, effect, granted_by)
+    VALUES (v_root, 'can_manage_system_limits', 'GRANT', v_root);
+
+    PERFORM set_config('app.user_id', v_ceo::TEXT, TRUE);
+    v_failed := FALSE;
+    BEGIN
+        DELETE FROM user_permission_overrides
+         WHERE user_id = v_root AND flag_code = 'can_manage_system_limits';
+    EXCEPTION WHEN OTHERS THEN
+        v_failed := TRUE;
+    END;
+    IF NOT v_failed THEN
+        RAISE EXCEPTION 'TEST 41a UĞURSUZ: CEO Root-un fərdi ROOT_ONLY override-ını SİLDİ!';
+    END IF;
+
+    PERFORM set_config('app.user_id', v_root::TEXT, TRUE);
+    BEGIN
+        DELETE FROM user_permission_overrides
+         WHERE user_id = v_root AND flag_code = 'can_manage_system_limits';
+    EXCEPTION WHEN OTHERS THEN
+        RAISE EXCEPTION 'TEST 41b UĞURSUZ: Root ÖZÜ belə override-ı silə bilmədi (%)', SQLERRM;
+    END;
+    IF EXISTS (
+        SELECT 1 FROM user_permission_overrides
+         WHERE user_id = v_root AND flag_code = 'can_manage_system_limits'
+    ) THEN
+        RAISE EXCEPTION 'TEST 41b UĞURSUZ: Root sildi, amma sətir HƏLƏ mövcuddur!';
+    END IF;
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 41 ✓ user_permission_overrides: EYNİ qapı fərdi override yolunda da işləyir';
+
+    -- Sessiya kontekstini TƏMİZLƏYİRİK: aşağıdakı `DELETE FROM license_tenants`
+    -- `positions`/`position_permissions`-ı KASKAD silir — `app.user_id` CEO-da
+    -- qalsaydı, ROOT-un digər (hələ silinməmiş) ROOT_ONLY sətirləri üzərində
+    -- BU TRIGGER kaskadı bloklayardı. Boş dəyər → "kontekstsiz" → buraxılır
+    -- (bax miqrasiyanın "aktor tapılmadıqda" şərhi).
+    PERFORM set_config('app.user_id', '', TRUE);
+
     RAISE NOTICE '';
     RAISE NOTICE '===========================================';
-    RAISE NOTICE 'BÜTÜN GUARD TESTLƏRİ UĞURLU: %/39', v_passed;
+    RAISE NOTICE 'BÜTÜN GUARD TESTLƏRİ UĞURLU: %/41', v_passed;
     RAISE NOTICE '===========================================';
 
     -- Test məlumatlarının təmizlənməsi

@@ -2093,6 +2093,18 @@ class KompasApplication:
             # bağlanır; hər yazıdan sonra balans+tarixçə+kataloq yenidən
             # oxunur (`screen_data._sales_points` başlığındakı vəd).
             (group_f.SalesPointsScreen, self._attach_sales_points),
+            # Cərimə etirazları: «Qəbul Et»/«Rədd Et» use case-ə bağlanır.
+            # Ekran BURADA ÜMUMİYYƏTLƏ yox idi — oxu yolu düzəldilmiş, yazı
+            # yolu isə yarımçıq qalmışdı (bax `controllers/fine_appeals.py`).
+            (group_f.FineAppealInboxScreen, self._attach_fine_appeals),
+            # Gündəlik tabel: «Tabeli Təsdiqlə» və «Qaralama Saxla». Bu ekran
+            # da cədvəldə yox idi — imzasız tabel isə norma üstü saatları
+            # hesablatmır (bax `controllers/daily_roster.py`).
+            (group_c.DailyRosterScreen, self._attach_daily_roster),
+            # Növbə dəyişmə: «Təsdiqlə»/«Rədd Et». Siqnal adları `TasksScreen`
+            # ilə eyni olduğu üçün siqnal qapısı da bunu «bağlanıb» sanırdı
+            # (bax `controllers/shift_swaps.py` başlığı).
+            (group_c.ShiftSwapScreen, self._attach_shift_swaps),
             (group_d.ErpServersScreen, self._attach_erp_servers),
             # Audit jurnalı YALNIZ OXUYUR, lakin hər süzgəc/səhifə dəyişikliyində
             # YENİDƏN oxuyur — `screen_data`-nın tək çağırışı bunu ödəmir.
@@ -2124,6 +2136,66 @@ class KompasApplication:
         if not isinstance(screen, SalesPointsScreen):  # pragma: no cover - tip qoruyucusu
             return
         SalesPointsController(self._context, self._current_employee).attach(screen)
+
+    def _attach_fine_appeals(self, screen: QWidget) -> None:
+        """Cərimə etirazının qərarı — `FineAppealUseCase`-ə bağlayır.
+
+        Düymələr ekranda VARDI, siqnal DÜZGÜN yük daşıyırdı (`appeal_id` +
+        səbəb) və use case tam işlək idi — lakin bu ekran `_dispatch_attach`
+        cədvəlində HEÇ VAXT olmamışdı, yəni siqnalı dinləyən yox idi. HR_Admin
+        qərarı yazırdı, «Qəbul Et» basırdı, heç nə olmurdu və etiraz 72 saat
+        sonra «HR cavab vermədi» statusuna düşürdü — işçinin real pul
+        kəsintisi isə qüvvədə qalırdı.
+        """
+        from src.presentation.controllers.fine_appeals import (  # noqa: PLC0415
+            FineAppealInboxController,
+        )
+        from src.presentation.screens.group_f import FineAppealInboxScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, FineAppealInboxScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        FineAppealInboxController(self._context, self._current_employee).attach(screen)
+
+    def _attach_daily_roster(self, screen: QWidget) -> None:
+        """Gündəlik tabelin imzası — `DailyAttendanceSheetUseCase`-ə bağlayır.
+
+        Hər iki düymə ekranda VARDI və siqnal yayırdı, lakin dinləyən yox idi:
+        mağaza meneceri «Tabeli Təsdiqlə» basırdı, heç nə olmurdu və tabel
+        imzasız qalırdı. Nəticə iki yerdə görünür — HR uyğunsuzluq
+        xəbərdarlığını almır, norma üstü saatlar isə `overtime_log`-a düşmür,
+        çünki aşım YALNIZ imzalanmış tabeldən hesablanır.
+        """
+        from src.presentation.controllers.daily_roster import (  # noqa: PLC0415
+            DailyRosterController,
+        )
+        from src.presentation.screens.group_c import DailyRosterScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, DailyRosterScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        DailyRosterController(self._context, self._current_employee).attach(screen)
+
+    def _attach_shift_swaps(self, screen: QWidget) -> None:
+        """Növbə dəyişmə qərarı — `ShiftSwapUseCase`-ə bağlayır.
+
+        Düymələr ekranda VARDI, use case tam işlək idi, lakin ekran
+        `_dispatch_attach` cədvəlində yox idi. Sorğu `PENDING` qalırdı: işçi
+        razılaşdığını sanır, matris isə köhnə qalır və işçi həmin gün
+        planlaşdırılmış görünür.
+        """
+        from src.presentation.controllers.shift_swaps import (  # noqa: PLC0415
+            ShiftSwapController,
+        )
+        from src.presentation.screens.group_c import ShiftSwapScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, ShiftSwapScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        ShiftSwapController(self._context, self._current_employee).attach(screen)
 
     def _attach_task_review(self, screen: QWidget) -> None:
         """Tapşırıq təsdiqi/rəddi — `TaskWorkflowUseCase`-ə bağlayır.
@@ -2642,6 +2714,7 @@ class KompasApplication:
         from src.presentation.controllers.pos_threshold import (  # noqa: PLC0415
             UsersPOSThresholdController,
         )
+        from src.presentation.controllers.user_admin import UserAdminController  # noqa: PLC0415
         from src.presentation.screens.group_c import UsersScreen  # noqa: PLC0415
 
         if self._preview or self._context is None or self._current_employee is None:
@@ -2650,6 +2723,12 @@ class KompasApplication:
             return
         UsersPOSThresholdController(self._context, self._current_employee).attach(screen)
         UsersEmployeeDocumentController(self._context, self._current_employee).attach(screen)
+        # «Yeni İstifadəçi» düyməsi (`create_requested`) əvvəl HEÇ NƏYƏ bağlı
+        # deyildi: GUI-dan tək-tək işçi yaratmağın yolu yox idi, yalnız CSV
+        # toplu idxalı işləyirdi. Üçüncü kontroller AYRIDIR, çünki o, başqa
+        # siqnala bağlanır (`create_requested`, `action_requested` deyil) və
+        # başqa use case işlədir (`UserManagementUseCase`).
+        UserAdminController(self._context, self._current_employee).attach(screen)
 
     def _attach_open_shift_market(self, screen: QWidget) -> None:
         """Növbə Planlama ekranının yazı/kataloq kontrollerlərini bağlayır.
@@ -3448,6 +3527,11 @@ class KompasApplication:
         # görməlidir ("Nahar fasiləniz: 60 dəqiqə · Bu gün: 0/1").
         home.set_break_options(controller.break_options(employee))
         home.logout_requested.connect(lambda: kiosk.set_content(pin_pad))
+        # «Şəkli Dəyiş» — düymə VARDI, heç yerə bağlı deyildi: işçi basırdı və
+        # kiosk susurdu. Yükləmə qatı hələ yoxdur (bax `controllers/profile.py
+        # ::_on_photo` — eyni səbəb, eyni mətn), lakin SÜKUT ilə İZAH arasında
+        # fərq var: birincisi nasazlıq kimi görünür, ikincisi vəziyyəti deyir.
+        home.photo_change_requested.connect(lambda: _kiosk_photo_notice(home))
 
         # #16 — "Açıq Növbələr" kartının ÖZ kontrolleri var (CLAUDE.md §6):
         # kart həm oxuyur, həm yazır və hər tutmadan sonra siyahı yenidən
@@ -3656,7 +3740,23 @@ class KompasApplication:
                 pin_pad.show_message(kiosk_unconfigured_message())
                 return
 
-            outcome = self._kiosk_controller.authenticate_by_face()
+            # UX-1 — ÜZ DOĞRULAMASI SANİYƏLƏR ÇƏKİR, EKRAN DONMUŞ GÖRÜNMƏMƏLİDİR.
+            #
+            # Kamera çəkilişi + 1:N tanıma + 1:1 doğrulama bloklayan
+            # əməliyyatdır. Əvvəl heç bir göstərici yox idi: işçi düyməni
+            # basırdı, kiosk cavabsız qalırdı və o, düyməni TƏKRAR basırdı —
+            # ikinci çəkiliş növbəyə düşürdü. Panel girişində eyni yol ARTIQ
+            # düzgün qurulmuşdu (`_on_face_login_requested`), kiosk yolu
+            # unudulmuşdu.
+            pin_pad.set_busy(True)
+            flush_ui()
+            try:
+                outcome = self._kiosk_controller.authenticate_by_face()
+            finally:
+                # Düymələr HƏR halda açılır — uğursuzluqdan sonra işçi PIN
+                # yoluna keçə bilməlidir.
+                pin_pad.set_busy(False)
+
             if outcome.failed or outcome.employee is None:
                 pin_pad.show_message(outcome.message)
                 return
@@ -3691,6 +3791,27 @@ class KompasApplication:
         kiosk.start()
         self._kiosk = kiosk
         return kiosk
+
+
+def _kiosk_photo_notice(parent: QWidget) -> None:
+    """«Şəkli Dəyiş» — yükləmə qatı hazır olmadığını AÇIQ deyir.
+
+    Mətn `controllers/profile.py::_on_photo` ilə eynidir və bu, qəsdəndir:
+    işçi eyni sualın cavabını kioskda və panel profilində FƏRQLİ eşitsəydi,
+    ikisindən birinin nasaz olduğunu düşünərdi. Səbəb də eynidir —
+    `employees.profile_photo_url` üçün yükləmə qatı yoxdur, mövcud olan
+    (Google Drive, miqrasiya 002) YALNIZ cərimə sübutuna bağlıdır.
+    """
+    from PySide6.QtWidgets import QMessageBox  # noqa: PLC0415
+
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Information)
+    box.setWindowTitle("Profil şəkli")
+    box.setText(
+        "Profil şəkli üçün yükləmə hələ konfiqurasiya edilməyib. "
+        "Şəkli administratorunuz təyin edə bilər."
+    )
+    box.exec()
 
 
 def _load_context_behind_splash(

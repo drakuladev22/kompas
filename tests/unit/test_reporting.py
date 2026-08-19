@@ -420,3 +420,80 @@ def test_output_directory_is_created_when_missing(tmp_path: Path) -> None:
     writer = ExcelReportWriter(output_dir=target)
     path = writer.write_attendance([], period=ReportPeriod(2026, 8))
     assert path.exists()
+
+
+# --------------------------------------------------------------------------- #
+# `write_table()` — ÜMUMİ cədvəl (audit jurnalının «Excel-ə İxrac Et»-i)
+# --------------------------------------------------------------------------- #
+
+
+def test_write_table_uses_the_header_order_not_dict_order(tmp_path: Path) -> None:
+    writer = ExcelReportWriter(output_dir=tmp_path)
+    path = writer.write_table(
+        [{"actor": "Aygün Əliyeva", "action": "CƏRİMƏ_YARADILDI", "when": "2026-08-19"}],
+        headers=[("when", "Tarix"), ("actor", "Kim"), ("action", "Əməliyyat")],
+        sheet_title="Audit Jurnalı",
+        file_name="Audit_2026-08.xlsx",
+    )
+
+    assert path.name == "Audit_2026-08.xlsx"
+    workbook = load_workbook(path)
+    assert workbook.sheetnames == ["Audit Jurnalı"]
+    sheet = workbook.active
+    assert sheet is not None
+    assert [cell.value for cell in sheet[1]] == ["Tarix", "Kim", "Əməliyyat"]
+    assert [cell.value for cell in sheet[2]] == ["2026-08-19", "Aygün Əliyeva", "CƏRİMƏ_YARADILDI"]
+
+
+def test_write_table_leaves_missing_keys_blank_instead_of_raising(tmp_path: Path) -> None:
+    """Audit sətirləri müxtəlif modullardan gəlir — hamısı EYNİ açarları daşımır."""
+    writer = ExcelReportWriter(output_dir=tmp_path)
+    path = writer.write_table(
+        [{"actor": "Aygün Əliyeva"}],
+        headers=[("actor", "Kim"), ("fine_amount", "Cərimə Məbləği")],
+        sheet_title="Qarışıq",
+        file_name="Qarisiq.xlsx",
+    )
+
+    sheet = load_workbook(path).active
+    assert sheet is not None
+    assert sheet["A2"].value == "Aygün Əliyeva"
+    # openpyxl boş sətri yazıb-oxuyanda `None` qaytarır (xana FİZİKİ boşdur) —
+    # `KeyError` ATILMADIĞINI yoxlamaq məqsədimizdir, "" ilə `None` arasındakı
+    # fərq deyil.
+    assert sheet["B2"].value in ("", None)
+
+
+def test_write_table_without_a_note_does_not_lose_the_last_data_row_from_the_filter(
+    tmp_path: Path,
+) -> None:
+    """`note=""` olanda `_add_period_note` çağırılmır — avtofiltr YENƏ DƏ bütün
+    sətirləri əhatə etməlidir (`_finalize`-in `footer_rows` düzəlişi)."""
+    writer = ExcelReportWriter(output_dir=tmp_path)
+    path = writer.write_table(
+        [{"actor": "Birinci"}, {"actor": "İkinci"}],
+        headers=[("actor", "Kim")],
+        sheet_title="Filtr",
+        file_name="Filtr.xlsx",
+    )
+
+    sheet = load_workbook(path).active
+    assert sheet is not None
+    assert sheet.auto_filter.ref == "A1:A3"
+    assert sheet.max_row == 3
+
+
+def test_write_table_with_a_note_appends_it_below_the_data(tmp_path: Path) -> None:
+    writer = ExcelReportWriter(output_dir=tmp_path)
+    path = writer.write_table(
+        [{"actor": "Birinci"}],
+        headers=[("actor", "Kim")],
+        sheet_title="Qeydli",
+        file_name="Qeydli.xlsx",
+        note="Bu, izah sətridir.",
+    )
+
+    sheet = load_workbook(path).active
+    assert sheet is not None
+    assert sheet.cell(row=sheet.max_row, column=1).value == "Bu, izah sətridir."
+    assert sheet.auto_filter.ref == "A1:A2"

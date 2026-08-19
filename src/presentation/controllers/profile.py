@@ -106,6 +106,11 @@ class ProfileController:
                     phone="",
                     password_note=PASSWORD_POLICY_NOTE,
                 )
+                # AD BAZADAN YENİDƏN YAZILIR: «Ləğv Et» sahələri SON OXUNMUŞ
+                # dəyərə qaytarır (`ProfileScreen.revert_edits`). Bu sətir
+                # olmasaydı, ləğv ekranın İLK açılışındakı ada qayıdardı —
+                # yəni saxlanmış yeni ad sükutla köhnəsi ilə əvəzlənərdi.
+                screen.set_identity(f"{employee.first_name} {employee.last_name}".strip())
                 screen.set_role_info(_role_rows(session, employee))
                 screen.set_sessions(_session_rows(session, employee, now=self._context.clock.now()))
                 # #20 Performans Qiymətləndirməsi (kompasos11.md Faza 8) —

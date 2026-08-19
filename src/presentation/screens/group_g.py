@@ -360,6 +360,12 @@ class ProfileScreen(Screen):
         toolbar_layout.setSpacing(12)
         toolbar_layout.addWidget(stretch())
         cancel = secondary_button("Ləğv Et")
+        # DÜYMƏ ƏVVƏL HEÇ NƏYƏ BAĞLI DEYİLDİ: istifadəçi adını səhv yazıb
+        # «Ləğv Et» basırdı, sahələr olduğu kimi qalırdı və o, dəyişikliyin
+        # ATILDIĞINI sanırdı — sonra «Yadda Saxla» basanda SƏHV ad yazılırdı.
+        # Ləğv YALNIZ EKRAN əməliyyatıdır (bazaya heç nə getməmişdi), ona görə
+        # kontroller lazım deyil: sahələr son YÜKLƏNMİŞ dəyərlərə qayıdır.
+        cancel.clicked.connect(self.revert_edits)
         toolbar_layout.addWidget(cancel)
         save = action_button("Yadda Saxla")
         save.clicked.connect(lambda: self.saved.emit(self.collected()))
@@ -459,6 +465,8 @@ class ProfileScreen(Screen):
 
         self._full_name = FormField("Ad, Soyad")
         self._full_name.set_text(full_name)
+        #: «Ləğv Et»-in qaytaracağı dəyərlər — son YÜKLƏNMİŞ vəziyyət.
+        self._loaded = {"full_name": full_name, "phone": ""}
         card.add(self._full_name)
 
         self._username = FormField("İstifadəçi adı")
@@ -689,6 +697,10 @@ class ProfileScreen(Screen):
         self._email.set_text(email)
         self._phone.set_text(phone)
         self._password_note.setText(password_note)
+        # Yükləmə vəziyyəti YENİLƏNİR: «Ləğv Et» ekranın İLK açılışına deyil,
+        # SON oxunmuş məlumata qaytarmalıdır (yazıdan sonra kontroller
+        # `refresh()` çağırır və dəyərlər dəyişir).
+        self._loaded["phone"] = phone
         self.show_content()
 
     def set_role_info(self, rows: list[tuple[str, str]]) -> None:
@@ -722,6 +734,21 @@ class ProfileScreen(Screen):
             row_layout.addWidget(stretch())
             row_layout.addWidget(body_label(value, size=13, wrap=False))
             layout.addWidget(row)
+
+    def set_identity(self, full_name: str) -> None:
+        """Ad sahəsini yeniləyir — `set_account` ilə eyni «yüklənmiş» qeydə düşür."""
+        self._full_name.set_text(full_name)
+        self._loaded["full_name"] = full_name
+
+    def revert_edits(self) -> None:
+        """«Ləğv Et» — sahələr son yüklənmiş dəyərlərə qayıdır.
+
+        Bazaya HEÇ NƏ göndərilmir, çünki hələ göndərilməmişdi: bu ekranda
+        «Yadda Saxla» basılmayıbsa yazı da baş verməyib. Ona görə ləğv
+        kontroller tələb etmir — ekranın öz vəziyyətinin bərpasıdır.
+        """
+        self._full_name.set_text(self._loaded["full_name"])
+        self._phone.set_text(self._loaded["phone"])
 
     def collected(self) -> dict[str, str]:
         """Yalnız DƏYİŞDİRİLƏ BİLƏN sahələr qaytarılır."""

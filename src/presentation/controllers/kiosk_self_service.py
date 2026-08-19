@@ -271,6 +271,11 @@ class KioskSelfServiceController:
                     "sistemə yüklənmir. Onu HR bölməsinə ayrıca təqdim edin."
                 ),
                 primary_text="Başa düşdüm",
+                # Düymə əvvəl HEÇ NƏYƏ bağlı deyildi (UI-R4-01): işçi onu
+                # basırdı və kiosk xəta ekranında qalırdı. Təsdiq edilən mesaj
+                # məhz «etiraz yazıldı» olduğu üçün davamı sənədsiz axının
+                # davamı ilə EYNİDİR — cərimə siyahısına qayıtmaq.
+                on_retry=self._open_fines,
             )
             return
         self._open_fines()

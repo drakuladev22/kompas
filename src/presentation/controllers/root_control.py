@@ -39,6 +39,7 @@ from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
+    from src.presentation.background_task import BackgroundTask, TaskExecutor
     from src.presentation.composition import ApplicationContext, Session
     from src.presentation.screens.group_d import RootControlScreen
 
@@ -160,9 +161,31 @@ MODULE_LABELS: dict[FeatureModule, str] = {
 class RootControlController:
     """ROOT panelinin üç bölməsini canlı məlumata bağlayır."""
 
-    def __init__(self, context: ApplicationContext, actor: Employee) -> None:
+    def __init__(
+        self,
+        context: ApplicationContext,
+        actor: Employee,
+        *,
+        executor: TaskExecutor | None = None,
+    ) -> None:
+        """Kontrolleri qurur.
+
+        Args:
+            context: Canlı obyekt qrafı.
+            actor: Paneli açan istifadəçi.
+            executor: Telegram test sorğusunun icraçısı (bax `_on_telegram_
+                test`). `None` = Qt sap hovuzu (`erp_servers.py` ilə eyni
+                naxış). Testlərdə `InlineExecutor` verilir ki, axın heç bir
+                hadisə dövrü gözləməsi olmadan yoxlansın.
+        """
         self._context = context
         self._actor = actor
+        self._executor = executor
+        #: Sonuncu Telegram test buraxılışı — çağırıcı `BackgroundTask.
+        #: is_running` ilə ikiqat işə salmanı rədd edir (bax `erp_servers.py`
+        #: başlığı: görünən deaktivlik tək başına kifayət etmir, klaviatura
+        #: qısayolu düymənin vəziyyətini yan keçə bilər).
+        self._telegram_task: BackgroundTask | None = None
 
     # ------------------------------- qoşulma --------------------------------- #
 
@@ -523,24 +546,54 @@ class RootControlController:
         )
 
     def _on_telegram_test(self, screen: RootControlScreen) -> None:
-        """`[Test Mesajı Göndər]` — nəticə AÇIQ göstərilir.
+        """`[Test Mesajı Göndər]` — sorğu FON SAPINDA icra olunur (UI-4).
+
+        ──────────────────────────────────────────────────────────────────────
+        ƏVVƏL SİNXRON İDİ — DÖVRƏ 4 AUDİTİNİN TAPINTISI
+        ──────────────────────────────────────────────────────────────────────
+        Bu çağırış birbaşa `httpx` ilə Telegram-a POST göndərir
+        (`infrastructure/notifications/telegram.py`) və taymaut
+        `SystemLimitKey.TELEGRAM_REQUEST_TIMEOUT_SECONDS`-dir (defolt 15 san,
+        Root 120 san-a qədər böyüdə bilər). Sinxron çağırıldıqda bütün ROOT
+        paneli həmin müddət ərzində HEÇ BİR göstərici olmadan donurdu — eyni
+        kateqoriya `erp_servers.py`-dəki ERP bağlantı testi ilə (bax onun
+        başlığı) və düzəliş də EYNİ naxışla (`background_task.run_job`) həll
+        olunur.
 
         «Göndərilmədi» cavabı da nəticədir: səbəbi jurnalda, faktı isə
         ekranda olmalıdır, əks halda Root düyməni basıb heç nə görməzdi.
         """
-        try:
-            with self._context.session(user_id=self._actor.id) as session:
-                delivered = session.telegram_config.send_test_message(
-                    tenant_id=session.tenant_id, actor=self._actor
-                )
-                session.commit()
-        except KompasOSError as error:
-            screen.set_telegram_message(error.user_message, error=True)
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        if self._telegram_task is not None and self._telegram_task.is_running:
             return
-        except Exception:
-            _error_log.exception("TELEGRAM_TEST_FAILED")
-            screen.set_telegram_message("Test mesajı göndərilmədi.", error=True)
-            return
+
+        screen.set_telegram_busy(True)
+        self._telegram_task = run_job(
+            self._send_telegram_test,
+            on_success=lambda delivered: self._on_telegram_test_succeeded(screen, delivered),
+            on_failure=lambda error: self._on_telegram_test_failed(screen, error),
+            owner=screen,
+            name="TELEGRAM_TEST",
+            executor=self._executor,
+        )
+
+    def _send_telegram_test(self) -> bool:
+        """FON SAPINDA icra olunur — ÖZ sessiyasını açır (bax `erp_servers.py`).
+
+        Əsas sapda qurulmuş sessiya ötürülmür: `psycopg` bağlantısı sap-
+        təhlükəsiz deyil.
+        """
+        with self._context.session(user_id=self._actor.id) as session:
+            delivered = session.telegram_config.send_test_message(
+                tenant_id=session.tenant_id, actor=self._actor
+            )
+            session.commit()
+            return delivered
+
+    def _on_telegram_test_succeeded(self, screen: RootControlScreen, delivered: object) -> None:
+        """Nəticə ƏSAS SAPDA qəbul edilir — burada Qt widget-ə TOXUNULA bilər."""
+        screen.set_telegram_busy(False)
         if delivered:
             screen.set_telegram_message("Test mesajı göndərildi — Telegram qrupunu yoxlayın.")
         else:
@@ -548,6 +601,15 @@ class RootControlController:
                 "Test mesajı çatmadı. Token, chat ID və internet bağlantısını yoxlayın.",
                 error=True,
             )
+
+    def _on_telegram_test_failed(self, screen: RootControlScreen, error: BaseException) -> None:
+        """Fon işində qalan istisna — SÜKUTLA UDULMUR (bax `erp_servers.py::_show_test_error`)."""
+        screen.set_telegram_busy(False)
+        if isinstance(error, KompasOSError):
+            screen.set_telegram_message(error.user_message, error=True)
+            return
+        _error_log.error("TELEGRAM_TEST_FAILED", exc_info=error)
+        screen.set_telegram_message("Test mesajı göndərilmədi.", error=True)
 
     def _on_face_scope_changed(
         self, screen: RootControlScreen, store_id: str, *, active: bool

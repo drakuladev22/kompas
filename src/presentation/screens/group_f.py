@@ -22,7 +22,10 @@ from typing import TYPE_CHECKING, Any, Final
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QDateTimeEdit,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -132,6 +135,180 @@ class TaskCard(Card):
             approve.clicked.connect(lambda: self.approved.emit(task_id))
             actions_layout.addWidget(approve)
             self.add(actions)
+
+
+class NewTaskDialog(QDialog):
+    """«Yeni Tapşırıq» forması — `TaskWorkflowUseCase.assign` üçün yük toplayır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AYRICA DİALOQ
+    ──────────────────────────────────────────────────────────────────────────
+    `TasksScreen`-də «Yeni Tapşırıq» düyməsi VARDI və `create_requested`
+    yayırdı, lakin onu dinləyən yox idi — menecer basırdı, heç nə olmurdu.
+    Kanban lövhəsinə forma sahələrini QOŞMAQ olmazdı: lövhə üç sütunla
+    doludur və forma orada daimi yer tutardı; modal isə yalnız lazım olanda
+    açılır (naxış `PosThresholdDialog`).
+
+    ──────────────────────────────────────────────────────────────────────────
+    İCRAÇI SİYAHIDAN SEÇİLİR, ADLA YAZILMIR
+    ──────────────────────────────────────────────────────────────────────────
+    `TaskDraft.assignee_id` identifikator tələb edir. Sərbəst ad sahəsi
+    olsaydı, eyniadlı iki işçidə tapşırıq SƏHV adama düşərdi və səhv yalnız
+    işçi «mənə aid deyil» deyəndə üzə çıxardı. Ona görə `QComboBox` hər
+    maddədə `userData` kimi `employee_id` daşıyır.
+
+    Signals:
+        submitted: `dict` — `title`, `assignee_id`, `deadline`, `description`,
+            `priority`, `requires_evidence`.
+    """
+
+    submitted = Signal(dict)
+
+    #: Prioritet etiketləri — dəyər `TaskPriority`-nin `.value`-su ilə EYNİDİR.
+    #: Ekran domen enum-unu İDXAL ETMİR (qat sırası), lakin dəyərləri onunla
+    #: uyğun saxlayır; uyğunsuzluq `test_new_task_dialog.py`-də tutulur.
+    PRIORITIES: Final[tuple[tuple[str, str], ...]] = (
+        ("LOW", "Aşağı"),
+        ("NORMAL", "Normal"),
+        ("HIGH", "Yüksək"),
+    )
+
+    def __init__(
+        self,
+        theme: ThemeManager,
+        *,
+        employees: list[tuple[str, str]],
+        default_deadline: Any,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._theme = theme
+        self.setWindowTitle("Yeni Tapşırıq")
+        self.setModal(True)
+        self.setMinimumWidth(472)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        card = Card(padding=24, spacing=16)
+        layout.addWidget(card)
+        card.add(title_label("Yeni Tapşırıq", size=19))
+        card.add(
+            muted_label(
+                "Son tarix keçəndə tapşırıq avtomatik eskalasiya olunur — "
+                "real olaraq çatdırıla bilən vaxt seçin.",
+                size=12,
+            )
+        )
+        card.add(Divider())
+
+        self._title = FormField("Başlıq", placeholder="Nə edilməlidir?")
+        card.add(self._title)
+
+        combo = QComboBox()
+        for employee_id, full_name in employees:
+            combo.addItem(full_name, employee_id)
+        self._assignee = FormField("İcraçı", widget=combo)
+        card.add(self._assignee)
+
+        self._deadline = QDateTimeEdit()
+        self._deadline.setCalendarPopup(True)
+        self._deadline.setDisplayFormat("dd.MM.yyyy HH:mm")
+        self._deadline.setDateTime(default_deadline)
+        card.add(FormField("Son tarix", widget=self._deadline))
+
+        priority = QComboBox()
+        for value, label in self.PRIORITIES:
+            priority.addItem(label, value)
+        priority.setCurrentIndex(1)
+        self._priority = FormField("Prioritet", widget=priority)
+        card.add(self._priority)
+
+        description_box = QWidget()
+        description_layout = QVBoxLayout(description_box)
+        description_layout.setContentsMargins(0, 0, 0, 0)
+        description_layout.setSpacing(8)
+        description_layout.addWidget(field_label("Təsvir (istəyə bağlı)"))
+        self._description = QPlainTextEdit()
+        self._description.setPlaceholderText("İcraçı nəyi, harada və hansı nəticə ilə etməlidir?")
+        self._description.setFixedHeight(80)
+        description_layout.addWidget(self._description)
+        card.add(description_box)
+
+        # DEFOLT AÇIQDIR: sübut tələbi tapşırığın «edildi» deyilməsi ilə
+        # HƏQİQƏTƏN edilməsi arasındakı yeganə fərqdir. Söndürmək qərardır,
+        # ona görə açıq gəlir və istifadəçi onu bilərəkdən söndürür.
+        self._requires_evidence = QCheckBox("Sübut şəkli tələb olunur")
+        self._requires_evidence.setChecked(True)
+        card.add(self._requires_evidence)
+
+        buttons = QWidget()
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(12)
+        buttons_layout.addWidget(stretch())
+
+        cancel = secondary_button("İmtina")
+        cancel.clicked.connect(self.reject)
+        buttons_layout.addWidget(cancel)
+
+        save = action_button("Tapşırıq Ver")
+        save.clicked.connect(self._on_submit)
+        buttons_layout.addWidget(save)
+        card.add(buttons)
+
+        save.setDefault(True)
+        save.setAutoDefault(True)
+        cancel.setAutoDefault(False)
+
+        QWidget.setTabOrder(self._title.input_widget(), combo)
+        QWidget.setTabOrder(combo, self._deadline)
+        QWidget.setTabOrder(self._deadline, priority)
+        QWidget.setTabOrder(priority, self._description)
+        QWidget.setTabOrder(self._description, self._requires_evidence)
+        QWidget.setTabOrder(self._requires_evidence, cancel)
+        QWidget.setTabOrder(cancel, save)
+
+        self._title.focus_input()
+
+    def _on_submit(self) -> None:
+        """Boş başlıq və icraçısız forma YAZI YOLUNA GİRMİR.
+
+        Hər ikisi domendə də məcburidir; burada dayandırmağın səbəbi mətnin
+        İTMƏMƏSİDİR — modal bağlanıb use case istisnası gələndə istifadəçi
+        yazdıqlarını yenidən doldurmalı olardı.
+        """
+        self._title.clear_error()
+        self._assignee.clear_error()
+
+        title = self._title.text().strip()
+        if not title:
+            self._title.set_error("Başlıq məcburidir")
+            return
+
+        widget = self._assignee.input_widget()
+        assignee_id = widget.currentData() if isinstance(widget, QComboBox) else None
+        if not assignee_id:
+            self._assignee.set_error("İcraçı seçilməlidir")
+            return
+
+        priority_widget = self._priority.input_widget()
+        priority = (
+            priority_widget.currentData() if isinstance(priority_widget, QComboBox) else "NORMAL"
+        )
+
+        self.submitted.emit(
+            {
+                "title": title,
+                "assignee_id": assignee_id,
+                "deadline": self._deadline.dateTime().toPython(),
+                "description": self._description.toPlainText().strip(),
+                "priority": priority or "NORMAL",
+                "requires_evidence": self._requires_evidence.isChecked(),
+            }
+        )
+        self.accept()
 
 
 class TasksScreen(Screen):

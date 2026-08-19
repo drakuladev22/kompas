@@ -729,6 +729,18 @@ class _RootScreen:
         #: səbəbdən AYRICA: `tenant_branding` `system_limits` sətri DEYİL.
         self.branding: tuple[str, str, str] | None = None
         self.branding_status: str = ""
+        #: Telegram test yolu (UI-4, dövrə 4) — busy/mesaj çağırışlarının SIRASI
+        #: yoxlanılır ki, «əvvəl busy=True, sonra busy=False» qaydası pozulmasın.
+        self.telegram_busy_calls: list[bool] = []
+        self.telegram_message: str = ""
+        self.telegram_message_error: bool = False
+
+    def set_telegram_busy(self, busy: bool) -> None:
+        self.telegram_busy_calls.append(busy)
+
+    def set_telegram_message(self, text: str, *, error: bool = False) -> None:
+        self.telegram_message = text
+        self.telegram_message_error = error
 
     def set_limits(self, rows: list[Any]) -> None:
         self.limits = rows
@@ -796,6 +808,48 @@ class _ModuleView:
         self.module_key = key
         self.is_enabled = enabled
         self.is_structural = structural
+
+
+class _TelegramConfigPort:
+    """`TelegramConfigUseCase.send_test_message`-in minimal təkrarı (UI-4).
+
+    `_on_telegram_test` bunu FON İŞÇİSİ içindən çağırır — `InlineExecutor`/
+    `_HeldExecutor` ilə sinxron test edildiyi üçün əlavə sap idarəçiliyi
+    lazım deyil (bax `test_infrastructure_controllers.py` başlığı, eyni qərar).
+    """
+
+    def __init__(self, *, delivered: bool = True, error: Exception | None = None) -> None:
+        self._delivered = delivered
+        self._error = error
+        self.calls: list[Any] = []
+
+    def send_test_message(self, *, tenant_id: Any, actor: Any) -> bool:
+        self.calls.append((tenant_id, actor))
+        if self._error is not None:
+            raise self._error
+        return self._delivered
+
+
+class _HeldTelegramExecutor:
+    """İşi SAXLAYAN icraçı — ikiqat işə salma qapısını determinstik yoxlayır.
+
+    `test_erp_connection_wizard.py::_HeldExecutor` ilə EYNİ naxış: `submit()`
+    işi növbəyə qoyur, `deliver()` isə onu testin İSTƏDİYİ anda icra edir —
+    heç bir `sleep` yoxdur.
+    """
+
+    def __init__(self) -> None:
+        self.jobs: list[Any] = []
+
+    @property
+    def runs_inline(self) -> bool:
+        return True
+
+    def submit(self, job: Any) -> None:
+        self.jobs.append(job)
+
+    def deliver(self, index: int = 0) -> None:
+        self.jobs.pop(index)()
 
 
 class _RootUseCase:
@@ -926,12 +980,17 @@ class _RootSession:
         stores: list[dict[str, Any]] | None = None,
         scope: _FaceScopeRepo | None = None,
         limits: dict[str, str] | None = None,
+        telegram_config: Any = None,
     ) -> None:
         self.tenant_id = TENANT
         self.root_control = use_case
         self.face_scope = scope or _FaceScopeRepo()
         self.uow = _RootUow(stores or [], self.face_scope)
         self.limits = _RootLimits(limits)
+        #: `_on_telegram_test` YALNIZ bunu oxuyur (bax `_TelegramConfigPort`);
+        #: `_fill()`-in tam yolu `session.branding`-siz onsuz da ERKƏN geri
+        #: qayıdır, ona görə bu sahə digər `_root(...)` testlərinə TƏSİR ETMİR.
+        self.telegram_config = telegram_config
         self.commits = 0
 
     def commit(self) -> None:
@@ -945,11 +1004,16 @@ def _root(
     scope: _FaceScopeRepo | None = None,
     limits: dict[str, str] | None = None,
     actor: Any = None,
+    telegram_config: Any = None,
+    executor: Any = None,
 ) -> tuple[RootControlController, _RootSession]:
-    session = _RootSession(use_case, stores=stores, scope=scope, limits=limits)
+    session = _RootSession(
+        use_case, stores=stores, scope=scope, limits=limits, telegram_config=telegram_config
+    )
     controller = RootControlController(
         _Context(session),  # type: ignore[arg-type]
         actor or _actor(),
+        executor=executor,
     )
     return controller, session
 
@@ -1093,6 +1157,87 @@ def test_hardlocked_flags_are_marked_in_the_registry() -> None:
     controller.refresh(screen)  # type: ignore[arg-type]
 
     assert screen.registry == [("can_export_reports", False), ("can_manage_permissions", True)]
+
+
+# --------------------------------------------------------------------------- #
+# «Test Mesajı Göndər» FON SAPINDA (UI-4, dövrə 4 auditi)
+# --------------------------------------------------------------------------- #
+#
+# ƏVVƏL `_on_telegram_test` `session.telegram_config.send_test_message`-i
+# birbaşa GUI sapında çağırırdı — Telegram-a həqiqi `httpx` sorğusu (taymaut
+# defolt 15 san, Root 120 san-a qədər böyüdə bilər) bütün ROOT panelini heç
+# bir göstərici olmadan dondururdu. Bu bölmə düzəlişi (`background_task.
+# run_job`, `erp_servers.py` ilə eyni naxış) yoxlayır: iş fona keçir, nəticə
+# ƏSAS sapa qayıdır, ikiqat işə salma rədd edilir.
+
+
+def test_telegram_test_shows_a_busy_state_and_the_success_message() -> None:
+    """`InlineExecutor` sinxron çatdırır — busy TRUE, sonra FALSE gəlməlidir."""
+    from src.presentation.background_task import InlineExecutor
+
+    telegram = _TelegramConfigPort(delivered=True)
+    controller, session = _root(_RootUseCase(), telegram_config=telegram, executor=InlineExecutor())
+    screen = _RootScreen()
+
+    controller._on_telegram_test(screen)  # type: ignore[arg-type]
+
+    assert len(telegram.calls) == 1
+    assert session.commits == 1
+    assert screen.telegram_busy_calls == [True, False]
+    assert screen.telegram_message == "Test mesajı göndərildi — Telegram qrupunu yoxlayın."
+    assert screen.telegram_message_error is False
+
+
+def test_telegram_test_reports_a_failed_delivery_without_hiding_the_reason() -> None:
+    """«Göndərilmədi» də nəticədir — sükutla udulmur (bax kontroller başlığı)."""
+    from src.presentation.background_task import InlineExecutor
+
+    telegram = _TelegramConfigPort(delivered=False)
+    controller, _ = _root(_RootUseCase(), telegram_config=telegram, executor=InlineExecutor())
+    screen = _RootScreen()
+
+    controller._on_telegram_test(screen)  # type: ignore[arg-type]
+
+    assert screen.telegram_busy_calls == [True, False]
+    assert screen.telegram_message_error is True
+    assert "çatmadı" in screen.telegram_message
+
+
+def test_telegram_test_catches_an_unexpected_exception_and_clears_busy() -> None:
+    """Fon işində qalan istisna GUI-ni «Göndərilir…» halında əbədi qoymamalıdır."""
+    from src.presentation.background_task import InlineExecutor
+
+    telegram = _TelegramConfigPort(error=RuntimeError("timeout"))
+    controller, session = _root(_RootUseCase(), telegram_config=telegram, executor=InlineExecutor())
+    screen = _RootScreen()
+
+    controller._on_telegram_test(screen)  # type: ignore[arg-type]
+
+    assert screen.telegram_busy_calls == [True, False]
+    assert screen.telegram_message == "Test mesajı göndərilmədi."
+    assert screen.telegram_message_error is True
+    # İstisna kommit-dən ƏVVƏL atılır (`send_test_message` daxilində) —
+    # yarımçıq audit sətri yazılmamalıdır.
+    assert session.commits == 0
+
+
+def test_a_second_telegram_test_is_rejected_while_the_first_is_running() -> None:
+    """İkiqat işə salma qapısı — `BackgroundTask.is_running` (bax `erp_servers.py`)."""
+    telegram = _TelegramConfigPort(delivered=True)
+    executor = _HeldTelegramExecutor()
+    controller, _ = _root(_RootUseCase(), telegram_config=telegram, executor=executor)
+    screen = _RootScreen()
+
+    controller._on_telegram_test(screen)  # type: ignore[arg-type]
+    controller._on_telegram_test(screen)  # ikinci klik — iş HƏLƏ qaçır  # type: ignore[arg-type]
+
+    assert len(executor.jobs) == 1, "ikinci klik yeni iş buraxmamalıdır"
+    assert screen.telegram_busy_calls == [True]
+
+    executor.deliver()
+
+    assert len(telegram.calls) == 1
+    assert screen.telegram_busy_calls == [True, False]
 
 
 def test_only_changed_limits_are_written() -> None:
@@ -1528,9 +1673,14 @@ def test_name_splitting_treats_the_last_word_as_the_surname(
 class _FullProfileScreen:
     def __init__(self) -> None:
         self.account: dict[str, str] = {}
+        self.identity = ""
         self.role_rows: list[tuple[str, str]] = []
         self.sessions: list[tuple[str, str, str]] = []
         self.errors: list[tuple[str, str]] = []
+
+    def set_identity(self, full_name: str) -> None:
+        """«Ləğv Et» sahələri SON OXUNMUŞ ada qaytarsın deyə lazımdır."""
+        self.identity = full_name
 
     def set_account(
         self, *, username: str, email: str, phone: str = "", password_note: str = ""

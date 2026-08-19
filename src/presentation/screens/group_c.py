@@ -49,6 +49,7 @@ from src.presentation.widgets.data_table import Column, DataTable
 from src.presentation.widgets.forms import FormField, field_label
 from src.presentation.widgets.help_hint import HelpButton
 from src.presentation.widgets.layout_utils import clear_layout
+from src.presentation.widgets.multi_select import MultiSelectCombo
 from src.presentation.widgets.primitives import (
     Card,
     Chip,
@@ -1432,6 +1433,260 @@ class UsersScreen(Screen):
         return self._table
 
 
+class NewUserDialog(QDialog):
+    """ "Yeni İşçi" modalı — `UsersScreen`-in `create_requested`-i açır.
+
+    `create_requested` düyməsi VARDI, lakin heç bir kontroller onu dinləmirdi
+    (yalnız CSV toplu idxalı işləyirdi) — bu, həmin boşluğu bağlayan dialoqdur.
+    `PosThresholdDialog` ilə EYNİ naxış: ekran domen tiplərini TANIMIR, yalnız
+    xam mətn/bool toplayır — `Position`/`StoreId`/`Username` kimi VO-lara
+    çevirmə `controllers/user_admin.py`-dədir (CLAUDE.md §6).
+
+    Signals:
+        submitted: sözlük (aşağıdakı bütün sahələr, açar adları
+            `controllers/user_admin.py`-də sabit kimi TƏKRARLANIR — dəyişəndə
+            İKİSİ birlikdə dəyişməlidir).
+
+    ──────────────────────────────────────────────────────────────────────────
+    ƏN AZI BİR AUTENTİFİKASİYA VASİTƏSİ — DİALOQ SƏVİYYƏSİNDƏ DƏ YOXLANILIR
+    ──────────────────────────────────────────────────────────────────────────
+    `Employee` konstruktoru "PIN, VƏ YA istifadəçi adı + şifrə" invariantını
+    domendə MƏCBUR edir (`_assert_has_authentication_method`), lakin bu
+    yoxlamanı YALNIZ use case-ə buraxsaydıq, admin bütün formanı (ad, vəzifə,
+    mağaza, tarix) doldurub "Yadda Saxla" basdıqdan SONRA rədd cavabı alardı
+    və dialoq bağlanmadığı üçün YAZDIQLARI İTMƏZDİ — amma səbəb yalnız use
+    case-in mətnindən görünərdi, sahə isə İŞARƏLƏNMƏZDİ. Ona görə eyni qayda
+    burada da yoxlanılır (`PosThresholdDialog._on_submit` ilə eyni "sahə
+    işarələ, bağlama" naxışı) — bu, domen qaydasının TƏKRARI deyil, onun
+    İSTİFADƏÇİYƏ görünən əks-sədasıdır; həqiqi qapı YENƏ DƏ domendədir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    KAMERA STORE-ID SAHƏSİ YALNIZ KAMERA-TİPLİ VƏZİFƏDƏ GÖRÜNÜR
+    ──────────────────────────────────────────────────────────────────────────
+    `UserManagementUseCase._apply_camera_stores` çox-mağazalı təyinatı YALNIZ
+    Kamera Operatoru roluna icazə verir — başqa rolda göndərilən sahə use
+    case-də RƏDD EDİLİR. Sahəni HƏMİŞƏ göstərmək "hansı rolda işə yarayır?"
+    sualını admin özü sınaqla öyrənməli edərdi; bunun əvəzinə `is_camera_type`
+    seçiləndə sahə görünür, seçilməyəndə ÜMUMİYYƏTLƏ RENDER OLUNMUR (bölmə 3-ün
+    "görmək = lazım olması" prinsipi — mənasız sahə boz göstərilmir, gizlədilir).
+    """
+
+    submitted = Signal(dict)
+
+    def __init__(
+        self,
+        theme: ThemeManager,
+        *,
+        stores: list[tuple[str, str]],
+        positions: list[tuple[str, str, bool]],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._theme = theme
+        #: `position_id` → kamera-tipli bayrağı — seçim dəyişəndə sahənin
+        #: görünürlüyünü qərarlaşdırmaq üçün (aşağı `_on_position_changed`).
+        self._camera_positions = {position_id for position_id, _, camera in positions if camera}
+        self.setWindowTitle("Yeni İşçi")
+        self.setModal(True)
+        self.setMinimumWidth(520)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        card = Card(padding=24, spacing=16)
+        layout.addWidget(card)
+        card.add(title_label("Yeni İşçi", size=19))
+        card.add(Divider())
+
+        self._first_name = FormField("Ad")
+        card.add(self._first_name)
+
+        self._last_name = FormField("Soyad")
+        card.add(self._last_name)
+
+        position_box = QComboBox()
+        for position_id, name_az, _camera in positions:
+            position_box.addItem(name_az, position_id)
+        position_box.currentIndexChanged.connect(self._on_position_changed)
+        self._position = FormField("Vəzifə", widget=position_box)
+        card.add(self._position)
+
+        store_box = QComboBox()
+        # Boş bənd BİRİNCİDİR VƏ USERDATA `""`-dir — "mağaza təyin edilməyib"
+        # domendə QANUNİ haldır (`EmployeeDraft.store_id: StoreId | None`),
+        # məcburi seçim isə Root/CEO kimi mağazasız rolları bloklayardı.
+        store_box.addItem("— Seçilməyib —", "")
+        for store_id, store_name in stores:
+            store_box.addItem(store_name, store_id)
+        self._store = FormField("Mağaza", widget=store_box)
+        card.add(self._store)
+
+        self._username = FormField(
+            "İstifadəçi adı",
+            placeholder="Admin panelə giriş üçün (kiosk-yalnız işçidə boş qalır)",
+        )
+        card.add(self._username)
+
+        self._password = FormField(
+            "İlkin şifrə",
+            password=True,
+            hint="İstifadəçi adı ilə BİRLİKDƏ tələb olunur. İşçi ilk girişdə dəyişməlidir.",
+        )
+        card.add(self._password)
+
+        self._pin = FormField(
+            "PIN (4 rəqəm)",
+            password=True,
+            hint="Kiosk girişi üçün — istifadəçi adı/şifrə əvəzinə (və ya onlarla birgə).",
+        )
+        card.add(self._pin)
+
+        self._email = FormField(
+            "Bildiriş e-poçtu",
+            hint="YALNIZ bildiriş üçündür — girişə təsiri yoxdur (SEC-016).",
+        )
+        card.add(self._email)
+
+        # TARİX SAHƏLƏRİ `FormField` (sadə mətn), `QDateEdit` DEYİL —
+        # `EmployeeDocumentDialog` başlığındakı EYNİ səbəb: `qss.py`-də
+        # `QDateEdit` üçün kontrast-yoxlanılmış rəng cütü yoxdur.
+        # FORMAT GÖSTƏRİLİR, NÜMUNƏ TARİX YOX: «(məs. 2026-08-19)» hissəsi
+        # SİLİNDİ — `test_no_form_field_shows_example_data` onu nümunə dəyər
+        # kimi tutur və qayda haqlıdır: konkret tarix sahəni «doldurulmuş»
+        # göstərir, `YYYY-AA-GG` isə yalnız NƏ formatda yazılacağını deyir.
+        # Aşağıdakı «Doğum tarixi» sahəsi onsuz da belə yazılmışdı — ikisi
+        # arasındakı fərq təsadüfi idi.
+        self._hire_date = FormField("İşə başlama tarixi", placeholder="YYYY-AA-GG")
+        card.add(self._hire_date)
+
+        self._date_of_birth = FormField("Doğum tarixi", placeholder="YYYY-AA-GG")
+        card.add(self._date_of_birth)
+
+        self._camera_field = FormField(
+            "Kamera Operatoru mağazaları",
+            widget=MultiSelectCombo("Mağaza seçin…"),
+            hint="Çox-seçimli təyinat — YALNIZ Kamera Operatoru rolunda tətbiq olunur.",
+        )
+        camera_widget = self._camera_field.input_widget()
+        if isinstance(camera_widget, MultiSelectCombo):
+            camera_widget.set_options(stores)
+        card.add(self._camera_field)
+
+        self._error = muted_label("")
+        self._error.setProperty("variant", "danger-text")
+        self._error.setVisible(False)
+        card.add(self._error)
+
+        buttons = QWidget()
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(12)
+        buttons_layout.addWidget(stretch())
+
+        cancel = secondary_button("İmtina")
+        cancel.clicked.connect(self.reject)
+        buttons_layout.addWidget(cancel)
+
+        save = action_button("Yarat")
+        save.clicked.connect(self._on_submit)
+        buttons_layout.addWidget(save)
+        card.add(buttons)
+
+        save.setDefault(True)
+        save.setAutoDefault(True)
+        cancel.setAutoDefault(False)
+
+        self._first_name.focus_input()
+        self._on_position_changed(position_box.currentIndex())
+
+    def _on_position_changed(self, _index: int) -> None:
+        """Kamera sahəsi YALNIZ kamera-tipli vəzifədə göstərilir (bax sinif başlığı)."""
+        widget = self._position.input_widget()
+        position_id = widget.currentData() if isinstance(widget, QComboBox) else None
+        self._camera_field.setVisible(position_id in self._camera_positions)
+
+    def _on_submit(self) -> None:
+        for field in (self._first_name, self._last_name):
+            field.clear_error()
+        self._error.setVisible(False)
+
+        first_name = self._first_name.text().strip()
+        last_name = self._last_name.text().strip()
+        missing = False
+        if not first_name:
+            self._first_name.set_error("Ad məcburidir")
+            missing = True
+        if not last_name:
+            self._last_name.set_error("Soyad məcburidir")
+            missing = True
+
+        position_widget = self._position.input_widget()
+        position_id = (
+            str(position_widget.currentData() or "")
+            if isinstance(position_widget, QComboBox)
+            else ""
+        )
+        if not position_id:
+            self._error.setText("Vəzifə seçilməlidir.")
+            self._error.setVisible(True)
+            missing = True
+
+        username = self._username.text().strip()
+        password = self._password.text().strip()
+        pin = self._pin.text().strip()
+        # DOMEN QAYDASININ ƏKS-SƏDASI (bax sinif başlığı): PIN, VƏ YA
+        # istifadəçi adı + şifrə BİRLİKDƏ — tək başına biri `Employee`
+        # konstruktorunda YENƏ DƏ rədd edilir. İki addımlı yoxlama:
+        #   1) istifadəçi adı və şifrə YA İKİSİ BİRLİKDƏ, YA HEÇ BİRİ —
+        #      tək başına şifrə istifadəyə yaramaz, tək başına istifadəçi
+        #      adı isə giriş vasitəsi vermir;
+        #   2) (1) keçəndən sonra ən azı PIN, YA DA cüt mövcud olmalıdır.
+        if bool(username) != bool(password):
+            self._error.setText(
+                "İstifadəçi adı və şifrə BİRLİKDƏ verilməlidir — biri "
+                "olmadan digəri istifadə oluna bilməz."
+            )
+            self._error.setVisible(True)
+            missing = True
+        elif not pin and not username:
+            self._error.setText(
+                "PIN, YA DA istifadəçi adı + şifrə BİRLİKDƏ verilməlidir "
+                "— işçinin ən azı bir giriş vasitəsi olmalıdır."
+            )
+            self._error.setVisible(True)
+            missing = True
+
+        if missing:
+            return
+
+        store_widget = self._store.input_widget()
+        store_id = (
+            str(store_widget.currentData() or "") if isinstance(store_widget, QComboBox) else ""
+        )
+        camera_widget = self._camera_field.input_widget()
+        camera_store_ids = (
+            camera_widget.selected_values() if isinstance(camera_widget, MultiSelectCombo) else []
+        )
+
+        self.submitted.emit(
+            {
+                "first_name": first_name,
+                "last_name": last_name,
+                "position_id": position_id,
+                "store_id": store_id,
+                "username": username,
+                "password": password,
+                "pin": pin,
+                "notification_email": self._email.text().strip(),
+                "hire_date": self._hire_date.text().strip(),
+                "date_of_birth": self._date_of_birth.text().strip(),
+                "camera_store_ids": camera_store_ids,
+            }
+        )
+        self.accept()
+
+
 class PosThresholdDialog(QDialog):
     """ "POS Səlahiyyəti" modalı — işçinin endirim/void/refund həddini göstərir/dəyişir.
 
@@ -1937,9 +2192,22 @@ class ShiftPlanningScreen(Screen):
 
         layout.addWidget(stretch())
 
-        publish = action_button("Planı Yayımla")
-        publish.clicked.connect(self.publish_requested)
-        layout.addWidget(publish)
+        # ──────────────────────────────────────────────────────────────────────
+        # «PLANI YAYIMLA» DÜYMƏSİ SİLİNDİ — ARXASINDA HEÇ NƏ YOX İDİ
+        # ──────────────────────────────────────────────────────────────────────
+        # Düymə `publish_requested` yayırdı, lakin heç bir kontroller onu
+        # dinləmirdi və `ShiftPlanningUseCase`-də «nəşr» ANLAYIŞI DA YOXDUR:
+        # matrisdəki hər toxunuş `apply_assignment` ilə DƏRHAL yazılır, yəni
+        # plan onsuz da canlıdır.
+        #
+        # Ona görə düymə sadəcə işləmirdi DEYİL — YANLIŞ MODEL öyrədirdi:
+        # menecer «hələ yayımlamamışam, deməli işçilər görmür» sanıb matrisdə
+        # sınaq dəyişiklikləri edə bilərdi, halbuki hər klik artıq qüvvədədir.
+        # Bu, sükutla işləməyən düymədən daha zərərlidir.
+        #
+        # `publish_requested` siqnalı SAXLANILIR: gələcəkdə həqiqi nəşr axını
+        # (məs. «ay hazırdır» bildirişi) əlavə olunarsa, ekranın müqaviləsi
+        # dəyişməyəcək — bax `test_signal_wiring_gate.py::NEVER_RAISED`.
         return bar
 
     def _build_footer(self) -> QWidget:
@@ -2328,6 +2596,16 @@ class DailyRosterScreen(Screen):
     def table(self) -> DataTable:
         return self._table
 
+    def manager_note(self) -> str:
+        """Rəhbər qeydinin CARİ mətni.
+
+        `draft_saved` mətni siqnalla daşıyır, `approve_requested` isə
+        parametrsizdir — imza anında qeydi oxumağın yolu yox idi. Siqnalın
+        imzasını dəyişməkdənsə oxu metodu əlavə olundu: ekran onsuz da
+        setter/getter API-si təqdim edir (CLAUDE.md bölmə 6) və siqnal
+        imzası dəyişsəydi maket yolu da yenilənməli olardı."""
+        return str(self._note.toPlainText())
+
 
 # --------------------------------------------------------------------------- #
 # 14 — Növbə Dəyişmə Sorğuları
@@ -2508,6 +2786,7 @@ class ShiftSwapScreen(Screen):
 __all__ = [
     "DailyRosterScreen",
     "DashboardScreen",
+    "NewUserDialog",
     "PermissionMatrixScreen",
     "PosThresholdDialog",
     "RankingEntry",

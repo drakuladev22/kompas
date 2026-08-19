@@ -225,6 +225,52 @@ class ExcelReportWriter:
         self._finalize(sheet, len(BONUS_PENALTY_HEADERS))
         return self._save(workbook, f"Premiya_Cerime_{period.key}.xlsx", report="bonus_penalty")
 
+    # ------------------------------- ÜMUMİ CƏDVƏL ----------------------------- #
+
+    def write_table(
+        self,
+        rows: list[dict[str, str]],
+        *,
+        headers: list[tuple[str, str]],
+        sheet_title: str,
+        file_name: str,
+        note: str = "",
+    ) -> Path:
+        """İXTİYARİ cədvəl — audit jurnalı «Excel-ə İxrac Et» düyməsi üçün (bax
+        modul başlığı: `write_attendance`/`write_bonus_penalty` YALNIZ ÖZ sabit
+        sxemlərini bilir, audit sətirləri isə modul-modul fərqli sahələr daşıyır).
+
+        `headers`: `(açar, başlıq_az)` cütləri — açar `rows`-dakı `dict`-in
+        açarıdır, başlıq isə Excel-də görünən mətndir. Sıra `headers`-in
+        SIRASIDIR (`dict` sırası deyil) ki, çağıran sütun ardıcıllığını idarə
+        edə bilsin.
+
+        `rows`-da açar ÇATIŞMIRSA `KeyError` ATILMIR, boş xana yazılır: audit
+        sətirləri MÜXTƏLİF modullardan (cərimə, icazə, tapşırıq, ...) gəlir
+        və hamısı EYNİ sütun dəstini doldurmaya bilər — məs. «Cərimə Məbləği»
+        sütunu icazə hadisəsində mənasızdır, xəta yox, sadəcə boş xana.
+        """
+        workbook = Workbook()
+        sheet = workbook.active
+        if sheet is None:  # pragma: no cover — openpyxl həmişə vərəq yaradır
+            raise ExcelExportError("Boş iş kitabı yaradıla bilmədi")
+        # Excel vərəq adı 31 simvoldan uzun ola BİLMƏZ (openpyxl bunu ATIR) —
+        # audit jurnalının başlığı çağıran tərəfdən İXTİYARİ uzunluqda gələ
+        # bilər (məs. filtr aralığı adına görə), ona görə burada KƏSİLİR.
+        sheet.title = sheet_title[:31]
+
+        header_keys = [key for key, _ in headers]
+        self._write_headers(sheet, tuple(label for _, label in headers))
+        for row in rows:
+            sheet.append([row.get(key, "") for key in header_keys])
+
+        footer_rows = 0
+        if note:
+            self._add_period_note(sheet, column_count=len(headers), note=note)
+            footer_rows = 2
+        self._finalize(sheet, len(headers), footer_rows=footer_rows)
+        return self._save(workbook, file_name, report="generic_table")
+
     # ------------------------------- köməkçilər ------------------------------ #
 
     @staticmethod
@@ -252,8 +298,16 @@ class ExcelReportWriter:
         sheet.cell(row=last_row, column=1).font = Font(italic=True)
 
     @staticmethod
-    def _finalize(sheet: Worksheet, column_count: int) -> None:
-        """Sütun enlərini məzmuna görə tənzimləyir və avtofiltr qoyur."""
+    def _finalize(sheet: Worksheet, column_count: int, *, footer_rows: int = 2) -> None:
+        """Sütun enlərini məzmuna görə tənzimləyir və avtofiltr qoyur.
+
+        `footer_rows`: `_add_period_note()`-un ƏLAVƏ etdiyi sətir sayı (boş
+        sətir + izah sətri = 2) — DEFOLT DƏYİŞMİR, çünki `write_attendance`/
+        `write_bonus_penalty` HƏMİŞƏ izah sətri yazır. `write_table()` isə
+        `note=""` olanda heç nə əlavə ETMİR (bax modul başlığı, "ÜMUMİ
+        CƏDVƏL") — `0` ötürür ki, avtofiltr axırıncı HƏQİQİ məlumat sətrini
+        itirməsin.
+        """
         for index in range(1, column_count + 1):
             letter = get_column_letter(index)
             longest = max(
@@ -265,7 +319,7 @@ class ExcelReportWriter:
 
         # Filtr YALNIZ məlumat aralığına qoyulur — izah sətri daxil edilsəydi,
         # süzgəc onu da gizlədə bilərdi.
-        data_rows = max(sheet.max_row - 2, 1)
+        data_rows = max(sheet.max_row - footer_rows, 1)
         sheet.auto_filter.ref = f"A1:{get_column_letter(column_count)}{data_rows}"
 
     def _save(self, workbook: Workbook, filename: str, *, report: str) -> Path:

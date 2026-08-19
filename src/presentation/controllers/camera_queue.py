@@ -28,6 +28,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from src.domain.entities.attendance_record import MIN_REJECT_REASON_LENGTH
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
@@ -102,16 +103,36 @@ class CameraQueueController:
 
     @staticmethod
     def _ask_reason(screen: OperatorQueueScreen) -> str | None:
-        from PySide6.QtWidgets import QInputDialog  # noqa: PLC0415
+        """Səbəb dialoqu — QISA cavab yazı yoluna ÜMUMİYYƏTLƏ girmir.
+
+        Hədd `10` əvvəl BURADA hərfi yazılmışdı və heç nə onu yoxlamırdı: mətn
+        rəqəmi vəd edirdi, kod isə bir simvolu da buraxırdı. İki nəticəsi
+        vardı — (a) operator qısa səbəb yazanda modal bağlanır, domen istisna
+        atır və YAZILAN MƏTN İTİR; (b) `MIN_REJECT_REASON_LENGTH` domendə
+        dəyişsəydi dialoq sükutla yalan rəqəm göstərərdi. İndi hədd domendən
+        İDXAL olunur və dialoqun ÖZÜNDƏ yoxlanılır.
+        """
+        from PySide6.QtWidgets import QInputDialog, QMessageBox  # noqa: PLC0415
 
         text, accepted = QInputDialog.getMultiLineText(
             screen,
             "Girişi rədd et",
-            "Səbəb (məcburi, minimum 10 simvol) — audit jurnalına düşür və\n"
-            "HR_Admin ilə Mağaza Menecerinə bildiriş gedir:",
+            f"Səbəb (məcburi, minimum {MIN_REJECT_REASON_LENGTH} simvol) — audit\n"
+            "jurnalına düşür və HR_Admin ilə Mağaza Menecerinə bildiriş gedir:",
         )
+        if not accepted:
+            return None
         cleaned = text.strip()
-        return cleaned if accepted and cleaned else None
+        if len(cleaned) < MIN_REJECT_REASON_LENGTH:
+            # Modal, `show_error` DEYİL: növbənin qalan sətirləri etibarlıdır
+            # və operator onları görməyə davam etməlidir.
+            box = QMessageBox(screen)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Rədd yazılmadı")
+            box.setText(f"Səbəb ən azı {MIN_REJECT_REASON_LENGTH} simvol olmalıdır.")
+            box.exec()
+            return None
+        return cleaned
 
     def _verify_return(self, session: Session, request: Any) -> None:
         """STEP 3 Saga-sı `async`-dir — GUI-də sinxron icra edilir.

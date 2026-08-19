@@ -162,6 +162,8 @@ class PinPadScreen(QWidget):
         self._theme = theme
         self._entered = ""
         self._locked = False
+        #: Üz doğrulaması gedirmi (`set_busy`). Bloklamadan AYRIDIR.
+        self._busy = False
 
         self.setObjectName("PinScreen")
         text_color = theme.color("--color-pin-text")
@@ -303,6 +305,10 @@ class PinPadScreen(QWidget):
         keypad = QWidget()
         grid = QGridLayout(keypad)
         grid.setSpacing(metrics.KEYPAD_SPACING)
+        # Düymələrə İSTİNAD saxlanılır: `set_busy` onları müvəqqəti söndürür.
+        # `findChildren` ilə axtarsaydıq, üz düyməsi də siyahıya düşərdi və o,
+        # ayrıca idarə olunur.
+        self._keys: list[QPushButton] = []
 
         for row_index, row in enumerate(self._LAYOUT):
             for column_index, key in enumerate(row):
@@ -322,6 +328,7 @@ class PinPadScreen(QWidget):
                     font.setPixelSize(14)
                     button.setFont(font)
                 button.clicked.connect(lambda _=False, value=key: self._on_key(value))
+                self._keys.append(button)
                 grid.addWidget(button, row_index, column_index)
 
         return keypad
@@ -412,6 +419,35 @@ class PinPadScreen(QWidget):
         )
         self._message.setStyleSheet(f"color: {self._theme.color('--color-danger')};")
         self.reset()
+
+    def set_busy(self, busy: bool, *, message: str = "Üz yoxlanılır…") -> None:
+        """Uzun sürən üz doğrulaması müddətində ekranı «məşğul» göstərir.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ LAZIMDIR (UX-1)
+        ──────────────────────────────────────────────────────────────────────
+        «Üzlə daxil ol» kamera çəkilişi + 1:N tanıma + 1:1 doğrulama deməkdir
+        və bu, saniyələr çəkir. Əvvəl heç bir göstərici yox idi: işçi düyməni
+        basırdı, ekran donmuş görünürdü və o, adətən düyməni TƏKRAR basırdı —
+        yəni ikinci çəkiliş növbəyə düşürdü. Panel girişində eyni yol ARTIQ
+        düzgün qurulmuşdu (`LoginScreen.set_busy`), kiosk yolu unudulmuşdu.
+
+        `_locked`-dan AYRIDIR: bloklama siyasət nəticəsidir və mesajı özü
+        yazır, bu isə müvəqqəti gözləmə vəziyyətidir.
+        """
+        self._busy = busy
+        self._face_button.setEnabled(not busy)
+        for button in self._keys:
+            button.setEnabled(not busy)
+        if busy:
+            self._message.setText(message)
+            self._message.setStyleSheet(f"color: {self._theme.color('--color-text-muted')};")
+        else:
+            self.clear_message()
+
+    @property
+    def is_busy(self) -> bool:
+        return self._busy
 
     def clear_lockout(self) -> None:
         self._locked = False
