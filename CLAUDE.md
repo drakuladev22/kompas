@@ -122,17 +122,22 @@ Hər dəyişiklikdən sonra HAMISI keçməlidir:
 ```bash
 .venv/Scripts/python.exe -m ruff check src/ tests/ scripts/
 .venv/Scripts/python.exe -m ruff format src/ tests/ scripts/
-.venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (365 fayl)
-QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 5350 test, 49 skip
+.venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (372 fayl)
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 5665 test, 50 skip
 .venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast
 ```
 
+Dəstin FAKTİKİ müddəti bu maşında **~58 dəqiqədir** (ölçüldü: 3477 saniyə,
+tək başına işləyəndə). Paralel ikinci pytest prosesi işə salınsa müddət
+İKİ-ÜÇ dəfə uzanır — dövrə-4-də üç proses eyni anda işlədi və dəst saatlarla
+çəkdi. Ona görə tam dəst TƏK işlədilir.
+
 **`QT_QPA_PLATFORM=offscreen` OPSİYONAL DEYİL.** Bu maşında real Windows
 platform plagini ilə e2e Qt testləri dəqiqədə ~4 test sürətinə düşür — tam
-dəst saatlarla çəkir və "asmış" kimi görünür. Offscreen-də eyni dəst **~55
-dəqiqəyə** bitir (ölçülüb; paralel qurma işi getdikdə daha uzun) — yəni onu
-fon işi kimi başladıb gözləmək lazımdır, "asmış" saymaq yox. Yeganə fərq:
-`test_mono_role_resolves_to_a_fixed_pitch_font` atlanır (aşağıya bax).
+dəst saatlarla çəkir və "asmış" kimi görünür. Yuxarıdakı ~58 dəqiqə məhz
+offscreen ölçüsüdür: dəsti fon işi kimi başladıb gözləmək lazımdır, "asmış"
+saymaq yox. Yeganə fərq: `test_mono_role_resolves_to_a_fixed_pitch_font`
+atlanır (aşağıya bax).
 
 Kontrast yoxlayıcısı **160 rəng cütünü** (`--include-high-contrast` olmadan
 158) ölçür — həm `tokens.py` cütlərini,
@@ -143,7 +148,7 @@ yeni rəng cütü və ya yeni QSS selektoru əlavə edən skriptin son sətrind�
 cari sayı oxuyub bu bəndi yeniləməlidir (eyni köhnəlmə riski
 `.design-sync/NOTES.md`-dədir).
 
-Domen coverage qapısı **85%** (hazırda 94.29%):
+Domen coverage qapısı **85%** (hazırda 94.22%):
 
 ```bash
 .venv/Scripts/python.exe -m pytest tests/unit \
