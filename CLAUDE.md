@@ -29,6 +29,47 @@ Eyni qayda `design_reference/*.jpg` referans skrinşotlarına da aiddir: onlar
 istinadlar həmin ölçünün HANSI maketdən gəldiyini deyir — ölçü qərarının
 sübutudur, açılacaq fayl deyil.
 
+### `.claude/agents/` — köhnə 47 tərif SİLİNDİ, yerinə DÖRD rol agenti
+
+Vəzifəyə görə bölünmüş 47 subagent (`domain-logic-engineer`,
+`anti-fraud-auditor`, `pyside-ui-engineer`, …) çıxarılıb. Səbəb: hər biri
+layihənin bir küncünə bağlı idi, ona görə sayı fasiləsiz artırdı və heç biri
+tam kontekst görmürdü. Yerinə **rola görə** dörd agent quraşdırılıb
+(commit `5dc3443`):
+
+| Agent | Model | Alətlər | Vəzifə |
+|---|---|---|---|
+| `planner` | opus | Read, Grep, Glob | Plan qurur, kod YAZMIR |
+| `ui-agent` | sonnet | Read, Grep, Glob | UI / komponent qərarları |
+| `builder` | sonnet | Read, Write, Edit, Bash, Grep, Glob | Kodu yazır (TDD) |
+| `reviewer` | sonnet | Read, Grep, Glob, Bash | Keyfiyyət + təhlükəsizlik qapısı |
+
+Səlahiyyət bölgüsü QƏSDƏNDİR: `builder` yaza bilir amma review edə bilmir,
+`reviewer` review edir amma yaza bilmir, `planner` yalnız oxuyur. Heç birində
+`Task` aləti YOXDUR — agent agenti çağıra bilmir, bütün koordinasiya əsas
+sessiyadan keçir. Bu, köhnə dəstin əsas problemini — kontekstin parçalanmasını
+— kəsir.
+
+Skill-lər `.claude/skills/`-dədir: `tdd`, `senior-code-review`, `ui-ux-pro-max`.
+Adı `code-review` DEYİL, çünki built-in `/code-review` əmri ilə toqquşurdu və
+çağırışda hansının işə düşəcəyi qeyri-müəyyən qalırdı.
+
+**İşə salınma qaydası DƏYİŞMƏYİB: subagent yalnız istifadəçi ONU AÇIQ
+İSTƏDİKDƏ işə düşür** — nə «paralel gedər», nə «token qənaət edər» mülahizəsi
+ilə. Tərif fayllarındakı «Use PROACTIVELY» ifadəsi bu qaydanın ALTINDADIR və
+avtomatik çağırışa icazə vermir: o cümlə agentin nə vaxt FAYDALI olduğunu
+izah edir, nə vaxt öz-özünə qalxacağını yox.
+
+Köhnə tapşırıq şablonlarında (`prompt/*.md`, `dbtest/*.md`) duran
+«FAZA 0 — AGENT (VARSA TƏKRAR YARATMA)» bloku HƏLƏ DƏ KEÇƏRSİZDİR: o mətn
+silinmiş 47-lik dəsti nəzərdə tuturdu. Blok atlanır və FAZA 1-dən başlanır.
+
+Kod şərhlərində qalan «agent qaydası 4», «agent tərifi, 4 sual» tipli
+istinadlar da həmin köhnə dəstə aiddir — qərarın haradan gəldiyinin
+sübutudur, çağırılacaq agent deyil. Mətnləri git tarixçəsindədir (`HEAD`
+DEYİL, silinmədən ƏVVƏLKİ commit):
+`git show 5dc3443^:.claude/agents/anti-fraud-auditor.md`.
+
 ---
 
 ## 1. Vəziyyət

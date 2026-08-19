@@ -1,9 +1,9 @@
 ---
-name: code-review
+name: senior-code-review
 description: Senior code review specialist. Use PROACTIVELY after writing or modifying code. Reviews for quality, security, performance, and best practices.
 ---
 
-# Code Review
+# Senior Code Review
 
 ## Ne zaman tetiklenir
 - Yeni kod yazıldıktan hemen sonra
