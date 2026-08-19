@@ -29,30 +29,53 @@ Eyni qayda `design_reference/*.jpg` referans skrinşotlarına da aiddir: onlar
 istinadlar həmin ölçünün HANSI maketdən gəldiyini deyir — ölçü qərarının
 sübutudur, açılacaq fayl deyil.
 
-### `.claude/agents/` — köhnə 47 tərif SİLİNDİ, yerinə DÖRD rol agenti
+### `.claude/agents/` — 47 tərif → 4 rol agenti → BEŞ sahə teammate-i
 
 Vəzifəyə görə bölünmüş 47 subagent (`domain-logic-engineer`,
-`anti-fraud-auditor`, `pyside-ui-engineer`, …) çıxarılıb. Səbəb: hər biri
-layihənin bir küncünə bağlı idi, ona görə sayı fasiləsiz artırdı və heç biri
-tam kontekst görmürdü. Yerinə **rola görə** dörd agent quraşdırılıb
-(commit `5dc3443`):
+`anti-fraud-auditor`, `pyside-ui-engineer`, …) çıxarılıb: hər biri layihənin
+bir küncünə bağlı idi, ona görə sayı fasiləsiz artırdı və heç biri tam
+kontekst görmürdü. Yerinə əvvəlcə **rola görə** dörd agent gəldi
+(`planner` / `ui-agent` / `builder` / `reviewer`, commit `5dc3443`) — həmin
+dəst də `814059c`-də ƏVƏZLƏNDİ.
 
-| Agent | Model | Alətlər | Vəzifə |
-|---|---|---|---|
-| `planner` | opus | Read, Grep, Glob | Plan qurur, kod YAZMIR |
-| `ui-agent` | sonnet | Read, Grep, Glob | UI / komponent qərarları |
-| `builder` | sonnet | Read, Write, Edit, Bash, Grep, Glob | Kodu yazır (TDD) |
-| `reviewer` | sonnet | Read, Grep, Glob, Bash | Keyfiyyət + təhlükəsizlik qapısı |
+**Rol bölgüsü niyə tutmadı:** eyni faylı üç agent kəsirdi — `planner` oxuyur,
+`builder` yazır, `reviewer` yenidən oxuyur; hər üçü eyni konteksti sıfırdan
+qurmalı olurdu. Daha pisi: faylın SAHİBİ yox idi, ona görə iki agent eyni anda
+`authorization.py`-a toxuna bilərdi və ikincisi birincinin işini sükutla
+üstələyirdi. **Sahəyə görə** bölgüdə hər faylın BİR sahibi var — toqquşma
+sükutlu üst-yazma yox, mesaj olur.
 
-Səlahiyyət bölgüsü QƏSDƏNDİR: `builder` yaza bilir amma review edə bilmir,
-`reviewer` review edir amma yaza bilmir, `planner` yalnız oxuyur. Heç birində
-`Task` aləti YOXDUR — agent agenti çağıra bilmir, bütün koordinasiya əsas
-sessiyadan keçir. Bu, köhnə dəstin əsas problemini — kontekstin parçalanmasını
-— kəsir.
+| Teammate | Model | SAHİBLİYİ (YALNIZ bunu redaktə edir) |
+|---|---|---|
+| `domain` | sonnet | `src/domain/`, `src/application/use_cases/` |
+| `infra` | sonnet | `src/infrastructure/`, `database/`, config, `.spec`, `installer/` |
+| `security` | sonnet | `authorization.py`, `entities/position.py`, `src/infrastructure/security/`, `scripts/`, RLS qaydalarının MƏZMUNU |
+| `ui` | sonnet | `src/presentation/` (ekran, kontroller, widget, tokenlər, QSS) |
+| `qa` | sonnet | **YALNIZ `tests/`** |
 
-Skill-lər `.claude/skills/`-dədir: `tdd`, `senior-code-review`, `ui-ux-pro-max`.
-Adı `code-review` DEYİL, çünki built-in `/code-review` əmri ilə toqquşurdu və
-çağırışda hansının işə düşəcəyi qeyri-müəyyən qalırdı.
+Alət dəsti hamısında eynidir (`Read, Grep, Glob, Edit, Write, Bash`) — fərq
+alətdə YOX, SAHƏDƏDİR. Qəsdli qaydalar:
+
+* **Başqasının faylını dəyişmək qadağandır** — `SendMessage` göndərilir.
+* **`qa` heç bir `src/` faylına toxunmur:** tapır, sahibinə bildirir, düzəlişi
+  sahibi edir. Test yazan və kodu düzəldən eyni agent olsaydı, test düzəlişə
+  uyğunlaşdırılardı — lazım olan isə əksidir.
+* **Schema dəyişikliyini YALNIZ `infra` edir** (`security` nəyin lazım olduğunu
+  deyir), çünki miqrasiya faylı ilə `schema.sql` pariteti (§7) bir əldə
+  qalmalıdır.
+* Heç birində `Task` aləti YOXDUR — agent agenti çağıra bilmir, bütün
+  koordinasiya əsas sessiyadan keçir.
+* Heç biri `git commit` / `git push` etmir — commit yalnız əsas sessiyadan.
+
+Hər tərifdə `thinking_budget: 4090` var: audit dövrələrində teammate-lər
+dayaz qərar verirdi. **Qeyd:** bu açarın CLI tərəfindən oxunduğu
+sənədləşdirilməyib — tanınmasa sükutla nəzərə alınmır, yəni zərəri yoxdur.
+
+Skill-lər `.claude/skills/`-dədir. Layihəyə xas ÜÇÜ — `kompasos-architecture`,
+`kompasos-security`, `kompasos-ui` — teammate işə başlamazdan əvvəl öz sahəsinə
+uyğun olanı oxuyur. Ümumi ÜÇÜ: `tdd`, `senior-code-review`, `ui-ux-pro-max`.
+Sonuncunun adı `code-review` DEYİL, çünki built-in `/code-review` əmri ilə
+toqquşurdu və çağırışda hansının işə düşəcəyi qeyri-müəyyən qalırdı.
 
 **İşə salınma qaydası DƏYİŞMƏYİB: subagent yalnız istifadəçi ONU AÇIQ
 İSTƏDİKDƏ işə düşür** — nə «paralel gedər», nə «token qənaət edər» mülahizəsi
@@ -68,7 +91,8 @@ Kod şərhlərində qalan «agent qaydası 4», «agent tərifi, 4 sual» tipli
 istinadlar da həmin köhnə dəstə aiddir — qərarın haradan gəldiyinin
 sübutudur, çağırılacaq agent deyil. Mətnləri git tarixçəsindədir (`HEAD`
 DEYİL, silinmədən ƏVVƏLKİ commit):
-`git show 5dc3443^:.claude/agents/anti-fraud-auditor.md`.
+`git show 5dc3443^:.claude/agents/anti-fraud-auditor.md`, rol dəsti üçün isə
+`git show 814059c^:.claude/agents/planner.md`.
 
 ---
 
