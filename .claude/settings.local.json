@@ -26,7 +26,36 @@
       "Bash(.venv/Scripts/python.exe -m pytest tests/unit --cov=src/domain --cov=src/shared --cov=src/infrastructure/security --cov-fail-under=85 -q)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/unit --cov=src/domain --cov=src/shared --cov=src/infrastructure/security -q)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/unit/test_exception_engine.py -q --cov=src/domain/exception_rules --cov=src/domain/entities/exception_record --cov=src/domain/value_objects/exception_signals)",
-      "Bash(.venv/Scripts/python.exe -m pytest tests/unit/test_persistence_gap_coverage.py -q)"
+      "Bash(.venv/Scripts/python.exe -m pytest tests/unit/test_persistence_gap_coverage.py -q)",
+      "Bash(.venv/Scripts/python.exe -m pytest *)",
+      "Bash(.venv/Scripts/python.exe -m ruff *)",
+      "Bash(.venv/Scripts/python.exe -m mypy *)",
+      "Bash(.venv/Scripts/python.exe -m coverage *)",
+      "Bash(.venv/Scripts/python.exe scripts/check_contrast.py *)",
+      "Bash(.venv/Scripts/python.exe scripts/check_symmetry.py *)",
+      "Bash(QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe *)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git ls-files*)",
+      "Bash(.venv/Scripts/python.exe .claude/hooks/ruff_fix.py*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.venv/Scripts/python.exe\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/ruff_fix.py\"",
+            "timeout": 30,
+            "statusMessage": "ruff"
+          }
+        ]
+      }
     ]
   }
 }

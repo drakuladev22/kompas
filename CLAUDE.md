@@ -53,6 +53,22 @@ sükutlu üst-yazma yox, mesaj olur.
 | `ui` | sonnet | `src/presentation/` (ekran, kontroller, widget, tokenlər, QSS) |
 | `qa` | sonnet | **YALNIZ `tests/`** |
 
+### QA-FULL dəsti — ÜÇ ƏLAVƏ agent (`qamanual.md`)
+
+`qamanual.md` proqramı üçün istifadəçi ÜÇ agent daha istədi. Onlar sahə
+bölgüsünü POZMUR — heç birinin öz faylı yoxdur, hər biri TAPIR və sahibinə
+`SendMessage` göndərir (yalnız `e2e-test-engineer` `tests/`-ə yazır):
+
+| Teammate | Nə edir | Düzəlişi kim edir |
+|---|---|---|
+| `performance-profiling-engineer` | Millisaniyə və sorğu sayı ölçür (Faza 5) | tapıntının sahibi |
+| `e2e-test-engineer` | Hər ekranı/düyməni REAL işə salır (Faza 3/4) | tapıntının sahibi; testi ÖZÜ yazır |
+| `crash-stability-engineer` | Sürətli klik, ekstremal input, şəbəkə kəsilməsi (Faza 6) | tapıntının sahibi |
+
+**Niyə vəzifə-agenti qadağası bunlara aid deyil:** silinən 47 agent FAYL
+SAHİBİ idi — ona görə eyni faylı üç agent kəsirdi. Bunlar sahib deyil,
+ÖLÇÜCÜdür. Sahiblik cədvəli dəyişməz qalır.
+
 Alət dəsti hamısında eynidir (`Read, Grep, Glob, Edit, Write, Bash`) — fərq
 alətdə YOX, SAHƏDƏDİR. Qəsdli qaydalar:
 
@@ -76,6 +92,12 @@ Skill-lər `.claude/skills/`-dədir. Layihəyə xas ÜÇÜ — `kompasos-archite
 uyğun olanı oxuyur. Ümumi ÜÇÜ: `tdd`, `senior-code-review`, `ui-ux-pro-max`.
 Sonuncunun adı `code-review` DEYİL, çünki built-in `/code-review` əmri ilə
 toqquşurdu və çağırışda hansının işə düşəcəyi qeyri-müəyyən qalırdı.
+
+`.claude/hooks/ruff_fix.py` — `PostToolUse` hook-u (`Write|Edit`):
+`src/`, `tests/`, `scripts/` altındakı hər `.py` faylına yazıdan DƏRHAL
+sonra `ruff check --fix` + `ruff format` işlədir. `jq` bu maşında YOXDUR,
+ona görə stdin JSON-u Python ilə oxunur. Hook heç vaxt BLOKLAMIR — `ruff`-un
+düzəldə bilmədiyi xəta onsuz da §2 qapılarında görünür.
 
 **İşə salınma qaydası DƏYİŞMƏYİB: subagent yalnız istifadəçi ONU AÇIQ
 İSTƏDİKDƏ işə düşür** — nə «paralel gedər», nə «token qənaət edər» mülahizəsi
