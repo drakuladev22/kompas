@@ -34,10 +34,11 @@ from src.presentation.shell.admin_shell import AdminShell
 from src.presentation.shell.kiosk import KioskWindow
 from src.presentation.shell.menu import build_default_registry
 from src.presentation.shell.window import FramelessWindow
+from src.presentation.stall_monitor import StallMonitor
 from src.presentation.theme.manager import ThemeManager
 from src.presentation.theme.tokens import ThemeMode
 from src.presentation.theme.transition import animate_theme_change
-from src.shared.logger import get_logger
+from src.shared.logger import get_logger, install_global_exception_hook
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -300,11 +301,23 @@ class KompasApplication:
         self._startup_task: Any = None
         #: İlk quraşdırma yazısı — eyni səbəbdən istinad saxlanılır.
         self._setup_task: Any = None
+        #: Tutulmamış istisna barədə istifadəçiyə ARTIQ deyilibmi.
+        self._crash_notified = False
         self._theme = ThemeManager(preference=theme_preference)
         self._theme.apply(app)
 
         self._registry = build_default_registry()
         self._window = FramelessWindow(title="KompasOS", theme=self._theme)
+        # ──────────────────────────────────────────────────────────────────
+        # DONMA ÖLÇÜSÜ HƏR ZAMAN AÇIQDIR
+        # ──────────────────────────────────────────────────────────────────
+        # Bu layihədə donmaların HAMISI müştəri şikayətindən sonra, jurnaldakı
+        # iki hadisənin vaxt fərqindən ÇIXARIŞ yolu ilə tapılıb. Yəni yalnız
+        # aralarında jurnal yazısı olan donmalar görünürdü. Monitor bunu
+        # tərsinə çevirir: kilidlənmə öz-özünü `MAIN_THREAD_STALL` kimi yazır.
+        # Pəncərəyə bağlanır — pəncərə öləndə taymer də ölür.
+        self._stall_monitor = StallMonitor(parent=self._window)
+        self._stall_monitor.start()
         # Başlıq zolağındakı tema düyməsi HƏR ekranda işləyir — splash,
         # sihirbaz, giriş və örtük. Əvvəl düymə YALNIZ örtüyün səhifə
         # başlığında idi, yəni girişdən əvvəl temanı dəyişmək mümkün deyildi
@@ -410,6 +423,51 @@ class KompasApplication:
         self._window.set_content(splash)
         self._window.show()
         splash.finish_after(SPLASH_DURATION_MS)
+
+    def notify_unhandled_error(
+        self, exc_type: type[BaseException], exc: BaseException, _tb: object = None
+    ) -> None:
+        """Tutulmamış istisna — İSTİFADƏÇİYƏ BİR DƏFƏ xəbər verilir.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ LAZIM OLDU
+        ──────────────────────────────────────────────────────────────────────
+        `install_global_exception_hook()` istisnanı tam traceback ilə
+        `error.log`-a yazır — DÜZGÜNDÜR, lakin EKRANDA heç nə dəyişmir. Giriş
+        çökməsi məhz belə görünürdü: istifadəçi «Yoxlanılır…» görüb yenidən
+        giriş ekranına qayıdırdı, jurnalda isə `NameError` vardı. İstifadəçi
+        üçün bu, «proqram işləmir, səbəbi bilinmir» deməkdir — o, nə şikayət
+        edəcəyini, biz isə nəyi axtaracağımızı bilmirdik.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ YALNIZ BİR DƏFƏ
+        ──────────────────────────────────────────────────────────────────────
+        Bir qüsur adətən TƏKRARLANIR (hər klikdə eyni slot çökür). Hər dəfə
+        pəncərə açsaydıq, istifadəçi onlarla dialoqu bağlamağa məcbur olar və
+        proqramı bağlaya bilməzdi — yəni bildiriş özü nasazlığa çevrilərdi.
+        Jurnal HƏR hadisəni yazmağa davam edir; məhdudlaşan yalnız ekrandır.
+
+        Mətn TEXNİKİ DEYİL: istisnanın adı istifadəçiyə heç nə demir. Ona görə
+        ekranda «nə etməli» yazılır, ad isə yalnız jurnala düşür.
+        """
+        if self._crash_notified:
+            return
+        self._crash_notified = True
+        _log.error("UNHANDLED_ERROR_NOTIFIED", extra={"error_type": exc_type.__name__})
+
+        from PySide6.QtWidgets import QMessageBox  # noqa: PLC0415
+
+        box = QMessageBox(self._window)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Gözlənilməz xəta")
+        box.setText(
+            "Əməliyyat tamamlana bilmədi.\n\n"
+            "Proqram işləməyə davam edir, lakin son əməliyyat baş tutmadı. "
+            "Təkrar cəhd edin; problem davam edərsə dəstəyə müraciət edin — "
+            "səbəb `error.log` faylına yazılıb."
+        )
+        box.setDetailedText(f"{exc_type.__name__}: {exc}")
+        box.exec()
 
     def show_loading_splash(self) -> None:
         """Splash-ı DƏRHAL göstərir — kontekst qurulmamışdan ƏVVƏL.
@@ -4196,6 +4254,14 @@ def run(
     app.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
 
     application = KompasApplication(app, preview=preview, theme_preference=theme, context=context)
+
+    # QLOBAL HOOK GUI-YƏ BAĞLANIR.
+    #
+    # `main.py` onu ARTIQ quraşdırıb və jurnal yazısı oradan gəlir — burada
+    # ƏLAVƏ olunan yeganə şey EKRANDIR. Təkrar quraşdırma jurnal davranışını
+    # dəyişmir: `install_global_exception_hook()` hər çağırışda eyni yazını
+    # qurur, `on_crash` isə onun ÜSTÜNƏ gəlir.
+    install_global_exception_hook(on_crash=application.notify_unhandled_error)
 
     # KONTEKST BURADA QURULUR, `main.py`-da YOX (SETUP-1 Faza 2).
     #

@@ -483,6 +483,8 @@ qalmır, qərara çevrilir.
 | Tema keçidinin giriş-öncəsi ekranlara ötürülməsi (THEME-1) | `presentation/shell/window.py` → məzmunun `apply_theme` metodu |
 | Fokus halqasının giriş modallığı (FOCUS-1) | `presentation/widgets/focus_ring.py` (`input_modality_tracker`); `buttons.py` onu YALNIZ İSTİFADƏ edir — D11-də dövri idxaldan qaçmaq üçün ayrıldı |
 | Bloklamadan əvvəl ekranı çəkdirmə (UX-1) | `presentation/controllers/ui_feedback.py` (`flush_ui`) |
+| Əsas sapın donma ölçüsü (QA-0) | `presentation/stall_monitor.py` — `MAIN_THREAD_STALL` |
+| QA ölçmə dəsti (vaxt, sorğu sayı, yaddaş) | `tests/fixtures/qa_harness.py`, `tests/unit/test_qa_infrastructure.py` |
 | Sessiyanın gediş-gəliş büdcəsi (PERF-1/2/3) | `docs/performance_notes.md`, `tests/unit/test_session_roundtrips.py`, `test_read_batch_scope.py` |
 | Açılış oxularının toplusu (PERF-3) | `ApplicationContext.read_batch()` — sapa görə ayrı, YALNIZ oxu |
 | `Screen` törəməsi ikinci layout QURMUR (LAYOUT-1) | `tests/unit/test_screen_layout_ownership.py` — pozulsa ekran BOŞ render olunur |
@@ -515,6 +517,7 @@ açarın məcburi olduğunu oradan öyrənir.
 | `KOMPASOS_DEVICE_FILE` | ✅ | Defolt `%PROGRAMDATA%\KompasOS\device.json`. Faylda yalnız `device_id` var və şifrələnmir — sirr deyil (DEVICE-1). Silinsə cihaz YENİ qeydiyyat yaradır |
 | `KOMPASOS_PLUGIN_TRUSTED_PUBLISHERS` | ✅ | Boş = fail-closed, heç bir plugin quraşdırılmır |
 | `KOMPASOS_PLUGIN_PYTHON` | ✅ | Paketlənmiş mühitdə plugin sandbox-u üçün interpretator; tapılmasa plugin icra olunmur |
+| `KOMPASOS_STALL_WARN_MS` | ✅ | Defolt 1000 ms. Əsas sap bu qədər kilidlənsə `MAIN_THREAD_STALL` jurnala düşür. `system_limits` DEYİL — monitor bazadan ƏVVƏL, açılış yolunda işə düşür |
 
 ---
 

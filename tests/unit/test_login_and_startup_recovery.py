@@ -228,7 +228,7 @@ def test_a_successful_rebuild_adopts_the_context() -> None:
     """Uğurlu cəhd nə ayarlar, nə fatal ekran açır — normal axına keçir."""
     application, settings_calls, fatal_calls = _application_with_recorders()
     adopted: list[Any] = []
-    application.adopt_context = lambda context: adopted.append(context)  # type: ignore[attr-defined]
+    application.adopt_context = adopted.append  # type: ignore[attr-defined]
 
     context = object()
     application._attempt_startup(lambda: context)
