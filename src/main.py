@@ -710,7 +710,7 @@ def _build_release_publisher(database: TenantDatabase) -> ReleasePublisher | Non
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911
     """Giriş nöqtəsi."""
     parser = argparse.ArgumentParser(prog="kompasos", description="KompasOS")
     parser.add_argument(
@@ -851,12 +851,46 @@ def main(argv: list[str] | None = None) -> int:
     # import zamanı lazy konfiqurasiyanı işə salır (app_version="0.0.0").
     # Kompozisiya kökü olaraq son sözü main deyir — əks halda bütün log
     # sətirləri yanlış versiya ilə yazılır.
-    log_dir = configure_logging(
-        log_dir=args.log_dir,
-        level=os.environ.get("KOMPASOS_LOG_LEVEL", "INFO"),
-        app_version=__version__,
-        force=True,
-    )
+    #
+    # `try/except OSError` QA dövrə 5 tapıntısıdır: `configure_logging()`
+    # `target_dir.mkdir(...)`-i qoruyucusuz çağırır (icazə siyasəti, antivirus,
+    # ya da eyni addan FAYL — `%PROGRAMDATA%\KompasOS\logs` yaradıla bilmirsə)
+    # — bu, aşağıdakı `except KompasOSError` blokundan ƏVVƏL, `install_global_
+    # exception_hook()`-dan da ƏVVƏL baş verirdi, yəni xəta NƏ jurnala düşürdü,
+    # NƏ təmiz çıxış kodu ilə bitirdi: xam `OSError` `main()`-dən yüksəlirdi.
+    # Paketlənmiş `--windowed` `.exe`-də bu, HEÇ BİR pəncərə/mesaj görünmədən
+    # səssiz çıxış demək idi.
+    #
+    # `get_logger(...)`-ə BURADA GÜVƏNİLMİR: konfiqurasiya məhz BU addımda
+    # uğursuz olub — lazy defolt YENİDƏN EYNİ qırıq qovluğu sınayardı və
+    # ikinci, gizli `OSError` yaradardı. `stderr`-ə yazmaq TƏK etibarlı
+    # kanaldır (mənbədən icrada və konsollu paketlənmədə görünür; sırf
+    # `--windowed` ikonla-klik ssenarisində görünməz qalır — bu, `is_frozen()`
+    # + özünü-yoxlama uğursuzluğunun YUXARIDAKI eyni, artıq QƏBUL EDİLMİŞ
+    # məhdudiyyətidir, YENİ boşluq deyil).
+    try:
+        log_dir = configure_logging(
+            log_dir=args.log_dir,
+            level=os.environ.get("KOMPASOS_LOG_LEVEL", "INFO"),
+            app_version=__version__,
+            force=True,
+        )
+    except (OSError, KompasOSError) as exc:
+        # `KompasOSError` DƏ TUTULUR: `configure_logging()` artıq xam `OSError`
+        # buraxmır — əvvəlcə `%TEMP%`-ə geri çəkilir (mağaza kassası log
+        # qovluğuna görə İŞƏ DÜŞMƏMƏLİDİR), yalnız O DA alınmasa `LogSetupError`
+        # (bir `KompasOSError` törəməsi) atır. Burada yalnız `OSError` yazılsaydı,
+        # həmin son hal yenidən qorunmasız qalardı — yəni düzəliş özü yeni
+        # səssiz ölüm yaradardı.
+        #
+        # `print` BURADA QƏSDƏNDİR (layihənin qalan hissəsi `logger`-dən
+        # istifadə edir) — `get_logger(...)` elə BU addımın özündə uğursuz
+        # olan konfiqurasiyaya güvənərdi (bax yuxarıdakı şərh).
+        print(  # noqa: T201
+            f"KompasOS: log qovluğu yaradıla bilmədi ({exc}). Qovluğa yazma icazəsini yoxlayın.",
+            file=sys.stderr,
+        )
+        return EXIT_STARTUP_ERROR
     install_global_exception_hook()
 
     log = get_logger(__name__)

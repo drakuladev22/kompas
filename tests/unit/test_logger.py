@@ -141,3 +141,108 @@ def test_configure_logging_is_idempotent(tmp_path: Path) -> None:
     assert second == tmp_path / "b"  # force olmadan yenidən qurulmur
     get_logger("test").info("qeyd")
     assert (tmp_path / "a" / "app.log").exists()
+
+
+def test_an_unusable_log_directory_falls_back_instead_of_crashing(
+    tmp_path: Path,
+) -> None:
+    """AÇILIŞ ÇÖKMƏSİ (dövrə 5) — indi GERİ ÇƏKİLMƏ ilə əvəzlənib.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NƏ QIRIQ İDİ
+    ──────────────────────────────────────────────────────────────────────────
+    `configure_logging` `target_dir.mkdir(...)`-i qoruyucusuz çağırırdı və
+    `main()` onu HƏM `install_global_exception_hook()`-dan, HƏM əsas
+    `try/except`-dən ƏVVƏL işlədir. Yəni `%PROGRAMDATA%\\KompasOS\\logs`
+    yaradıla bilməyəndə (icazə siyasəti, antivirus, ya eyni addan FAYL) xam
+    `OSError` yüksəlirdi: paketlənmiş `--windowed` `.exe`-də NƏ pəncərə, NƏ
+    mesaj, NƏ `error.log` sətri — proses sadəcə yox olurdu.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ ÇÖKMƏ YOX, GERİ ÇƏKİLMƏ SEÇİLDİ
+    ──────────────────────────────────────────────────────────────────────────
+    Mağaza kassası log qovluğuna görə İŞƏ DÜŞMƏMƏLİDİR — növbə başlayır,
+    kassir işləməlidir. Üstəlik «təmiz çıxış kodu» `--windowed` rejimdə
+    istifadəçiyə heç nə göstərmir (`stderr` görünmür), yəni o da praktikada
+    səssiz yoxa çıxmadır.
+    """
+    blocker = tmp_path / "blocker"
+    blocker.write_text("bura qovluq deyil, fayldır", encoding="utf-8")
+    unwritable_log_dir = blocker / "logs"  # ana element FAYLDIR — mkdir uğursuz olur
+
+    used = configure_logging(log_dir=unwritable_log_dir, console=False, force=True)
+
+    assert used != unwritable_log_dir
+    assert used.is_dir()
+    # Geri çəkilmə `%TEMP%`-ədir — istənilən istifadəçi üçün yazıla biləndir.
+    assert used.parent.name == "KompasOS"
+
+
+def test_the_fallback_is_written_to_the_log_so_it_can_be_traced(
+    tmp_path: Path,
+) -> None:
+    """Geri çəkilmə SÜKUTLA olmur — «loglar niyə boşdur?» sualı cavablanmalıdır."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("fayl", encoding="utf-8")
+    requested = blocker / "logs"
+
+    used = configure_logging(log_dir=requested, console=False, force=True)
+    error_log = used / "error.log"
+
+    assert error_log.exists()
+    # SƏTİR JSON-dur — mətn axtarışı yol ayırıcılarının qoşa qaçışına görə
+    # yanıldıcıdır (`\` → `\\`). Ona görə sətir PARSE olunur və sahələr
+    # ADLA yoxlanılır: bu, həm dəqiqdir, həm də sahə adı dəyişəndə testi
+    # sükutla keçirmir.
+    # SONUNCU uyğun sətir götürülür, BİRİNCİ yox: geri çəkilmə qovluğu
+    # `%TEMP%`-dədir və PAYLAŞILANDIR — orada əvvəlki icraların (hətta əvvəlki
+    # test dövrələrinin) `LOG_DIR_FALLBACK` sətirləri qalır. Birincini
+    # götürsəydik test başqa icranın yolunu yoxlayardı və səbəbi tapmaq
+    # çətin olardı.
+    entries = [
+        json.loads(line)
+        for line in error_log.read_text(encoding="utf-8").splitlines()
+        if line.strip() and json.loads(line).get("message") == "LOG_DIR_FALLBACK"
+    ]
+    assert entries, "LOG_DIR_FALLBACK sətri yazılmayıb"
+    entry = entries[-1]
+
+    # Həm İSTƏNİLƏN, həm İŞLƏDİLƏN yol yazılır — səbəb izlənə bilsin.
+    assert Path(entry["context"]["requested"]) == requested
+    assert Path(entry["context"]["used"]) == used
+    assert entry["context"]["error"]
+
+
+def test_main_starts_normally_when_only_the_preferred_log_dir_is_broken(
+    tmp_path: Path,
+) -> None:
+    """Sınıq log qovluğu açılışı DAYANDIRMIR — `EXIT_STARTUP_ERROR` qaytarılmır."""
+    from src.main import EXIT_STARTUP_ERROR, main
+
+    blocker = tmp_path / "blocker"
+    blocker.write_text("bura qovluq deyil, fayldır", encoding="utf-8")
+
+    code = main(["--check", "--log-dir", str(blocker / "logs")])
+
+    assert code != EXIT_STARTUP_ERROR
+
+
+def test_main_exits_cleanly_when_even_the_fallback_is_unusable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HƏR İKİ qovluq alınmasa: təmiz çıxış kodu, XAM istisna YOX.
+
+    Bu, düzəlişin ÖZÜNÜN yeni səssiz ölüm yaratmadığını kilidləyir: son hal
+    `LogSetupError` (bir `KompasOSError` törəməsi) atır və `main()`-in
+    `except (OSError, KompasOSError)` budağı onu tutur.
+    """
+    from src.main import EXIT_STARTUP_ERROR, main
+
+    blocker = tmp_path / "blocker"
+    blocker.write_text("fayl", encoding="utf-8")
+    # `%TEMP%` DƏ sınıq olsun — geri çəkilmə yolu da bağlanır.
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(blocker))
+
+    code = main(["--check", "--log-dir", str(blocker / "logs")])
+
+    assert code == EXIT_STARTUP_ERROR

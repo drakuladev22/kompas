@@ -28,12 +28,17 @@ import sys
 import threading
 import traceback
 from collections.abc import MutableMapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Final
 
 from src.shared.data_paths import default_log_dir
+
+# `exceptions.py` HEÇ NƏ idxal etmir (yalnız `typing`), ona görə dairəvi
+# idxal riski YOXDUR — yoxlanıldı.
+from src.shared.exceptions import KompasOSError
 
 # --------------------------------------------------------------------------- #
 # Konfiqurasiya sabitləri
@@ -206,6 +211,78 @@ _configured: bool = False
 _configure_lock = threading.Lock()
 
 
+@dataclass(frozen=True)
+class _LogDirFallback:
+    """Log qovluğu dəyişdirildi — hansı yol istənmişdi və niyə alınmadı."""
+
+    requested: str
+    error: str
+
+
+class LogSetupError(KompasOSError):
+    """HEÇ BİR log qovluğu yaradıla bilmədi — açılış dayandırılmalıdır."""
+
+
+def _usable_log_dir(requested: Path | None) -> tuple[Path, _LogDirFallback | None]:
+    """Yazıla bilən log qovluğu tapır — TAPMASA aydın istisna atır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ BU FUNKSİYA VAR — SƏSSİZ ÖLÜM HALI (dövrə 5 auditi)
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl burada sadəcə `target_dir.mkdir(parents=True, exist_ok=True)` vardı.
+    `configure_logging()` isə `main()`-də HƏM `install_global_exception_hook()`
+    -dan, HƏM əsas `try/except`-dən ƏVVƏL çağırılır — yəni `mkdir` `OSError`
+    atsaydı istisna XAM yüksəlirdi. Paketlənmiş `--windowed` `.exe`-də bunun
+    nəticəsi ən pis formadır: **pəncərə yoxdur, mesaj yoxdur, `error.log`-da
+    da heç nə yoxdur** — proses sadəcə yox olur. Digər açılış xətalarından
+    fərqli olaraq geridə DİAQNOSTİK İZ QALMIR.
+
+    Repro edilib: `%PROGRAMDATA%\\KompasOS\\logs` yolunda eyniadlı FAYL varsa
+    `FileExistsError [WinError 183]` yüksəlir (icazə siyasəti və antivirus da
+    eyni nəticəni verə bilər).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ ÇÖKMƏK YOX, GERİ ÇƏKİLMƏK
+    ──────────────────────────────────────────────────────────────────────────
+    Mağaza kassası üçün «log qovluğu yaradıla bilmədi» səbəbi ilə İŞƏ
+    DÜŞMƏMƏK yanlış davranışdır: növbə başlayır, kassir işləməlidir, log isə
+    ikinci dərəcəli məsələdir. Ona görə əvvəlcə `%TEMP%`-ə çəkilirik — o,
+    praktiki olaraq HƏMİŞƏ yazıla biləndir.
+
+    Geri çəkilmə SÜKUTLA olmur: çağıran tərəf `_LogDirFallback` alır və
+    `configure_logging` bunu `LOG_DIR_FALLBACK` sətri ilə yazır. Üstəlik
+    `main()`-in `KOMPOSOS_STARTING` sətrindəki `log_dir` sahəsi artıq FAKTİKİ
+    qovluğu göstərir — yəni «loglar niyə boşdur?» sualı bir baxışda cavablanır.
+
+    HƏR İKİSİ alınmasa istisna atılır, lakin bu dəfə `KompasOSError`
+    törəməsidir — yəni `main()`-in mövcud `except KompasOSError` budağı onu
+    tutur və istifadəçi `EXIT_STARTUP_ERROR` ilə AYDIN nəticə alır.
+    """
+    import tempfile
+
+    primary = requested if requested is not None else default_log_dir()
+    try:
+        primary.mkdir(parents=True, exist_ok=True)
+    except OSError as first_error:
+        fallback = Path(tempfile.gettempdir()) / "KompasOS" / "logs"
+        try:
+            fallback.mkdir(parents=True, exist_ok=True)
+        except OSError as second_error:
+            raise LogSetupError(
+                "Log qovluğu yaradıla bilmədi",
+                user_message=(
+                    "Proqram jurnal qovluğunu yarada bilmədi. Administratorunuzla əlaqə saxlayın."
+                ),
+                context={
+                    "requested": str(primary),
+                    "fallback": str(fallback),
+                    "error": str(second_error),
+                },
+            ) from second_error
+        return fallback, _LogDirFallback(requested=str(primary), error=str(first_error))
+    return primary, None
+
+
 def configure_logging(
     *,
     log_dir: Path | None = None,
@@ -233,8 +310,7 @@ def configure_logging(
         if _configured and not force:
             return log_dir or default_log_dir()
 
-        target_dir = Path(log_dir) if log_dir else default_log_dir()
-        target_dir.mkdir(parents=True, exist_ok=True)
+        target_dir, fallback_reason = _usable_log_dir(Path(log_dir) if log_dir else None)
 
         for channel in LogChannel:
             logger = logging.getLogger(channel.logger_name)
@@ -261,6 +337,20 @@ def configure_logging(
                 logger.addHandler(stream_handler)
 
         _configured = True
+
+        if fallback_reason:
+            # SÜKUT QADAĞANDIR: log qovluğunun DƏYİŞMƏSİ özü diaqnostik
+            # faktdır. Bu sətir artıq qurulmuş kanala yazılır, yəni
+            # `%TEMP%`-dəki fayla düşür və «loglar niyə boşdur?» sualının
+            # cavabı elə orada olur.
+            logging.getLogger(LogChannel.ERROR.logger_name).error(
+                "LOG_DIR_FALLBACK",
+                extra={
+                    "requested": fallback_reason.requested,
+                    "used": str(target_dir),
+                    "error": fallback_reason.error,
+                },
+            )
         return target_dir
 
 
