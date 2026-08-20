@@ -47,8 +47,14 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q
 * `--onedir` QƏSDƏNDİR: `--onefile` hər açılışda arxivi `%TEMP%`-ə açırdı və
   müştəri maşınında 5-15 saniyə çəkirdi. Ölçülmüş isti açılış: **0.7 s**
   (ilk açılış ~5 s — Defender 960 yeni faylı bir dəfəlik yoxlayır).
-* `database/` və `.env` QƏSDƏN paketə düşmür: birincisi yerləşdirmə
-  artefaktıdır, ikincisi sirr saxlayır.
+* **`database/` PAKETƏ DÜŞÜR, `.env` DÜŞMÜR.** Bu sətir əvvəl «`database/`
+  qəsdən paketə düşmür» deyirdi — YANLIŞ idi və təhlükəli yanlış idi:
+  `provisioning.py` «Bazanı Avtomatik Qur» axınında sxemi və miqrasiyaları
+  məhz PAKETİN İÇİNDƏN oxuyur (`_sql_root()` əvvəlcə `bundle_root()`-a baxır),
+  yəni onlar olmasaydı təmiz müştəri quraşdırması bazanı QURA BİLMƏZDİ.
+  Spec onları `_DATABASE_DATAS` ilə daxil edir (`schema.sql` + kök səviyyəli
+  `NNN_*.sql`; `migrations/vendor/` DÜŞMÜR). Ölçülüb: paketdə **76 miqrasiya**.
+  `.env` isə HƏQİQƏTƏN düşmür — sirr saxlayır.
 
 Yoxlama:
 
