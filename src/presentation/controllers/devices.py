@@ -237,41 +237,67 @@ class DevicePendingController:
     AKTOR YOXDUR (bax modul başlığı).
     """
 
-    def __init__(self, context: ApplicationContext) -> None:
+    def __init__(self, context: ApplicationContext, *, executor: Any = None) -> None:
         self._context = context
+        #: Fon icraçısı — istehsalatda Qt hovuzu, testlərdə `InlineExecutor`.
+        self._executor = executor
+        #: Qaçan işə istinad: nəticə gəlməmiş toplanarsa siqnal itərdi.
+        self._task: Any = None
 
     def attach(self, screen: DevicePendingScreen) -> None:
         screen.recheck_requested.connect(lambda: self.refresh(screen))
         self.refresh(screen)
 
-    def refresh(self, screen: DevicePendingScreen) -> RegisteredDevice | None:
-        """Cihazı qeydiyyata salır/oxuyur və ekranı yeniləyir.
+    def refresh(self, screen: DevicePendingScreen) -> None:
+        """Cihazı qeydiyyata salır/oxuyur və ekranı yeniləyir — FON SAPINDA (UI-6).
 
-        Returns:
-            Cihaz sətri; oxuna bilmədisə `None`. Çağıran tərəf (`app.py`)
-            `is_operational` yoxlayaraq ekranı bağlayıb işə davam edir.
+        ──────────────────────────────────────────────────────────────────────
+        ƏVVƏL SİNXRON İDİ — DÖVRƏ 5 AUDİTİNİN TAPINTISI
+        ──────────────────────────────────────────────────────────────────────
+        `register()` HƏM baza sessiyası açır, HƏM `device_identity.
+        collect_fingerprint()` çağırır — sonuncusu Windows-da PowerShell
+        alt-prosesi işə salır və `HARDWARE_PROBE_TIMEOUT_SECONDS` (8 san.)
+        qədər gözləyə bilər (`device_identity.py::_probe_hardware`, — antivirus
+        və ya PowerShell siyasəti onu yavaşlada bilər). «Yenidən Yoxla»
+        düyməsi `set_busy(True)` ilə deaktiv olurdu, LAKİN iş özü GUI sapında
+        qalırdı — yəni bütün pəncərə həmin 8+ saniyə ərzində CAVAB VERMİRDİ
+        (sürüşdürülə, bağlana bilmirdi). Düzəliş `erp_servers.py` bağlantı
+        testi ilə EYNİ naxışdır.
         """
-        screen.set_busy(True)
-        # Qeydiyyat şəbəkəyə gedir — vəziyyət ƏVVƏLCƏ çəkilməlidir (UX-1).
-        flush_ui()
-        try:
-            device = self.register()
-        except KompasOSError as error:
-            screen.show_error(title="Qeydiyyat alınmadı", message=error.user_message)
-            return None
-        except Exception:
-            _error_log.exception("DEVICE_REGISTER_FAILED")
-            screen.show_error(title="Qeydiyyat alınmadı", message=REGISTER_FAILED)
-            return None
-        finally:
-            screen.set_busy(False)
+        from src.presentation.background_task import run_job  # noqa: PLC0415
 
-        screen.set_device(
-            short_code=device.short_code,
-            machine_name=device.machine_name,
-            status=device.status,
+        screen.set_busy(True)
+        # Qeydiyyat şəbəkəyə/aparat sorğusuna gedir — vəziyyət ƏVVƏLCƏ
+        # çəkilməlidir (UX-1).
+        flush_ui()
+
+        self._task = run_job(
+            self.register,
+            on_success=lambda device: self._on_registered(screen, device),
+            on_failure=lambda error: self._on_register_failed(screen, error),
+            owner=screen,
+            name="DEVICE_REGISTER",
+            executor=self._executor,
         )
-        return device
+
+    def _on_registered(self, screen: DevicePendingScreen, device: object) -> None:
+        """Nəticə ƏSAS SAPDA qəbul edilir — burada Qt widget-ə TOXUNULA bilər."""
+        screen.set_busy(False)
+        device_row: RegisteredDevice = device  # type: ignore[assignment]
+        screen.set_device(
+            short_code=device_row.short_code,
+            machine_name=device_row.machine_name,
+            status=device_row.status,
+        )
+
+    def _on_register_failed(self, screen: DevicePendingScreen, error: BaseException) -> None:
+        """Fon işində qalan istisna — SÜKUTLA UDULMUR."""
+        screen.set_busy(False)
+        if isinstance(error, KompasOSError):
+            screen.show_error(title="Qeydiyyat alınmadı", message=error.user_message)
+            return
+        _error_log.error("DEVICE_REGISTER_FAILED", exc_info=error)
+        screen.show_error(title="Qeydiyyat alınmadı", message=REGISTER_FAILED)
 
     def register(self) -> RegisteredDevice:
         """Cihazı tanıdır və kimliyi diskə yazır.

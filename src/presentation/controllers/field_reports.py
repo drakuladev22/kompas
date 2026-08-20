@@ -112,11 +112,20 @@ class FieldReportsController:
     """`FieldReportScreen`-i `FieldReportUseCase`-ə bağlayır."""
 
     def __init__(
-        self, context: ApplicationContext, actor: Employee, *, requires_checklist: bool
+        self,
+        context: ApplicationContext,
+        actor: Employee,
+        *,
+        requires_checklist: bool,
+        executor: Any = None,
     ) -> None:
         self._context = context
         self._actor = actor
         self._requires_checklist = requires_checklist
+        #: Fon icraçısı — istehsalatda Qt hovuzu, testlərdə `InlineExecutor`.
+        self._executor = executor
+        #: Ehtiyat: nəticə gəlməmiş toplanmasın (bax `_trigger_evidence_upload`).
+        self._upload_task: Any = None
 
     # ------------------------------- qoşulma --------------------------------- #
 
@@ -329,8 +338,28 @@ class FieldReportsController:
             return False
 
         # Yükləməni DƏRHAL bir dəfə sınayırıq (`fine_entry.py`-dəki eyni qərar).
-        self._context.run_evidence_uploads()
+        self._trigger_evidence_upload(screen)
         return True
+
+    def _trigger_evidence_upload(self, screen: FieldReportScreen) -> None:
+        """`run_evidence_uploads()` FON SAPINDA (DÖVRƏ 5 audit tapıntısı).
+
+        Bax `fine_entry.py::_trigger_evidence_upload` başlığı — eyni funksiya
+        gözləyən BÜTÜN partiyanı (20-yə qədər şəkil) şəbəkəyə yükləyir və
+        sinxron çağırıldıqda "Təqdim Et" düyməsi bu müddət ərzində donurdu.
+        """
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        self._upload_task = run_job(
+            self._context.run_evidence_uploads,
+            on_success=lambda _uploaded: None,
+            on_failure=lambda error: _error_log.error(
+                "FIELD_REPORT_UPLOAD_TRIGGER_FAILED", exc_info=error
+            ),
+            owner=screen,
+            name="FIELD_REPORT_UPLOAD",
+            executor=self._executor,
+        )
 
     def _on_progress(self, screen: FieldReportScreen, report_id: str) -> None:
         """«İcraya Götür» — `SUBMITTED` → `IN_PROGRESS`."""

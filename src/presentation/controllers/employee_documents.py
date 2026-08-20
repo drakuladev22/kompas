@@ -66,9 +66,15 @@ EMPLOYEE_DOCUMENT_ACTION_KEY = "employee_documents"
 class UsersEmployeeDocumentController:
     """`UsersScreen`-in "Sənədlər" bəndini `EmployeeDocumentUseCase`-ə bağlayır."""
 
-    def __init__(self, context: ApplicationContext, actor: Employee) -> None:
+    def __init__(
+        self, context: ApplicationContext, actor: Employee, *, executor: Any = None
+    ) -> None:
         self._context = context
         self._actor = actor
+        #: Fon icraçısı — istehsalatda Qt hovuzu, testlərdə `InlineExecutor`.
+        self._executor = executor
+        #: Ehtiyat: nəticə gəlməmiş toplanmasın (bax `_trigger_evidence_upload`).
+        self._upload_task: Any = None
 
     # ------------------------------- qoşulma --------------------------------- #
 
@@ -287,7 +293,28 @@ class UsersEmployeeDocumentController:
 
         # Yükləməni DƏRHAL bir dəfə sınayırıq (`fine_entry.py`-dəki EYNİ
         # qərar) — uğursuzluq əhəmiyyətsizdir, element növbədə qalır.
-        self._context.run_evidence_uploads()
+        self._trigger_evidence_upload(screen)
+
+    def _trigger_evidence_upload(self, screen: UsersScreen) -> None:
+        """`run_evidence_uploads()` FON SAPINDA (DÖVRƏ 5 audit tapıntısı).
+
+        Bax `fine_entry.py::_trigger_evidence_upload` başlığı — eyni funksiya
+        gözləyən BÜTÜN partiyanı (20-yə qədər şəkil) şəbəkəyə yükləyir və
+        sinxron çağırıldıqda "Sənəd əlavə et" dialoqu bu müddət ərzində
+        donurdu.
+        """
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        self._upload_task = run_job(
+            self._context.run_evidence_uploads,
+            on_success=lambda _uploaded: None,
+            on_failure=lambda error: _error_log.error(
+                "EMPLOYEE_DOCUMENT_UPLOAD_TRIGGER_FAILED", exc_info=error
+            ),
+            owner=screen,
+            name="EMPLOYEE_DOCUMENT_UPLOAD",
+            executor=self._executor,
+        )
 
     def _deactivate(
         self,

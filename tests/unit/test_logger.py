@@ -144,7 +144,7 @@ def test_configure_logging_is_idempotent(tmp_path: Path) -> None:
 
 
 def test_an_unusable_log_directory_falls_back_instead_of_crashing(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AÇILIŞ ÇÖKMƏSİ (dövrə 5) — indi GERİ ÇƏKİLMƏ ilə əvəzlənib.
 
@@ -165,7 +165,21 @@ def test_an_unusable_log_directory_falls_back_instead_of_crashing(
     kassir işləməlidir. Üstəlik «təmiz çıxış kodu» `--windowed` rejimdə
     istifadəçiyə heç nə göstərmir (`stderr` görünmür), yəni o da praktikada
     səssiz yoxa çıxmadır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `tempfile.gettempdir()` MOCK-LANIR (TESTİN İZOLYASİYASI)
+    ──────────────────────────────────────────────────────────────────────────
+    Mock-lanmasa geri çəkilmə HƏQİQİ `%TEMP%\\KompasOS\\logs`-a yazır. Bu
+    qovluq test sessiyaları arasında TƏMİZLƏNMİR (`RotatingFileHandler`
+    mövcud faylın üzərinə YAZMIR, ƏLAVƏ edir) — nəticədə real inkişaf
+    maşınında/CI agentində sahiblənilməyən artefakt yığılır VƏ testlər arası
+    sızma yaranır («son sətri götür» kimi fərdi düzəlişlər simptomu müalicə
+    edir, mənbəni yox). `tmp_path`-a bağlı SAXTA `%TEMP%` hər testi TAM
+    izolyasiya edir və `next(...)`/`[-1]` kimi «hansı köhnə sətri seçək»
+    sualını ümumiyyətlə YARATMIR.
     """
+    fake_temp = tmp_path / "faketemp"
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(fake_temp))
     blocker = tmp_path / "blocker"
     blocker.write_text("bura qovluq deyil, fayldır", encoding="utf-8")
     unwritable_log_dir = blocker / "logs"  # ana element FAYLDIR — mkdir uğursuz olur
@@ -174,14 +188,21 @@ def test_an_unusable_log_directory_falls_back_instead_of_crashing(
 
     assert used != unwritable_log_dir
     assert used.is_dir()
-    # Geri çəkilmə `%TEMP%`-ədir — istənilən istifadəçi üçün yazıla biləndir.
-    assert used.parent.name == "KompasOS"
+    assert used == fake_temp / "KompasOS" / "logs"
 
 
 def test_the_fallback_is_written_to_the_log_so_it_can_be_traced(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Geri çəkilmə SÜKUTLA olmur — «loglar niyə boşdur?» sualı cavablanmalıdır."""
+    """Geri çəkilmə SÜKUTLA olmur — «loglar niyə boşdur?» sualı cavablanmalıdır.
+
+    `tempfile.gettempdir()` YUXARIDAKI testin şərhindəki səbəblə mock-lanır:
+    izolyasiya olmadan `error.log` başqa testlərin/sessiyaların köhnə
+    `LOG_DIR_FALLBACK` sətirlərini daşıyır və test YANLIŞ (özününkü olmayan)
+    qeydi yoxlaya bilər.
+    """
+    fake_temp = tmp_path / "faketemp"
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(fake_temp))
     blocker = tmp_path / "blocker"
     blocker.write_text("fayl", encoding="utf-8")
     requested = blocker / "logs"
@@ -192,33 +213,27 @@ def test_the_fallback_is_written_to_the_log_so_it_can_be_traced(
     assert error_log.exists()
     # SƏTİR JSON-dur — mətn axtarışı yol ayırıcılarının qoşa qaçışına görə
     # yanıldıcıdır (`\` → `\\`). Ona görə sətir PARSE olunur və sahələr
-    # ADLA yoxlanılır: bu, həm dəqiqdir, həm də sahə adı dəyişəndə testi
-    # sükutla keçirmir.
-    # SONUNCU uyğun sətir götürülür, BİRİNCİ yox: geri çəkilmə qovluğu
-    # `%TEMP%`-dədir və PAYLAŞILANDIR — orada əvvəlki icraların (hətta əvvəlki
-    # test dövrələrinin) `LOG_DIR_FALLBACK` sətirləri qalır. Birincini
-    # götürsəydik test başqa icranın yolunu yoxlayardı və səbəbi tapmaq
-    # çətin olardı.
-    entries = [
-        json.loads(line)
-        for line in error_log.read_text(encoding="utf-8").splitlines()
-        if line.strip() and json.loads(line).get("message") == "LOG_DIR_FALLBACK"
-    ]
-    assert entries, "LOG_DIR_FALLBACK sətri yazılmayıb"
-    entry = entries[-1]
+    # ADLA yoxlanılır.
+    records = _read_lines(error_log)
+    fallback_records = [r for r in records if r["message"] == "LOG_DIR_FALLBACK"]
+    # İzolyasiya sayəsində DƏQİQ BİR sətir gözlənilir — "hansını götürək?"
+    # sualı (birinci/sonuncu) burada ümumiyyətlə yaranmır.
+    assert len(fallback_records) == 1
+    entry = fallback_records[0]
 
     # Həm İSTƏNİLƏN, həm İŞLƏDİLƏN yol yazılır — səbəb izlənə bilsin.
-    assert Path(entry["context"]["requested"]) == requested
-    assert Path(entry["context"]["used"]) == used
-    assert entry["context"]["error"]
+    assert Path(entry["context"]["requested"]) == requested  # type: ignore[index]
+    assert Path(entry["context"]["used"]) == used  # type: ignore[index]
+    assert entry["context"]["error"]  # type: ignore[index]
 
 
 def test_main_starts_normally_when_only_the_preferred_log_dir_is_broken(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Sınıq log qovluğu açılışı DAYANDIRMIR — `EXIT_STARTUP_ERROR` qaytarılmır."""
     from src.main import EXIT_STARTUP_ERROR, main
 
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path / "faketemp"))
     blocker = tmp_path / "blocker"
     blocker.write_text("bura qovluq deyil, fayldır", encoding="utf-8")
 

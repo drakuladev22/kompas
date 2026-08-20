@@ -33,6 +33,7 @@ from src.domain.value_objects.identifiers import (
     new_employee_document_id,
 )
 from src.infrastructure.storage.upload_queue import UploadOwnerType
+from src.presentation.background_task import InlineExecutor
 from src.presentation.controllers import screen_data as screen_data_module
 from src.presentation.controllers.employee_documents import UsersEmployeeDocumentController
 from src.shared.exceptions import KompasOSError
@@ -232,7 +233,11 @@ def _binder(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _controller(context: _Context) -> UsersEmployeeDocumentController:
-    return UsersEmployeeDocumentController(context, _Actor())  # type: ignore[arg-type]
+    # `InlineExecutor`: bu testlər MƏNTİQİ ölçür, sapı yox — nəticə dərhal,
+    # hadisə dövrü gözləmədən qayıdır (bax `background_task.py`).
+    return UsersEmployeeDocumentController(  # type: ignore[arg-type]
+        context, _Actor(), executor=InlineExecutor()
+    )
 
 
 # --------------------------------------------------------------------------- #

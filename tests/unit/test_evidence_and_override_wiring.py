@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from src.infrastructure.storage.upload_queue import UploadOwnerType
+from src.presentation.background_task import InlineExecutor
 from src.presentation.controllers.camera_queue import _combine
 from src.presentation.controllers.fine_entry import NO_STORES_MESSAGE, FineEntryController
 
@@ -149,7 +150,11 @@ class _Actor:
 
 
 def _controller(context: Any) -> FineEntryController:
-    controller = FineEntryController(context, actor=_Actor())  # type: ignore[arg-type]
+    # `InlineExecutor`: bu testlər MƏNTİQİ ölçür, sapı yox — nəticə dərhal,
+    # hadisə dövrü gözləmədən qayıdır (bax `background_task.py`).
+    controller = FineEntryController(  # type: ignore[arg-type]
+        context, actor=_Actor(), executor=InlineExecutor()
+    )
     controller._fine_types = {"Gecikmə": FINE_TYPE}
     controller._stores = {"Bellona 28 May": STORE}
     controller._employees = {"Aysel Quliyeva": WORKER}

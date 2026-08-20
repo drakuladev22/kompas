@@ -363,6 +363,17 @@ class KompasApplication:
         #: olunur), amma yerli dəyişən qalmasa Python onu nəticə gəlməmiş
         #: toplaya bilər (`background_task.py`-dakı eyni əsaslandırma).
         self._touch_task: Any = None
+        #: DÖVRƏ 5 audit tapıntısı — kamera çəkilişi + 1:1 üz doğrulaması
+        #: FON SAPINA köçüb (bax `_on_face_login_requested`). İstinad
+        #: `_touch_task` ilə EYNİ səbəbdən saxlanılır: nəticə gəlməmiş
+        #: toplanmasın.
+        self._face_login_task: Any = None
+        #: DÖVRƏ 5 audit tapıntısı — kiosk `on_face_login` (`start_kiosk`)
+        #: EYNİ səbəbdən fon sapına köçüb. `_face_login_task`-dan AYRIDIR:
+        #: panel və kiosk eyni anda AÇIQ ekranlar deyil, lakin iki müstəqil
+        #: axının BİR sahədə üst-üstə düşməsi (nadir, amma mümkün) birinin
+        #: nəticəsini digərinin ləğv etməsinə səbəb OLMAMALIDIR.
+        self._kiosk_face_task: Any = None
         #: Plugin-lərin verdiyi səhifələr (audit G-3) — girişdə hesablanır.
         self._plugin_pages: tuple[PluginPage, ...] = ()
 
@@ -680,14 +691,27 @@ class KompasApplication:
         return FaceLoginController(self._context).available()
 
     def _on_face_login_requested(self, username: str) -> None:
-        """«Üzlə daxil ol» — şifrəsiz giriş (1:1 üz doğrulaması).
+        """«Üzlə daxil ol» — şifrəsiz giriş (1:1 üz doğrulaması), İŞ FON SAPINDA (UI-7).
+
+        ──────────────────────────────────────────────────────────────────────
+        ƏVVƏL SİNXRON İDİ — DÖVRƏ 5 AUDİTİNİN TAPINTISI
+        ──────────────────────────────────────────────────────────────────────
+        `FaceLoginController.authenticate()` kamera çəkilişi + 1:1 üz doğrulaması
+        aparır və bu, saniyələr çəkir. Köhnə şərh bunu açıq etiraf edirdi
+        («o müddətdə ekran donmuş GÖRÜNÜRDÜ»), lakin düzəliş yalnız `flush_ui()`
+        ilə busy vəziyyətini ƏVVƏLCƏDƏN çəkməkdən ibarət idi (UX-1) — işin ÖZÜ
+        yenə GUI sapında qalırdı, yəni pəncərə həqiqətən DONURDU (sürüşdürülə,
+        bağlana bilmirdi), sadəcə "Yoxlanılır…" yazısı ilə donurdu.
+
+        Naxış `erp_servers.py`/`root_control.py::_on_telegram_test` ilə
+        EYNİDİR. Uğur yolunun qalan hissəsi (`_show_face_setup_if_required`,
+        `show_admin`) `_on_face_login_succeeded`-ə köçüb — o, ƏSAS SAPDA
+        işlədiyi üçün Qt widget-lərinə TOXUNA bilər.
 
         Önizləmədə şifrə yolu ilə EYNİ nümunə ekranı açılır: maket rejimində
         kamera yoxdur, lakin düymənin AXINI göstərilməlidir — əks halda dizayn
         baxışında o, ölü bir düymə kimi görünərdi.
         """
-        from datetime import UTC, datetime  # noqa: PLC0415
-
         if self._context is None:
             if self._preview:
                 from src.presentation import preview_data  # noqa: PLC0415
@@ -697,27 +721,43 @@ class KompasApplication:
             self._login.set_error("Baza bağlantısı qurulmayıb — üzlə giriş mümkün deyil.")
             return
 
+        from src.presentation.background_task import run_job  # noqa: PLC0415
         from src.presentation.controllers.face_login import (  # noqa: PLC0415
             FaceLoginController,
         )
 
         self._login.set_busy(True)
-        # «Yoxlanılır…» vəziyyəti DƏRHAL çəkilməlidir (UX-1): kamera çəkilişi
-        # və 1:1 doğrulama saniyələr çəkir və o müddətdə ekran donmuş görünürdü.
+        # «Yoxlanılır…» vəziyyəti DƏRHAL çəkilməlidir (UX-1).
         flush_ui()
-        try:
-            outcome = FaceLoginController(self._context).authenticate(username)
-        finally:
-            # Düymələr HƏR halda açılır — uğursuzluqdan sonra istifadəçi şifrə
-            # yoluna keçə bilməlidir.
-            self._login.set_busy(False)
 
-        if outcome.failed or outcome.employee is None:
-            self._login.set_error(outcome.message)
+        controller = FaceLoginController(self._context)
+        self._face_login_task = run_job(
+            lambda: controller.authenticate(username),
+            on_success=self._on_face_login_succeeded,
+            on_failure=self._on_face_login_failed,
+            owner=self._login,
+            name="FACE_LOGIN",
+        )
+
+    def _on_face_login_succeeded(self, outcome: object) -> None:
+        """Nəticə ƏSAS SAPDA qəbul edilir — burada Qt widget-ə TOXUNULA bilər."""
+        from datetime import UTC, datetime  # noqa: PLC0415
+
+        from src.presentation.controllers.face_login import (  # noqa: PLC0415
+            FaceLoginOutcome,
+        )
+
+        # Düymələr HƏR halda açılır — uğursuzluqdan sonra istifadəçi şifrə
+        # yoluna keçə bilməlidir.
+        self._login.set_busy(False)
+        result: FaceLoginOutcome = outcome  # type: ignore[assignment]
+
+        if result.failed or result.employee is None:
+            self._login.set_error(result.message)
             return
 
         self._login.clear()
-        employee = outcome.employee
+        employee = result.employee
         # Üz qeydiyyatı qapısı BURADA DA ÇAĞIRILIR, baxmayaraq ki, üzlə girən
         # işçinin profili onsuz da var: qapı «modul açıq + qeydiyyat yoxdur»
         # şərtinə baxır və bu yolda `False` qaytarır. Şərti burada təkrar
@@ -729,7 +769,7 @@ class KompasApplication:
         # ──────────────────────────────────────────────────────────────────
         # `show_admin()` DA BLOKLAYAN ƏMƏLİYYATDIR — İKİNCİ BUSY PƏNCƏRƏSİ (UI-1)
         # ──────────────────────────────────────────────────────────────────
-        # Yuxarıdakı `finally` göstəricini artıq söndürüb (uğursuz cəhddə düymə
+        # Yuxarıdakı sətir göstəricini artıq söndürüb (uğursuz cəhddə düymə
         # AÇIQ qalmalıdır), lakin bu sətirdən sonra `read_batch()` (PERF-3)
         # YENİDƏN bloklayır — adətən 1-2 s, hovuz tükənəndə/bağlantı qırılanda
         # isə köhnə yola qayıdıb ~18 s-ə qədər çəkə bilər (bax `show_admin`
@@ -741,6 +781,18 @@ class KompasApplication:
             self.show_admin(employee, now=datetime.now(UTC))
         finally:
             self._login.set_busy(False)
+
+    def _on_face_login_failed(self, error: BaseException) -> None:
+        """Fon işində qalan istisna — SÜKUTLA UDULMUR.
+
+        `FaceLoginController.authenticate()` özü istisna ATMIR (bütün hallar
+        `FaceLoginOutcome.succeeded=False`-a çevrilir, bax onun başlığı), ona
+        görə bura NORMALDA düşmür — son qoruyucudur (`root_control.py::
+        _on_telegram_test_failed` ilə eyni məntiq).
+        """
+        self._login.set_busy(False)
+        _log.error("FACE_LOGIN_TASK_FAILED", exc_info=error)
+        self._login.set_error("Üz təsdiqi aparıla bilmədi. Şifrənizlə daxil olun.")
 
     def set_kiosk_controller(self, controller: KioskController) -> None:
         """Kiosk PIN körpüsünü qoşur (Faza 5)."""
@@ -3727,7 +3779,19 @@ class KompasApplication:
             kiosk.set_content(home)
 
         def on_face_login() -> None:
-            """«Üzlə daxil ol» — PIN-siz giriş (üz qapısı ilə).
+            """«Üzlə daxil ol» — PIN-siz giriş (üz qapısı ilə), İŞ FON SAPINDA (UI-8).
+
+            ──────────────────────────────────────────────────────────────────
+            ƏVVƏL «BUSY GÖRÜNTÜSÜ», HƏQİQİ FON İŞİ DEYİLDİ — DÖVRƏ 5 TAPINTISI
+            ──────────────────────────────────────────────────────────────────
+            Kamera çəkilişi + 1:N tanıma + 1:1 doğrulama bloklayan
+            əməliyyatdır — panel girişindəki 1:1-dən DAHA AĞIRDIR. Əvvəlki
+            düzəliş (UX-1) yalnız `set_busy(True)` + `flush_ui()` qoyub
+            "Yoxlanılır…" görüntüsünü ÇƏKDİRİRDİ, lakin `authenticate_by_face()`
+            ÖZÜ hələ GUI sapında icra olunurdu — yəni kiosk pəncərəsi Windows
+            üçün "cavab vermir" halına düşürdü, sadəcə həmin donma "Yoxlanılır…"
+            yazısı ilə baş verirdi. Naxış `_on_face_login_requested` (panel
+            yolu) ilə EYNİDİR — `run_job` ilə fona köçürülür.
 
             Önizləmədə eyni nümunə ekranı açılır: maket rejimində kamera və
             baza yoxdur, lakin düymənin AXINI göstərilməlidir — əks halda
@@ -3740,29 +3804,38 @@ class KompasApplication:
                 pin_pad.show_message(kiosk_unconfigured_message())
                 return
 
-            # UX-1 — ÜZ DOĞRULAMASI SANİYƏLƏR ÇƏKİR, EKRAN DONMUŞ GÖRÜNMƏMƏLİDİR.
-            #
-            # Kamera çəkilişi + 1:N tanıma + 1:1 doğrulama bloklayan
-            # əməliyyatdır. Əvvəl heç bir göstərici yox idi: işçi düyməni
-            # basırdı, kiosk cavabsız qalırdı və o, düyməni TƏKRAR basırdı —
-            # ikinci çəkiliş növbəyə düşürdü. Panel girişində eyni yol ARTIQ
-            # düzgün qurulmuşdu (`_on_face_login_requested`), kiosk yolu
-            # unudulmuşdu.
-            pin_pad.set_busy(True)
-            flush_ui()
-            try:
-                outcome = self._kiosk_controller.authenticate_by_face()
-            finally:
-                # Düymələr HƏR halda açılır — uğursuzluqdan sonra işçi PIN
-                # yoluna keçə bilməlidir.
+            from src.presentation.background_task import run_job  # noqa: PLC0415
+
+            controller = self._kiosk_controller
+
+            def on_success(outcome: object) -> None:
+                """Nəticə ƏSAS SAPDA qəbul edilir — Qt widget-ə burada TOXUNULA bilər."""
                 pin_pad.set_busy(False)
+                result: KioskOutcome = outcome  # type: ignore[assignment]
+                if result.failed or result.employee is None:
+                    pin_pad.show_message(result.message)
+                    return
+                home = self._build_employee_home(result, kiosk=kiosk, pin_pad=pin_pad)
+                kiosk.set_content(home)
 
-            if outcome.failed or outcome.employee is None:
-                pin_pad.show_message(outcome.message)
-                return
+            def on_failure(error: BaseException) -> None:
+                """Fon işində qalan istisna — SÜKUTLA UDULMUR (son qoruyucu)."""
+                pin_pad.set_busy(False)
+                _log.error("KIOSK_FACE_LOGIN_TASK_FAILED", exc_info=error)
+                pin_pad.show_message("Üz təsdiqi aparıla bilmədi. PIN ilə daxil olun.")
 
-            home = self._build_employee_home(outcome, kiosk=kiosk, pin_pad=pin_pad)
-            kiosk.set_content(home)
+            # Klaviatura və üz düyməsi İŞ BAŞLAMAZDAN ƏVVƏL söndürülür —
+            # ikiqat çəkilişin qarşısını alır (`PinPadScreen.set_busy`).
+            # `flush_ui()` ARTIQ LAZIM DEYİL: iş fondadırsa hadisə dövrəsi
+            # onsuz da işləyir və "Yoxlanılır…" görüntüsü təbii yolla çəkilir.
+            pin_pad.set_busy(True)
+            self._kiosk_face_task = run_job(
+                controller.authenticate_by_face,
+                on_success=on_success,
+                on_failure=on_failure,
+                owner=pin_pad,
+                name="KIOSK_FACE_LOGIN",
+            )
 
         pin_pad.submitted.connect(on_pin)
         pin_pad.face_login_requested.connect(on_face_login)

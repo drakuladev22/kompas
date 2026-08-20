@@ -26,7 +26,7 @@ etiraz düyməsi SƏTİRDƏDİR.
 from __future__ import annotations
 
 from time import monotonic
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import UUID, uuid4
 
 from src.domain.value_objects.identifiers import PointsEntryId, RedemptionId, RewardId
@@ -34,9 +34,13 @@ from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from src.domain.entities.employee import Employee
     from src.presentation.composition import ApplicationContext, Session
     from src.presentation.screens.group_f import SalesPointsScreen
+
+_T = TypeVar("_T")
 
 _error_log = get_logger(__name__, channel=LogChannel.ERROR)
 
@@ -65,13 +69,21 @@ class SalesPointsController:
         mükafat təsdiqlənir). Qərarı use case verir.
         """
 
+        parsed_reward_id = _parse_uuid(reward_id, RewardId)
+        if parsed_reward_id is None:
+            screen.show_error(
+                title="Mükafat sorğusu göndərilmədi",
+                message="Mükafat identifikatoru düzgün deyil. Səhifəni yeniləyin.",
+            )
+            return
+
         redemption_id = self._redemption_id_for(reward_id)
 
         def run(session: Session) -> None:
             session.sales_points.request_reward(
                 tenant_id=session.tenant_id,
                 actor=self._actor,
-                reward_id=RewardId(UUID(reward_id)),
+                reward_id=parsed_reward_id,
                 # `redemption_id` ÇAĞIRAN TƏRƏFDƏN gəlir: use case-in özü
                 # yaratsaydı, təkrar göndərmə (ikiqat klik) İKİ sətir yazardı.
                 redemption_id=redemption_id,
@@ -118,6 +130,14 @@ class SalesPointsController:
     # ------------------------------- etiraz ---------------------------------- #
 
     def _on_appeal(self, screen: SalesPointsScreen, entry_id: str) -> None:
+        parsed_entry_id = _parse_uuid(entry_id, PointsEntryId)
+        if parsed_entry_id is None:
+            screen.show_error(
+                title="Etiraz göndərilmədi",
+                message="Xal sətrinin identifikatoru düzgün deyil. Səhifəni yeniləyin.",
+            )
+            return
+
         reason = self._ask_reason(screen)
         if reason is None:
             return
@@ -126,7 +146,7 @@ class SalesPointsController:
             session.sales_points.open_dispute(
                 tenant_id=session.tenant_id,
                 actor=self._actor,
-                entry_id=PointsEntryId(UUID(entry_id)),
+                entry_id=parsed_entry_id,
                 reason=reason,
             )
 
@@ -180,6 +200,28 @@ class SalesPointsController:
                 message=getattr(exc, "user_message", "Yenidən cəhd edin."),
                 on_retry=lambda: self.refresh(screen),
             )
+
+
+def _parse_uuid(raw: str, wrap: Callable[[UUID], _T]) -> _T | None:
+    """`str` → domen ID-si; yararsız isə `None` (DÖVRƏ 5 audit tapıntısı).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ BURADA — ÇÖKMƏ RİSKİ
+    ──────────────────────────────────────────────────────────────────────────
+    Normal axında `raw` ekranın ÖZ göstərdiyi sətirdən gəlir, ona görə həmişə
+    etibarlı UUID-dir. Lakin köhnəlmiş sətir/gələcək UI uyğunsuzluğu halında
+    `UUID(raw)` `ValueError` atır — bu isə `_write()`-in `except KompasOSError`
+    budağından KEÇMİR (`ValueError` domen istisnası deyil). Tutulmasaydı,
+    istisna Qt siqnal slotundan (`reward_requested`/`appeal_requested`)
+    yuxarı qalxıb tətbiqi çökdürərdi. Naxış `tasks.py::_parse_task_id`
+    (özü də `employee_documents.py::_deactivate`-dəki QA-13 düzəlişindən
+    gəlir) ilə EYNİDİR.
+    """
+    try:
+        return wrap(UUID(raw))
+    except ValueError:
+        _error_log.error("SALES_POINTS_ID_MALFORMED", extra={"raw_id": raw})
+        return None
 
 
 __all__ = ["SalesPointsController"]

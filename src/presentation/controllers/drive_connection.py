@@ -61,12 +61,18 @@ STATUS_TEXT: dict[str, tuple[str, str]] = {
 class DriveConnectionController:
     """Razılıq axınını başladır, gözləyir və bağlantını yazır."""
 
-    def __init__(self, context: ApplicationContext, actor: Employee) -> None:
+    def __init__(
+        self, context: ApplicationContext, actor: Employee, *, executor: Any = None
+    ) -> None:
         self._context = context
         self._actor = actor
         self._flow: Any = None
         self._timer: QTimer | None = None
         self._elapsed_ms = 0
+        #: Fon icraçısı — istehsalatda Qt hovuzu, testlərdə `InlineExecutor`.
+        self._executor = executor
+        #: Kod-mübadiləsi işinə istinad: nəticə gəlməmiş toplanarsa siqnal itərdi.
+        self._exchange_task: Any = None
 
     # ------------------------------- qoşulma --------------------------------- #
 
@@ -229,12 +235,34 @@ class DriveConnectionController:
 
         if code is None:
             return
+        # Kod gəldi — TAYMER burada dayandırılır: `_complete()` indi FONDA
+        # işləyəcək (bax onun başlığı) və taymer kəsilməsə, növbəti 200 ms-lik
+        # tıqqıltı artıq bağlanmış lokal serverdə ikinci `poll()` çağırardı.
+        self._stop_timer()
         self._complete(screen, code)
 
     def _complete(self, screen: DriveConnectionScreen, code: str) -> None:
+        """Kodu token-ə dəyişir — İŞ FON SAPINDADIR (UI-5).
+
+        ──────────────────────────────────────────────────────────────────
+        ƏVVƏL SİNXRON İDİ — DÖVRƏ 5 AUDİTİNİN TAPINTISI
+        ──────────────────────────────────────────────────────────────────
+        `flow.exchange()` Google token endpoint-inə birbaşa `httpx` ilə POST
+        göndərir (`infrastructure/storage/oauth_flow.py`), taymautu isə 30
+        saniyədir. Sinxron çağırıldıqda bu, `QTimer.timeout` slotunun içində
+        icra olunduğu üçün bütün GUI sapını — və beləliklə bütöv pəncərəni —
+        həmin müddət ərzində dondururdu. Düzəliş `erp_servers.py` bağlantı
+        testi ilə EYNİ naxışdır (`background_task.run_job`).
+        """
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
         flow = self._flow
         assert flow is not None
-        try:
+
+        def job() -> object:
+            # FON SAPINDA icra olunur: `flow.exchange()` şəbəkə çağırışıdır,
+            # `_repository()` isə `self._context.database` hovuzundan TƏZƏ
+            # bağlantı götürür (`unit_of_work`) — pool sap-təhlükəsizdir.
             credentials = flow.exchange(code)
             connection = self._repository().connect(
                 google_account_email=credentials.account_email or "(naməlum hesab)",
@@ -242,19 +270,22 @@ class DriveConnectionController:
                 encryption=self._encryption(),
                 connected_by=self._actor.id,
             )
-        except KompasOSError as error:
-            self._finish(screen)
-            screen.show_error(title="Hesab qoşulmadı", message=error.user_message)
-            return
-        except Exception:
-            self._finish(screen)
-            _error_log.exception("DRIVE_CONNECT_FAILED")
-            screen.show_error(
-                title="Hesab qoşulmadı",
-                message="Bağlantı yazıla bilmədi. Yenidən cəhd edin.",
-            )
-            return
+            return (credentials, connection)
 
+        self._exchange_task = run_job(
+            job,
+            on_success=lambda result: self._on_exchange_succeeded(screen, result),
+            on_failure=lambda error: self._on_exchange_failed(screen, error),
+            owner=screen,
+            name="DRIVE_OAUTH_EXCHANGE",
+            executor=self._executor,
+        )
+
+    def _on_exchange_succeeded(self, screen: DriveConnectionScreen, result: object) -> None:
+        """Nəticə ƏSAS SAPDA qəbul edilir — burada Qt widget-ə TOXUNULA bilər."""
+        credentials: Any
+        connection: Any
+        credentials, connection = result  # type: ignore[misc]
         _audit_log.warning(
             "DRIVE_CONNECTION_ESTABLISHED",
             extra={"actor_id": str(self._actor.id), "account": credentials.account_email},
@@ -292,11 +323,28 @@ class DriveConnectionController:
         # bağlantının işlədiyini elə burada görməlidir.
         self._context.run_evidence_uploads()
 
+    def _on_exchange_failed(self, screen: DriveConnectionScreen, error: BaseException) -> None:
+        """Fon işində qalan istisna — SÜKUTLA UDULMUR."""
+        self._finish(screen)
+        if isinstance(error, KompasOSError):
+            screen.show_error(title="Hesab qoşulmadı", message=error.user_message)
+            return
+        _error_log.error("DRIVE_CONNECT_FAILED", exc_info=error)
+        screen.show_error(
+            title="Hesab qoşulmadı",
+            message="Bağlantı yazıla bilmədi. Yenidən cəhd edin.",
+        )
+
     def _on_cancel(self, screen: DriveConnectionScreen) -> None:
         self._finish(screen)
 
     def _finish(self, screen: DriveConnectionScreen) -> None:
         self._stop_timer()
+        if self._exchange_task is not None:
+            # Ləğv = nəticəni rədd etmək (bax `background_task.py`): gözlənən
+            # kod-mübadiləsi bağlanmış ekrana/dialoqa geri yazılmasın.
+            self._exchange_task.cancel()
+            self._exchange_task = None
         if self._flow is not None:
             self._flow.close()
             self._flow = None

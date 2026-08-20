@@ -48,12 +48,18 @@ NO_STORES_MESSAGE = "Sizə hələ mağaza təyin edilməyib — cərimə yarada 
 class FineEntryController:
     """Cərimə formasını `ManualFineUseCase` və sübut növbəsinə bağlayır."""
 
-    def __init__(self, context: ApplicationContext, actor: Employee) -> None:
+    def __init__(
+        self, context: ApplicationContext, actor: Employee, *, executor: Any = None
+    ) -> None:
         self._context = context
         self._actor = actor
         self._fine_types: dict[str, Any] = {}
         self._stores: dict[str, Any] = {}
         self._employees: dict[str, Any] = {}
+        #: Fon icraçısı — istehsalatda Qt hovuzu, testlərdə `InlineExecutor`.
+        self._executor = executor
+        #: Ehtiyat: əsas iş bitmədən toplanmasın (bax `_trigger_evidence_upload`).
+        self._upload_task: Any = None
 
     # ------------------------------- seçimlər -------------------------------- #
 
@@ -181,8 +187,34 @@ class FineEntryController:
         # 3) Yükləməni DƏRHAL bir dəfə sınayırıq — şəbəkə varsa şəkil saniyələr
         #    içində Drive-a düşür. Uğursuzluq əhəmiyyətsizdir: element növbədə
         #    qalır və taymer onu təkrar götürür.
-        self._context.run_evidence_uploads()
+        self._trigger_evidence_upload(screen)
         self._refresh(screen)
+
+    def _trigger_evidence_upload(self, screen: FineEntryScreen) -> None:
+        """`run_evidence_uploads()` FON SAPINDA — DÖVRƏ 5 AUDİTİNİN TAPINTISI.
+
+        ──────────────────────────────────────────────────────────────────────
+        ƏVVƏL SİNXRON İDİ
+        ──────────────────────────────────────────────────────────────────────
+        `run_evidence_uploads()` növbədəki HƏR gözləyən şəkli (partiya ölçüsü
+        20-yə qədər) Google Drive-a yükləyir — bu tək YENİ şəkil deyil, bütün
+        BACKLOG-dur (zəif internetli filialda toplanmış ola bilər). `app.py::
+        _drain_upload_queue` (D3-01) məhz bu funksiyanı GUI sapından çıxarıb,
+        lakin bu çağırış nöqtəsi o zaman unudulmuşdu — "cərimə saxla" düyməsi
+        arxada eyni sinxron şəbəkə yükləməsini yenə DÖVRƏ EDİRDİ.
+        """
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        self._upload_task = run_job(
+            self._context.run_evidence_uploads,
+            on_success=lambda _uploaded: None,
+            on_failure=lambda error: _error_log.error(
+                "FINE_EVIDENCE_UPLOAD_TRIGGER_FAILED", exc_info=error
+            ),
+            owner=screen,
+            name="FINE_EVIDENCE_UPLOAD",
+            executor=self._executor,
+        )
 
     def _refresh(self, screen: FineEntryScreen) -> None:
         from src.presentation.controllers.screen_data import ScreenDataBinder  # noqa: PLC0415

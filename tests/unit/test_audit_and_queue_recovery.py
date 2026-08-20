@@ -29,6 +29,7 @@ from src.infrastructure.storage.upload_queue import (
     UploadOwnerType,
     UploadStatus,
 )
+from src.presentation.background_task import InlineExecutor
 from src.presentation.controllers.drive_connection import DriveConnectionController
 from src.presentation.controllers.screen_data import (
     LATE_QUEUE_MINUTES,
@@ -170,7 +171,11 @@ def _controller(
     audit: _Audit, monkeypatch: Any
 ) -> tuple[DriveConnectionController, _Context, _Repository, _Screen]:
     context = _Context(audit)
-    controller = DriveConnectionController(context, _Actor())  # type: ignore[arg-type]
+    # `InlineExecutor`: bu testlər MƏNTİQİ ölçür, sapı yox — nəticə dərhal,
+    # hadisə dövrü gözləmədən qayıdır (bax `background_task.py`).
+    controller: DriveConnectionController = DriveConnectionController(  # type: ignore[arg-type]
+        context, _Actor(), executor=InlineExecutor()
+    )
     repository = _Repository(_Connection())
     monkeypatch.setattr(controller, "_repository", lambda: repository)
     # Şifrələmə xidməti bu testdə heç nə etmir: yoxlanan şey token-in

@@ -173,16 +173,31 @@ class TaskReviewController:
     # ------------------------------- qərarlar -------------------------------- #
 
     def _on_approve(self, screen: TasksScreen, task_id: str) -> None:
+        parsed_id = _parse_task_id(task_id)
+        if parsed_id is None:
+            screen.show_error(
+                title="Təsdiq yazılmadı",
+                message="Tapşırıq identifikatoru düzgün deyil. Səhifəni yeniləyin.",
+            )
+            return
+
         def run(session: Session) -> None:
             session.tasks.approve(
                 tenant_id=session.tenant_id,
                 actor=self._actor,
-                task_id=TaskId(UUID(task_id)),
+                task_id=parsed_id,
             )
 
         self._write(screen, run, failure="Təsdiq yazılmadı")
 
     def _on_reject(self, screen: TasksScreen, task_id: str) -> None:
+        parsed_id = _parse_task_id(task_id)
+        if parsed_id is None:
+            screen.show_error(
+                title="Rədd yazılmadı",
+                message="Tapşırıq identifikatoru düzgün deyil. Səhifəni yeniləyin.",
+            )
+            return
         reason = self._ask_reason(screen)
         if reason is None:
             return
@@ -191,7 +206,7 @@ class TaskReviewController:
             session.tasks.reject(
                 tenant_id=session.tenant_id,
                 actor=self._actor,
-                task_id=TaskId(UUID(task_id)),
+                task_id=parsed_id,
                 reason=reason,
             )
 
@@ -262,6 +277,27 @@ class TaskReviewController:
                 # şəbəkə/baza bir anlıq düşə bilər.
                 on_retry=lambda: self.refresh(screen),
             )
+
+
+def _parse_task_id(raw: str) -> TaskId | None:
+    """`str` → `TaskId`; yararsız isə `None` (DÖVRƏ 5 audit tapıntısı).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ BURADA — ÇÖKMƏ RİSKİ
+    ──────────────────────────────────────────────────────────────────────────
+    Normal axında `raw` ekranın ÖZ göstərdiyi kartdan gəlir, ona görə həmişə
+    etibarlı UUID-dir. Lakin köhnəlmiş kart/gələcək UI uyğunsuzluğu halında
+    `UUID(raw)` `ValueError` atır — bu isə `_write()`-in `except KompasOSError`
+    budağından KEÇMİR (`ValueError` domen istisnası deyil). Tutulmasaydı,
+    istisna Qt siqnal slotundan (`approve_requested`/`reject_requested`)
+    yuxarı qalxıb tətbiqi çökdürərdi. Naxış `employee_documents.py::
+    _deactivate`-dəki QA-13 düzəlişinin EYNİSİdir.
+    """
+    try:
+        return TaskId(UUID(raw))
+    except ValueError:
+        _error_log.error("TASK_ID_MALFORMED", extra={"task_id": raw})
+        return None
 
 
 def _inform(screen: Any, title: str, message: str) -> None:
