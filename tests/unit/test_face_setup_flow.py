@@ -273,9 +273,20 @@ def test_the_ceo_path_runs_after_the_wizard_not_at_login() -> None:
     """
     source = _APP.read_text(encoding="utf-8")
     setup = source[source.index("def _on_setup_completed") :]
-    setup = setup[: setup.index("def _start_ceo_face_setup")]
+    setup = setup[: setup.index("def _ceo_face_setup_subject")]
 
-    assert "_start_ceo_face_setup(payload)" in setup
+    # Subyekt sihirbazın CAVABINDAN (`payload`) tapılır — yəni yol
+    # quraşdırmanın sonundadır. Yazma fon sapına köçəndən sonra çağırış iki
+    # metoda bölündü: `_ceo_face_setup_subject` fonda (baza gedişi),
+    # `_start_ceo_face_setup` isə əsas sapda (Qt widget-i). Hər ikisi HƏLƏ DƏ
+    # bu blokun içindədir — giriş ekranında deyil.
+    assert "_ceo_face_setup_subject(payload)" in setup
+    assert "_start_ceo_face_setup(employee)" in setup
+
+    login = source[source.index("def show_login") :]
+    login = login[: login.index("    def ", 1)]
+    assert "_start_ceo_face_setup" not in login, "CEO qeydiyyatı giriş ekranına sürüşüb"
+    assert "_start_ceo_face_setup" not in login, "CEO qeydiyyatı giriş ekranına sürüşüb"
 
 
 def test_the_module_toggle_switches_the_requirement_off() -> None:

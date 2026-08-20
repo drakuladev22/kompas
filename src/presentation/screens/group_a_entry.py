@@ -624,6 +624,8 @@ class FirstRunWizard(QWidget):
         super().__init__(parent)
         self._theme = theme
         self._index = 0
+        #: Quraşdırma fonda gedirmi — `set_busy()` idarə edir.
+        self._busy = False
         # ──────────────────────────────────────────────────────────────────
         # VƏZİYYƏT WIDGET-LƏRDƏN UZUN YAŞAYIR
         # ──────────────────────────────────────────────────────────────────
@@ -854,7 +856,7 @@ class FirstRunWizard(QWidget):
         # 1C server və HR dəvəti addımları keçilə bilər — hər ikisi
         # spesifikasiyada "istəyə görə"dir (bölmə 7, sətir 223).
         self._skip.setVisible(self._index >= self.FIRST_OPTIONAL_STEP)
-        self._next.setText("Tamamla" if self._index == len(self.STEPS) - 1 else "Davam Et")
+        self._next.setText(self._next_label())
 
     def _field(self, key: str, label: str, *, password: bool = False) -> FormField:
         """Sahəni qurur və ƏVVƏL yazılmış dəyəri BƏRPA edir.
@@ -981,6 +983,34 @@ class FirstRunWizard(QWidget):
         self._index -= 1
         self._apply_step()
 
+    def set_busy(self, busy: bool) -> None:
+        """Quraşdırma FONDA gedir — sihirbaz gözləmə vəziyyətinə keçir.
+
+        ────────────────────────────────────────────────────────────────────
+        NİYƏ LAZIMDIR
+        ────────────────────────────────────────────────────────────────────
+        «Tamamla» basıldıqda `complete_setup()` uzaq bazaya ONLARLA yazı
+        göndərir (tenant, mağazalar, hesab, dəvətlər) — şəbəkə gecikməsi ilə
+        bu, saniyələrlə ölçülür. Əvvəl həmin iş GUI sapında idi: pəncərə
+        donurdu və istifadəçi «proqram ağır işləyir» görürdü. İş fona
+        keçəndən sonra ekran CAVAB VERİR, lakin heç nə dəyişməsəydi
+        istifadəçi «düyməni basdım, heç nə olmadı» deyib TƏKRAR basardı —
+        ikinci sorğu isə yarımçıq quraşdırma yaradardı.
+
+        Ona görə vəziyyət GÖRÜNÜR (düymə mətni) və düymələr BLOKLANIR.
+        Blokla mətn bir yerdədir: yalnız biri olsaydı ya səssiz gözləmə, ya
+        da yalançı «hazırdır» görüntüsü qalardı.
+        """
+        self._busy = busy
+        self._next.setEnabled(not busy)
+        self._skip.setEnabled(not busy)
+        self._back.setEnabled(not busy and self._index > 0)
+        self._next.setText("Quraşdırılır…" if busy else self._next_label())
+
+    def _next_label(self) -> str:
+        """Son addımda «Tamamla», qalanlarında «Davam Et»."""
+        return "Tamamla" if self._index == len(self.STEPS) - 1 else "Davam Et"
+
     def _on_next(self) -> None:
         """«Davam Et» — validasiya, tutma, sonra irəliləmə.
 
@@ -988,7 +1018,7 @@ class FirstRunWizard(QWidget):
         `self._index`-ə baxır, ona görə artırmadan sonra çağırılsaydı NÖVBƏTİ
         addımın (hələ qurulmamış) sahələrini oxumağa çalışardı.
         """
-        if not self._validate_current():
+        if self._busy or not self._validate_current():
             return
         self._capture_current()
         if self._index < len(self.STEPS) - 1:
@@ -1004,6 +1034,8 @@ class FirstRunWizard(QWidget):
         validasiyadan keçirdi və keçilən addımın yarımçıq dəyərlərini
         saxlayırdı. «Keç» sözü hər iki davranışın əksini vəd edir.
         """
+        if self._busy:
+            return
         self._discard_current()
         if self._index < len(self.STEPS) - 1:
             self._index += 1

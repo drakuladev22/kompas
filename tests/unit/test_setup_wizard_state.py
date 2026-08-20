@@ -242,7 +242,7 @@ def test_only_correctable_errors_avoid_the_fatal_screen() -> None:
 
     for name in ("WeakSecretError", "InvalidUsernameError", "InvalidEmailError"):
         assert name in source, f"`{name}` düzəldilə bilən siyahısında yoxdur"
-    assert "isinstance(exc, kind)" in source, "ayırma tip üzrə deyil"
+    assert "isinstance(error, kind)" in source, "ayırma tip üzrə deyil"
     assert "FIRST_RUN_SETUP_REJECTED" in source, "rədd cavabı ayrıca jurnala yazılmır"
     # Fatal yol SİLİNMƏMƏLİDİR — yalnız daralıb.
     assert "FIRST_RUN_SETUP_FAILED" in source

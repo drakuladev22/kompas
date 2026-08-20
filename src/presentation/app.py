@@ -280,9 +280,14 @@ class KompasApplication:
         preview: bool = False,
         theme_preference: ThemeMode = ThemeMode.SYSTEM,
         context: ApplicationContext | None = None,
+        executor: Any = None,
     ) -> None:
         self._app = app
         self._preview = preview
+        #: Fon icraçısı — istehsalatda Qt sap hovuzu (`None` → defolt),
+        #: testlərdə `InlineExecutor`. Naxış `erp_servers.py`/`root_control.py`
+        #: kontrollerlərindəki ilə eynidir.
+        self._executor = executor
         _apply_window_icon(app)
         #: Canlı obyekt qrafı (Faza 5/6). `None` -> önizləmə/dizayn rejimi.
         self._context = context
@@ -290,6 +295,11 @@ class KompasApplication:
         #: SƏBƏBİ ayırır (`recovery_console.may_open`-un bypass qərarı buna
         #: söykənir). Kontekst uğurla qurulubsa `None` qalır.
         self._startup_failure_kind: StartupFailureKind | None = None
+        #: Fon açılış cəhdi — istinad SAXLANILIR, yoxsa Python onu
+        #: nəticə gəlmədən toplayar və splash əbədi qalar.
+        self._startup_task: Any = None
+        #: İlk quraşdırma yazısı — eyni səbəbdən istinad saxlanılır.
+        self._setup_task: Any = None
         self._theme = ThemeManager(preference=theme_preference)
         self._theme.apply(app)
 
@@ -524,11 +534,75 @@ class KompasApplication:
         self._window.set_content(wizard)
 
     def _on_setup_completed(self, payload: dict[str, object], wizard: QWidget) -> None:
-        """Sihirbaz formu doldurdu — hesab/mağaza yaradılır, sonra giriş.
+        """Sihirbaz formu doldurdu — yazma FON SAPINDA başlayır.
 
         Sihirbaz EKRANI özü heç nə yazmır (o, yalnız formadır); yazma
         `FirstRunSetupUseCase`-dədir və o, "tenant boşdurmu?" qapısını
         yenidən yoxlayır — ekranın vəziyyətinə güvənilmir.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ FON SAPI — İSTİFADƏÇİNİN «AĞIR İŞLƏYİR» ŞİKAYƏTİ
+        ──────────────────────────────────────────────────────────────────────
+        `complete_setup()` TƏK əməliyyat deyil: tenant sətri, mağazalar, CEO
+        hesabı, dəvətlər və 1C serveri — hamısı ayrı-ayrı gediş-gəlişlərdir və
+        baza UZAQDADIR. Arxasınca `_ceo_face_setup_subject()` daha bir
+        autentifikasiya və iki oxu edir. Hamısı GUI sapında idi, yəni
+        «Tamamla» basıldıqdan sonra pəncərə tam donurdu — istifadəçi bunu
+        «qeydiyyat yerində proqram ağır işləyir» kimi bildirdi.
+
+        Naxış açılış yolundakı ilə eynidir (`_attempt_startup`): iş
+        `run_job`-a verilir, EKRAN QƏRARI isə əsas sapda çıxarılır — Qt
+        widget-i yalnız orada qurula bilər.
+
+        İşçiyə istinad `self._setup_task`-da SAXLANILIR: saxlanmasaydı Python
+        onu nəticə gəlməmiş toplayardı və quraşdırma sükutla itərdi.
+        """
+        if self._context is None:
+            self.show_login()
+            return
+
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        context = self._context
+        set_busy = getattr(wizard, "set_busy", None)
+        if callable(set_busy):
+            set_busy(True)
+
+        def _store() -> Employee | None:
+            """FON SAPI: yazır və CEO üz qeydiyyatının lazım olub-olmadığını deyir.
+
+            İki addım BİR işdədir, çünki ikincisi birincinin nəticəsindən
+            asılıdır (hesab hələ yaranmayıbsa autentifikasiya mənasızdır) və
+            ayrı iş kimi buraxılsaydı aralarında yenə GUI sapı bloklanardı.
+            """
+            context.complete_setup(payload)
+            # CEO-NUN ÜZ QEYDİYYATI SİHİRBAZIN SONUNDADIR (SEC-025).
+            # İşçilər onu İLK GİRİŞDƏ keçir və orada yanlarındakı admin
+            # təsdiqləyir; CEO üçün bu mümkün deyil, çünki o an tenant-da
+            # ondan başqa admin YOXDUR. Şərti use case özü yoxlayır.
+            return self._ceo_face_setup_subject(payload)
+
+        self._setup_task = run_job(
+            _store,
+            on_success=lambda employee: self._on_setup_stored(employee, wizard),
+            on_failure=lambda error: self._on_setup_rejected(error, wizard),
+            owner=wizard,
+            name="FIRST_RUN_SETUP",
+            executor=self._executor,
+        )
+
+    def _on_setup_stored(self, employee: Employee | None, wizard: QWidget) -> None:
+        """Quraşdırma bitdi — ƏSAS SAPDA növbəti ekran seçilir."""
+        set_busy = getattr(wizard, "set_busy", None)
+        if callable(set_busy):
+            set_busy(False)
+        if employee is not None:
+            self._start_ceo_face_setup(employee)
+            return
+        self.show_login()
+
+    def _on_setup_rejected(self, error: BaseException, wizard: QWidget) -> None:
+        """Quraşdırma uğursuz oldu — düzəldilə bilən səhv FATAL DEYİL.
 
         ──────────────────────────────────────────────────────────────────────
         DÜZƏLDİLƏ BİLƏN SƏHV FATAL DEYİL
@@ -543,10 +617,6 @@ class KompasApplication:
         hər şey FATAL qalır — «bilinməyəni buraxmaq» prinsipi tərsinədir və
         sükutla yarımçıq quraşdırma yaradardı.
         """
-        if self._context is None:
-            self.show_login()
-            return
-
         from src.application.use_cases.first_run_setup import (  # noqa: PLC0415
             SetupValidationError,
         )
@@ -564,48 +634,38 @@ class KompasApplication:
             (SetupValidationError, ""),
         )
 
-        try:
-            self._context.complete_setup(payload)
-        except Exception as exc:
-            for kind, field in correctable:
-                if isinstance(exc, kind):
-                    _log.warning(
-                        "FIRST_RUN_SETUP_REJECTED",
-                        extra={"error_type": type(exc).__name__, "field": field or "—"},
-                    )
-                    message = getattr(exc, "user_message", "") or str(exc)
-                    show_error = getattr(wizard, "show_error", None)
-                    if callable(show_error):
-                        show_error(message, field=field)
-                        return
-                    break
-            _log.exception("FIRST_RUN_SETUP_FAILED")
-            self.show_fatal_error(getattr(exc, "user_message", "Quraşdırma tamamlana bilmədi."))
-            return
+        # BLOK ƏVVƏLCƏ AÇILIR: sihirbaz açıq qalırsa düymələr yenidən
+        # işləməlidir, fatal ekrana keçiriksə onsuz da bu widget atılır.
+        set_busy = getattr(wizard, "set_busy", None)
+        if callable(set_busy):
+            set_busy(False)
 
-        # CEO-NUN ÜZ QEYDİYYATI SİHİRBAZIN SONUNDADIR (SEC-025).
-        # İşçilər onu İLK GİRİŞDƏ keçir və orada yanlarındakı admin
-        # təsdiqləyir; CEO üçün bu mümkün deyil, çünki o an tenant-da ondan
-        # başqa admin YOXDUR. Şərti use case özü yoxlayır.
-        if self._start_ceo_face_setup(payload):
-            return
-        self.show_login()
+        for kind, field in correctable:
+            if isinstance(error, kind):
+                _log.warning(
+                    "FIRST_RUN_SETUP_REJECTED",
+                    extra={"error_type": type(error).__name__, "field": field or "—"},
+                )
+                message = getattr(error, "user_message", "") or str(error)
+                show_error = getattr(wizard, "show_error", None)
+                if callable(show_error):
+                    show_error(message, field=field)
+                    return
+                break
 
-    def _start_ceo_face_setup(self, payload: dict[str, object]) -> bool:
+        _log.error("FIRST_RUN_SETUP_FAILED", extra={"error": str(error)})
+        self.show_fatal_error(getattr(error, "user_message", "Quraşdırma tamamlana bilmədi."))
+
+    def _start_ceo_face_setup(self, employee: Employee) -> None:
         """Sihirbazdan sonra CEO-nun üz qeydiyyatı ekranını açır.
 
-        Returns:
-            `True` — ekran göstərildi; `False` — şərt ödənmir və adi axın
-            (giriş ekranı) davam etməlidir.
+        Subyekt ARTIQ tapılıb (`_ceo_face_setup_subject`, fon sapında) — bu
+        metod yalnız widget qurur, yəni əsas sapdan çıxmır.
 
         UĞURSUZLUQ AXINI DAYANDIRMIR: quraşdırma ARTIQ tamamlanıb və hesab
         yaranıb. Üz qeydiyyatı alınmasa istifadəçi giriş edə bilməlidir —
         əks halda kamerasız maşında quraşdırma dalana düşərdi.
         """
-        employee = self._ceo_face_setup_subject(payload)
-        if employee is None:
-            return False
-
         from src.presentation.controllers.face_setup import (  # noqa: PLC0415
             FaceSetupController,
         )
@@ -621,7 +681,6 @@ class KompasApplication:
         screen.skipped.connect(self.show_login)
         self._window.set_content(screen)
         _log.info("CEO_FACE_SETUP_STARTED", extra={"employee_id": str(employee.id)})
-        return True
 
     def _ceo_face_setup_subject(self, payload: dict[str, object]) -> Employee | None:
         """Üz qeydiyyatı LAZIMDIRSA CEO-nu qaytarır, əks halda `None`.
@@ -650,6 +709,14 @@ class KompasApplication:
                 Username(str(root_raw.get("username", ""))),
                 str(root_raw.get("password", "")),
             )
+            # EYNİ SƏBƏB (bax `_authenticate`): `Employee` icra zamanı
+            # mövcud deyildi. Burada `NameError` ÇÖKMƏ yaratmırdı, çünki
+            # aşağıdakı `except Exception` onu udurdu — nəticədə CEO üz
+            # qeydiyyatı yoxlaması HƏMİŞƏ `None` qaytarırdı, yəni qapı
+            # sükutla söndürülmüşdü. Sükutlu nasazlıq çökmədən betərdir:
+            # heç kim onu görmür.
+            from src.domain.entities.employee import Employee  # noqa: PLC0415
+
             employee = getattr(outcome, "employee", None)
             if not isinstance(employee, Employee):
                 return None
@@ -874,8 +941,24 @@ class KompasApplication:
             return
 
         self._login.clear()
+
+        # İDXAL BURADADIR, `TYPE_CHECKING` BLOKUNDA YOX — İSTEHSALAT ÇÖKMƏSİ.
+        #
+        # `Employee` fayl başında YALNIZ `if TYPE_CHECKING:` altında idxal
+        # olunur, yəni İCRA ZAMANI belə bir ad YOXDUR. Aşağıdakı `isinstance()`
+        # isə həqiqi icra istifadəsidir — nəticədə hər UĞURLU girişdən sonra
+        # `NameError: name 'Employee' is not defined` atılırdı və istifadəçi
+        # giriş ekranına qaytarılırdı (jurnalda `LOGIN_SUCCESS`-dən 1 saniyə
+        # sonra `UNHANDLED_EXCEPTION`).
+        #
+        # NİYƏ NƏ TEST, NƏ MYPY TUTDU: mypy üçün idxal MÖVCUDDUR (o, məhz
+        # `TYPE_CHECKING` blokunu oxuyur), sətir isə `# pragma: no cover` ilə
+        # örtükdən çıxarılmışdı — «tip qoruyucusudur, icra olunmaz» fərziyyəsi
+        # ilə. Halbuki o, HƏR girişdə icra olunur.
+        from src.domain.entities.employee import Employee  # noqa: PLC0415
+
         employee = outcome.employee
-        if not isinstance(employee, Employee):  # pragma: no cover - tip qoruyucusu
+        if not isinstance(employee, Employee):
             self._login.set_error("Giriş nəticəsi oxuna bilmədi.")
             return
 
@@ -3364,8 +3447,13 @@ class KompasApplication:
         self._window.set_content(screen)
         self._window.show()
 
-    def show_connection_settings(self, rebuild: Callable[[], ApplicationContext]) -> None:
-        """«Bağlantı Ayarları» ekranı — HAZIRDA HEÇ YERDƏN ÇAĞIRILMIR.
+    def show_connection_settings(
+        self,
+        rebuild: Callable[[], ApplicationContext],
+        *,
+        failure_message: str = "",
+    ) -> None:
+        """«Bağlantı Ayarları» ekranı — KONFİQURASİYA nasazlığında açılır.
 
         ──────────────────────────────────────────────────────────────────────
         NİYƏ QALIR VƏ NİYƏ ÇAĞIRILMIR
@@ -3377,10 +3465,16 @@ class KompasApplication:
         özü «düzəldib» poza bilirdi). Texnikin yolu indi `Ctrl+Shift+K` →
         Bərpa Konsoludur və o, EYNİ `save_settings()` funksiyasını çağırır.
 
-        Metod və ekran SİLİNMİR: hər ikisi işlək, sınanmış koddur və
-        quraşdırma axınının dəyişməsi halında yenidən bağlana bilər. Lakin
-        «çağırılmır» faktı BURADA yazılır — əks halda növbəti oxucu onu canlı
-        yol sanıb ekranı düzəltməyə çalışardı (audit məhz bunu tapdı).
+        Metod və ekran İNDİ YENİDƏN BAĞLIDIR, lakin DAR şərtlə: yalnız
+        `StartupFailureKind.is_configuration_problem` doğru olduqda
+        (`CREDENTIALS_MISSING`, `CREDENTIALS_INVALID`) — yəni pozulacaq işlək
+        konfiqurasiyanın OLMADIĞI hallarda. Şəbəkə nasazlığı bura DÜŞMÜR:
+        orada ayarları açmaq istifadəçini düzgün dəyərləri «düzəltməyə» sövq
+        edərdi.
+
+        `failure_message` ekranın başında göstərilir ki, istifadəçi NİYƏ
+        burada olduğunu bilsin — boş ekran «proqram niyə ayarları soruşur?»
+        sualını cavabsız qoyardı.
         """
         from src.presentation.controllers.connection_settings import (  # noqa: PLC0415
             ConnectionSettingsController,
@@ -3390,28 +3484,128 @@ class KompasApplication:
         )
 
         screen = ConnectionSettingsScreen(self._theme)
+        if failure_message:
+            # `set_status` MÖVCUD API-dir — yeni metod ƏLAVƏ EDİLMİR: ekranın
+            # müqaviləsini genişləndirmək maket yolunu da yeniləməyi tələb
+            # edərdi (CLAUDE.md bölmə 6: maket və canlı EYNİ açarlar).
+            screen.set_status(failure_message)
         controller = ConnectionSettingsController(
             on_saved=lambda: self._attempt_startup(rebuild),
         )
         controller.attach(screen)
-        # İmtina fatal ekrana QAYIDIR, tətbiqi bağlamır: istifadəçi ayarları
-        # dəyişmək istəmirsə də əlaqə ünvanını görməlidir (bölmə 8).
-        screen.cancelled.connect(lambda: self._attempt_startup(rebuild))
+        # İMTİNA `_attempt_startup`-a QAYITMIR — bu, SONSUZ DÖVRƏ olardı:
+        # konfiqurasiya hələ yoxdur, yəni cəhd yenidən uğursuz olub bu ekranı
+        # açardı və istifadəçi dəstək ünvanını heç vaxt görə bilməzdi. İmtina
+        # fatal ekrana aparır (mesaj + əlaqə + «Yenidən Cəhd Et») — oradan
+        # təkrar cəhd yenidən buraya gətirir, yəni dövrəni İSTİFADƏÇİ idarə
+        # edir (bölmə 8).
+        # İDXAL İCRA ZAMANI LAZIMDIR: `StartupFailureKind` fayl başında yalnız
+        # `TYPE_CHECKING` altındadır — aşağıdakı `lambda` isə HƏQİQİ icra
+        # istifadəsidir. Bu, elə həmin girişi çökdürən qüsurun eynisidir
+        # (`NameError`), ona görə burada təkrarlanmır.
+        from src.presentation.composition import StartupFailureKind  # noqa: PLC0415
+
+        cancel_kind = StartupFailureKind.CREDENTIALS_MISSING
+        screen.cancelled.connect(
+            lambda: self.show_startup_failure(
+                message=failure_message or "Bağlantı ayarları tamamlanmadı.",
+                kind=cancel_kind,
+                rebuild=rebuild,
+            )
+        )
         self._window.set_content(screen)
         self._window.show()
 
-    def _attempt_startup(self, rebuild: Callable[[], ApplicationContext]) -> None:
-        """Konteksti yenidən qurmağa cəhd edir; uğurda normal axına keçir."""
-        from src.presentation.composition import StartupError  # noqa: PLC0415
+    @staticmethod
+    def _startup_failure_kind_missing() -> StartupFailureKind:
+        """`CREDENTIALS_MISSING` — İCRA ZAMANI idxal ilə.
 
-        try:
-            context = rebuild()
-        except StartupError as exc:
-            _log.warning("STARTUP_RETRY_FAILED", extra=exc.to_dict())
-            self.show_startup_failure(message=exc.user_message, kind=exc.kind, rebuild=rebuild)
+        Fayl başındakı idxal `TYPE_CHECKING` altındadır; ona güvənmək məhz
+        girişi çökdürən `NameError`-un eynisini yaradardı.
+        """
+        from src.presentation.composition import StartupFailureKind  # noqa: PLC0415
+
+        return StartupFailureKind.CREDENTIALS_MISSING
+
+    def _attempt_startup(self, rebuild: Callable[[], ApplicationContext]) -> None:
+        """Konteksti yenidən qurmağa cəhd edir — İŞ FON SAPINDA.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ FON SAPI — ÖLÇÜLMÜŞ DONMA
+        ──────────────────────────────────────────────────────────────────────
+        `rebuild()` = `build_context()`: baza hovuzunu açır və bağlantı
+        taymautu **15 saniyəyədəkdir**. Əvvəl bu, birbaşa GUI sapında
+        çağırılırdı, yəni hər təkrar cəhddə pəncərə həmin müddət boyu donurdu
+        — istifadəçinin bildirdiyi «loading screendə donub qalır, sonra
+        açılır» məhz budur. Jurnalda ölçülüb: `GUI_STARTED` 0.46 s, sonrakı
+        `STARTUP_RETRY_FAILED` 7.30 s — aradakı ~6.8 saniyə tam donma idi.
+
+        İLK açılış onsuz da fon sapındadır (`_load_context_behind_splash`) —
+        yəni naxış layihədə ARTIQ vardı, sadəcə TƏKRAR CƏHD yolu ondan kənarda
+        qalmışdı. Bu, bu dövrənin təkrarlanan tapıntısıdır: bir yol düzəldilir,
+        qonşu yol unudulur.
+        """
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        # İKİQAT CƏHD QAPISI: «Yenidən Cəhd Et» ardıcıl basılanda ikinci sorğu
+        # birincinin nəticəsini üstələyə və istifadəçi köhnə nəticəni görə
+        # bilərdi.
+        existing = getattr(self, "_startup_task", None)
+        if existing is not None and getattr(existing, "is_running", False):
             return
 
-        self.adopt_context(context)
+        # Splash BURADA göstərilir: fon işi başlayanda ekran olduğu kimi
+        # qalsaydı, istifadəçi «düyməni basdım, heç nə olmur» görərdi.
+        self.show_loading_splash()
+        self._startup_task = run_job(
+            rebuild,
+            on_success=self.adopt_context,
+            on_failure=lambda error: self._on_startup_failed(error, rebuild),
+            owner=self._window,
+            name="STARTUP_RETRY",
+            executor=self._executor,
+        )
+
+    def _on_startup_failed(
+        self, error: BaseException, rebuild: Callable[[], ApplicationContext]
+    ) -> None:
+        """Fon cəhdi uğursuz oldu — ekran seçimi ƏSAS SAPDA edilir."""
+        from src.presentation.composition import StartupError  # noqa: PLC0415
+
+        if not isinstance(error, StartupError):
+            # `build_context()` müqaviləyə görə YALNIZ `StartupError` atır.
+            # Başqa istisna gəlirsə bu, gözlənilməz nasazlıqdır və SÜKUTLA
+            # udulmamalıdır — əks halda splash əbədi qalar.
+            _log.error("STARTUP_RETRY_CRASHED", extra={"error": str(error)})
+            self.show_startup_failure(
+                message="Tətbiq işə düşə bilmədi. Dəstəklə əlaqə saxlayın.",
+                kind=self._startup_failure_kind_missing(),
+                rebuild=rebuild,
+            )
+            return
+
+        _log.warning("STARTUP_RETRY_FAILED", extra=error.to_dict())
+        # ──────────────────────────────────────────────────────────────────
+        # KONFİQURASİYA PROBLEMİ AYARLAR EKRANINA GEDİR, ÖLÜ-SONA YOX
+        # ──────────────────────────────────────────────────────────────────
+        # `StartupFailureKind.is_configuration_problem` məhz bu sualın cavabı
+        # üçün yazılmışdı — «Bağlantı Ayarları ekranı KÖMƏK EDƏRMİ» — lakin
+        # HEÇ YERDƏN çağırılmırdı (yalnız testlərdə). Nəticə TƏMİZ
+        # QURAŞDIRMADA görünürdü: `connection.json` yoxdur →
+        # `CREDENTIALS_MISSING` → fatal ekran açılır və mesajı «Bağlantı
+        # Ayarları ekranından server məlumatlarını daxil edin» deyir, HALBUKİ
+        # həmin ekranı açmağın YOLU YOXDUR. Yəni hər YENİ müştəri
+        # quraşdırmadan dərhal sonra kilidlənirdi.
+        #
+        # RECOVERY-1 həmin düyməni QƏSDƏN çıxarmışdı və səbəbi keçərlidir:
+        # mağaza işçisi İŞLƏK konfiqurasiyanı «düzəldib» poza bilir. Lakin bu
+        # iki hal (`CREDENTIALS_MISSING`, `CREDENTIALS_INVALID`) məhz işlək
+        # konfiqurasiyanın OLMADIĞI hallardır — pozulacaq bir şey yoxdur.
+        # `is_configuration_problem` elə bu sərhədi çəkir.
+        if error.kind.is_configuration_problem:
+            self.show_connection_settings(rebuild, failure_message=error.user_message)
+            return
+        self.show_startup_failure(message=error.user_message, kind=error.kind, rebuild=rebuild)
 
     def adopt_context(self, context: ApplicationContext) -> None:
         """Gec qurulmuş konteksti mənimsəyir və örtüyü normal axına salır.

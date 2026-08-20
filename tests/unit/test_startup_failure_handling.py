@@ -581,9 +581,15 @@ def test_preview_mode_offers_no_retry(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_a_successful_retry_adopts_the_context(qtbot, qt_app, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Uğurlu təkrar cəhd örtüyü NORMAL axına salır — proses yenidən açılmır."""
     from src.presentation.app import KompasApplication
+    from src.presentation.background_task import InlineExecutor
     from src.presentation.theme.tokens import ThemeMode
 
     application = KompasApplication(qt_app, preview=True, theme_preference=ThemeMode.LIGHT)
+    # AÇILIŞ CƏHDİ FON SAPINDADIR (donma düzəlişi) — testdə hadisə dövrəsi
+    # gözlənilməsin deyə layihənin `InlineExecutor` naxışı verilir: `run_job`
+    # qayıtdıqda nəticə ARTIQ çatdırılmışdır. Sap davranışı ayrıca
+    # `test_background_task.py`-da ölçülür; burada ölçülən EKRAN SEÇİMİDİR.
+    application._executor = InlineExecutor()
     started: list[bool] = []
     monkeypatch.setattr(application, "start", lambda: started.append(True))
     monkeypatch.setattr("src.presentation.app._build_auth_controller", lambda context: object())
@@ -611,9 +617,15 @@ def test_a_failed_retry_shows_the_new_reason(qtbot, qt_app, monkeypatch) -> None
     from PySide6.QtWidgets import QPushButton
 
     from src.presentation.app import KompasApplication
+    from src.presentation.background_task import InlineExecutor
     from src.presentation.theme.tokens import ThemeMode
 
     application = KompasApplication(qt_app, preview=True, theme_preference=ThemeMode.LIGHT)
+    # AÇILIŞ CƏHDİ FON SAPINDADIR (donma düzəlişi) — testdə hadisə dövrəsi
+    # gözlənilməsin deyə layihənin `InlineExecutor` naxışı verilir: `run_job`
+    # qayıtdıqda nəticə ARTIQ çatdırılmışdır. Sap davranışı ayrıca
+    # `test_background_task.py`-da ölçülür; burada ölçülən EKRAN SEÇİMİDİR.
+    application._executor = InlineExecutor()
 
     def _rebuild() -> Any:
         raise StartupError(
