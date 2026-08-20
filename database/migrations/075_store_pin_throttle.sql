@@ -171,18 +171,80 @@
 -- py`-a əlavə lazım deyil.
 --
 -- ---------------------------------------------------------------------------
--- CANLI BAZADA TƏTBİQ EDİLMƏYİB (dövrə 3 qeydi)
+-- CANLI BAZADA QİSMƏN TƏTBİQ EDİLMİŞ ÇIXDI (dövrə 5 kəşfi — aşağıdakı §0-ı bax)
 -- ---------------------------------------------------------------------------
--- Bu fayl (əvvəlki versiyası ilə birlikdə) HEÇ VAXT canlı bazaya COMMIT
--- olunmayıb — yalnız ƏVVƏLKİ versiya (fərqli açarla) `DATABASE_ADMIN_URL`
--- ilə ROLLBACK edilən tranzaksiyada sınanmışdı (o sınaq ARTIQ etibarsızdır,
--- çünki açar dəyişib). Bu versiya YALNIZ statik nəzərdən keçirilib —
--- `ARCHITECT`-in AÇIQ İCAZƏSİ olmadan növbəti canlı DDL/yazı aparılmayıb.
+-- Bu bölmə ƏVVƏL "heç vaxt commit olunmayıb, yalnız rollback edilmiş sınaq"
+-- deyirdi (dövrə 3 qeydi). Faktiki tətbiqdə (dövrə 5) bu, YANLIŞ ÇIXDI:
+-- `apply_migrations.py` canlı bazada `store_pin_throttle` cədvəlinin ARTIQ
+-- MÖVCUD olduğunu, lakin `store_id`-açarlı RƏDD EDİLMİŞ İLK QARALAMA quruluşu
+-- ilə (0 sətir, `machine_key` sütunu YOX) tapdı — yəni həmin "rollback"
+-- sınağı, ehtimal ki, öz `DATABASE_ADMIN_URL` tranzaksiyasından KƏNAR bir
+-- addımda (və ya sonrakı yarımçıq icrada) qismən COMMIT olunub. Səbəb
+-- ARTIQ ARXEOLOJI ƏHƏMİYYƏTSİZDİR — nəticə isə YOX: `CREATE TABLE IF NOT
+-- EXISTS` bu köhnə cədvəli görüb ATLAYIR, sonrakı `COMMENT ON COLUMN
+-- store_pin_throttle.machine_key` isə mövcud olmayan sütuna müraciət edib
+-- ÇÖKÜR. §0 bunu düzəldir.
 -- ===========================================================================
 
 SET search_path TO kompasos, public;
 
 BEGIN;
+
+-- ---------------------------------------------------------------------------
+-- 0. KÖHNƏ QARALAMANIN TƏMİZLƏNMƏSİ (dövrə 5, canlı bazada tapılan hal)
+-- ---------------------------------------------------------------------------
+-- BU BLOK NİYƏ LAZIMDIR — statik yoxlama (schema.sql-ə qarşı) bunu TUTA
+-- BİLMƏZDİ: fayl `schema.sql`-ə görə tam düzgün idi (`store_pin_throttle`
+-- orada ÜMUMİYYƏTLƏ yoxdur), canlı bazaya görə isə YOX — orada eyni adlı,
+-- amma FƏRQLİ (rədd edilmiş, `store_id`-açarlı) cədvəl artıq mövcud idi.
+-- Bu, "sxem faylı ilə statik müqayisə kifayət etmir, canlı bazanın ÖZ
+-- tarixçəsi ayrıca yoxlanmalıdır" dərsinin YENİ nümunəsidir (bax DB-5,
+-- CLAUDE.md §7).
+--
+-- NİYƏ ŞƏRTSIZ `DROP TABLE` YAZILMIR — yalnız BU DƏQİQ ƏLAMƏTLƏ (cədvəl
+-- VAR, `machine_key` sütunu YOX) qorunur ki, bu blok səhvən DÜZGÜN tətbiq
+-- olunmuş (yeni) cədvəli və ya gələcəkdə tamam BAŞQA səbəbdən yaranan eyniadlı
+-- cədvəli silməsin. `store_pin_throttle` BU MİQRASİYADAN ƏVVƏL heç bir
+-- LEGİTİM formada mövcud OLA BİLMƏZ (tamamilə yeni obyektdir, §7-nin öz
+-- qeydi) — yəni "cədvəl var, `machine_key` yox" şərti YALNIZ bu rədd
+-- edilmiş qaralamaya uyğun gələ bilər, başqa heç bir ssenariyə yox.
+--
+-- NİYƏ TƏHLÜKƏSİZ SİLİNİR — DATA İTKİSİ DEYİL: bu cədvəl YALNIZ EFEMER PIN
+-- throttle sayğacı saxlayır (biznes məlumatı, cərimə, audit YOX) — silinsə
+-- terminal sadəcə "hələ heç bir uğursuz cəhd olmayıb" vəziyyətinə düşür
+-- (bax modul başlığı, `get_for_update` `None` qaytarır). Üstəlik canlı
+-- bazadakı nüsxə 0 SƏTİR idi (team-lead-in tapıntısı) — silinəcək HEÇ NƏ
+-- yoxdur, YALNIZ SƏHV QURULUŞ silinir. Köhnə açarı (`store_id`) SAXLAMAQ
+-- DÜZƏLİŞ DEYİL, SEC-05-in artıq rədd etdiyi qüsuru CANLI BAZADA
+-- ƏBƏDİLƏŞDİRMƏK olardı (bax modul başlığı, "AÇAR NİYƏ store_id DEYİL").
+--
+-- `CASCADE`: köhnə cədvələ bağlı trigger (`trg_store_pin_throttle_lockout`)
+-- cədvəllə BİRLİKDƏ gedir (əlavə addım lazım deyil), `CASCADE` YALNIZ
+-- naməlum/gələcək asılılıqlara qarşı müdafiə xəttidir — heç nə bu cədvələ
+-- İSTİNAD ETMİR (nə FK, nə VIEW), ona görə praktiki təsiri YOXDUR.
+--
+-- İDEMPOTENTLİK: bu blok üç vəziyyətin HƏR BİRİNDƏ təhlükəsizdir —
+--   (a) təmiz baza: `to_regclass` NULL qaytarır → şərt False → keçilir;
+--   (b) bu miqrasiya ARTIQ düzgün tətbiq olunub: cədvəl var VƏ `machine_key`
+--       sütunu VAR → şərt False → keçilir (mövcud sətirlər TOXUNULMUR);
+--   (c) köhnə qaralama: cədvəl var, `machine_key` YOX → DROP, aşağıdakı
+--       `CREATE TABLE IF NOT EXISTS` YENİDƏN doğru quruluşu qurur.
+DO $$
+BEGIN
+    IF to_regclass('kompasos.store_pin_throttle') IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'kompasos'
+              AND table_name   = 'store_pin_throttle'
+              AND column_name  = 'machine_key'
+       ) THEN
+        RAISE NOTICE
+            'MİQRASİYA 075: köhnə (store_id-açarlı, rədd edilmiş) '
+            'store_pin_throttle qaralaması tapıldı və silindi.';
+        DROP TABLE store_pin_throttle CASCADE;
+    END IF;
+END
+$$;
 
 -- ---------------------------------------------------------------------------
 -- 1. CƏDVƏL
