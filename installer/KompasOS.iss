@@ -77,6 +77,16 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
+; MİNİMUM WINDOWS 10 — QURAŞDIRMA ANINDA DAYANDIRILIR, AÇILIŞDA YOX.
+;
+; PySide6 6.x Windows 10-dan aşağıda işləmir və `qframelesswindow` çərçivəsiz
+; pəncərə üçün Windows 10+ API-lərinə (`DwmExtendFrameIntoClientArea`,
+; `GetDpiForWindow`) güvənir. `MinVersion` olmadan Setup Windows 8.1-də də
+; quraşdırırdı: müştəri 400 MB yükləyir, quraşdırır, sonra proqram açılanda
+; anlaşılmaz DLL xətası alırdı. İndi sihirbaz ilk ekranda AYDIN dayanır —
+; səhvi tapmağın ən ucuz anı budur.
+MinVersion=10.0
+
 [Languages]
 ; Inno Setup-un rəsmi paylanmasında AZƏRBAYCAN dili YOXDUR — ona görə
 ; sihirbazın öz mətnləri İngiliscədir (config.md: «mümkünsə; deyilsə İngiliscə

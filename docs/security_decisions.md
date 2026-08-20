@@ -1327,6 +1327,61 @@ cədvəli (`database/migrations/`, `infra`), `PinHandshakeUseCase`
 
 ## Açıq qalan (Faza 3-də bağlanır)
 
+## SEC-034 — Kod imzalama sertifikatı ALINMIR: qəbul edilmiş risk
+
+**Vəziyyət:** Qəbul edildi — **məhsul sahibinin qərarı** (20.08.2026)
+
+**Qərar.** EV kod imzalama sertifikatı hazırda ALINMIR və buraxılış İMZASIZ
+paylanır. Səbəb texniki deyil, maliyyədir: sertifikatın illik xərci
+(300–600 USD) hazırda ayrılmır.
+
+**Bu, SEC-012/SEC-027-ni ləğv ETMİR — onların üzərindən QƏSDƏN keçir.**
+Fərq vacibdir: SEC-012 hələ də «imzasız istehsalat buraxılışı qadağandır»
+deyir və CI-ın `production-release` job-u həmin qapıda DAYANIR. Yəni
+buraxılışlar CI-dan ÇIXMIR, lokal build-dən paylanır. Qapı SÖNDÜRÜLMÜR:
+söndürülsəydi, sertifikat alınan gün heç kim onu geri qaytarmağı xatırlamazdı.
+
+**Nəticə — ölçülmüş, təxmin deyil.** SEC-027-dəki ölçmə qüvvədədir: Smart App
+Control məcburi rejimdə (`VerifiedAndReputablePolicyState = 1`) imzasız `.exe`
+ÜMUMİYYƏTLƏ yüklənmir (exit 126) və istifadəçiyə «davam et» seçimi TƏKLİF
+OLUNMUR. Bu, müştərilərin BİR HİSSƏSİNDƏ proqramın açılmayacağı deməkdir:
+
+| Hədəf maşın | Nəticə |
+|---|---|
+| Windows 10 | işləyir |
+| Windows 10-dan yüksəldilmiş Windows 11 | işləyir (SAC söndürülü gəlir) |
+| Təmiz quraşdırılmış Windows 11 (yeni PC) | **açılmır** |
+
+Mağaza üçün YENİ PC alınırsa sonuncu hal ən ehtimallıdır.
+
+**Riskin idarə olunması — `scripts/check_target_machine.ps1`.** Quraşdırmadan
+ƏVVƏL hədəf maşında işlədilir və SAC vəziyyətini (Windows versiyası,
+arxitektura, `%PROGRAMDATA%` icazəsi, disk, admin hüququ ilə birlikdə)
+yoxlayır. Skript `.ps1`-dir, `.exe` DEYİL — SAC ona toxunmur, yəni məhz
+bloklanan maşında da işləyir və SƏBƏBİ ekranda yazır. `Setup.exe`-nin özü də
+imzasız `.exe` olduğu üçün belə maşında quraşdırıcı DA açılmır; skript bu
+faktı mağazaya getməzdən əvvəl üzə çıxarır.
+
+**Nə RƏDD EDİLDİ (SEC-027-dəki siyahıya əlavə).**
+
+| Alternativ | Niyə rədd edildi |
+|---|---|
+| Müştəri maşınına öz kök sertifikatımızı quraşdırmaq | SAC üçün etibarlı işləmir; üstəlik bizə həmin maşında İSTƏNİLƏN faylı «etibarlı» imzalamaq imkanı verər — kənar müştəriyə satılan məhsulda qəbuledilməzdir |
+| Quraşdırma təlimatında SAC-ın söndürülməsini TƏLƏB etmək | Söndürmə biryönlüdür (geri qaytarmaq üçün Windows təmiz quraşdırılmalıdır). Skript bunu VARİANT kimi göstərir, TƏLƏB kimi yox — qərar müştərinindir |
+| Reputasiyanın öz-özünə toplanmasını gözləmək | SAC imza İLƏ BİRLİKDƏ reputasiya tələb edir və hər yeni buraxılış reputasiya sayğacını sıfırlayır — yəni gözləmək plan deyil |
+
+**Ən ucuz çıxış yolu (araşdırıldı, qərara bağlanmadı).** Microsoft-un
+«Azure Trusted Signing» (2026-dan «Azure Artifact Signing») xidməti Basic
+tarifdə ayda ~10 USD-dir və fərdi developer qeydiyyatına icazə verir —
+yəni EV sertifikatının illik xərcindən qat-qat ucuzdur. Qeydiyyatdan ƏVVƏL
+yoxlanmalıdır: bəzi hesablarda rol yaratmaq üçün əlavə Entra ID P2
+lisenziyası tələb olunduğu bildirilib.
+
+**Tətbiq:** `scripts/check_target_machine.ps1`, `docs/build_and_release.md` §4,
+SEC-012, SEC-027.
+
+---
+
 | # | Məsələ | Faza |
 |---|---|---|
 | 1 | `SET LOCAL app.tenant_id` repozitoriya qatında tətbiq edilməlidir (SEC-008 müqaviləsi) | 3 |
@@ -1335,4 +1390,4 @@ cədvəli (`database/migrations/`, `infra`), `PinHandshakeUseCase`
 | 4 | Köhnə Fernet token-lərinin toplu miqrasiyası (`needs_rotation` + `rotate_token`) | 3 |
 | 5 | Plugin sandbox-un OS-səviyyəli izolyasiyası (ayrı proses + məhdud hüquq) | 2 |
 | 6 | Hüquqi məsləhət: kamera izləmə + cərimə sistemi üçün (bölmə 6 UYĞUNLUQ QEYDİ) | müştəri |
-| 7 | EV kod imzalama sertifikatının alınması — onsuz `production-release` SEC-012 qapısında dayanır (SEC-027) | müştəri |
+| 7 | EV kod imzalama sertifikatının alınması — **QƏBUL EDİLMİŞ RİSK, bax SEC-034**: hazırda alınmır, buraxılış imzasızdır və SAC məcburi maşınlarda açılmır. Açıq iş DEYİL, qərardır | müştəri |

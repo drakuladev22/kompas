@@ -91,7 +91,25 @@ winget install --id JRSoftware.InnoSetup --silent \
 
 ## 4. Kod imzalama (sertifikat hazır olduqda)
 
-**Hazırda sertifikat YOXDUR** — bax `docs/security_decisions.md` SEC-027.
+**SERTİFİKAT QƏSDƏN ALINMIR — QƏBUL EDİLMİŞ RİSK (SEC-034).** Buraxılış
+imzasız paylanır; səbəb və nəticələr `docs/security_decisions.md` SEC-034-dədir.
+Aşağıdakı addımlar sertifikat alınan gün üçün SAXLANILIR, hazırda İCRA
+EDİLMİR.
+
+**Quraşdırmadan ƏVVƏL hər hədəf maşında bunu işlədin** — imzasız buraxılışın
+yeganə praktiki qorunması budur:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\check_target_machine.ps1
+```
+
+Skript Windows versiyasını, arxitekturanı, **Smart App Control vəziyyətini**,
+`%PROGRAMDATA%` yazıla bilməsini, disk sahəsini və administrator hüququnu
+yoxlayır. `NƏTİCƏ: bu maşında quraşdırmayın` çıxarsa quraşdırmağa BAŞLAMAYIN —
+`Setup.exe` özü də imzasız `.exe`-dir və SAC məcburi rejimdə onu da açmır,
+yəni səhv yalnız mağazada, müştərinin yanında üzə çıxardı.
+
+Sertifikat mövzusunun texniki hissəsi (nə vaxt alınsa) — SEC-027.
 İmzasız `.exe` Windows 11-in Smart App Control-u tərəfindən BLOKLANIR, yəni
 bu addım buraxılış üçün opsional deyil.
 
