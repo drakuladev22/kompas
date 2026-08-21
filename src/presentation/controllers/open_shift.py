@@ -269,6 +269,17 @@ class ShiftMatrixOpenShiftController:
                 session.commit()
         except KompasOSError as error:
             # Elan bu arada tutulubsa da bura düşür — admin AÇIQ cavab alır.
+            #
+            # QA-FULL FAZA 3 QEYDİ (`announcements.py::_on_withdraw` ilə eyni
+            # tapıntı burada da MÖVCUDDUR, amma hazırda ZƏRƏRSİZDİR):
+            # `set_open_shift_postings()` `show_content()` çağırmır, ona görə
+            # aşağıdakı sinxron `refresh()` bu banner-in üstündən yazmır.
+            # `on_retry`-a keçid BURADA tətbiq OLUNMADI, çünki
+            # `tests/unit/test_open_shift_controller.py`-dəki
+            # `test_a_rejected_cancel_still_refreshes_because_the_posting_may_already_be_gone`
+            # sahtəsi (`_AdminScreen.show_error`) `on_retry` parametrini
+            # QƏBUL ETMİR — testə toxunmaq `qa`/`e2e` sahəsidir. `ui` bu
+            # faylı dəyişə bilər, testi YOX.
             screen.show_error(title="Elan ləğv edilmədi", message=error.user_message)
             self.refresh(screen)
             return

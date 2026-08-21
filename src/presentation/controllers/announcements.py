@@ -196,9 +196,18 @@ class AnnouncementsAdminController:
                 session.commit()
         except KompasOSError as error:
             # Elan bu arada başqası tərəfindən geri çəkilibsə də bura düşür —
-            # admin AÇIQ cavab alır.
-            screen.show_error(title="Elan geri çəkilmədi", message=error.user_message)
-            self.refresh(screen)
+            # admin AÇIQ cavab alır. `refresh()` BURADAN ÇAĞIRILMIR: o,
+            # `set_announcements()` → `show_content()` zənciri ilə
+            # `ContentSwitcher`-i sinxron şəkildə "content" vəziyyətinə
+            # qaytarır və heç bir render arası olmadan bu xəta banner-inin
+            # ÜSTÜNDƏN yazır — admin mesajı HEÇ VAXT görmür (QA-FULL FAZA 3,
+            # `announcements.py::_submit` ilə eyni qərar). Yenidən yükləmə
+            # `on_retry` ilə istifadəçinin öz qərarına buraxılır.
+            screen.show_error(
+                title="Elan geri çəkilmədi",
+                message=error.user_message,
+                on_retry=lambda: self.refresh(screen),
+            )
             return
         except Exception:
             _error_log.exception(
