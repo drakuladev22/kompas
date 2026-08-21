@@ -2075,6 +2075,23 @@ class KompasApplication:
             return
         CameraQueueController(self._context, self._current_employee).attach(screen)
 
+    def _may_override_return_time(self) -> bool:
+        """`can_override_return_time` — "Vaxtı Düzəlt" düyməsinin GÖRÜNMƏSİ üçün.
+
+        `can_verify_returns`-dan (menyu qapısı) AYRI flag-dir
+        (`leave_verification.py:387-398`): ekranı görən operator manual
+        düzəliş səlahiyyətinə malik olmaya bilər. `_may_contact_support` ilə
+        EYNİ naxış — bax onun başlığı.
+        """
+        if self._preview:
+            return True
+        employee = self._current_employee
+        if employee is None:
+            return False
+        from datetime import UTC, datetime  # noqa: PLC0415
+
+        return bool(employee.has_permission("can_override_return_time", now=datetime.now(UTC)))
+
     def _may_contact_support(self) -> bool:
         """`can_contact_support` — defolt CEO/Root/HR_Admin (bölmə 8).
 
@@ -2908,6 +2925,12 @@ class KompasApplication:
             UsersPOSThresholdController,
         )
         from src.presentation.controllers.user_admin import UserAdminController  # noqa: PLC0415
+        from src.presentation.controllers.user_lifecycle import (  # noqa: PLC0415
+            UserLifecycleController,
+        )
+        from src.presentation.controllers.user_status_filter import (  # noqa: PLC0415
+            UserStatusFilterController,
+        )
         from src.presentation.screens.group_c import UsersScreen  # noqa: PLC0415
 
         if self._preview or self._context is None or self._current_employee is None:
@@ -2922,6 +2945,18 @@ class KompasApplication:
         # siqnala bağlanır (`create_requested`, `action_requested` deyil) və
         # başqa use case işlədir (`UserManagementUseCase`).
         UserAdminController(self._context, self._current_employee).attach(screen)
+        # DÖRDÜNCÜ kontroller (QA-FULL Faza 3, KRİTİK tapıntı): "···"
+        # menyusunun qalan dörd bəndi (`reset_pin`, `reset_password`,
+        # `change_role`, `deactivate`) heç bir kontrollerə bağlı DEYİLDİ —
+        # admin "Deaktiv Et" basırdı, HEÇ NƏ baş vermirdi. Bax `controllers/
+        # user_lifecycle.py` başlığı.
+        UserLifecycleController(self._context, self._current_employee).attach(screen)
+        # BEŞİNCİ kontroller (QA-FULL Faza 3, İSTİFADƏÇİNİN sözü ilə): "Vəziyyət"
+        # seçicisi SERVER-tərəfli süzgəcdir (`screen_data.py::_users`), yəni
+        # dəyişəndə dəst YENİDƏN oxunmalıdır. `user_admin.py`-a ƏLAVƏ EDİLMƏDİ
+        # — bax `controllers/user_status_filter.py` başlığı (köhnə test sahtəsi
+        # ilə toqquşma riski).
+        UserStatusFilterController(self._context, self._current_employee).attach(screen)
 
     def _attach_open_shift_market(self, screen: QWidget) -> None:
         """Növbə Planlama ekranının yazı/kataloq kontrollerlərini bağlayır.
@@ -3200,6 +3235,7 @@ class KompasApplication:
                 theme,
                 assigned_stores=queue_stores,
                 store_filter_threshold=queue_store_threshold,
+                may_override_return_time=self._may_override_return_time(),
             ),
             "daily_roster": lambda: group_c.DailyRosterScreen(theme),
             "shift_planning": lambda: group_c.ShiftPlanningScreen(theme),

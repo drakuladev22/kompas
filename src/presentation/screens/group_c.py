@@ -1238,11 +1238,36 @@ class UsersScreen(Screen):
         create_requested: "Yeni İşçi".
         action_requested: (əməliyyat açarı, istifadəçi adı).
         search_changed: Axtarış mətni.
+        status_filter_changed: "Vəziyyət" seçicisinin açarı
+            (`"active"`/`"inactive"`/`"all"` — bax `_STATUS_FILTERS`).
+
+    ──────────────────────────────────────────────────────────────────────────
+    "VƏZİYYƏT" SEÇİCİSİ — QA-FULL FAZA 3, İSTİFADƏÇİNİN SÖZÜ İLƏ
+    ──────────────────────────────────────────────────────────────────────────
+    İstifadəçi: «işçi işdən çıxsa, işçinin üstünə basıb xitam vermək lazımdır
+    ki, ƏLAVƏ YER TUTMASIN». `screen_data.py::_users` bunu artıq SERVER
+    tərəfdə tətbiq edir — deaktiv işçilər DEFOLTDA sorğuya belə DÜŞMÜR (əks
+    halda `LIMIT 500` altında yığılıb aktiv işçiləri sıxışdırırdılar, bax
+    həmin funksiyanın başlığı). Amma soft-delete FİZİKİ SİLMƏ DEYİL
+    (CLAUDE.md §4/§6: keçmiş qeyd SÜBUT olaraq lazımdır) — bu seçici həmin
+    "gizlət, yox etmə" prinsipinin GÖRÜNƏN yarısıdır: admin istəyəndə
+    deaktivləri YENƏ görə bilir.
     """
 
     create_requested = Signal()
     action_requested = Signal(str, str)
     search_changed = Signal(str)
+    status_filter_changed = Signal(str)
+
+    #: `(açar, etiket)` — etiketlər `_STATUS_TONES`-dəki "Aktiv"/"Deaktiv" ilə
+    #: EYNİ terminologiyadır (sətir çipi ilə toolbar seçicisi arasında söz
+    #: fərqi yaranmasın deyə). "Hamısı" DEFOLT DEYİL — İSTİFADƏÇİNİN sözü
+    #: "əlavə yer tutmasın"dır, yəni defolt görünüş DAR olmalıdır.
+    _STATUS_FILTERS: Final[tuple[tuple[str, str], ...]] = (
+        ("active", "Aktiv"),
+        ("inactive", "Deaktiv"),
+        ("all", "Hamısı"),
+    )
 
     #: Maketdəki ··· menyusu.
     #:
@@ -1283,6 +1308,19 @@ class UsersScreen(Screen):
         self._search.setFixedWidth(320)
         self._search.textChanged.connect(self._on_search)
         toolbar_layout.addWidget(self._search)
+
+        # "Vəziyyət" seçicisi (sinif başlığı) — DEFOLT "Aktiv": deaktiv
+        # işçilər İSTİFADƏÇİNİN sözü ilə "əlavə yer tutmamalıdır". `group_h.py::
+        # _build_role_filter` ilə EYNİ naxış (etiket + `QComboBox`).
+        self._status_filter: str = "active"
+        toolbar_layout.addWidget(muted_label("Vəziyyət"))
+        self._status_filter_box = QComboBox()
+        for key, label in self._STATUS_FILTERS:
+            self._status_filter_box.addItem(label, key)
+        self._status_filter_box.setProperty("variant", "form")
+        self._status_filter_box.currentIndexChanged.connect(self._on_status_filter_changed)
+        toolbar_layout.addWidget(self._status_filter_box)
+
         toolbar_layout.addWidget(stretch())
 
         # Kontekstual kömək (audit G-4) — «···» menyusundakı altı əməliyyatın
@@ -1309,6 +1347,15 @@ class UsersScreen(Screen):
         #: Sonuncu doldurulmuş dəst — axtarış onun üzərində işləyir.
         self._users: list[dict[str, str]] = []
 
+        #: `None` = HAMISI göstərilir (maket və köhnə çağıranlar üçün geriyə
+        #: uyğun defolt). Canlı yol `set_permitted_actions()` ilə cari
+        #: aktorun daşıdığı flag-lərə uyğun dar dəst göndərir — "GÖRMƏK =
+        #: SƏLAHİYYƏTİN OLMASI" (kompasos-ui skill, bölmə 3): icazəsi
+        #: olmayan bənd boz DEYİL, menyuda ÜMUMİYYƏTLƏ yoxdur (bax
+        #: `screen_data.py::_users` və `controllers/user_lifecycle.py`,
+        #: QA-FULL Faza 3).
+        self._permitted_actions: frozenset[str] | None = None
+
         self._table = DataTable(
             [
                 Column("İşçi", 260),
@@ -1332,6 +1379,33 @@ class UsersScreen(Screen):
     def search_field(self) -> QLineEdit:
         """Axtarış sahəsi — kontroller/testlər üçün."""
         return self._search
+
+    def status_filter_selector(self) -> QComboBox:
+        """ "Vəziyyət" seçicisi — kontroller/testlər üçün."""
+        return self._status_filter_box
+
+    def status_filter(self) -> str:
+        """Cari "Vəziyyət" seçimi (`"active"`/`"inactive"`/`"all"`).
+
+        `screen_data.py::_users` BUNU OXUYUR və SQL `WHERE`-ə keçirir — çünki
+        deaktiv işçilər DEFOLTDA sorğuya belə DÜŞMÜR (sinif başlığı). Client-
+        side axtarışdan (`_matches_search`) FƏRQLİ olaraq bu, SERVER-tərəfli
+        süzgəcdir: seçim dəyişəndə dəst YENİDƏN oxunmalıdır (kontroller
+        `status_filter_changed`-i dinləyib `refresh()` çağırır).
+        """
+        return self._status_filter
+
+    def set_permitted_actions(self, keys: frozenset[str] | None) -> None:
+        """ "···" menyusunun cari aktora GÖRÜNƏN bəndlərini məhdudlaşdırır.
+
+        `None` HAMISINI göstərir (`__init__`-dəki defolt izahına bax).
+        Sətirlər ARTIQ dolubsa cədvəl DƏRHAL yenidən qurulur ki, çağırış
+        sırasından (bu, `set_users`-dan əvvəl VƏ ya sonra gələ bilər) asılı
+        olmasın.
+        """
+        self._permitted_actions = keys
+        if self._users:
+            self._render()
 
     def set_users(self, users: list[dict[str, str]]) -> None:
         """Siyahını təzələyir; aktiv axtarış şərti QORUNUR.
@@ -1361,6 +1435,17 @@ class UsersScreen(Screen):
         """
         self._render()
         self.search_changed.emit(text)
+
+    def _on_status_filter_changed(self, index: int) -> None:
+        """ "Vəziyyət" seçimi — `_on_search`-dan FƏRQLİ olaraq BURADA ekranı
+        özü SÜZMÜR: seçim SERVER sorğusunun `WHERE` şərtidir, deaktiv
+        işçilər `self._users`-də ÜMUMİYYƏTLƏ ola bilməz (dar dəst DEFOLTDUR,
+        bax `status_filter()`). Ona görə siqnal ATILIR, kontroller onu
+        dinləyib YENİDƏN oxuyur (`ShiftWindowController` ilə EYNİ naxış).
+        """
+        key = self._status_filter_box.itemData(index)
+        self._status_filter = str(key) if key else "active"
+        self.status_filter_changed.emit(self._status_filter)
 
     def _matches_search(self, user: dict[str, str]) -> bool:
         """Ad, istifadəçi adı, rol və mağaza üzrə uyğunluq (registrsiz).
@@ -1422,6 +1507,11 @@ class UsersScreen(Screen):
 
         menu = QMenu(button)
         for key, label in self.ACTIONS:
+            # "GÖRMƏK = SƏLAHİYYƏTİN OLMASI" (bax `__init__`-dəki
+            # `_permitted_actions` şərhi) — süzülən bənd `QAction`-a
+            # ÇEVRİLMİR belə, boz göstərilmir.
+            if self._permitted_actions is not None and key not in self._permitted_actions:
+                continue
             menu.addAction(
                 label,
                 lambda k=key, name=full_name: self.action_requested.emit(k, name),
@@ -1824,6 +1914,248 @@ class PosThresholdDialog(QDialog):
 
     def _on_revoke(self) -> None:
         self.revoke_requested.emit()
+        self.accept()
+
+
+class ResetPinDialog(QDialog):
+    """ "PIN Sıfırla" modalı — admin-vasitəçili PIN sıfırlaması (bölmə 2).
+
+    QA-FULL Faza 3: `UsersScreen`-in "···" menyusundakı bu bənd əvvəl heç
+    bir kontrollerə bağlı deyildi (bax `controllers/user_lifecycle.py`
+    başlığı). `PosThresholdDialog` ilə EYNİ naxış: ekran domen tiplərini
+    TANIMIR, yalnız xam mətni toplayır — `Pin` VO-suna çevirmə/yoxlama
+    `controllers/user_lifecycle.py`-dədir (CLAUDE.md §6).
+
+    Signals:
+        submitted: yeni PIN (xam mətn, 4 rəqəm).
+    """
+
+    submitted = Signal(str)
+
+    def __init__(
+        self, theme: ThemeManager, *, employee_name: str, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._theme = theme
+        self.setWindowTitle("PIN Sıfırla")
+        self.setModal(True)
+        self.setMinimumWidth(420)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        card = Card(padding=24, spacing=16)
+        layout.addWidget(card)
+        card.add(title_label("PIN Sıfırla", size=19))
+        card.add(muted_label(employee_name))
+        card.add(Divider())
+        card.add(
+            muted_label(
+                "Köhnə PIN dərhal işləməz olur. İşçi bildiriş alır — sizin "
+                "xahişiniz deyilsə dərhal rəhbərliyə bildirməlidir (bölmə 2).",
+                size=12,
+            )
+        )
+
+        self._pin = FormField("Yeni PIN (4 rəqəm)", password=True)
+        card.add(self._pin)
+
+        buttons = QWidget()
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(12)
+        buttons_layout.addWidget(stretch())
+
+        cancel = secondary_button("İmtina")
+        cancel.clicked.connect(self.reject)
+        buttons_layout.addWidget(cancel)
+
+        save = action_button("Sıfırla")
+        save.clicked.connect(self._on_submit)
+        buttons_layout.addWidget(save)
+        card.add(buttons)
+
+        save.setDefault(True)
+        save.setAutoDefault(True)
+        cancel.setAutoDefault(False)
+
+        self._pin.focus_input()
+
+    def _on_submit(self) -> None:
+        pin = self._pin.text().strip()
+        self._pin.clear_error()
+        if not pin:
+            self._pin.set_error("Yeni PIN məcburidir")
+            return
+        # FORMAT/ZƏİFLİK YOXLAMASI BURADA TƏKRARLANMIR — `Pin.create()`
+        # domendə edir (`user_lifecycle.py::_reset_pin`), rədd cavabı isə
+        # `KompasOSError.user_message` ilə eyni "İmtina/Sıfırla" pəncərəsi
+        # bağlanmadan modal xəta kimi göstərilir (`NewUserDialog` ilə eyni
+        # qərar deyil — burada sahə ARTIQ silinib, ona görə sahə-səviyyəli
+        # işarələmə mənasızdır).
+        self.submitted.emit(pin)
+        self.accept()
+
+
+class ResetPasswordDialog(QDialog):
+    """ "Şifrəni Yenilə" modalı — admin-vasitəçili şifrə sıfırlaması (bölmə 2).
+
+    `ResetPinDialog` ilə EYNİ naxış (bax onun başlığı).
+
+    Signals:
+        submitted: yeni şifrə (xam mətn).
+    """
+
+    submitted = Signal(str)
+
+    def __init__(
+        self, theme: ThemeManager, *, employee_name: str, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._theme = theme
+        self.setWindowTitle("Şifrəni Yenilə")
+        self.setModal(True)
+        self.setMinimumWidth(420)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        card = Card(padding=24, spacing=16)
+        layout.addWidget(card)
+        card.add(title_label("Şifrəni Yenilə", size=19))
+        card.add(muted_label(employee_name))
+        card.add(Divider())
+        card.add(
+            muted_label(
+                "İşçi ilk girişdə bu şifrəni DƏYİŞMƏYƏ MƏCBURDUR — admin şifrəni "
+                "daimi bilməməlidir (`UserManagementUseCase.reset_password`).",
+                size=12,
+            )
+        )
+
+        self._password = FormField("Yeni şifrə", password=True)
+        card.add(self._password)
+
+        buttons = QWidget()
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(12)
+        buttons_layout.addWidget(stretch())
+
+        cancel = secondary_button("İmtina")
+        cancel.clicked.connect(self.reject)
+        buttons_layout.addWidget(cancel)
+
+        save = action_button("Yenilə")
+        save.clicked.connect(self._on_submit)
+        buttons_layout.addWidget(save)
+        card.add(buttons)
+
+        save.setDefault(True)
+        save.setAutoDefault(True)
+        cancel.setAutoDefault(False)
+
+        self._password.focus_input()
+
+    def _on_submit(self) -> None:
+        password = self._password.text().strip()
+        self._password.clear_error()
+        if not password:
+            self._password.set_error("Yeni şifrə məcburidir")
+            return
+        self.submitted.emit(password)
+        self.accept()
+
+
+class ChangeRoleDialog(QDialog):
+    """ "Rolu Dəyiş" modalı — işçinin vəzifəsini (deməli rolunu) dəyişir.
+
+    `NewUserDialog`-un vəzifə seçimi ilə EYNİ combo naxışı, LAKİN yalnız
+    BİR sahə var: `controllers/user_lifecycle.py::_change_role` mövcud
+    işçini YÜKLƏYİR və draftı ONUN cari sahələri ilə doldurub YALNIZ
+    `position`-u əvəzləyir — əks halda `UserManagementUseCase.update_employee`
+    boş sahələri (mağaza, e-poçt, tarix) SİLƏRDİ (CLAUDE.md §6: use case
+    draftın HAMISINI yazır, "yalnız dəyişəni göndər" YOXDUR).
+
+    Signals:
+        submitted: seçilmiş vəzifənin `position_id`-si (mətn).
+    """
+
+    submitted = Signal(str)
+
+    def __init__(
+        self,
+        theme: ThemeManager,
+        *,
+        employee_name: str,
+        current_role: str,
+        positions: list[tuple[str, str]],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._theme = theme
+        self.setWindowTitle("Rolu Dəyiş")
+        self.setModal(True)
+        self.setMinimumWidth(420)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        card = Card(padding=24, spacing=16)
+        layout.addWidget(card)
+        card.add(title_label("Rolu Dəyiş", size=19))
+        card.add(muted_label(f"{employee_name} — hazırkı rol: {current_role}"))
+        card.add(Divider())
+        card.add(
+            muted_label(
+                "Yalnız ÖZÜNÜZDƏN aşağı pilləyə toxuna bilərsiniz (Strict "
+                "Hierarchy Guard) — qadağan olan seçim növbəti addımda rədd edilir.",
+                size=12,
+            )
+        )
+
+        position_box = QComboBox()
+        for position_id, name_az in positions:
+            position_box.addItem(name_az, position_id)
+        self._position = FormField("Yeni vəzifə", widget=position_box)
+        card.add(self._position)
+
+        self._error = muted_label("")
+        self._error.setProperty("variant", "danger-text")
+        self._error.setVisible(False)
+        card.add(self._error)
+
+        buttons = QWidget()
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(12)
+        buttons_layout.addWidget(stretch())
+
+        cancel = secondary_button("İmtina")
+        cancel.clicked.connect(self.reject)
+        buttons_layout.addWidget(cancel)
+
+        save = action_button("Dəyiş")
+        save.clicked.connect(self._on_submit)
+        buttons_layout.addWidget(save)
+        card.add(buttons)
+
+        save.setDefault(True)
+        save.setAutoDefault(True)
+        cancel.setAutoDefault(False)
+
+    def _on_submit(self) -> None:
+        widget = self._position.input_widget()
+        position_id = str(widget.currentData() or "") if isinstance(widget, QComboBox) else ""
+        self._error.setVisible(False)
+        if not position_id:
+            self._error.setText("Vəzifə seçilməlidir.")
+            self._error.setVisible(True)
+            return
+        self.submitted.emit(position_id)
         self.accept()
 
 
@@ -2784,12 +3116,15 @@ class ShiftSwapScreen(Screen):
 
 
 __all__ = [
+    "ChangeRoleDialog",
     "DailyRosterScreen",
     "DashboardScreen",
     "NewUserDialog",
     "PermissionMatrixScreen",
     "PosThresholdDialog",
     "RankingEntry",
+    "ResetPasswordDialog",
+    "ResetPinDialog",
     "RoleCreateDialog",
     "ShiftPlanningScreen",
     "ShiftSwapScreen",

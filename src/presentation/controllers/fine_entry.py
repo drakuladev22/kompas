@@ -29,7 +29,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic
 from typing import TYPE_CHECKING, Any
+from uuid import UUID, uuid4
 
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
@@ -60,6 +62,9 @@ class FineEntryController:
         self._executor = executor
         #: Ehtiyat: əsas iş bitmədən toplanmasın (bax `_trigger_evidence_upload`).
         self._upload_task: Any = None
+        #: Son işlədilmiş `idempotency_key` və onun yarandığı an (ikiqat klik
+        #: qoruması). Bax `_idempotency_key_for_submission`.
+        self._recent_idempotency: tuple[UUID, float] | None = None
 
     # ------------------------------- seçimlər -------------------------------- #
 
@@ -144,6 +149,7 @@ class FineEntryController:
         from src.infrastructure.storage.upload_queue import UploadOwnerType  # noqa: PLC0415
 
         fine_id = new_fine_id()
+        idempotency_key = self._idempotency_key_for_submission()
         taken_at = datetime.now(UTC)
 
         try:
@@ -170,6 +176,7 @@ class FineEntryController:
                     fine_type_id=fine_type_id,
                     evidence_reference=entry_id,
                     fine_id=fine_id,
+                    idempotency_key=idempotency_key,
                 )
                 session.uow.fines.mark_evidence_pending(fine_id)
                 session.commit()
@@ -215,6 +222,42 @@ class FineEntryController:
             name="FINE_EVIDENCE_UPLOAD",
             executor=self._executor,
         )
+
+    def _idempotency_key_for_submission(self) -> UUID:
+        """İkiqat klikdə EYNİ `idempotency_key` — DB-nin unikal indeksi üçün.
+
+        `ManualFineUseCase.issue()`-un `idempotency_key` parametri məhz
+        `uq_fines_manual_camera_idempotency_key` indeksinə (miqrasiya 074)
+        çatmaq üçündür — bu metod olmadan həmin indeks manual-forma axınında
+        HEÇ VAXT işə düşmür (bax bu faylın başlığı).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ FORMA AÇILANDA YOX, İLK KLİKDƏ YARANIR
+        ──────────────────────────────────────────────────────────────────────
+        `sales_points.py::SalesPointsController._redemption_id_for` ilə EYNİ
+        naxış — bax onun başlığı. `fine_id`-dən FƏRQLİ olaraq bu ekranda YALNIZ
+        BİR göndəriş düyməsi var (sales_points-də hər mükafat sətrinin öz
+        `reward_id`-i var), ona görə burada `dict` yox, TƏK slot kifayətdir.
+
+        Pəncərə bitəndən sonra (`DUPLICATE_SUBMISSION_WINDOW_SECONDS`) YENİ
+        açar yaranır — əks halda eyni operatorun sonrakı, TAMAMİLƏ AYRI
+        cəriməsi köhnə açarla toqquşub DB-nin unikal indeksinə ilişərdi.
+        `monotonic()` işlədilir, `now()` yox — Windows saatı dəyişsə də
+        pəncərə sürüşmür.
+        """
+        from src.application.use_cases.fine_management import (  # noqa: PLC0415
+            DUPLICATE_SUBMISSION_WINDOW_SECONDS,
+        )
+
+        now = monotonic()
+        previous = self._recent_idempotency
+        if previous is not None and now - previous[1] < DUPLICATE_SUBMISSION_WINDOW_SECONDS:
+            self._recent_idempotency = (previous[0], now)
+            return previous[0]
+
+        fresh = uuid4()
+        self._recent_idempotency = (fresh, now)
+        return fresh
 
     def _refresh(self, screen: FineEntryScreen) -> None:
         from src.presentation.controllers.screen_data import ScreenDataBinder  # noqa: PLC0415

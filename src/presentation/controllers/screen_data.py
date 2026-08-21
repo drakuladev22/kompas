@@ -1068,20 +1068,62 @@ class ScreenDataBinder:
             )
 
     def _users(self, session: Session, screen: Any) -> None:
+        """ "İstifadəçilər" cədvəli — QA-FULL Faza 3: "···" menyusunun görünürlüyü DƏ BURADA.
+
+        `set_permitted_actions()` TƏK yerdə hesablanır (bax `controllers/
+        user_lifecycle.py` başlığı): bu ekranın DÖRD yazan kontrolleri
+        (`user_admin.py`, `pos_threshold.py`, `employee_documents.py`,
+        `user_lifecycle.py`) `refresh()`-lərinin HAMISI bu funksiyadan
+        keçir, ona görə icazə süzgəci hər kontrollerdə AYRI hesablansaydı
+        biri digərinin nəticəsini sükutla üstələyərdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        `is_active` SÜZGƏCİ — QA-FULL Faza 3, İSTİFADƏÇİNİN sözü ilə
+        ──────────────────────────────────────────────────────────────────────
+        İstifadəçi: «işçi işdən çıxsa, işçinin üstünə basıb xitam vermək
+        lazımdır ki, ƏLAVƏ YER TUTMASIN». Əvvəl sorğuda `is_active` şərti
+        YOX İDİ — deaktiv edilmiş işçi siyahıda ƏBƏDİ qalırdı, "Deaktiv Et"
+        düyməsi işlədikdən SONRA belə heç nə DƏYİŞMİRDİ. Daha ciddisi:
+        `LIMIT 500` süzgəcdən ƏVVƏL YOX (SQL-də `WHERE` HƏMİŞƏ `LIMIT`-dən
+        əvvəl tətbiq olunur), amma ÖZÜ `is_active` şərti olmadan bütün
+        (aktiv + deaktiv) sətirləri əhatə edirdi — uzun işləyən müştəridə
+        işdən çıxmışlar toplanıb aktiv işçiləri 500-lük pəncərədən
+        SIXIŞDIRA bilərdi (sükutlu məlumat itkisi: admin işçini "yoxdur"
+        sanardı). `screen.status_filter()` DEFOLTDA `"active"`-dir —
+        `UsersScreen` başlığındakı izaha bax.
+
+        SOFT-DELETE FİZİKİ SİLMƏ DEYİL (CLAUDE.md §4/§6): deaktiv işçilər
+        YOX EDİLMİR, YALNIZ defolt görünüşdən GİZLƏDİLİR — admin "Vəziyyət"
+        seçicisi ilə "Deaktiv"/"Hamısı"na keçib onları YENƏ görə bilər.
+
+        `LIMIT 500` ÖZÜ DƏ HƏLƏ QALIR (növbəti addım deyil, bu partiyanın
+        əhatəsindən kənardır): 500-dən çox AKTİV işçisi olan müştəridə YENƏ
+        DƏ risklidir. `is_active` süzgəci bu riski AZALDIR (deaktivlər artıq
+        yer tutmur), amma LƏĞV ETMİR — səhifələmə/`OFFSET` ayrıca iş kimi
+        qalır.
+        """
+        status_filter = screen.status_filter()
+        if status_filter == "inactive":
+            status_clause = "NOT e.is_active"
+        elif status_filter == "all":
+            status_clause = "TRUE"
+        else:  # "active" — DEFOLT (bax yuxarıdakı izah)
+            status_clause = "e.is_active"
         rows = session.uow.connection.execute(
-            """
+            f"""
             SELECT e.first_name, e.last_name, e.username, e.is_active,
                    COALESCE(p.name_az, '—') AS role_name,
                    COALESCE(s.name, '—')    AS store_name
             FROM employees e
             LEFT JOIN positions p ON p.id = e.position_id
             LEFT JOIN stores s    ON s.id = e.store_id
-            WHERE e.tenant_id = %s
+            WHERE e.tenant_id = %s AND {status_clause}
             ORDER BY e.last_name, e.first_name
             LIMIT 500
-            """,
+            """,  # noqa: S608 — şərtlər sabit siyahıdandır, dəyər %s ilə bağlanır
             (session.tenant_id,),
         ).fetchall()
+        screen.set_permitted_actions(_permitted_user_actions(self._actor))
         screen.set_users(
             [
                 {
@@ -2188,6 +2230,48 @@ def _default_store(session: Session, actor: Employee) -> tuple[Any, str]:
 def _position_name(session: Session, employee_id: Any) -> str:
     employee = session.uow.employees.get(employee_id)
     return str(employee.position.name_az) if employee is not None else "—"
+
+
+def _permitted_user_actions(actor: Employee) -> frozenset[str]:
+    """`UsersScreen.ACTIONS`-dan aktorun GÖRƏ biləcəyi açarlar (QA-FULL Faza 3).
+
+    "GÖRMƏK = SƏLAHİYYƏTİN OLMASI" — hər açar öz use case-inin `_require(...)`
+    çağırdığı flag-lə birbaşa uzlaşır (`user_lifecycle.py`, `pos_threshold.py`,
+    `employee_documents.py` başlıqları). `change_role` İKİ flag tələb edir,
+    çünki `UserManagementUseCase.update_employee` rol dəyişikliyində HƏR
+    İKİSİNİ yoxlayır (`MANAGE_EMPLOYEES_FLAG` + rol dəyişəndə əlavə olaraq
+    `MANAGE_ROLES_FLAG`) — bəndi göstərib, klikdən sonra rədd etmək "GÖRMƏK
+    = SƏLAHİYYƏT" prinsipini yarı-tətbiq edərdi.
+    """
+    from src.application.use_cases.employee_documents import (  # noqa: PLC0415
+        MANAGE_EMPLOYEE_DOCUMENTS_FLAG,
+    )
+    from src.application.use_cases.pos_threshold import (  # noqa: PLC0415
+        MANAGE_POS_THRESHOLDS_FLAG,
+    )
+    from src.application.use_cases.user_management import (  # noqa: PLC0415
+        MANAGE_EMPLOYEES_FLAG,
+        MANAGE_ROLES_FLAG,
+        RESET_PASSWORD_FLAG,
+        RESET_PIN_FLAG,
+    )
+
+    now = datetime.now(UTC)
+    can_manage_employees = actor.has_permission(MANAGE_EMPLOYEES_FLAG, now=now)
+    permitted: set[str] = set()
+    if actor.has_permission(RESET_PIN_FLAG, now=now):
+        permitted.add("reset_pin")
+    if actor.has_permission(RESET_PASSWORD_FLAG, now=now):
+        permitted.add("reset_password")
+    if can_manage_employees and actor.has_permission(MANAGE_ROLES_FLAG, now=now):
+        permitted.add("change_role")
+    if actor.has_permission(MANAGE_POS_THRESHOLDS_FLAG, now=now):
+        permitted.add("pos_threshold")
+    if actor.has_permission(MANAGE_EMPLOYEE_DOCUMENTS_FLAG, now=now):
+        permitted.add("employee_documents")
+    if can_manage_employees:
+        permitted.add("deactivate")
+    return frozenset(permitted)
 
 
 __all__ = [

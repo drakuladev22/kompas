@@ -15,11 +15,13 @@ Kontrollerin yeganə əlavəsi istisnanın İSTİFADƏÇİYƏ İZAH EDİLMƏSİD
 ──────────────────────────────────────────────────────────────────────────────
 NİYƏ "···" MENYUSUNUN QALAN MADDƏLƏRİ BURADA YOXDUR
 ──────────────────────────────────────────────────────────────────────────────
-`reset_pin`, `reset_password`, `change_role`, `deactivate` bu partiyanın
-ƏHATƏSİNDƏN KƏNARDIR. Onlar bu dəyişiklikdən ƏVVƏL də heç bir kontrollerə
-bağlı deyildi (`UsersScreen` heç vaxt `app.py::_attach_write_controller`-in
-cədvəlində olmayıb) — ona görə onları görməzdən gəlmək REQRESSİYA DEYİL,
-mövcud (boş) vəziyyəti eynilə saxlayır.
+`reset_pin`, `reset_password`, `change_role`, `deactivate` bu faylın
+ƏHATƏSİNDƏN KƏNARDIR — onlar AYRI kontrollerdə (`controllers/
+user_lifecycle.py`) bağlıdır. Əvvəl (bu şərh yazılanda) heç birinə bağlı deyildilər
+(`UsersScreen` heç vaxt `app.py::_attach_write_controller`-in cədvəlində
+olmayıb) — bu, QA-FULL Faza 3-ün KRİTİK tapıntısı idi (admin "Deaktiv Et"
+basırdı, HEÇ NƏ baş vermirdi) və `user_lifecycle.py`-da düzəldilib. Bu faylın
+öz bəndini (`pos_threshold`) DƏYİŞMƏDƏN saxlaması ilə bağlı izah aşağıdadır.
 
 ──────────────────────────────────────────────────────────────────────────────
 NİYƏ İŞÇİ ADI İLƏ AXTARIŞ (FINE_ENTRY İLƏ EYNİ MƏHDUDİYYƏT)

@@ -151,7 +151,10 @@ class QueueEntry:
 
 
 class QueueRow(Card):
-    """Növbə sətri — işçi, tip nişanı, vaxt və üç hərəkət düyməsi.
+    """Növbə sətri — işçi, tip nişanı, vaxt və hərəkət düymələri.
+
+    "Vaxtı Düzəlt" `may_override_return_time` `False` olanda ÜMUMİYYƏTLƏ
+    QURULMUR — bax konstruktorun şərhi.
 
     Signals:
         approve_requested / reject_requested / adjust_requested: `request_id`.
@@ -166,6 +169,7 @@ class QueueRow(Card):
         entry: QueueEntry,
         theme: ThemeManager,
         *,
+        may_override_return_time: bool,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(padding=16, spacing=0, parent=parent)
@@ -223,9 +227,16 @@ class QueueRow(Card):
 
         layout.addWidget(stretch())
 
-        adjust = secondary_button("Vaxtı Düzəlt")
-        adjust.clicked.connect(lambda: self.adjust_requested.emit(entry.request_id))
-        layout.addWidget(adjust)
+        # "GÖRMƏK = SƏLAHİYYƏT" (kompasos-ui skill, bölmə 3): `can_verify_returns`
+        # (ekrana giriş) və `can_override_return_time` (manual vaxt düzəlişi)
+        # AYRI flag-lərdir (`leave_verification.py:387-398`) — operator
+        # birincini daşıyıb ikincisiz ola bilər. Düymə İCAZƏSİ OLMAYANDA
+        # ÜMUMİYYƏTLƏ QURULMUR (boz DEYİL) — əks halda operator formanı
+        # doldurur, göndərir və YALNIZ O ZAMAN `AuthorizationError` alır.
+        if may_override_return_time:
+            adjust = secondary_button("Vaxtı Düzəlt")
+            adjust.clicked.connect(lambda: self.adjust_requested.emit(entry.request_id))
+            layout.addWidget(adjust)
 
         reject = secondary_button("Rədd Et")
         reject.clicked.connect(lambda: self.reject_requested.emit(entry.request_id))
@@ -288,10 +299,15 @@ class OperatorQueueScreen(Screen):
         *,
         assigned_stores: list[str],
         store_filter_threshold: int = QUEUE_STORE_FILTER_THRESHOLD,
+        may_override_return_time: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(theme, parent=parent)
         self._assigned_stores = assigned_stores
+        # FAIL-CLOSED DEFOLT: "GÖRMƏK = SƏLAHİYYƏT" (bölmə 3) — çağıran aktoru
+        # ötürmürsə (məs. köhnə test/çağırış), düymə GİZLİ qalır, GÖRÜNMÜR yox.
+        # Bax `QueueRow.__init__` başlığı.
+        self._may_override_return_time = may_override_return_time
         self._active_filter = "all"
         self._active_store = ALL_STORES
         self._rows: list[QueueRow] = []
@@ -443,7 +459,9 @@ class OperatorQueueScreen(Screen):
             return
 
         for entry in visible:
-            row = QueueRow(entry, self.theme)
+            row = QueueRow(
+                entry, self.theme, may_override_return_time=self._may_override_return_time
+            )
             row.approve_requested.connect(self.approve_requested)
             row.reject_requested.connect(self.reject_requested)
             row.adjust_requested.connect(self.adjust_requested)
