@@ -242,6 +242,69 @@ Qapı: `tests/unit/test_screen_layout_ownership.py` (AST — bazasız işləyir)
 
 ---
 
+## PERF-5 — İdarə Paneli 17 sorğu, Sağlamlıq ekranı İKİ sessiya idi
+
+Ölçmə üsulu: `psycopg.Cursor.execute` sarındı, hər ekran `ScreenDataBinder.
+populate()` ilə CANLI bazaya qarşı açıldı (boş kirayəçi, Sinqapur pooler,
+gediş-gəliş ~206 ms). Ölçülən şey ekranın çəkilişi deyil — göndərilən sorğu
+və açılan tranzaksiya sayıdır.
+
+### Nə tapıldı
+
+| Qüsur | Ölçülmüş |
+|---|---|
+| `MultiStoreBenchmarkUseCase.trend()` N ayı N AYRI sorğu ilə oxuyurdu | 6 aya 5 əlavə sorğu |
+| `ranking()` cari və əvvəlki ayı iki sorğu ilə oxuyurdu | +1 sorğu |
+| Açıq sessiyanın İÇİNDƏ limit oxusu (`NtpVerifier` → `NTP_*`) İKİNCİ tranzaksiya açırdı | +1 sessiya (~0.63 s) |
+
+Üçüncüsü ən gizlisi idi: `read_batch()` (PERF-3) iş vahidini limit
+körpüləri ilə paylaşırdı, LAKİN yalnız AÇILIŞ topluları üçün. Ekranın öz
+sessiyası paylaşmırdı — yəni eyni sapda, eyni kirayəçidə AÇIQ tranzaksiya
+dururkən limit oxusu yenisini açırdı.
+
+### Həll
+
+* `BatchedMetricProvider` (OPSİYONAL port, `multi_store_benchmark.py`) —
+  `metric_values_by_period()` N aralığı BİR sorğuda oxuyur. Postgres tərəfi
+  MÖVCUD metrik SQL-ini `UNION ALL` ilə N dəfə sarıyır: aylıq sorğu dəsti
+  İKİNCİ nüsxədə YAZILMIR (`AVG`/`HAVING` semantikası hərfən qorunur).
+* Provayder metodu dəstəkləmirsə (yaddaş-daxili sahtələr) köhnə dövrə
+  işləyir — nəticə eynidir, yalnız sorğu sayı fərqlidir.
+* `ApplicationContext.session()` açıq iş vahidini limit körpüləri ilə
+  PAYLAŞIR (`_read_batch.uow`), sessiya bitəndə bərpa edir.
+
+### Nəticə (canlı ölçü, əvvəl → sonra)
+
+| Ekran | Əvvəl | Sonra |
+|---|---|---|
+| `dashboard` | 5251 ms / 17 sorğu | **3247 ms / 13 sorğu** |
+| `health` | 3777 ms / 8 sorğu / 2 sessiya | **1900 ms / 7 sorğu / 1 sessiya** |
+
+Qapı: `tests/unit/test_benchmark_batched_reads.py` (sayğac testi, bazasız).
+
+### Şübhələnilən, LAKİN ölçüdə TƏMİZ çıxan dörd yer
+
+Bunlar «yavaş ola bilər» siyahısındaydı; ölçü göstərdi ki, düzəliş TƏLƏB
+ETMİRLƏR. Rəqəmlər burada saxlanılır ki, eyni şübhə ikinci dəfə araşdırılmasın.
+
+| Nə ölçüldü | Nəticə |
+|---|---|
+| Excel ixracı (`ExcelReportWriter.write_table`) | 1000 sətir **68 ms**, 5000 sətir 273 ms, 20 000 sətir 1174 ms — xətti. İxrac onsuz da `BackgroundTask`-dadır (`report_export.py`), UI sapı bloklanmır |
+| Üz aşkarlama (HOG, 640×480 kadr) | **102 ms** |
+| 1:N üz müqayisəsi (500 profil) | **0.4 ms** — hədəf 3 saniyə idi; baza tərəfi də tək sorğudur (`list_store_profiles`) |
+| Yaddaş sızması: 38 ekran × 32 dövr (1216 quruluş) | 16.58 → **16.62 MB** (+45 KB, +0.3 %), artım FASİLƏSİZ DEYİL — sızma yoxdur |
+| Paketdəki istifadəsiz Qt modulları | `dist/`-də `Qt6WebEngine*.dll` YOXDUR — `.spec`-in `_UNUSED_QT_MODULES` siyahısı işləyir |
+
+### Qalan ən yavaş üçlük (ölçülmüş, hələ toxunulmayıb)
+
+| Ekran | Müddət | Sorğu |
+|---|---|---|
+| `dashboard` | 3247 ms | 13 |
+| `sales_points` | 2107 ms | 8 |
+| `audit` | 1641 ms | 5 |
+
+---
+
 ## Hələ ölçülməmiş / gələcək addımlar
 
 | Mövzu | Ölçülmüş dəyər | Qeyd |

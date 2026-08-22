@@ -2359,7 +2359,35 @@ class ApplicationContext:
                 raise
             return
         with self._database.unit_of_work(self._tenant_id, user_id=user_id) as uow:
-            yield self._build_session(uow)
+            # ──────────────────────────────────────────────────────────────
+            # AÇIQ SESSİYA VARKƏN LİMİT OXUSU İKİNCİ TRANZAKSİYA AÇMIR (PERF-5)
+            # ──────────────────────────────────────────────────────────────
+            # Ölçüldü (canlı baza, gediş-gəliş ~206 ms): «Sistem Sağlamlığı»
+            # ekranı 3.8 saniyə çəkirdi və onun İKİ sessiyası vardı —
+            # birincisi ekranın öz oxusu, ikincisi isə həmin oxunun İÇİNDƏ
+            # `NtpVerifier`-in soruşduğu `NTP_*` limiti (`InfrastructureLimits.
+            # _raw` → `_RootLimitReader.get_str`). Sessiyanın öz yükü ~0.63 s
+            # olduğu üçün bu, xalis itki idi: eyni sapda ARTIQ AÇIQ, eyni
+            # kirayəçiyə aid tranzaksiya vardı.
+            #
+            # `read_batch()`-in `uow` paylaşması (PERF-4) məhz bu problemi
+            # açılış yolunda həll edirdi; burada həmin mexanizm EKRAN
+            # sessiyalarına da şamil olunur. `session` sahəsi TOXUNULMUR —
+            # yalnız `uow`: yəni yuvalanmış `session()` çağırışları KÖHNƏ
+            # davranışı (öz tranzaksiyası) saxlayır və bu, qəsdəndir, çünki
+            # onların aktoru fərqli ola bilər (yuxarıdakı AKTOR ŞƏRTİ).
+            #
+            # DAXİLDƏKİ toplu SAHİBİ DEYİLİK: `read_batch()` onsuz da aktivdirsə
+            # yuxarıdakı budaq işə düşür və bura ÇATILMIR.
+            previous = getattr(self._read_batch, "uow", None)
+            self._read_batch.uow = uow
+            try:
+                yield self._build_session(uow)
+            finally:
+                # Bərpa: sessiya bağlananda paylaşım DA bitir — bağlanmış
+                # tranzaksiyanın iş vahidi sonrakı limit oxusuna verilsəydi,
+                # oxu «bağlantı qaytarılıb» xətası ilə sınardı.
+                self._read_batch.uow = previous
 
     @contextmanager
     def read_batch(self, *, user_id: EmployeeId | None = None) -> Iterator[bool]:

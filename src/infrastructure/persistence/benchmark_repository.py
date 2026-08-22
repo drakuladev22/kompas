@@ -34,6 +34,7 @@ from src.domain.value_objects.identifiers import StoreId
 from src.infrastructure.persistence.repositories import _BaseRepository
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import date
 
     from psycopg import Connection
@@ -191,13 +192,73 @@ class PostgresMultiStoreBenchmarkRepository(_BaseRepository):
 
         query = _METRIC_QUERIES[metric]
         rows = self._fetch_all(query, (tenant_id, start, end))
-        result = {
+        result = self._collect(rows)
+        self._cache[cache_key] = result
+        return dict(result)
+
+    def metric_values_by_period(
+        self,
+        tenant_id: TenantId,
+        metric: BenchmarkMetric,
+        *,
+        periods: Sequence[tuple[date, date]],
+    ) -> list[dict[StoreId, float]]:
+        """N aralığı BİR gediş-gəlişdə oxuyur (PERF-5, `BatchedMetricProvider`).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `UNION ALL`, NİYƏ AYRICA "AYLIQ" SORĞU DƏSTİ DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Alternativ — hər metrik üçün `date_trunc('month', …)` ilə qruplaşan
+        İKİNCİ sorğu yazmaq — RƏDD EDİLDİ: altı metrikin altısı da iki nüsxədə
+        yaşayardı və biri düzələndə digəri sükutla köhnələrdi (DB-1-in dərsi).
+        `UNION ALL` isə MÖVCUD sorğunu OLDUĞU KİMİ işlədir — hər aralıq öz
+        alt-sorğusudur, yəni `AVG`/`FILTER`/`HAVING` semantikası HƏRFƏN
+        qorunur (aylıq ortalamadan aralıq ortalaması ÇIXARILMIR — bu, riyazi
+        olaraq səhv olardı).
+
+        ──────────────────────────────────────────────────────────────────────
+        SQL SƏTİR-BİRLƏŞDİRMƏSİ BURADA NİYƏ TƏHLÜKƏSİZDİR
+        ──────────────────────────────────────────────────────────────────────
+        Birləşdirilən HƏR parça SABİTdir: `_METRIC_QUERIES` lüğətinin dəyəri
+        və dövrün SIRA NÖMRƏSİ (`int`). Tarixlər və `tenant_id` PARAMETR
+        olaraq qalır (`%s`) — bax CLAUDE.md bölmə 4, `config_repositories.py::
+        list_range` ilə eyni qayda.
+        """
+        wanted = [(start, end) for start, end in periods]
+        missing = [window for window in wanted if (tenant_id, metric, *window) not in self._cache]
+        if missing:
+            query = _METRIC_QUERIES[metric]
+            fragments = [
+                # `_METRIC_QUERIES` lüğətindən, `index` isə `int`. Tarix və
+                # `tenant_id` PARAMETR olaraq qalır (aşağıda `params`).
+                f"SELECT {index} AS period_index, store_id, value "  # noqa: S608
+                f"FROM ({query}) AS period_{index}"
+                for index in range(len(missing))
+            ]
+            params: list[Any] = []
+            for start, end in missing:
+                params.extend((tenant_id, start, end))
+            rows = self._fetch_all("\nUNION ALL\n".join(fragments), tuple(params))
+            grouped: dict[int, list[dict[str, Any]]] = {}
+            for row in rows:
+                grouped.setdefault(int(row["period_index"]), []).append(row)
+            for index, window in enumerate(missing):
+                self._cache[(tenant_id, metric, *window)] = self._collect(grouped.get(index, []))
+
+        return [dict(self._cache[(tenant_id, metric, *window)]) for window in wanted]
+
+    @staticmethod
+    def _collect(rows: list[dict[str, Any]]) -> dict[StoreId, float]:
+        """Sətirləri `store_id → dəyər` lüğətinə çevirir.
+
+        `store_id`/`value` NULL olan sətir ATILIR — bax modul başlığı
+        ("məlumatı olmayan filial dict-də YOXDUR").
+        """
+        return {
             StoreId(row["store_id"]): float(row["value"])
             for row in rows
             if row["store_id"] is not None and row["value"] is not None
         }
-        self._cache[cache_key] = result
-        return dict(result)
 
 
 __all__ = ["PostgresMultiStoreBenchmarkRepository"]

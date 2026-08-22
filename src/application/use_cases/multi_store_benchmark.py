@@ -80,6 +80,7 @@ from src.domain.value_objects.authorization import AuthorizationError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime
 
     from src.domain.entities.employee import Employee
@@ -315,6 +316,41 @@ class MultiStoreMetricProvider(Protocol):
         ...
 
 
+class BatchedMetricProvider(Protocol):
+    """ÇOX aralığı BİR gediş-gəlişdə oxuyan OPSİYONAL genişlənmə (PERF-5).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AYRI PROTOCOL, NİYƏ `MultiStoreMetricProvider`-ə ƏLAVƏ METOD DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    `trend()` N ay üçün N ayrı `metric_values()` çağırırdı — CANLI ölçüdə bu,
+    İdarə Panelinin 17 sorğusundan ALTISI idi (hər biri ~206 ms şəbəkə
+    gediş-gəlişi, bax `docs/performance_notes.md`). Toplu oxu həmin altını
+    BİRƏ endirir.
+
+    Metod ƏSAS porta əlavə edilsəydi, onu TƏTBİQ ETMƏYƏN hər sahtə (testlərin
+    yaddaş-daxili provayderləri) sükutla protokoldan düşərdi — halbuki toplu
+    oxu OPTİMALLAŞDIRMADIR, TƏLƏB deyil: bir aralığı bir dəfə oxumaq HƏMİŞƏ
+    düzgün nəticə verir. Ona görə use case `isinstance` YOX, `getattr` ilə
+    yoxlayır və metod yoxdursa KÖHNƏ dövrəyə düşür (eyni "opsional port"
+    naxışı `ports.py::RowLockingLeaveRequests`-dədir).
+    """
+
+    def metric_values_by_period(
+        self,
+        tenant_id: TenantId,
+        metric: BenchmarkMetric,
+        *,
+        periods: Sequence[tuple[date, date]],
+    ) -> list[dict[StoreId, float]]:
+        """Hər `[start, end)` aralığı üçün BİR dict — SIRA qorunur.
+
+        Qaytarılan siyahının uzunluğu `periods`-un uzunluğu ilə EYNİDİR;
+        məlumatı olmayan aralıq BOŞ dict-dir (`None` DEYİL) — çağıran tərəf
+        "aralıq yoxdur" halını AYRICA yoxlamamalıdır.
+        """
+        ...
+
+
 # --------------------------------------------------------------------------- #
 # Use case
 # --------------------------------------------------------------------------- #
@@ -355,11 +391,13 @@ class MultiStoreBenchmarkUseCase:
         previous_start, previous_end = _month_bounds(_shift_months(current_start, -1))
 
         stores = self._provider.active_stores(tenant_id)
-        current = self._provider.metric_values(
-            tenant_id, metric, start=current_start, end=current_end
-        )
-        previous = self._provider.metric_values(
-            tenant_id, metric, start=previous_start, end=previous_end
+        # PERF-5: cari VƏ əvvəlki ay BİR gediş-gəlişdə (bax
+        # `BatchedMetricProvider`). Toplu oxunu dəstəkləməyən provayder köhnə
+        # iki çağırışı işlədir — NƏTİCƏ EYNİDİR.
+        current, previous = self._metric_windows(
+            tenant_id,
+            metric,
+            windows=[(current_start, current_end), (previous_start, previous_end)],
         )
 
         # Yalnız AKTİV (kataloqda olan) filiallar sıralanır — bağlanmış
@@ -442,16 +480,42 @@ class MultiStoreBenchmarkUseCase:
         )
         anchor = _month_bounds(moment.date())[0]
 
-        points: list[TrendPoint] = []
+        windows: list[tuple[date, date]] = []
         for offset in range(months - 1, -1, -1):
             month_start = _shift_months(anchor, -offset)
-            month_end = _shift_months(month_start, 1)
-            values = self._provider.metric_values(
-                tenant_id, metric, start=month_start, end=month_end
-            )
+            windows.append((month_start, _shift_months(month_start, 1)))
+
+        monthly = self._metric_windows(tenant_id, metric, windows=windows)
+
+        points: list[TrendPoint] = []
+        for (month_start, _), values in zip(windows, monthly, strict=True):
             value = values.get(store_id) if store_id is not None else _network_value(values, metric)
             points.append(TrendPoint(period_label=f"{month_start:%Y-%m}", value=value))
         return points
+
+    def _metric_windows(
+        self,
+        tenant_id: TenantId,
+        metric: BenchmarkMetric,
+        *,
+        windows: Sequence[tuple[date, date]],
+    ) -> list[dict[StoreId, float]]:
+        """Bir neçə aralığın dəyəri — mümkünsə BİR gediş-gəlişdə (PERF-5).
+
+        Provayder `metric_values_by_period`-i DƏSTƏKLƏYİRSƏ o çağırılır;
+        dəstəkləmirsə (testlərin yaddaş-daxili sahtələri) hər aralıq ayrıca
+        oxunur. NƏTİCƏ HƏR İKİ YOLDA EYNİDİR — fərq YALNIZ sorğu sayındadır,
+        ona görə çağıran metodlar (`ranking`, `trend`) hansı yolun işlədiyini
+        bilmir və bilməməlidir (bax `BatchedMetricProvider` başlığı).
+        """
+        batched = getattr(self._provider, "metric_values_by_period", None)
+        if batched is not None:
+            values: list[dict[StoreId, float]] = batched(tenant_id, metric, periods=windows)
+            return values
+        return [
+            self._provider.metric_values(tenant_id, metric, start=start, end=end)
+            for start, end in windows
+        ]
 
     # ---------------------------- 4. Kənar-kart ------------------------------- #
 
