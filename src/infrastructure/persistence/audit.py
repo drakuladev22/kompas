@@ -181,23 +181,64 @@ class PostgresAuditReader:
             """,  # noqa: S608 — şərtlər sabit siyahıdandır, dəyərlər %s ilə bağlanır
             (*params, filters.limit, filters.offset),
         )
-        return [
-            AuditEntry(
-                entry_id=row["id"],
-                occurred_at=row["occurred_at"],
-                actor_id=row["actor_id"],
-                actor_name=row["actor_name"],
-                action=row["action"],
-                entity_type=row["entity_type"],
-                entity_id=row["entity_id"],
-                reason=row["reason"],
-                before_state=row["before_state"],
-                after_state=row["after_state"],
-                machine_name=row["machine_name"],
-                app_version=row["app_version"],
-            )
-            for row in rows
-        ]
+        return [self._to_entry(row) for row in rows]
+
+    @staticmethod
+    def _to_entry(row: dict[str, Any]) -> AuditEntry:
+        """Sətir → `AuditEntry`. `query()` və `query_page()` ORTAQ işlədir —
+        iki nüsxə saxlansaydı, yeni sütun birində unudulardı."""
+        return AuditEntry(
+            entry_id=row["id"],
+            occurred_at=row["occurred_at"],
+            actor_id=row["actor_id"],
+            actor_name=row["actor_name"],
+            action=row["action"],
+            entity_type=row["entity_type"],
+            entity_id=row["entity_id"],
+            reason=row["reason"],
+            before_state=row["before_state"],
+            after_state=row["after_state"],
+            machine_name=row["machine_name"],
+            app_version=row["app_version"],
+        )
+
+    def query_page(self, tenant_id: TenantId, filters: AuditFilter) -> tuple[list[AuditEntry], int]:
+        """Səhifə + ÜMUMİ say — BİR gediş-gəlişdə (PERF-5).
+
+        ──────────────────────────────────────────────────────────────────────
+        `count(*) OVER ()` NİYƏ AYRI `count()` SORĞUSUNDAN YAXŞIDIR
+        ──────────────────────────────────────────────────────────────────────
+        `AuditQueryUseCase.search` səhifəni və ümumi sayı ARDICIL soruşurdu:
+        eyni `WHERE` şərti ilə İKİ sorğu, hər biri ~206 ms şəbəkə gediş-gəlişi
+        (`docs/performance_notes.md`). Pəncərə funksiyası sayı MƏHZ HƏMİN
+        sorğunun içində, `LIMIT` TƏTBİQ OLUNMAZDAN ƏVVƏLKİ sətir dəsti üzərində
+        hesablayır — yəni rəqəm dəyişmir, gediş-gəliş azalır.
+
+        BOŞ SƏHİFƏ HALI: sətir qayıtmayanda pəncərə funksiyasının dəyəri də
+        YOXDUR (sətir yoxdursa sütun da yoxdur). Bu, süzgəcin heç nə tapmadığı
+        (say = 0) VƏ `offset` dəstin sonundan kənara düşdüyü (say > 0) hallarını
+        AYIRD ETMİR — ona görə həmin halda AÇIQ `count()` çağırılır. İkinci
+        sorğu YALNIZ boş səhifədə baş verir, yəni adi axında qazanc tamdır.
+        """
+        clauses, params = self._where(tenant_id, filters)
+        rows = self._fetch(
+            f"""
+            SELECT a.id, a.occurred_at, a.actor_id, a.action, a.entity_type,
+                   a.entity_id, a.reason, a.before_state, a.after_state,
+                   a.machine_name, a.app_version,
+                   COALESCE(e.first_name || ' ' || e.last_name, 'Sistem') AS actor_name,
+                   count(*) OVER () AS total_count
+            FROM audit_logs a
+            LEFT JOIN employees e ON e.id = a.actor_id
+            WHERE {clauses}
+            ORDER BY a.occurred_at DESC
+            LIMIT %s OFFSET %s
+            """,  # noqa: S608 — şərtlər sabit siyahıdandır, dəyərlər %s ilə bağlanır
+            (*params, filters.limit, filters.offset),
+        )
+        if not rows:
+            return [], self.count(tenant_id, filters)
+        return [self._to_entry(row) for row in rows], int(rows[0]["total_count"])
 
     def count(self, tenant_id: TenantId, filters: AuditFilter) -> int:
         clauses, params = self._where(tenant_id, filters)

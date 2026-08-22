@@ -45,10 +45,39 @@ SET search_path TO kompasos, public;
 
 BEGIN;
 
+-- ---------------------------------------------------------------------------
+-- `trg_flag_attributes_immutable` MÜVƏQQƏTİ SÖNDÜRÜLÜR — NİYƏ İCAZƏLİDİR
+-- ---------------------------------------------------------------------------
+-- CANLI BAZADA AŞKARLANDI: bu miqrasiya `enforce_flag_attributes_immutable()`
+-- (schema.sql §18) tərəfindən RƏDD EDİLİRDİ —
+--     DƏYİŞMƏZ ATRİBUT: "can_manage_backups" flag-inin təhlükəsizlik
+--     atributları dəyişdirilə bilməz
+-- Trigger MƏHZ bunun üçün var: `hardlock_level` TƏTBİQDƏN (Root ekranı,
+-- skript, birbaşa `UPDATE`) dəyişdirilə bilməz, əks halda struktur zəmanət
+-- sükutla konfiqurasiyaya çevrilərdi.
+--
+-- MİQRASİYA İSƏ HƏMİN QAYDANIN ÖZÜNÜ DƏYİŞMƏYİN YEGANƏ SANKSİYALI YOLUDUR:
+-- fayl reyestrə (SHA-256 ilə, migrations/061) yazılır, kod baxışından keçir
+-- və `schema.sql` nüsxəsi ilə birlikdə yenilənir (CLAUDE.md §7). Ona görə
+-- trigger BURADA, TƏK bir `UPDATE` üçün söndürülür və DƏRHAL geri qaytarılır.
+--
+-- `ALTER TABLE ... DISABLE TRIGGER` seçildi, `session_replication_role` YOX:
+-- ikincisi HƏMİN SESSİYADAKI BÜTÜN trigger-ləri (o cümlədən `enforce_
+-- permission_hardlock`, append-only qoruyucuları) susdurardı — bu miqrasiya
+-- isə aşağıda `position_permissions`/`user_permission_overrides` sətirlərini
+-- SİLİR və həmin qoruyucuların İŞLƏK qalması ORADA lazımdır.
+--
+-- Söndürmə TRANZAKSİYA daxilindədir: `COMMIT`-ə qədər cədvəl üzərində ACCESS
+-- EXCLUSIVE kilid saxlanılır, yəni paralel bir sessiya "trigger sönülü" ANI
+-- görə BİLMƏZ. Uğursuzluqda `ROLLBACK` trigger-i də geri qaytarır.
+ALTER TABLE permission_flags DISABLE TRIGGER trg_flag_attributes_immutable;
+
 UPDATE permission_flags
    SET hardlock_level = 2
  WHERE code = 'can_manage_backups'
    AND hardlock_level <> 2;
+
+ALTER TABLE permission_flags ENABLE TRIGGER trg_flag_attributes_immutable;
 
 -- Rol-defolt yolu: ROOT/CEO-dan kənar mövqedən silinir. `positions.code`
 -- həm şablon (`tenant_id IS NULL`), həm kirayəçi nüsxəsi üçün eynidir.

@@ -284,6 +284,11 @@ def test_verify_flags_a_tenant_whose_seed_never_ran(
         def cursor(self) -> _Cursor:
             return _Cursor()
 
+        def rollback(self) -> None:
+            # `_verify` hər halqadan sonra çağırır (ABORTED tranzaksiyanı
+            # təmizləmək üçün) — sahtə onu sadəcə udur.
+            return None
+
     original = psycopg.connect
     psycopg.connect = lambda _dsn, **_: _Connection()  # type: ignore[assignment,misc]
     try:

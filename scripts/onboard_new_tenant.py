@@ -117,6 +117,7 @@ import secrets
 import subprocess
 import sys
 import uuid
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import Final
@@ -740,6 +741,135 @@ _CORE_TABLES: Final[tuple[str, ...]] = (
 _SEEDED_TABLES: Final[tuple[str, ...]] = ("system_limits", "feature_toggles", "positions")
 
 
+def _verify_tenant_links(
+    args: argparse.Namespace,
+    tenant_id: uuid.UUID,
+    *,
+    line: Callable[[bool, str, str], None],
+) -> None:
+    """`--verify`-in TENANT bazasındakı dörd halqası (reyestr, cədvəl, seed, sətir).
+
+    `_verify`-dən AYRILDI: hər halqa öz `try`-ı ilə gəldikdən sonra funksiya
+    ifadə həddini keçirdi. Bölgü təbiidir — burada YALNIZ müştəri bazası
+    danışılır, vendor bazası və yerli konfiqurasiya AYRI bağlantılardır.
+    """
+    import psycopg
+
+    def _link(title: str, check: Callable[[], None]) -> None:
+        """BİR halqa — ÖZ `try`-ı ilə.
+
+        CANLI AŞKARLANDI: `kompasos_app` rolu `schema_migrations`-i OXUYA
+        BİLMİR (migrations/078 GRANT sərtləşməsi — reyestr admin işidir).
+        Bütün halqalar TƏK `try` ilə sarılanda həmin icazə xətası QALAN üç
+        halqanı da öldürürdü, yəni operator «seed varmı?» sualına cavab
+        ALMIRDI. İndi hər halqa müstəqil sınır.
+        """
+        try:
+            check()
+        except psycopg.Error as exc:
+            line(False, title, f"oxuna bilmədi — {str(exc).splitlines()[0]}")
+
+    try:
+        with psycopg.connect(args.tenant_dsn, connect_timeout=30) as conn, conn.cursor() as cur:
+            cur.execute("SET search_path TO kompasos, public")
+
+            def _registry() -> None:
+                """1. MİQRASİYA REYESTRİ (061) — DB-5-in tapdığı qüsurun qapısı:
+                tətbiq olunmayan miqrasiya «cədvəl yoxdur» kimi AYLARLA gizlənir.
+
+                REYESTR ADMİN İŞİDİR: `kompasos_app` rolunun ora OXU icazəsi
+                YOXDUR (migrations/078) — o halda bu halqa «oxuna bilmədi»
+                deyir və operator admin DSN-i ilə təkrar çağırır."""
+                expected = {
+                    path.name
+                    for path in sorted(
+                        (_REPO_ROOT / "database" / "migrations").glob("[0-9][0-9][0-9]_*.sql")
+                    )
+                }
+                cur.execute("SELECT to_regclass('kompasos.schema_migrations')")
+                row = cur.fetchone()
+                if row is None or row[0] is None:
+                    line(False, "Miqrasiya reyestri", "cədvəl YOXDUR (061 tətbiq olunmayıb)")
+                    return
+                cur.execute("SELECT filename FROM schema_migrations")
+                applied = {name for (name,) in cur.fetchall()}
+                missing = sorted(expected - applied)
+                line(
+                    not missing,
+                    "Miqrasiya reyestri",
+                    f"{len(applied)}/{len(expected)} tətbiq olunub"
+                    + (f", çatmayan: {', '.join(missing[:5])}" if missing else ""),
+                )
+
+            def _tables() -> None:
+                """2. ƏSAS CƏDVƏLLƏR — `to_regclass` NULL qaytarırsa cədvəl yoxdur."""
+                absent = []
+                for table in _CORE_TABLES:
+                    cur.execute("SELECT to_regclass(%s)", (f"kompasos.{table}",))
+                    found = cur.fetchone()
+                    if found is None or found[0] is None:
+                        absent.append(table)
+                line(
+                    not absent,
+                    "Əsas cədvəllər",
+                    f"{len(_CORE_TABLES) - len(absent)}/{len(_CORE_TABLES)} mövcuddur"
+                    + (f", yoxdur: {', '.join(absent)}" if absent else ""),
+                )
+
+            def _seed() -> None:
+                """3. SEED — `seed_tenant_defaults()` çağırılıbmı.
+
+                Sətirlər HƏMİŞƏ kirayəçiyə görə süzülür: qlobal şablon sətirləri
+                (`tenant_id IS NULL`, məs. rol şablonları) SAYILSAYDI, seed
+                edilməmiş kirayəçi də «dolu» görünərdi."""
+                counts: dict[str, int] = {}
+                for table in _SEEDED_TABLES:
+                    cur.execute(
+                        f"SELECT count(*) FROM {table} WHERE tenant_id = %s",  # noqa: S608 — ad SABİT siyahıdandır
+                        (str(tenant_id),),
+                    )
+                    counted = cur.fetchone()
+                    counts[table] = int(counted[0]) if counted else 0
+                empty = sorted(name for name, value in counts.items() if value == 0)
+                line(
+                    not empty,
+                    "Seed məlumatı",
+                    ", ".join(f"{name}={value}" for name, value in counts.items())
+                    + (f" — BOŞ: {', '.join(empty)}" if empty else ""),
+                )
+
+            def _tenant_row() -> None:
+                """4. KİRAYƏÇİ SƏTRİ — addım 3-ün nəticəsi."""
+                cur.execute(
+                    "SELECT tenant_name, status FROM license_tenants WHERE tenant_id = %s",
+                    (str(tenant_id),),
+                )
+                row = cur.fetchone()
+                line(
+                    row is not None,
+                    "Kirayəçi sətri",
+                    f"«{row[0]}», status {row[1]}" if row else "TAPILMADI",
+                )
+
+            for title, check in (
+                ("Miqrasiya reyestri", _registry),
+                ("Əsas cədvəllər", _tables),
+                ("Seed məlumatı", _seed),
+                ("Kirayəçi sətri", _tenant_row),
+            ):
+                _link(title, check)
+                # Bir halqa sınsa tranzaksiya ABORTED qalır — növbəti sorğu da
+                # sınardı (PostgreSQL qaydası). `rollback()` sessiyanı təmizə
+                # çıxarır və qalan halqalar HƏQİQƏTƏN yoxlanır.
+                conn.rollback()
+                # `SET search_path` TRANZAKSİYAYA bağlıdır: `rollback()` onu da
+                # geri alır və növbəti halqa cədvəli «yoxdur» sanardı (canlı
+                # ölçüdə məhz belə oldu — `system_limits does not exist`).
+                cur.execute("SET search_path TO kompasos, public")
+    except psycopg.Error as exc:
+        line(False, "Tenant bazası", f"qoşulmaq alınmadı — {exc}")
+
+
 def _verify(args: argparse.Namespace, tenant_id: uuid.UUID) -> int:
     """Mövcud kirayəçini YOXLAYIR — heç nə yazmır. Qaytarır: proses kodu.
 
@@ -759,80 +889,21 @@ def _verify(args: argparse.Namespace, tenant_id: uuid.UUID) -> int:
 
     sys.stdout.write(f"Kirayəçi yoxlaması: {tenant_id}\n")
 
-    try:
-        with psycopg.connect(args.tenant_dsn, connect_timeout=30) as conn, conn.cursor() as cur:
-            cur.execute("SET search_path TO kompasos, public")
+    def _link(title: str, check: Callable[[], None]) -> None:
+        """BIR halqa — oz try/except-i ile.
 
-            # 1. MİQRASİYA REYESTRİ (061) — DB-5-in tapdığı qüsurun qapısı:
-            # tətbiq olunmayan miqrasiya "cədvəl yoxdur" kimi AYLARLA gizlənir.
-            expected = {
-                path.name
-                for path in sorted(
-                    (_REPO_ROOT / "database" / "migrations").glob("[0-9][0-9][0-9]_*.sql")
-                )
-            }
-            cur.execute("SELECT to_regclass('kompasos.schema_migrations')")
-            row = cur.fetchone()
-            if row is None or row[0] is None:
-                _line(False, "Miqrasiya reyestri", "cədvəl YOXDUR (061 tətbiq olunmayıb)")
-            else:
-                cur.execute("SELECT filename FROM schema_migrations")
-                applied = {name for (name,) in cur.fetchall()}
-                missing = sorted(expected - applied)
-                _line(
-                    not missing,
-                    "Miqrasiya reyestri",
-                    f"{len(applied)}/{len(expected)} tətbiq olunub"
-                    + (f", çatmayan: {', '.join(missing[:5])}" if missing else ""),
-                )
+        CANLI ASKARLANDI: `kompasos_app` rolu `schema_migrations`-i OXUYA
+        BILMIR (migrations/078 GRANT sertlesmesi — reyestr admin isidir).
+        Butun halqalar TEK `try` ile sarilanda hemin icaze xetasi QALAN uc
+        halqani da oldururdu, yeni operator "seed varmi?" sualina cavab
+        ALMIRDI. Indi her halqa mustegil sinir.
+        """
+        try:
+            check()
+        except psycopg.Error as exc:
+            _line(False, title, f"oxuna bilmedi — {str(exc).splitlines()[0]}")
 
-            # 2. ƏSAS CƏDVƏLLƏR — `to_regclass` NULL qaytarırsa cədvəl yoxdur.
-            absent = []
-            for table in _CORE_TABLES:
-                cur.execute("SELECT to_regclass(%s)", (f"kompasos.{table}",))
-                found = cur.fetchone()
-                if found is None or found[0] is None:
-                    absent.append(table)
-            _line(
-                not absent,
-                "Əsas cədvəllər",
-                f"{len(_CORE_TABLES) - len(absent)}/{len(_CORE_TABLES)} mövcuddur"
-                + (f", yoxdur: {', '.join(absent)}" if absent else ""),
-            )
-
-            # 3. SEED — `seed_tenant_defaults()` çağırılıbmı. Sətirlər HƏMİŞƏ
-            # kirayəçiyə görə süzülür: qlobal şablon sətirləri (`tenant_id IS
-            # NULL`, məs. rol şablonları) SAYILSAYDI, seed edilməmiş kirayəçi
-            # də "dolu" görünərdi.
-            counts: dict[str, int] = {}
-            for table in _SEEDED_TABLES:
-                cur.execute(
-                    f"SELECT count(*) FROM {table} WHERE tenant_id = %s",  # noqa: S608 — ad SABİT siyahıdandır
-                    (str(tenant_id),),
-                )
-                counted = cur.fetchone()
-                counts[table] = int(counted[0]) if counted else 0
-            empty = sorted(name for name, value in counts.items() if value == 0)
-            _line(
-                not empty,
-                "Seed məlumatı",
-                ", ".join(f"{name}={value}" for name, value in counts.items())
-                + (f" — BOŞ: {', '.join(empty)}" if empty else ""),
-            )
-
-            # 4. KİRAYƏÇİ SƏTRİ — addım 3-ün nəticəsi.
-            cur.execute(
-                "SELECT tenant_name, status FROM license_tenants WHERE tenant_id = %s",
-                (str(tenant_id),),
-            )
-            tenant_row = cur.fetchone()
-            _line(
-                tenant_row is not None,
-                "Kirayəçi sətri",
-                f"«{tenant_row[0]}», status {tenant_row[1]}" if tenant_row else "TAPILMADI",
-            )
-    except psycopg.Error as exc:
-        _line(False, "Tenant bazası", f"qoşulmaq alınmadı — {exc}")
+    _verify_tenant_links(args, tenant_id, line=_line)
 
     # 5. VENDOR SƏTRİ — AYRI bazadır, ona görə AYRI bağlantı: birincinin
     # uğursuzluğu ikincinin yoxlanmasını əngəlləməməlidir (ikisi müstəqil

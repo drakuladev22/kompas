@@ -1303,7 +1303,13 @@ class ScreenDataBinder:
         """
         balance = session.sales_points.balance_for(self._actor.id, tenant_id=session.tenant_id)
         available = int(balance.available)
-        to_next_reward, next_reward_cost = _next_reward_gap(session, session.tenant_id, available)
+        # Kataloq BİR DƏFƏ oxunur və İKİ yerə gedir: «növbəti mükafat»
+        # düsturuna və ekranın kataloq siyahısına (PERF-5 — əvvəl eyni sorğu
+        # iki dəfə gedirdi, bax `_next_reward_gap`).
+        catalog = list(session.sales_points.list_rewards_for_employee(session.tenant_id))
+        to_next_reward, next_reward_cost = _next_reward_gap(
+            session, session.tenant_id, available, rewards=[item for _reward_id, item in catalog]
+        )
         screen.set_balance(
             available,
             monthly_delta=_monthly_points_delta(session, self._actor.id),
@@ -1355,9 +1361,7 @@ class ScreenDataBinder:
         screen.set_catalog(
             [
                 {"id": str(reward_id), "name": item.name, "cost": str(item.cost_points)}
-                for reward_id, item in session.sales_points.list_rewards_for_employee(
-                    session.tenant_id
-                )
+                for reward_id, item in catalog
             ],
             balance=available,
         )
@@ -1711,7 +1715,9 @@ def _points_status_text(row: Any) -> str:
     return "Təsdiqli"
 
 
-def _next_reward_gap(session: Session, tenant_id: Any, available: int) -> tuple[int, int]:
+def _next_reward_gap(
+    session: Session, tenant_id: Any, available: int, *, rewards: list[Any] | None = None
+) -> tuple[int, int]:
     """`(to_next_reward, next_reward_cost)` — "Növbəti mükafat" düsturu.
 
     Balansı hələ ÇATMAYAN ən ucuz mükafat götürülür. Hamısı əlçatandırsa ən
@@ -1720,10 +1726,21 @@ def _next_reward_gap(session: Session, tenant_id: Any, available: int) -> tuple[
     `points_balance_summary` bu düsturu PAYLAŞIR (bax aşağıdakı başlıq) —
     balans obyektini hər çağıran ÖZÜ gətirir ki, əlavə `balance_for`
     sorğusu yaranmasın.
+
+    `rewards` ARQUMENTİ NİYƏ VAR (PERF-5, canlı ölçü): `_sales_points` mükafat
+    kataloqunu ONSUZ DA oxuyur (ekranın `set_catalog` çağırışı üçün) — bu
+    funksiya isə EYNİ `SELECT ... FROM rewards` sorğusunu İKİNCİ dəfə
+    göndərirdi. Ölçü: «Satış Xalları» 8 sorğudan biri məhz bu təkrar idi
+    (~206 ms). Kataloq verilməyibsə (kiosk kartı — `points_balance_summary`)
+    davranış DƏYİŞMİR: funksiya onu özü oxuyur.
     """
-    catalog = [
-        item for _reward_id, item in session.sales_points.list_rewards_for_employee(tenant_id)
-    ]
+    catalog = (
+        rewards
+        if rewards is not None
+        else [
+            item for _reward_id, item in session.sales_points.list_rewards_for_employee(tenant_id)
+        ]
+    )
     out_of_reach = sorted(item.cost_points for item in catalog if item.cost_points > available)
     next_cost = (
         out_of_reach[0] if out_of_reach else max((item.cost_points for item in catalog), default=0)

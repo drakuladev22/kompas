@@ -199,8 +199,17 @@ class AuditQueryUseCase:
             )
         applied = filters.normalized(max_page_size=max_page_size)
 
-        entries = self._reader.query(tenant_id, applied)
-        total = self._reader.count(tenant_id, applied)
+        # PERF-5: səhifə VƏ ümumi say BİR sorğuda gəlir (oxucu dəstəkləyirsə).
+        # Əvvəl iki ayrı gediş-gəliş idi və hər biri ~206 ms (bax
+        # `docs/performance_notes.md`) — «Audit Jurnalı» ekranının beş
+        # sorğusundan biri məhz bu təkrar idi. Dəstəkləməyən oxucu (sahtələr,
+        # gələcək fayl-əsaslı oxucu) köhnə iki çağırışa düşür — NƏTİCƏ EYNİDİR.
+        paged = getattr(self._reader, "query_page", None)
+        if paged is not None:
+            entries, total = paged(tenant_id, applied)
+        else:
+            entries = self._reader.query(tenant_id, applied)
+            total = self._reader.count(tenant_id, applied)
 
         self._audit.record(
             tenant_id=tenant_id,

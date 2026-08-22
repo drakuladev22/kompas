@@ -279,6 +279,18 @@ dururkən limit oxusu yenisini açırdı.
 |---|---|---|
 | `dashboard` | 5251 ms / 17 sorğu | **3247 ms / 13 sorğu** |
 | `health` | 3777 ms / 8 sorğu / 2 sessiya | **1900 ms / 7 sorğu / 1 sessiya** |
+| `sales_points` | 2107 ms / 8 sorğu | **1896 ms / 7 sorğu** |
+| `audit` | 5 sorğu (səhifə + say AYRI) | **4 sorğu** — `count(*) OVER ()` |
+
+İki əlavə təkrar da bağlandı:
+
+* `_sales_points` mükafat kataloqunu İKİ dəfə oxuyurdu — biri ekranın
+  siyahısı, digəri «növbəti mükafat» düsturu (`_next_reward_gap`). İndi bir
+  dəfə oxunur və hər ikisinə verilir.
+* `AuditQueryUseCase.search` səhifəni və ümumi sayı AYRI sorğularla alırdı;
+  `PostgresAuditReader.query_page` pəncərə funksiyası ilə ikisini birləşdirir.
+  BOŞ səhifədə (süzgəc heç nə tapmayıb VƏ YA `offset` dəstdən kənardadır)
+  `count()` yenə çağırılır — pəncərə dəyəri sətir olmadıqda MÖVCUD DEYİL.
 
 Qapı: `tests/unit/test_benchmark_batched_reads.py` (sayğac testi, bazasız).
 
