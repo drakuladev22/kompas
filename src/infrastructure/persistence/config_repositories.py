@@ -46,7 +46,7 @@ from src.domain.value_objects.identifiers import TenantId
 
 # `TenantId` ilə EYNİ səbəbdən RUNTIME idxaldır: `schedules_for()` `TimeRange(...)`-i
 # BİLAVASİTƏ QURUR (D10), `TYPE_CHECKING` bloku olsaydı `NameError` atardı.
-from src.domain.value_objects.scheduling import TimeRange
+from src.domain.value_objects.scheduling import DEFAULT_TIMEZONE, TimeRange
 from src.infrastructure.persistence.repositories import _BaseRepository
 from src.shared.logger import get_logger
 
@@ -582,18 +582,34 @@ class PostgresShiftRepository(_BaseRepository):
 
         İstirahət günündə və ya plan olmadıqda `None` qaytarılır; çağıran
         tərəf o zaman gecikmə hesablamır.
+
+        D1: `sa.shift_date + wm.start_time` Postgres-də `timestamp WITHOUT
+        time zone` verir (sütun tipləri naive) — psycopg onu naive
+        `datetime` kimi qaytarır və `scheduling.py`-dəki `require_aware()`
+        `NaiveDatetimeError` atır. Plan BOŞ olan (`sa` sətri yoxdur) filialda
+        bu heç görünmür, çünki o zaman sorğu `None` qaytarır və `require_
+        aware()` çağırılmır — ona görə qüsur yalnız PLAN QURULMUŞ filialda,
+        səhər təsdiqi zamanı üzə çıxırdı. Düzəliş `overtime_repositories.py`
+        və `report_repositories.py`-dəki eyni naxışı təkrarlayır: `AT TIME
+        ZONE s.timezone` naive cəmi mağazanın öz qurşağında YOZUR və nəticəni
+        `timestamptz`-ə (aware) çevirir. `stores` LEFT JOIN-dir, çünki
+        `employees.store_id` NULL ola bilər (schema.sql) — belə halda
+        `COALESCE` defolt qurşağa (`Asia/Baku`) düşür.
         """
         row = self._fetch_one(
             """
-            SELECT (sa.shift_date + wm.start_time) AS starts_at
+            SELECT ((sa.shift_date + wm.start_time)
+                     AT TIME ZONE COALESCE(s.timezone, %s)) AS starts_at
             FROM shift_assignments sa
             JOIN work_modes wm ON wm.id = sa.work_mode_id
+            JOIN employees e ON e.id = sa.employee_id
+            LEFT JOIN stores s ON s.id = e.store_id
             WHERE sa.employee_id = %s
               AND sa.shift_date = %s
               AND sa.tenant_id = %s
               AND NOT sa.is_off_day
             """,
-            (employee_id, work_date, self._tenant),
+            (DEFAULT_TIMEZONE, employee_id, work_date, self._tenant),
         )
         return row["starts_at"] if row else None
 

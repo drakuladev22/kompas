@@ -33,7 +33,7 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from src.domain.entities.fine import Fine, FineStatus
+from src.domain.entities.fine import Fine, FineSource, FineStatus
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.identifiers import new_fine_review_batch_id
 from src.shared.exceptions import KompasOSError
@@ -41,8 +41,16 @@ from src.shared.logger import LogChannel, get_logger
 from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from src.domain.entities.employee import Employee
-    from src.domain.interfaces.ports import AuditTrail, Clock, Notifier, SystemLimits
+    from src.domain.interfaces.ports import (
+        AuditTrail,
+        Clock,
+        EmployeeRepository,
+        Notifier,
+        SystemLimits,
+    )
     from src.domain.value_objects.identifiers import EmployeeId, FineId, FineReviewBatchId, TenantId
 
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
@@ -84,6 +92,18 @@ class PublishResult:
     review_month: str
     published: list[FineId] = field(default_factory=list)
     discarded: list[FineId] = field(default_factory=list)
+    #: DEEP-GAP D2 — "Saxla" qərarı verilib, LAKİN nəşr edilməyib: işçi
+    #: `publish_batch` anında deaktivdir. Sətir `PENDING_REVIEW`-də QALIR
+    #: (nə `published`-ə, nə `discarded`-ə düşür, `Fine` obyekti heç
+    #: mutasiya olunmur) — HR əl ilə qərar verməlidir (bax `publish_batch`
+    #: başlığı).
+    held_inactive_employee: list[FineId] = field(default_factory=list)
+    #: DEEP-GAP T3 — MANUAL_CAMERA cəriməsinin sübut şəkli HƏLƏ Drive-a
+    #: yüklənməyib (`evidence_upload_status <> 'SYNCED'`). `held_inactive_
+    #: employee` ilə EYNİ semantika: sətir `PENDING_REVIEW`-də QALIR, `Fine`
+    #: obyekti mutasiya OLUNMUR, növbəti icmalda YENİDƏN görünür — yəni bu,
+    #: rədd deyil, TƏXİRƏ SALMADIR (şəkil yüklənən kimi öz-özünə nəşr olunacaq).
+    held_missing_evidence: list[FineId] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -115,6 +135,49 @@ class FineReviewBatchRepository(Protocol):
     def save(self, batch: FineReviewBatch) -> None: ...
 
 
+@runtime_checkable
+class FineEvidenceSyncReader(Protocol):
+    """Sübut şəklinin Drive-a HƏQİQƏTƏN yüklənib-yüklənmədiyini oxuyur (T3).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AYRICA PORT — NİYƏ `Fine` ENTITY-SİNƏ SAHƏ ƏLAVƏ EDİLMİR
+    ──────────────────────────────────────────────────────────────────────────
+    `evidence_drive_*` sütunlarının domendən KƏNARDA saxlanması ŞÜURLU
+    qərardır və `repositories.py`-ın "NİYƏ BUNLAR `save()`-dan KEÇMİR"
+    bölməsində yazılıb: cərimə yaradılan anda fayl ID-si hələ yoxdur, yəni
+    "yüklənmə vəziyyəti" domen anlayışı DEYİL, infrastruktur detalıdır. Həmin
+    qərarı pozub entity-yə iki sahə əlavə etsəydik, `Fine`-ın hər bərpası
+    (mapper, sahtələr, testlər) Drive vəziyyətini daşımalı olardı.
+
+    Ona görə use case SUALI verir ("bu id-lərdən hansının şəkli hələ
+    yüklənməyib?"), CAVABI isə repo-dan alır — domen tipi qaytarılmır, yəni
+    port `ports.py`-a DEYİL, use case-in yanına yazılır (CLAUDE.md §3-ün
+    `ReportFactProvider` əsaslandırması, `FineReviewBatchRepository` ilə eyni).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ DƏSTLƏ, TƏK-TƏK YOX
+    ──────────────────────────────────────────────────────────────────────────
+    Aylıq icmalda 21 filialın yüzlərlə sətri olur. Hər sətir üçün ayrıca sorğu
+    "[Bütün Filiallara Göndər]" düyməsini N+1 gediş-gəlişə çevirərdi
+    (`docs/performance_notes.md` büdcəsi) — bir `id = ANY(...)` sorğusu
+    kifayətdir.
+    """
+
+    def unsynced_evidence_ids(self, fine_ids: Sequence[FineId]) -> set[FineId]:
+        """Verilən id-lərdən şəkli HƏLƏ `SYNCED` OLMAYANLARI qaytarır.
+
+        MƏNBƏ SÜTUNU `evidence_upload_status`-dur (miqrasiya 002), NƏ
+        `photo_evidence_url` — sonuncu MANUAL_CAMERA axınında LOKAL növbə
+        açarını saxlayır (`fine_entry.py` şəkli əvvəlcə diskə yazır), yəni
+        "dolu" olması şəklin Drive-da olduğunu SÜBUT ETMİR. T3 qüsurunun kök
+        səbəbi məhz bu iki sahənin qarışdırılması idi.
+
+        SIRA/TAM DƏST ZƏMANƏTİ YOXDUR: tapılmayan id sadəcə nəticəyə düşmür
+        (başqa tenant-a aid ola bilər — RLS + açıq `tenant_id` şərti).
+        """
+        ...
+
+
 class MonthlyFineReviewUseCase:
     """Aylıq icmal + kütləvi nəşr.
 
@@ -140,6 +203,8 @@ class MonthlyFineReviewUseCase:
         notifier: Notifier,
         limits: SystemLimits,
         review_batches: FineReviewBatchRepository,
+        employees: EmployeeRepository | None = None,
+        evidence_sync: FineEvidenceSyncReader | None = None,
     ) -> None:
         self._clock = clock
         self._audit = audit
@@ -150,6 +215,19 @@ class MonthlyFineReviewUseCase:
         # sabitləyərdi — ona görə asılılıq açıq tələb olunur.
         self._limits = limits
         self._review_batches = review_batches
+        # DEEP-GAP D2 — `None` = kompozisiya kökü hələ ötürməyib. Bu halda
+        # köhnə davranış (deaktiv işçinin cəriməsi də nəşr olunur) DƏYİŞMİR:
+        # yoxlama YALNIZ port varsa aparılır, sükutla YENİ bloklama YARANMIR.
+        self._employees = employees
+        # DEEP-GAP T3 — `employees` ilə EYNİ naxış və EYNİ səbəb: port hələ
+        # bağlanmayıbsa köhnə davranış DƏYİŞMİR. Bu, "sükutla söndürülmüş
+        # qoruma" DEYİL, çünki qapının İKİNCİ (və struktur) nüsxəsi DB-dədir:
+        # `chk_fine_published` məhdudiyyəti `infra`-nın tapşırığındadır və
+        # ekranı yan keçən skript də ona tabedir (CLAUDE.md §5: hər qayda İKİ
+        # yerdə). Buradakı qat isə İSTİFADƏÇİYƏ İZAH verən qatdır — DB rəddi
+        # "əməliyyat alınmadı" deyərdi, bu isə hansı cərimənin niyə
+        # gözlədiyini adbaad sadalayır.
+        self._evidence_sync = evidence_sync
 
     # ------------------------------ görünmə ---------------------------------- #
 
@@ -216,6 +294,8 @@ class MonthlyFineReviewUseCase:
         # sətir üçün ayrıca oxusaydıq, dəst ortasında Root limiti dəyişdikdə
         # eyni partiyadakı iki cərimə fərqli müddət alardı.
         window_hours = self._appeal_window_hours(tenant_id)
+        # T3 — BİR sorğu, dövrədən ƏVVƏL (bax `FineEvidenceSyncReader`).
+        unsynced_evidence = self._unsynced_evidence(pending)
 
         for fine_id, fine in pending.items():
             decision = by_id.get(fine_id, FineDecision(fine_id=fine_id))
@@ -235,6 +315,31 @@ class MonthlyFineReviewUseCase:
                     review_batch_id=batch_id,
                 )
                 result.discarded.append(fine_id)
+            elif self._is_employee_inactive(fine.employee_id):
+                # DEEP-GAP D2 — ƏSAS HƏLL: işçi nəşr ANINDA deaktivdirsə cərimə
+                # nəşr EDİLMİR. Səbəb: etiraz pəncərəsi `published_at`-dan
+                # başlayır (bax `Fine.is_appeal_window_open`), deaktiv hesab
+                # isə giriş edə bilmir (`assert_admin_login_allowed`/PIN
+                # namizədləri `is_active` süzgəcindən keçir) — yəni pəncərə
+                # AÇILA BİLMƏYƏN bir cərimə struktur olaraq NATAMAMDIR. Sətir
+                # `PENDING_REVIEW`-də qalır (mutasiya YOXDUR, `save()` bu
+                # sətri YENİDƏN yazmayacaq), HR əl ilə qərar verir.
+                result.held_inactive_employee.append(fine_id)
+            elif fine_id in unsynced_evidence:
+                # DEEP-GAP T3 — sübut şəkli HƏLƏ Drive-da deyil. Nəşr işçiyə
+                # 72 saatlıq etiraz pəncərəsi açır (`Fine.publish`), etiraza
+                # baxan şəxs isə şəkli HEÇ YERDƏN tapa bilməzdi: `photo_
+                # evidence_url` MANUAL_CAMERA axınında LOKAL növbə açarıdır və
+                # o növbə faylı (`%PROGRAMDATA%\KompasOS\data`) admin hüququ
+                # OLMADAN silinə bilər. Yəni "sübutu olmayan cərimə" nəşr
+                # oluna bilirdi — bu qol onu bloklamır, TƏXİRƏ SALIR.
+                #
+                # `held_inactive_employee` ilə EYNİ ZƏNCİRDƏ və EYNİ formada:
+                # sətir `PENDING_REVIEW`-də qalır, `Fine` mutasiya olunmur,
+                # növbəti icmalda yenidən görünür. Sıra ƏHƏMİYYƏTLİDİR —
+                # deaktiv işçi yoxlaması ÖNCƏ gəlir, çünki o, ŞƏXSİN
+                # vəziyyətidir və şəkil yüklənsə belə həll olunmur.
+                result.held_missing_evidence.append(fine_id)
             else:
                 # Pəncərə uzunluğu TENANT-dan gəlir, `Fine` sinfinin
                 # defoltundan yox: icmaldan gələn obyekt repository-dən bərpa
@@ -252,6 +357,39 @@ class MonthlyFineReviewUseCase:
         return result
 
     # ------------------------------ köməkçi ---------------------------------- #
+
+    def _is_employee_inactive(self, employee_id: EmployeeId) -> bool:
+        """DEEP-GAP D2: `employees` portu yoxdursa (kompozisiya köhnədir) YOXLAMA APARILMIR.
+
+        Tapılmayan işçi də "deaktiv" sayılır — silinmiş/köçürülmüş sətir üçün
+        eyni əsaslandırma tətbiq olunur: pəncərə açıla bilməyəcək bir cəriməni
+        NƏŞR ETMƏMƏK həmişə TƏHLÜKƏSİZ tərəfdir (HR sonra əl ilə qərar verir).
+        """
+        if self._employees is None:
+            return False
+        employee = self._employees.get(employee_id)
+        return employee is None or not employee.is_active
+
+    def _unsynced_evidence(self, pending: dict[FineId, Fine]) -> set[FineId]:
+        """Şəkli hələ yüklənməmiş MANUAL_CAMERA cərimələri (T3).
+
+        SÜZGƏC BURADADIR, REPO-DA YOX: "hansı mənbənin sübutu MƏCBURİDİR"
+        biznes qaydasıdır (`Fine.__init__`-dəki `chk_fine_manual_requires_
+        evidence` güzgüsü) — onu SQL-ə köçürsəydik qayda İKİ yerdə YAŞAYARDI
+        və mənbə növü artanda (məs. gələcək "MANUAL_MANAGER") sükutla
+        ayrılardı. Repo yalnız sütunu oxuyur.
+
+        AUTO_DELAY cəriməsinin şəkli YOXDUR və olmamalıdır — onu bu dəstə
+        salsaydıq, gecikmə cərimələrinin HAMISI əbədi gözləyən qalardı.
+        """
+        if self._evidence_sync is None:
+            return set()
+        camera_ids = [
+            fine_id for fine_id, fine in pending.items() if fine.source is FineSource.MANUAL_CAMERA
+        ]
+        if not camera_ids:
+            return set()
+        return self._evidence_sync.unsynced_evidence_ids(camera_ids)
 
     def _assert_may_publish(self, actor: Employee, *, now: datetime) -> None:
         if not actor.has_permission(PUBLISH_FINES_FLAG, now=now):
@@ -312,6 +450,8 @@ class MonthlyFineReviewUseCase:
                 "actor_id": str(actor.id),
                 "published_count": len(result.published),
                 "discarded_count": len(result.discarded),
+                "held_inactive_employee_count": len(result.held_inactive_employee),
+                "held_missing_evidence_count": len(result.held_missing_evidence),
             },
         )
         self._audit.record(
@@ -325,9 +465,53 @@ class MonthlyFineReviewUseCase:
                 "review_month": result.review_month,
                 "kept": len(result.published),
                 "reversed": len(result.discarded),
+                # DEEP-GAP D2 — bu ay saxlanan (nə nəşr, nə ləğv olunmuş)
+                # sətirlərin sayı. Sıfırdan böyükdürsə HR əl ilə baxmalıdır.
+                "held_inactive_employee": len(result.held_inactive_employee),
+                # T3 — sıfırdan böyükdürsə şəkil növbəsi geri qalıb və ya
+                # spool faylı itib; nəşr edən şəxs SƏBƏBİ auditdən görməlidir.
+                "held_missing_evidence": len(result.held_missing_evidence),
                 "published_at": now.isoformat(),
             },
         )
+        if result.held_inactive_employee:
+            # BLOKLAMIR, YALNIZ XƏBƏRDARLIQ: bu sətirlər `PENDING_REVIEW`-də
+            # qalıb və növbəti aylıq icmalda YENƏ görünəcək — susdurulan bir
+            # xəbərdarlıq onları əbədi "gözləyən" saxlaya bilərdi.
+            self._notifier.notify(
+                tenant_id=tenant_id,
+                recipient_id=None,
+                category="MONTHLY_FINES_HELD_INACTIVE_EMPLOYEE",
+                title_az="Deaktiv işçinin cəriməsi nəşr edilmədi",
+                body_az=(
+                    f"{result.review_month} ayı üzrə {len(result.held_inactive_employee)} "
+                    f"cərimə nəşr edilmədi, çünki işçi artıq deaktivdir (etiraz "
+                    f"pəncərəsi açıla bilməz). Bu cərimələr 'Gözləyən' siyahısında "
+                    f"qalır — əl ilə qərar tələb olunur."
+                ),
+                is_critical=True,
+            )
+        if result.held_missing_evidence:
+            # T3 — `held_inactive_employee` ilə EYNİ ton: bloklama deyil,
+            # XƏBƏRDARLIQ. AYRI kateqoriya QƏSDƏNDİR: iki saxlamanın HƏLLİ
+            # tamam fərqlidir — deaktiv işçi HR qərarı tələb edir, itmiş şəkil
+            # isə TEXNİKİ araşdırma (Drive bağlantısı, növbə faylı). Eyni
+            # kateqoriyaya yığsaydıq, bildirişi alan adam hansı işi görəcəyini
+            # bilməzdi.
+            self._notifier.notify(
+                tenant_id=tenant_id,
+                recipient_id=None,
+                category="MONTHLY_FINES_HELD_MISSING_EVIDENCE",
+                title_az="Sübut şəkli olmayan cərimə nəşr edilmədi",
+                body_az=(
+                    f"{result.review_month} ayı üzrə {len(result.held_missing_evidence)} "
+                    f"cərimə nəşr edilmədi, çünki sübut şəkli hələ Google Drive-a "
+                    f"yüklənməyib. Şəkil yüklənən kimi cərimə növbəti icmalda "
+                    f"normal nəşr olunacaq — yüklənmə dayanıbsa Drive bağlantısını "
+                    f"yoxlayın."
+                ),
+                is_critical=True,
+            )
         if result.published:
             self._notifier.notify(
                 tenant_id=tenant_id,

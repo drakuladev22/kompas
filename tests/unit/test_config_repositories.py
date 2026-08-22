@@ -197,6 +197,35 @@ def test_scheduled_start_is_none_without_a_plan() -> None:
     assert repo.scheduled_start(ACTOR, date(2026, 8, 12)) is None
 
 
+def test_scheduled_start_query_converts_the_naive_sum_to_the_store_timezone() -> None:
+    """D1 reqressiya qapısı.
+
+    `sa.shift_date + wm.start_time` Postgres-də naive `timestamp` verir;
+    `require_aware()` onu `NaiveDatetimeError` ilə rədd edir — plan MÖVCUD
+    olan filialda səhər təsdiqi çökürdü (`morning_check_in.py`). Boş plan
+    budağı (`test_scheduled_start_is_none_without_a_plan`) bunu heç vaxt
+    aşkarlamırdı, çünki `None` yolunda sorğu nəticəsi işlənmir.
+
+    Fake cursor SQL-i işlətmir (yalnız qeyd edir), ona görə DB-nin özünün
+    `AT TIME ZONE` çevirməsini yoxlaya bilmirik — onu `tests/integration`
+    edir. Burada YOXLANAN: (1) sorğu mətni artıq `AT TIME ZONE` işlədir və
+    `stores` cədvəlinə JOIN edir — köhnə naive cəmə geri qayıtma reqressiya
+    kimi tutulur; (2) sətir TAPILANDA metod onu şəffaf qaytarır (aware
+    `datetime` real DB-dən gələndə də eyni yol işləyəcək).
+    """
+    from datetime import UTC, date, datetime
+
+    aware_start = datetime(2026, 8, 12, 9, 0, tzinfo=UTC)
+    repo, conn = _build(PostgresShiftRepository, rows=[{"starts_at": aware_start}])
+
+    result = repo.scheduled_start(ACTOR, date(2026, 8, 12))
+
+    assert result is aware_start
+    sql, _params = conn.executed[-1]
+    assert "AT TIME ZONE" in sql
+    assert "JOIN stores" in sql or "LEFT JOIN stores" in sql
+
+
 # --------------------------------------------------------------------------- #
 # CameraAssignment — fail-safe BOŞ
 # --------------------------------------------------------------------------- #

@@ -359,6 +359,51 @@ class _QueueScreen:
         self.errors.append((title, message))
 
 
+class _MessageBox:
+    """`QMessageBox` əvəzi (DEEP-GAP U8).
+
+    `CameraQueueController._notify` doqquz uğursuzluq yolunu artıq
+    `screen.show_error()` ƏVƏZİNƏ real `QMessageBox`-a yönləndirir (bax
+    onun başlığı: növbənin qalan sətirləri ekranda qalmalıdır). Bu fayl
+    başlığında yazıldığı kimi Qt hadisə dövrəsi TƏLƏB EDİLMİR — modul
+    səviyyəli import (`from PySide6.QtWidgets import QMessageBox`) `sys.
+    modules`-dəki bu sahtə ilə ƏVƏZ olunur, real `QApplication` LAZIM
+    DEYİL (eyni naxış `test_controller_dead_guards.py::_MessageBox`-dadır).
+    """
+
+    shown: list[tuple[str, str]] = []  # noqa: RUF012 - sinif səviyyəli, `_install` sıfırlayır
+
+    class Icon:
+        Warning = 0
+
+    def __init__(self, _parent: Any = None) -> None:
+        self._title = ""
+        self._text = ""
+
+    def setIcon(self, _icon: Any) -> None:  # noqa: N802
+        return None
+
+    def setWindowTitle(self, title: str) -> None:  # noqa: N802
+        self._title = title
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        self._text = text
+
+    def exec(self) -> None:
+        _MessageBox.shown.append((self._title, self._text))
+
+
+def _install_message_box_stub(monkeypatch: pytest.MonkeyPatch) -> type[_MessageBox]:
+    """`_notify`-ın gec idxalını sahtə ilə əvəz edir — bax `_MessageBox` başlığı."""
+    _MessageBox.shown = []
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "PySide6.QtWidgets",
+        type("_Stub", (), {"QMessageBox": _MessageBox})(),
+    )
+    return _MessageBox
+
+
 class _Cursor:
     def __init__(self, rows: list[dict[str, Any]]) -> None:
         self._rows = rows
@@ -495,8 +540,15 @@ def test_approving_an_attendance_row_calls_the_morning_check_in_use_case() -> No
     assert screen.errors == []
 
 
-def test_a_leave_row_cannot_be_rejected_and_the_reason_is_explained() -> None:
-    """Qayıdış təsdiqində «rədd» anlayışı yoxdur — sükutla keçilmir."""
+def test_a_leave_row_cannot_be_rejected_and_the_reason_is_explained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Qayıdış təsdiqində «rədd» anlayışı yoxdur — sükutla keçilmir.
+
+    DEEP-GAP U8: mesaj artıq `screen.show_error()` YOX, `QMessageBox`-dır
+    (bax `_MessageBox` başlığı) — növbənin qalan sətirləri ekranda qalır.
+    """
+    box = _install_message_box_stub(monkeypatch)
     session = _QueueSession(uow=_QueueUow(leave=_leave_request()))
     controller = CameraQueueController(_Context(session), _actor())  # type: ignore[arg-type]
     screen = _QueueScreen()
@@ -509,23 +561,29 @@ def test_a_leave_row_cannot_be_rejected_and_the_reason_is_explained() -> None:
         failure_title="Rədd yazılmadı",
     )
 
-    assert screen.errors[0][0] == "Bu sətir rədd edilə bilməz"
+    assert screen.errors == [], "Növbə `show_error()` ilə SİLİNMƏMƏLİ idi (DEEP-GAP U8)"
+    assert box.shown[0][0] == "Bu sətir rədd edilə bilməz"
     assert session.commits == 0
 
 
-def test_a_row_that_disappeared_asks_for_a_refresh_instead_of_crashing() -> None:
+def test_a_row_that_disappeared_asks_for_a_refresh_instead_of_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Sərhəd: nə icazə sorğusu, nə davamiyyət qeydi — `KeyError` YOX, mesaj."""
+    box = _install_message_box_stub(monkeypatch)
     session = _QueueSession(uow=_QueueUow(leave=None, record=None))
     controller = CameraQueueController(_Context(session), _actor())  # type: ignore[arg-type]
     screen = _QueueScreen()
 
     controller._on_approve(screen, str(uuid.uuid4()))  # type: ignore[arg-type]
 
-    assert screen.errors == [("Sorğu tapılmadı", "Bu sətir artıq emal edilib. Növbəni yeniləyin.")]
+    assert screen.errors == []
+    assert box.shown == [("Sorğu tapılmadı", "Bu sətir artıq emal edilib. Növbəni yeniləyin.")]
     assert session.commits == 0
 
 
-def test_a_denied_verification_shows_the_domain_reason() -> None:
+def test_a_denied_verification_shows_the_domain_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    box = _install_message_box_stub(monkeypatch)
     session = _QueueSession(
         uow=_QueueUow(leave=None, record=_attendance_record()),
         morning_error=_DeniedError("flag yoxdur"),
@@ -535,11 +593,15 @@ def test_a_denied_verification_shows_the_domain_reason() -> None:
 
     controller._on_approve(screen, str(uuid.uuid4()))  # type: ignore[arg-type]
 
-    assert screen.errors == [("Təsdiq yazılmadı", "Bu əməliyyat üçün səlahiyyətiniz yoxdur.")]
+    assert screen.errors == []
+    assert box.shown == [("Təsdiq yazılmadı", "Bu əməliyyat üçün səlahiyyətiniz yoxdur.")]
     assert session.commits == 0
 
 
-def test_an_unexpected_queue_failure_is_reported_without_technical_detail() -> None:
+def test_an_unexpected_queue_failure_is_reported_without_technical_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    box = _install_message_box_stub(monkeypatch)
     session = _QueueSession(
         uow=_QueueUow(leave=None, record=_attendance_record()),
         morning_error=RuntimeError("psycopg: bağlantı qırıldı"),
@@ -549,22 +611,25 @@ def test_an_unexpected_queue_failure_is_reported_without_technical_detail() -> N
 
     controller._on_approve(screen, str(uuid.uuid4()))  # type: ignore[arg-type]
 
-    assert screen.errors[0] == (
+    assert box.shown[0] == (
         "Təsdiq yazılmadı",
         "Əməliyyat tamamlanmadı. Yenidən cəhd edin.",
     )
-    assert "psycopg" not in screen.errors[0][1]
+    assert "psycopg" not in box.shown[0][1]
 
 
-def test_a_malformed_request_id_is_handled_as_a_failure_not_a_crash() -> None:
+def test_a_malformed_request_id_is_handled_as_a_failure_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """`uuid.UUID("abc")` `ValueError` atır — ekran çökməməlidir."""
+    box = _install_message_box_stub(monkeypatch)
     session = _QueueSession(uow=_QueueUow())
     controller = CameraQueueController(_Context(session), _actor())  # type: ignore[arg-type]
     screen = _QueueScreen()
 
     controller._on_approve(screen, "bu-uuid-deyil")  # type: ignore[arg-type]
 
-    assert screen.errors[0][0] == "Təsdiq yazılmadı"
+    assert box.shown[0][0] == "Təsdiq yazılmadı"
 
 
 def test_the_override_dialog_reads_the_threshold_from_system_limits() -> None:
@@ -599,15 +664,19 @@ def test_unknown_employee_and_store_fall_back_to_short_identifiers() -> None:
     assert details["store_name"] == f"#{str(STORE)[:8]}"
 
 
-def test_adjustment_of_an_attendance_row_is_refused_with_a_reason() -> None:
+def test_adjustment_of_an_attendance_row_is_refused_with_a_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Manual vaxt düzəlişi YALNIZ qayıdış təsdiqinə aiddir (modul başlığı)."""
+    box = _install_message_box_stub(monkeypatch)
     session = _QueueSession(uow=_QueueUow(leave=None))
     controller = CameraQueueController(_Context(session), _actor())  # type: ignore[arg-type]
     screen = _QueueScreen()
 
     controller._on_adjust(screen, str(uuid.uuid4()))  # type: ignore[arg-type]
 
-    assert screen.errors == [
+    assert screen.errors == []
+    assert box.shown == [
         (
             "Bu sətir üçün düzəliş yoxdur",
             "Manual vaxt düzəlişi yalnız qayıdış təsdiqinə tətbiq olunur.",
@@ -615,18 +684,20 @@ def test_adjustment_of_an_attendance_row_is_refused_with_a_reason() -> None:
     ]
 
 
-def test_adjustment_load_failure_is_shown_not_swallowed() -> None:
+def test_adjustment_load_failure_is_shown_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    box = _install_message_box_stub(monkeypatch)
     session = _QueueSession(uow=_QueueUow())
     controller = CameraQueueController(_Context(session), _actor())  # type: ignore[arg-type]
     screen = _QueueScreen()
 
     controller._on_adjust(screen, "bu-uuid-deyil")  # type: ignore[arg-type]
 
-    assert screen.errors[0][0] == "Düzəliş açıla bilmədi"
+    assert box.shown[0][0] == "Düzəliş açıla bilmədi"
 
 
-def test_a_bad_time_string_never_reaches_the_use_case() -> None:
+def test_a_bad_time_string_never_reaches_the_use_case(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sərhəd: format SS:DD deyilsə yazı BAŞLAMIR."""
+    box = _install_message_box_stub(monkeypatch)
     session = _QueueSession(uow=_QueueUow(leave=_leave_request()))
     controller = CameraQueueController(_Context(session), _actor())  # type: ignore[arg-type]
     screen = _QueueScreen()
@@ -639,7 +710,8 @@ def test_a_bad_time_string_never_reaches_the_use_case() -> None:
         reference=NOW,
     )
 
-    assert screen.errors == [("Vaxt oxunmadı", "Vaxt formatı SS:DD olmalıdır.")]
+    assert screen.errors == []
+    assert box.shown == [("Vaxt oxunmadı", "Vaxt formatı SS:DD olmalıdır.")]
     assert session.leave_verification.calls == []
     assert session.commits == 0
 
@@ -664,7 +736,8 @@ def test_a_valid_override_is_written_and_committed() -> None:
     assert screen.errors == []
 
 
-def test_override_denial_keeps_the_screen_honest() -> None:
+def test_override_denial_keeps_the_screen_honest(monkeypatch: pytest.MonkeyPatch) -> None:
+    box = _install_message_box_stub(monkeypatch)
     session = _QueueSession(uow=_QueueUow(leave=_leave_request()))
     session.leave_verification = _Recorder(error=_DeniedError("flag yoxdur"))
     controller = CameraQueueController(_Context(session), _actor())  # type: ignore[arg-type]
@@ -678,7 +751,8 @@ def test_override_denial_keeps_the_screen_honest() -> None:
         reference=NOW,
     )
 
-    assert screen.errors == [("Düzəliş yazılmadı", "Bu əməliyyat üçün səlahiyyətiniz yoxdur.")]
+    assert screen.errors == []
+    assert box.shown == [("Düzəliş yazılmadı", "Bu əməliyyat üçün səlahiyyətiniz yoxdur.")]
     assert session.commits == 0
 
 
@@ -1701,6 +1775,17 @@ class _FullProfileScreen:
         self.role_rows: list[tuple[str, str]] = []
         self.sessions: list[tuple[str, str, str]] = []
         self.errors: list[tuple[str, str]] = []
+        # QA-FULL Faza 3 (e2e teammate) — bu iki sahə ƏVVƏL YOX İDİ.
+        # `ProfileController.refresh()` `screen.set_performance_history(...)`
+        # VƏ `screen.set_face_enrollment(...)`-i ŞƏRTSİZ çağırır (bax
+        # `profile.py`); bu sahtədə həmin metodlar olmadığı üçün HƏR TEK
+        # `refresh()` çağırışı `AttributeError`-a düşüb geniş `except
+        # Exception:`-ə tutulurdu — testlər YAŞIL qalırdı, çünki heç biri
+        # `screen.errors == []` yoxlamırdı, halbuki əslində HƏR BİRİ xəta
+        # qoluna düşmüşdü (aşağıdakı `screen.errors == []` iddiaları məhz
+        # bunu üzə çıxarmaq üçün əlavə edildi).
+        self.performance_rows: list[dict[str, str]] = []
+        self.face_enrollment: dict[str, str] = {}
 
     def set_identity(self, full_name: str) -> None:
         """«Ləğv Et» sahələri SON OXUNMUŞ ada qaytarsın deyə lazımdır."""
@@ -1721,6 +1806,12 @@ class _FullProfileScreen:
 
     def set_sessions(self, sessions: list[tuple[str, str, str]]) -> None:
         self.sessions = sessions
+
+    def set_performance_history(self, rows: list[dict[str, str]]) -> None:
+        self.performance_rows = rows
+
+    def set_face_enrollment(self, enrollment: dict[str, str]) -> None:
+        self.face_enrollment = enrollment
 
     def show_error(self, *, title: str, message: str) -> None:
         self.errors.append((title, message))
@@ -1751,6 +1842,13 @@ class _RoutedConnection:
     def execute(self, sql: str, params: Any = None) -> _Cursor:
         if "auth_sessions" in sql:
             return _Cursor(self.session_rows)
+        if "face_enrolled_at" in sql:
+            # `_face_enrollment_row` (`profile.py`) ÜÇÜNCÜ sorğudur — mağaza
+            # sətrini geri versəydik `row["face_enrolled_at"]` `KeyError`
+            # atardı (mağaza sətrində belə açar yoxdur). Qeydiyyatsız işçi
+            # REAL haldır (`fetchone()` → `None`), ona görə boş sətir DEYİL,
+            # sıfır sətir qaytarılır.
+            return _Cursor([])
         return _Cursor(self.store_rows)
 
 
@@ -1802,6 +1900,20 @@ class _ProfileGate:
             raise self._error
 
 
+class _PerformanceReviews:
+    """`session.performance_reviews.list_own(...)`-un əvəzedicisi (#20 kartı).
+
+    `refresh()` bunu ŞƏRTSİZ çağırır — bu sinif olmasaydı hər `refresh()`
+    çağırışı `AttributeError`-a düşürdü (bax `_FullProfileScreen` başlığı).
+    """
+
+    def __init__(self, views: list[Any] | None = None) -> None:
+        self._views = views or []
+
+    def list_own(self, *, tenant_id: Any, employee: Any) -> list[Any]:
+        return list(self._views)
+
+
 class _FullProfileSession:
     def __init__(
         self,
@@ -1820,6 +1932,12 @@ class _FullProfileSession:
             flags=flags or [],
         )
         self.employee_profile = _ProfileGate(error=gate_error)
+        # `_face_enrollment_row` (`profile.py`) reminder ayını buradan oxuyur —
+        # `_Limits` (yuxarıda, D3-03 üçün istifadə olunan EYNİ sinif) hər
+        # sorğuya sabit dəyər qaytarır, bu kartın ÖZÜ ayrıca test predmeti
+        # deyil.
+        self.limits = _Limits(6)
+        self.performance_reviews = _PerformanceReviews()
         self.commits = 0
 
     def commit(self) -> None:
@@ -1865,6 +1983,11 @@ def test_the_profile_screen_never_invents_a_phone_number() -> None:
 
     controller.refresh(screen)  # type: ignore[arg-type]
 
+    # `screen.errors == []` — bu iddia OLMADAN test `refresh()`-in daxilində
+    # atılan `AttributeError`-u (sahtənin çatışmayan atributu) SÜKUTLA
+    # BURAXARDI: aşağıdakı `account` iddiaları o istisnadan ƏVVƏL artıq
+    # yazılmış olur, ona görə "uğurlu yol" iddiası ONLARSIZ YANLIŞ TƏSDİQ olardı.
+    assert screen.errors == [], "refresh() gözlənilmədən xəta qoluna düşdü"
     assert screen.account["phone"] == ""
     assert screen.account["username"] == "r.mammadov"
     assert screen.account["email"] == "—", "E-poçt yoxdursa tire göstərilir"
@@ -1885,6 +2008,7 @@ def test_the_role_card_counts_active_permissions_against_the_catalog() -> None:
 
     controller.refresh(screen)  # type: ignore[arg-type]
 
+    assert screen.errors == [], "refresh() gözlənilmədən xəta qoluna düşdü"
     rows = dict(screen.role_rows)
     assert rows["Vəzifə"] == "HR Admin"
     assert rows["Aktiv icazə"] == "1 / 3"
@@ -1905,6 +2029,7 @@ def test_more_than_two_stores_are_summarised_not_listed() -> None:
 
     controller.refresh(screen)  # type: ignore[arg-type]
 
+    assert screen.errors == [], "refresh() gözlənilmədən xəta qoluna düşdü"
     assert dict(screen.role_rows)["Təyin edilmiş mağaza"] == "Bakı və daha 2"
 
 
@@ -1917,6 +2042,7 @@ def test_a_store_that_no_longer_exists_reads_as_unassigned() -> None:
 
     controller.refresh(screen)  # type: ignore[arg-type]
 
+    assert screen.errors == [], "refresh() gözlənilmədən xəta qoluna düşdü"
     assert dict(screen.role_rows)["Təyin edilmiş mağaza"] == "Təyin edilməyib"
 
 
@@ -1966,6 +2092,7 @@ def test_session_rows_mark_only_live_sessions_as_active() -> None:
 
     controller.refresh(screen)  # type: ignore[arg-type]
 
+    assert screen.errors == [], "refresh() gözlənilmədən xəta qoluna düşdü"
     states = [row[2] for row in screen.sessions]
     assert states == ["Aktiv sessiya", "Bağlanıb", "Bağlanıb"]
     assert screen.sessions[1][1] == "Naməlum cihaz"

@@ -40,6 +40,7 @@ from enum import Enum
 
 from src.domain.entities.base import AggregateRoot, DomainRuleError
 from src.domain.events import DailyAttendanceSheetConfirmedEvent
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.identifiers import (
     DailySheetId,
     EmployeeId,
@@ -54,12 +55,25 @@ class AutoAttendanceStatus(str, Enum):
     """`daily_attendance_sheet_lines.auto_status` — avtomatik təyin olunan vəziyyət.
 
     Dəyərlər `schema.sql`-dakı şərhlə eynidir:
-    `VERIFIED | LATE | OUTSIDE | ABSENT | OFF_DAY`, üstəgəl `PENDING` və
-    `UNPLANNED`.
+    `VERIFIED | LATE | OUTSIDE | ABSENT | OFF_DAY`, üstəgəl `PENDING`,
+    `UNPLANNED` və `ANNUAL_LEAVE`.
 
     `PENDING` niyə lazımdır: tabel gün ƏRZİNDƏ də açıla bilər və o zaman bəzi
     işçilər hələ operator təsdiqini gözləyir. Onları `ABSENT` yazmaq səhv
     olardı — hələ günün sonu deyil.
+
+    ──────────────────────────────────────────────────────────────────────────
+    `ANNUAL_LEAVE` NİYƏ AYRI STATUSDUR (DEEP-GAP D1)
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl HR-ın təsdiqlədiyi illik məzuniyyət tabeldə HEÇ VAXT görünmürdü:
+    `AttendanceFact`-in illik məzuniyyət sahəsi yox idi, `facts_for` yalnız
+    növbə/davamiyyət/qısa-icazə qeydlərini oxuyurdu (`annual_leave_requests`
+    sözü faylında SIFIR dəfə keçirdi). Nəticədə HR-ın təsdiqlədiyi 14 günlük
+    məzuniyyət tabeldə `ABSENT` ("🔴 İcazəsiz qayıb") kimi düşürdü — sistem
+    ÖZ TƏSDİQ ETDİYİ qərarı intizam pozuntusu kimi göstərirdi. `OFF_DAY`-a
+    yönləndirmək də yalnışdır: `OFF_DAY` "istirahət günü" deməkdir, illik
+    məzuniyyət isə AYRI hüquqi kateqoriyadır (ödənişli, HR-təsdiqli) və
+    hesabatda qarışdırılmamalıdır.
     """
 
     VERIFIED = "VERIFIED"
@@ -69,16 +83,29 @@ class AutoAttendanceStatus(str, Enum):
     OFF_DAY = "OFF_DAY"
     PENDING = "PENDING"
     UNPLANNED = "UNPLANNED"
+    ANNUAL_LEAVE = "ANNUAL_LEAVE"
 
     @property
     def counts_as_worked(self) -> bool:
-        """Davamiyyət hesabatında "faktiki işlənilən gün" sayılırmı."""
+        """Davamiyyət hesabatında "faktiki işlənilən gün" sayılırmı.
+
+        `ANNUAL_LEAVE` QƏSDƏN BURADA YOXDUR: bu sual üçün cavab sabit deyil —
+        Root parametridir (`SystemLimitKey.ANNUAL_LEAVE_COUNTS_AS_WORKED_DAY`),
+        çünki `@property` sabit qiymətdən başqa heç nə oxuya bilməz. Onu
+        nəzərə alan çağırış `counts_as_worked_with()` istifadə etməlidir.
+        """
         return self in (
             AutoAttendanceStatus.VERIFIED,
             AutoAttendanceStatus.LATE,
             AutoAttendanceStatus.OUTSIDE,
             AutoAttendanceStatus.UNPLANNED,
         )
+
+    def counts_as_worked_with(self, policy: AttendanceCountingPolicy) -> bool:
+        """`counts_as_worked`-in Root-parametrli variantı (yalnız `ANNUAL_LEAVE` fərqlənir)."""
+        if self is AutoAttendanceStatus.ANNUAL_LEAVE:
+            return policy.annual_leave_counts_as_worked
+        return self.counts_as_worked
 
     @property
     def label_az(self) -> str:
@@ -93,7 +120,28 @@ _STATUS_LABELS: dict[AutoAttendanceStatus, str] = {
     AutoAttendanceStatus.OFF_DAY: "⚪ İstirahət",
     AutoAttendanceStatus.PENDING: "🟡 Təsdiq gözləyir",
     AutoAttendanceStatus.UNPLANNED: "⚠️ Planlanmamış iş",
+    AutoAttendanceStatus.ANNUAL_LEAVE: "🟣 Məzuniyyətdə",
 }
+
+
+@dataclass(frozen=True)
+class AttendanceCountingPolicy:
+    """`ANNUAL_LEAVE_COUNTS_AS_WORKED_DAY` Root parametrinin daşıyıcısı.
+
+    Ayrıca dataclass olması `LaborLimits`/`AttritionWeights` ilə EYNİ naxışdır
+    (bax `domain.labor_rules.LaborLimits`): pəncərəni oxuyan use case bunu BİR
+    dəfə `SystemLimits` portundan qurur və pəncərədəki BÜTÜN sətirlərə eyni
+    dəyəri tətbiq edir — hər sətir üçün ayrıca oxusaydıq, Root dəyəri
+    dəyişdirən an eyni tabeldə iki sətir fərqli qaydayla sayıla bilərdi.
+    """
+
+    annual_leave_counts_as_worked: bool
+
+    @classmethod
+    def defaults(cls) -> AttendanceCountingPolicy:
+        """`DEFAULT_LIMITS` dəyəri — YALNIZ fallback (limit portu yoxdursa)."""
+        key = SystemLimitKey.ANNUAL_LEAVE_COUNTS_AS_WORKED_DAY
+        return cls(annual_leave_counts_as_worked=DEFAULT_LIMITS[key] != "0")
 
 
 @dataclass
@@ -114,6 +162,12 @@ class SheetLine:
         Hesablanmış xüsusiyyətdir, saxlanan bayraq DEYİL: `planned_off` və
         `auto_status` dəyişdikdə uyğunsuzluq da avtomatik yenilənir. Ayrıca
         sahə saxlansaydı, ikisi bir-birindən ayrı düşə bilərdi.
+
+        `ANNUAL_LEAVE` HEÇ VAXT uyğunsuzluq sayılmır (DEEP-GAP D1): aşağıdakı
+        iki şərtdən heç biri bu statusla üst-üstə düşmür (nə `UNPLANNED`, nə
+        `ABSENT`), ona görə əlavə xüsusi hal YAZILMAYIB — sıralamanın özü
+        kifayət edir. HR-ın təsdiqlədiyi məzuniyyət "plana uyğunsuz" ola
+        bilməz, çünki о, planın ÖZÜNDƏN üstün bir təsdiqdir.
         """
         if self.planned_off:
             return self.auto_status is AutoAttendanceStatus.UNPLANNED
@@ -239,7 +293,15 @@ class DailyAttendanceSheet(AggregateRoot):
 
     @property
     def worked_count(self) -> int:
-        return sum(1 for line in self.lines if line.auto_status.counts_as_worked)
+        """DEFOLT siyasətlə sayır (`AttendanceCountingPolicy.defaults()`).
+
+        Tenant-a görə Root dəyərini nəzərə alan çağırış `worked_count_with()`
+        istifadə etməlidir (bax `DailyAttendanceSheetUseCase`).
+        """
+        return self.worked_count_with(AttendanceCountingPolicy.defaults())
+
+    def worked_count_with(self, policy: AttendanceCountingPolicy) -> int:
+        return sum(1 for line in self.lines if line.auto_status.counts_as_worked_with(policy))
 
     def _require_open(self) -> None:
         if self.is_confirmed:
@@ -273,17 +335,33 @@ class AttendanceFact:
     is_late: bool = False
     late_minutes: int = 0
     day_is_over: bool = True
+    #: DEEP-GAP D1 — bu gün üçün TƏSDİQLƏNMİŞ illik məzuniyyət var (bax
+    #: `AnnualLeaveRequestRepository.find_overlapping_approved`, EYNİ sorğu
+    #: `shift_scheduling.ANNUAL_LEAVE_CONFLICT_KIND`-in oxu tərəfi ilə).
+    #: Defolt `False`: mövcud çağıranlar (testlər, sahtələr) bu sahəni
+    #: BİLMİR və köhnə davranış (illik məzuniyyət nəzərə alınmır) DƏYİŞMİR.
+    on_annual_leave: bool = False
 
-    def derive_status(self) -> AutoAttendanceStatus:
+    def derive_status(self) -> AutoAttendanceStatus:  # noqa: PLR0911 - hər `return` AYRI status qapısıdır
         """Faktlardan tabel statusunu çıxarır (bölmə 3, 4).
 
         Sıralama vacibdir: "hazırda xaricdə" olmaq işə gəlməyi ƏVƏZ ETMİR —
         işçi əvvəlcə təsdiqlənib, sonra icazəyə çıxıb. Ona görə `OUTSIDE`
         yoxlaması `VERIFIED`-dən ƏVVƏL gəlir, amma yalnız təsdiqlənmiş
         işçilər üçün mənalıdır (STEP 1 yalnız `🟢`-dan işə düşür).
+
+        `ANNUAL_LEAVE` `OUTSIDE`-dan DƏRHAL SONRA, hər cür check-in
+        siqnalından ƏVVƏL yoxlanır (DEEP-GAP D1): HR-ın TƏSDİQLƏDİYİ
+        məzuniyyət qeydi ötəri/qeyri-müəyyən check-in siqnallarından üstündür
+        — məhz D1-in kök səbəbi bunun əksi idi (sistem öz təsdiqini
+        e'tibarsız sayıb "qayıb" yazırdı). Yalnız fiziki iştirak faktı
+        (`is_currently_outside`, artıq mağazada QEYDİYYATDAN keçmiş insan)
+        onu üstələyə bilər.
         """
         if self.is_currently_outside:
             return AutoAttendanceStatus.OUTSIDE
+        if self.on_annual_leave:
+            return AutoAttendanceStatus.ANNUAL_LEAVE
         if self.has_verified_check_in:
             if self.planned_off:
                 return AutoAttendanceStatus.UNPLANNED
@@ -311,6 +389,7 @@ def build_lines(facts: list[AttendanceFact]) -> list[SheetLine]:
 
 
 __all__ = [
+    "AttendanceCountingPolicy",
     "AttendanceFact",
     "AutoAttendanceStatus",
     "DailyAttendanceSheet",

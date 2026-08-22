@@ -372,9 +372,12 @@ class DriveConnectionController:
     # ------------------------------ köməkçilər ------------------------------- #
 
     def _permitted(self) -> bool:
-        from datetime import UTC, datetime  # noqa: PLC0415
-
-        return bool(self._actor.has_permission(MANAGE_DRIVE_FLAG, now=datetime.now(UTC)))
+        """VAXT `self._context.clock`-DAN GƏLİR, `datetime.now(UTC)`-DAN YOX
+        (DEEP-GAP FAZA 4, T5) — `root_control.py::_permitted` ilə EYNİ
+        düzəliş, eyni səbəb: bu, yeganə qapıdır (use case yoxdur, kontroller
+        birbaşa repository-yə yazır) və OS saatı TIME-1-in server-lövbərli
+        vədini pozurdu."""
+        return bool(self._actor.has_permission(MANAGE_DRIVE_FLAG, now=self._context.clock.now()))
 
     def _record_audit(
         self,

@@ -630,6 +630,7 @@ class PostgresUnitOfWork:
             PostgresEmployeeRepository,
             PostgresFineRepository,
             PostgresLeaveRequestRepository,
+            PostgresOpenFineExposureReader,
             PostgresPositionRepository,
         )
         from src.infrastructure.persistence.saga_repository import (  # noqa: PLC0415
@@ -688,6 +689,10 @@ class PostgresUnitOfWork:
             "leave_requests": PostgresLeaveRequestRepository(conn, self._context),
             "attendance": PostgresAttendanceRepository(conn, self._context),
             "fines": PostgresFineRepository(conn, self._context),
+            # DEEP-GAP D2 — `OpenFineExposureReader` portunun adapteri
+            # (`user_management.py`). `fines` İLƏ EYNİ BAĞLANTIDADIR, çünki
+            # ikisi eyni tranzaksiyada oxunur (deaktivasiya ön-yoxlaması).
+            "fine_exposure": PostgresOpenFineExposureReader(conn, self._context),
             # Audit iş vahidinin İÇİNDƏDİR: yazı onu doğuran əməliyyatla eyni
             # tranzaksiyada olmalıdır (bax `audit.py` başlığı).
             "audit": PostgresAuditTrail(conn),

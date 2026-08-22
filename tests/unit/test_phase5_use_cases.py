@@ -34,6 +34,7 @@ from src.application.use_cases.task_workflow import (
 )
 from src.application.use_cases.user_management import (
     EmployeeDraft,
+    OpenFineExposure,
     UserManagementUseCase,
 )
 from src.domain.entities.employee import Employee, PermissionOverride
@@ -1215,6 +1216,101 @@ def test_deactivation_never_deletes_the_row() -> None:
     assert target.id in repo.employees
     assert not target.is_active
     assert audit.records[-1]["reason"] == "İşdən çıxdı"
+
+
+# --------------------------------------------------------------------------- #
+# DEEP-GAP D2 — deaktivasiya anında açıq cərimə/etiraz ön-yoxlaması
+# --------------------------------------------------------------------------- #
+
+
+class _FineExposure:
+    """`OpenFineExposureReader` sahtəsi — sabit nəticə qaytarır."""
+
+    def __init__(self, exposure: OpenFineExposure) -> None:
+        self._exposure = exposure
+        self.queried: list[EmployeeId] = []
+
+    def count_open_for_employee(self, employee_id: EmployeeId) -> OpenFineExposure:
+        self.queried.append(employee_id)
+        return self._exposure
+
+
+def test_deactivation_reports_open_fine_exposure_and_notifies_without_blocking() -> None:
+    """Açıq cərimə/etiraz varsa: deaktivasiya BAŞ VERİR, audit + bildiriş DƏ olur."""
+    target = _employee(code="SATICI", priority=RolePriority.OPERATIONAL)
+    repo, audit, notifier = _EmployeeRepo([target]), _Audit(), _Notifier()
+    exposure = _FineExposure(OpenFineExposure(pending_review_fine_count=2, open_appeal_count=1))
+    use_case = UserManagementUseCase(
+        employees=repo,
+        credentials=_Credentials(),
+        audit=audit,
+        clock=_Clock(),
+        notifier=notifier,
+        fine_exposure=exposure,
+    )
+
+    deactivated = use_case.deactivate_employee(
+        tenant_id=TENANT,
+        actor=_employee(flags=("can_manage_employees",)),
+        employee_id=target.id,
+        reason="İşdən çıxdı",
+    )
+
+    assert deactivated.is_active is False, (
+        "BLOKLAMIR — açıq iz meşru deaktivasiyanı dayandırmamalıdır"
+    )
+    assert exposure.queried == [target.id]
+    after = audit.records[-1]["after_state"]
+    assert after["open_fine_count"] == 2
+    assert after["open_appeal_count"] == 1
+    assert len(notifier.sent) == 1
+    assert notifier.sent[0]["category"] == "EMPLOYEE_DEACTIVATED_WITH_OPEN_FINES"
+    assert notifier.sent[0]["is_critical"] is True
+
+
+def test_deactivation_with_no_open_exposure_does_not_notify() -> None:
+    """Açıq iz yoxdursa bildiriş göndərilmir, lakin audit sıfırı DA yazır (susmur)."""
+    target = _employee(code="SATICI", priority=RolePriority.OPERATIONAL)
+    repo, audit, notifier = _EmployeeRepo([target]), _Audit(), _Notifier()
+    exposure = _FineExposure(OpenFineExposure(pending_review_fine_count=0, open_appeal_count=0))
+    use_case = UserManagementUseCase(
+        employees=repo,
+        credentials=_Credentials(),
+        audit=audit,
+        clock=_Clock(),
+        notifier=notifier,
+        fine_exposure=exposure,
+    )
+
+    use_case.deactivate_employee(
+        tenant_id=TENANT,
+        actor=_employee(flags=("can_manage_employees",)),
+        employee_id=target.id,
+        reason="İşdən çıxdı",
+    )
+
+    assert notifier.sent == []
+    after = audit.records[-1]["after_state"]
+    assert after["open_fine_count"] == 0
+    assert after["open_appeal_count"] == 0
+
+
+def test_deactivation_skips_exposure_check_when_port_is_not_wired() -> None:
+    """`fine_exposure=None` — köhnə kompozisiya kökü qırılmır, `None` açıq yazılır."""
+    target = _employee(code="SATICI", priority=RolePriority.OPERATIONAL)
+    repo, audit = _EmployeeRepo([target]), _Audit()
+    use_case = _user_use_case(employees=repo, credentials=_Credentials(), audit=audit)
+
+    use_case.deactivate_employee(
+        tenant_id=TENANT,
+        actor=_employee(flags=("can_manage_employees",)),
+        employee_id=target.id,
+        reason="İşdən çıxdı",
+    )
+
+    after = audit.records[-1]["after_state"]
+    assert after["open_fine_count"] is None
+    assert after["open_appeal_count"] is None
 
 
 # --------------------------------------------------------------------------- #

@@ -1338,8 +1338,24 @@ def test_an_empty_face_scope_is_explained_as_global_not_disabled(qtbot, theme) -
 
 
 @requires_qt
-def test_toggling_a_store_emits_the_scope_signal(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+def test_toggling_a_store_emits_the_scope_signal(qtbot, theme, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from PySide6.QtWidgets import QMessageBox
+
     from src.presentation.screens.group_d import RootControlScreen
+
+    # T4 TƏSDİQ MODALI SAHTƏLƏNİR: əhatə QLOBAL ikən (heç bir mağaza seçilməyib)
+    # İLK mağazanı seçmək digər bütün mağazalarda üz təsdiqini söndürür, ona görə
+    # `_confirm_face_scope_narrowing()` `QMessageBox.question(...)` açır. Offscreen
+    # platformada modal cavab gözləyərək ƏBƏDİ bloklanır — bu test tam dəsti iki
+    # dəfə «asdırıb» və `pytest-timeout` prosesi öldürüb. Naxış layihədə mövcuddur
+    # (`tests/e2e/test_developer_panel_ui.py:174`). Burada cavab «Bəli»dir, çünki
+    # testin mövzusu SİQNALIN yayılmasıdır; «Xeyr» qolu `test_root_control_screen_
+    # e2e.py`-də ayrıca kilidlənib.
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes),
+    )
 
     store_id = str(uuid.uuid4())
     screen = RootControlScreen(theme)

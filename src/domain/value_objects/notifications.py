@@ -239,6 +239,25 @@ TENANT_NOTIFICATION_AUDIENCE: Final[dict[str, tuple[str, ...]]] = {
     # KONFİQURASİYA EDƏ BİLƏN roldadır — süzgəcsiz sətir FAIL-OPEN olardı və
     # hər `Satıcı` bu göstəriciləri görərdi.
     "EXECUTIVE_DIGEST_DELIVERED": ("can_configure_executive_digest",),
+    # `fine_review.MonthlyFineReviewUseCase._record` (DEEP-GAP D2): işçi nəşr
+    # ANINDA deaktivdirsə cərimə `PENDING_REVIEW`-də saxlanılır və HR əl ilə
+    # qərar verməlidir. Auditoriya `can_publish_fines`-dir — "[Bütün Filiallara
+    # Göndər]" düyməsini basan ROL, saxlanan sətri də görməlidir; başqa rol
+    # (məs. sadə HR) görsə, düyməni basa bilmədiyi üçün heç nə edə bilməzdi.
+    "MONTHLY_FINES_HELD_INACTIVE_EMPLOYEE": ("can_publish_fines",),
+    # `user_management.UserManagementUseCase.deactivate_employee` (DEEP-GAP
+    # D2): deaktiv edilən işçinin AÇIQ (nəşr gözləyən/etirazlı) cərimələri var.
+    # Auditoriya YENƏ `can_publish_fines`-dir — EYNİ SƏBƏB: bu sətirlərin
+    # taleyini yalnız nəşr edə bilən rol həll edə bilər (əl ilə saxlamaq/silmək).
+    "EMPLOYEE_DEACTIVATED_WITH_OPEN_FINES": ("can_publish_fines",),
+    # `fine_review.MonthlyFineReviewUseCase._record` (DEEP-GAP T3): sübut
+    # şəkli hələ Drive-a yüklənməmiş MANUAL_CAMERA cəriməsi nəşr edilmir.
+    # Auditoriya YENƏ `can_publish_fines`-dir, LAKİN səbəb bir qədər fərqlidir:
+    # sətir cərimə alan İŞÇİNİN adını daşımasa da, hansı cərimənin sübutsuz
+    # qaldığını açır — bu, nəşrə qədər gizli qalmalı olan məlumatdır (`Fine.
+    # is_visible_to_employee` qaydası). Süzgəcsiz sətir onu bütün filiala
+    # göstərərdi.
+    "MONTHLY_FINES_HELD_MISSING_EVIDENCE": ("can_publish_fines",),
     # ─────────────────────────────────────────────────────────────────────
     # `MONTHLY_FINES_PUBLISHED` BURAYA QƏSDƏN SALINMIR — ONU SÜZMƏYİN.
     # ─────────────────────────────────────────────────────────────────────

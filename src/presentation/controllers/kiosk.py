@@ -171,6 +171,18 @@ class KioskController:
         # dən yenidən oxumaq lazımsız I/O olardı.
         self._machine_key = machine_key
 
+    @property
+    def store_id(self) -> StoreId:
+        """Terminalın bağlı olduğu mağaza (DEEP-GAP U5).
+
+        PIN ekranının başlıq sətri əvvəl SABİT mətn idi ("Bellona — 28 May")
+        — `app.py::start_kiosk` mağaza adını heç yerdən oxumurdu, halbuki
+        `_build_kiosk_controller` onu artıq `KOMPASOS_STORE_ID`-dən tapıb bu
+        kontrollerə ötürüb. Xassə YALNIZ oxu üçündür: mağaza terminalın
+        ÖMRÜ boyu dəyişmir (bax konstruktor şərhi).
+        """
+        return self._store_id
+
     # -------------------------------- PIN ------------------------------------ #
 
     def authenticate(self, pin: str) -> KioskOutcome:
@@ -308,10 +320,20 @@ class KioskController:
                 candidates = session.uow.employees.find_by_pin_candidates(
                     self._context.tenant_id, self._store_id
                 )
+                import socket  # noqa: PLC0415
+
                 identified = session.face_verification.identify_for_login(
                     tenant_id=self._context.tenant_id,
                     store_id=self._store_id,
+                    # T1 (DEEP-GAP Faza 4) — `authenticate_with_pin`-dəki EYNİ
+                    # dəyər, EYNİ səbəb (SEC-01/SEC-05): açar konstruktorda BİR
+                    # DƏFƏ oxunub, `store_id`-dən QURULMUR (admin hüququ
+                    # olmadan dəyişdirilə bilər). `machine_name` terminalın
+                    # bloklanma/təhlükəsizlik hadisəsində görünən addır — üzlə
+                    # giriş yolu bunsuz «naməlum terminal» kimi qeydə düşərdi.
+                    machine_key=self._machine_key,
                     candidates=candidates,
+                    machine_name=socket.gethostname(),
                 )
                 # Tanıma cəhdi jurnal yazmır (bax use case başlığı), lakin
                 # kamera/kadr vəziyyəti dəyişmiş ola bilər — commit ucuzdur və

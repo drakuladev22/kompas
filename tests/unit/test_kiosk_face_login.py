@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -32,10 +33,13 @@ from tests.conftest import requires_qt
 
 TENANT = uuid.uuid4()
 STORE = uuid.uuid4()
-#: SEC-01/SEC-05 (dövrə 3) — bu fayldakı testlər `authenticate_by_face()`
-#: yolunu ölçür (`machine_key` YALNIZ PIN handshake-də işlədilir), amma
-#: konstruktor arqumenti YENƏ DƏ MƏCBURİDİR.
+#: SEC-01/SEC-05 (dövrə 3) + DEEP-GAP T1 — ARTIQ İKİ yolda işlədilir: PIN
+#: handshake-ində VƏ 1:N `identify_for_login()`-də (terminal throttle-ı hər
+#: ikisi üçün EYNİ `(tenant_id, machine_key)` sətridir).
 MACHINE_KEY = MachineIdentityHash(digest="a" * 64)
+
+#: Sabit "indi" — sahtə saat. Kilid müqayisələri BU ana nisbətən qurulur.
+NOW = datetime(2026, 3, 2, 9, 0, tzinfo=UTC)
 
 
 # --------------------------------------------------------------------------- #
@@ -180,11 +184,14 @@ class _Camera:
     def __init__(self, *, available: bool = True, frames: int = 1) -> None:
         self._available = available
         self._frames = frames
+        #: T1 — bloklanmış terminalda kadr ÇƏKİLMƏMƏLİDİR (fail-fast).
+        self.captures = 0
 
     def is_available(self) -> bool:
         return self._available
 
     def capture(self, *, count: int = 1, gesture: Any = None) -> list[Any]:
+        self.captures += 1
         return [object()] * self._frames
 
 
@@ -243,13 +250,14 @@ def _use_case(distances: dict[Any, float], *, live: bool = True, **overrides: An
         "limits": _Limits(),
         "toggles": _Toggles(),
         "audit": object(),
-        "clock": object(),
+        "clock": _Clock(),
         "notifier": object(),
-        # `verify()`-in FACE_MISMATCH qolu bunu çağırır (SEC-7); bu fayldakı
-        # testlər YALNIZ `identify_for_login`/`login_available` çağırır, ona
-        # görə `object()` kifayətdir — `verify()` çağıran test olsaydı
-        # `.record` metodu tələb olunardı.
-        "security_events": object(),
+        # T1-dən SONRA `identify_for_login` DƏ bura yazır (ƏSL rədd yollarında),
+        # ona görə `object()` ARTIQ KİFAYƏT ETMİR — sahtə `.record` tələb edir.
+        "security_events": _SecurityEvents(),
+        # T1 — 1:N girişin terminal throttle-ı. MƏCBURİ arqumentdir: sükutla
+        # "throttle yoxdur" davranışına qayıtmaq QƏSDƏN mümkün deyil.
+        "pin_throttle": _PinThrottle(),
     }
     kwargs.update(overrides)
     return FaceVerificationUseCase(**kwargs)
@@ -281,7 +289,7 @@ def test_identification_picks_the_closest_enrolled_face() -> None:
     use_case = _use_case({first.id: 0.10, second.id: 0.60})
 
     found = use_case.identify_for_login(
-        tenant_id=TENANT, store_id=STORE, candidates=[first, second]
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[first, second]
     )
 
     assert found is first
@@ -297,7 +305,7 @@ def test_identification_refuses_when_two_faces_are_too_close() -> None:
     use_case = _use_case({first.id: 0.30, second.id: 0.33})
 
     found = use_case.identify_for_login(
-        tenant_id=TENANT, store_id=STORE, candidates=[first, second]
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[first, second]
     )
 
     assert found is None
@@ -307,7 +315,9 @@ def test_identification_refuses_when_nobody_is_close_enough() -> None:
     stranger = _Employee("Kənar şəxs")
     use_case = _use_case({stranger.id: 0.95})
 
-    found = use_case.identify_for_login(tenant_id=TENANT, store_id=STORE, candidates=[stranger])
+    found = use_case.identify_for_login(
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[stranger]
+    )
 
     assert found is None
 
@@ -317,7 +327,9 @@ def test_identification_refuses_when_liveness_fails() -> None:
     person = _Employee("Rəşad")
     use_case = _use_case({person.id: 0.05}, live=False)
 
-    found = use_case.identify_for_login(tenant_id=TENANT, store_id=STORE, candidates=[person])
+    found = use_case.identify_for_login(
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[person]
+    )
 
     assert found is None
 
@@ -326,7 +338,9 @@ def test_identification_is_off_when_the_module_is_disabled() -> None:
     person = _Employee("Rəşad")
     use_case = _use_case({person.id: 0.05}, toggles=_Toggles(enabled=False))
 
-    found = use_case.identify_for_login(tenant_id=TENANT, store_id=STORE, candidates=[person])
+    found = use_case.identify_for_login(
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[person]
+    )
 
     assert found is None
 
@@ -340,6 +354,252 @@ def test_login_button_availability_follows_module_scope_and_camera() -> None:
 
     without_module = _use_case({}, toggles=_Toggles(enabled=False))
     assert without_module.login_available(tenant_id=TENANT, store_id=STORE) is False
+
+
+# --------------------------------------------------------------------------- #
+# 2b — T1: 1:N girişin terminal throttle-ı
+# --------------------------------------------------------------------------- #
+#
+# NİYƏ BU TESTLƏR VAR
+# ───────────────────────────────────────────────────────────────────────────
+# «Üzlə daxil ol» yolu nə sayğac artırırdı, nə iz buraxırdı: uğursuz cəhd
+# sadəcə `None` qaytarırdı. Yəni kamera qarşısında GECƏ BOYU məhdudiyyətsiz
+# sınaq mümkün idi və səhəri gün heç bir jurnalda sətir qalmırdı. Aşağıdakı
+# testlər həmin iki boşluğu AYRI-AYRI ölçür — biri keçib digəri qırılsa,
+# hansının itdiyi dərhal görünür.
+
+
+def _throttle(*, locked: bool = False, failed_count: int = 1) -> Any:
+    from src.domain.value_objects.pin_throttle import TerminalPinThrottle
+
+    return TerminalPinThrottle(
+        tenant_id=TENANT,
+        machine_key=MACHINE_KEY,
+        store_id=STORE,
+        failed_count=failed_count,
+        window_started_at=NOW - timedelta(minutes=1),
+        locked_until=NOW + timedelta(minutes=15) if locked else None,
+        updated_at=NOW,
+    )
+
+
+class _Clock:
+    def now(self) -> datetime:
+        return NOW
+
+
+class _SecurityEvents:
+    def __init__(self) -> None:
+        self.rows: list[dict[str, Any]] = []
+
+    def record(self, **kwargs: Any) -> None:
+        self.rows.append(kwargs)
+
+    def types(self) -> list[str]:
+        return [str(row["event_type"]) for row in self.rows]
+
+
+class _PinThrottle:
+    """`PinThrottleRepository` sahtəsi — sayğacı YADDAŞDA saxlayır.
+
+    `record_failure` DB trigger-inin ARİFMETİKASINI təkrarlamır: bu fayldakı
+    testlərin mövzusu hədd deyil, ÇAĞIRILIB-ÇAĞIRILMADIĞIDIR. Kilidin YENİ
+    yarandığı hal `locks_on` ilə açıq şəkildə qurulur — yəni test hansı
+    davranışı ölçdüyünü gizlətmir.
+    """
+
+    def __init__(self, *, existing: Any = None, locks_on: int | None = None) -> None:
+        self._existing = existing
+        self._locks_on = locks_on
+        self.failures = 0
+        self.read_count = 0
+
+    def get_for_update(self, _tenant: Any, _machine_key: Any) -> Any:
+        self.read_count += 1
+        return self._existing
+
+    def record_failure(self, _tenant: Any, _machine_key: Any, *, store_id: Any) -> Any:
+        self.failures += 1
+        locked = self._locks_on is not None and self.failures >= self._locks_on
+        return _throttle(locked=locked, failed_count=self.failures)
+
+    def update_last_seen_store(self, _tenant: Any, _machine_key: Any, *, store_id: Any) -> None:
+        return None
+
+
+class _BrokenPinThrottle:
+    def get_for_update(self, _tenant: Any, _machine_key: Any) -> Any:
+        raise RuntimeError("bağlantı yoxdur")
+
+    def record_failure(self, _tenant: Any, _machine_key: Any, *, store_id: Any) -> Any:
+        raise AssertionError("kilid oxuna bilmədikdə buraya çatılmamalıdır")
+
+    def update_last_seen_store(self, _tenant: Any, _machine_key: Any, *, store_id: Any) -> None:
+        return None
+
+
+def test_unrecognised_face_increments_the_terminal_counter_and_leaves_a_trace() -> None:
+    """ƏSL uyğunsuzluq: sayğac artır VƏ `security_events` sətri yaranır.
+
+    İkisi bir arada yoxlanılır, çünki qüsurun ÖZÜ də bir arada idi: «kim cəhd
+    etdiyi məlum deyil» qərarı jurnalı da, sürət-limitini də özü ilə aparmışdı.
+    """
+    throttle = _PinThrottle()
+    events = _SecurityEvents()
+    stranger = _Employee("Kənar şəxs")
+    use_case = _use_case({stranger.id: 0.95}, pin_throttle=throttle, security_events=events)
+
+    found = use_case.identify_for_login(
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[stranger]
+    )
+
+    assert found is None
+    assert throttle.failures == 1
+    assert events.types() == ["FACE_LOGIN_FAILED"]
+    assert events.rows[0]["details"]["reason"] == "NO_MATCH"
+
+
+def test_ambiguous_match_also_counts_against_the_terminal() -> None:
+    """Marja qapısı LİMİTSİZ sınaq sahəsi olmamalıdır.
+
+    Sayılmasaydı, iki işçiyə eyni dərəcədə oxşayan hər kadr pulsuz cəhd
+    olardı — halbuki burada biometrik QƏRAR verilib və giriş RƏDD edilib.
+    """
+    throttle = _PinThrottle()
+    events = _SecurityEvents()
+    first, second = _Employee("Rəşad"), _Employee("Rəşid")
+    use_case = _use_case(
+        {first.id: 0.30, second.id: 0.33}, pin_throttle=throttle, security_events=events
+    )
+
+    found = use_case.identify_for_login(
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[first, second]
+    )
+
+    assert found is None
+    assert throttle.failures == 1
+    assert events.rows[0]["details"]["reason"] == "AMBIGUOUS"
+
+
+def test_liveness_failure_does_not_lock_the_terminal() -> None:
+    """`verify()`-dakı qərarın EYNİSİ: canlılıq uğursuzluğu sayğaca YAZILMIR.
+
+    Zəif işıqda göz qırpması tutulmayan VİCDANLI işçi bütün mağazanın PIN
+    girişini bloklaya bilməz — sayğac `store_pin_throttle`-dır, yəni onun
+    kilidi PIN yoluna DA təsir edir.
+    """
+    throttle = _PinThrottle()
+    person = _Employee("Rəşad")
+    use_case = _use_case({person.id: 0.05}, live=False, pin_throttle=throttle)
+
+    found = use_case.identify_for_login(
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[person]
+    )
+
+    assert found is None
+    assert throttle.failures == 0
+
+
+def test_store_without_any_enrolled_face_does_not_lock_the_terminal() -> None:
+    """Qeydiyyatsız mağaza KONFİQURASİYA halıdır, hücum siqnalı deyil.
+
+    Sayılsaydı, üz modulu açılan ilk gün hər cəhd uğursuz olardı və terminal
+    öz-özünü PIN-siz qoyardı.
+    """
+    throttle = _PinThrottle()
+    person = _Employee("Rəşad")
+    use_case = _use_case({}, pin_throttle=throttle)
+
+    found = use_case.identify_for_login(
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[person]
+    )
+
+    assert found is None
+    assert throttle.failures == 0
+
+
+def test_locked_terminal_is_refused_before_the_camera_is_used() -> None:
+    """Fail-fast: bloklanmış terminalda kadr ÇƏKİLMİR.
+
+    Kadr çəkilsəydi hücumçu «kamera işləyir» geribildirişi alardı və N profil
+    üzərində məsafə hesablaması hər basışda boşa gedərdi.
+    """
+    from src.application.use_cases.authentication import TerminalLockedError
+
+    camera = _Camera()
+    events = _SecurityEvents()
+    person = _Employee("Rəşad")
+    use_case = _use_case(
+        {person.id: 0.05},
+        camera=camera,
+        security_events=events,
+        pin_throttle=_PinThrottle(existing=_throttle(locked=True)),
+    )
+
+    with pytest.raises(TerminalLockedError):
+        use_case.identify_for_login(
+            tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[person]
+        )
+
+    assert camera.captures == 0
+    assert events.types() == ["FACE_LOGIN_TERMINAL_LOCKED"]
+
+
+def test_new_lockout_is_recorded_when_the_threshold_is_crossed() -> None:
+    """Həddi KEÇƏN cəhd İKİ sətir buraxır: rədd + yeni kilid."""
+    throttle = _PinThrottle(locks_on=1)
+    events = _SecurityEvents()
+    stranger = _Employee("Kənar şəxs")
+    use_case = _use_case({stranger.id: 0.95}, pin_throttle=throttle, security_events=events)
+
+    use_case.identify_for_login(
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[stranger]
+    )
+
+    assert events.types() == ["FACE_LOGIN_FAILED", "FACE_LOGIN_TERMINAL_LOCKED"]
+    assert events.rows[1]["details"]["trigger"] == "NEW_LOCKOUT"
+    # Sayğacın PIN ilə ORTAQ olduğu sətirdən OXUNA bilməlidir — əks halda
+    # hadisəni araşdıran adam PIN girişinin niyə bağlandığını tapa bilməz.
+    assert events.rows[1]["details"]["shared_counter"] == "store_pin_throttle"
+
+
+def test_face_login_fails_closed_when_the_throttle_cannot_be_read() -> None:
+    """FAIL-CLOSED (SEC-06) — throttle oxuna bilmirsə cəhd RƏDD edilir.
+
+    Fail-open variantı bütün qorumanı sükutla söndürərdi. Qiymət isə burada
+    PIN axınındakından da AŞAĞIDIR: işçi PIN-lə davam edir.
+    """
+    from src.application.use_cases.authentication import TerminalThrottleUnavailableError
+
+    camera = _Camera()
+    person = _Employee("Rəşad")
+    use_case = _use_case({person.id: 0.05}, camera=camera, pin_throttle=_BrokenPinThrottle())
+
+    with pytest.raises(TerminalThrottleUnavailableError):
+        use_case.identify_for_login(
+            tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[person]
+        )
+
+    assert camera.captures == 0
+
+
+def test_module_gate_is_checked_before_the_throttle_is_read() -> None:
+    """Modul söndürülübsə DB-yə heç bir sorğu getmir.
+
+    Sıra tərsinə olsaydı, üz modulu ÜMUMİYYƏTLƏ açılmamış tenant-da hər ekran
+    çəkilişi `SELECT ... FOR UPDATE` doğurardı.
+    """
+    throttle = _PinThrottle()
+    person = _Employee("Rəşad")
+    use_case = _use_case({person.id: 0.05}, toggles=_Toggles(enabled=False), pin_throttle=throttle)
+
+    assert (
+        use_case.identify_for_login(
+            tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[person]
+        )
+        is None
+    )
+    assert throttle.read_count == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -469,6 +729,65 @@ def test_face_login_opens_only_after_the_gate_allows(monkeypatch) -> None:  # ty
 
     assert outcome.succeeded is True
     assert outcome.employee is employee
+
+
+def test_authenticate_by_face_forwards_the_terminal_machine_key(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """DEEP-GAP T1 — `KioskController.authenticate_by_face` ARTIQ öz
+    `machine_key`-ini `identify_for_login()`-ə ÖTÜRÜR.
+
+    ƏVVƏL: çağırış `machine_key` VERMİRDİ (`mypy` `call-arg` xətası ilə
+    tutdu — imza MƏCBURİ arqumentdir, `None` fallback-ı YOXDUR, bax
+    `FaceVerificationUseCase.__init__` başlığı). Nəticədə terminal
+    throttle-ı (`(tenant_id, machine_key)`) 1:N üz girişində HEÇ VAXT
+    işə düşməzdi — foto/video ilə limitsiz cəhd mümkün olardı.
+    """
+    from src.presentation.controllers.kiosk import FaceGate, KioskController
+
+    employee = _Employee("Rəşad")
+    received: dict[str, Any] = {}
+
+    class _FaceUseCase:
+        def identify_for_login(self, **kwargs: Any) -> Any:
+            received.update(kwargs)
+            return employee
+
+    class _Uow:
+        class employees:  # noqa: N801 - sahtə ad məkanı
+            @staticmethod
+            def find_by_pin_candidates(_tenant: Any, _store: Any) -> list[Any]:
+                return [employee]
+
+    class _Session:
+        def __init__(self) -> None:
+            self.uow = _Uow()
+            self.face_verification = _FaceUseCase()
+
+        def commit(self) -> None:
+            return None
+
+    class _Context:
+        tenant_id = TENANT
+
+        @contextmanager
+        def session(self, *, user_id: Any = None):  # type: ignore[no-untyped-def]
+            yield _Session()
+
+    monkeypatch.setattr(KioskController, "_status_for", lambda self, s, e: None)
+    monkeypatch.setattr(
+        KioskController,
+        "_face_gate",
+        lambda self, emp, ctx: FaceGate(allowed=True, message="", face={"outcome": "MATCH"}),
+    )
+
+    controller = KioskController(  # type: ignore[arg-type]
+        _Context(), store_id=STORE, machine_key=MACHINE_KEY
+    )
+    controller.authenticate_by_face()
+
+    assert received["machine_key"] == MACHINE_KEY
+    assert received["store_id"] == STORE
+    assert received["tenant_id"] == TENANT
+    assert received["machine_name"], "Terminal adı ötürülməli idi (bloklanma hadisəsi üçün)"
 
 
 def test_login_trigger_context_exists_for_the_audit_trail() -> None:

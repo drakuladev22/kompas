@@ -18,7 +18,7 @@ orada admin ekranlarının açılması təhlükəsizlik problemi olardı.
 from __future__ import annotations
 
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -38,6 +38,7 @@ from src.presentation.stall_monitor import StallMonitor
 from src.presentation.theme.manager import ThemeManager
 from src.presentation.theme.tokens import ThemeMode
 from src.presentation.theme.transition import animate_theme_change
+from src.shared.exceptions import KompasOSError
 from src.shared.logger import get_logger, install_global_exception_hook
 
 if TYPE_CHECKING:
@@ -59,7 +60,7 @@ if TYPE_CHECKING:
     from src.presentation.controllers.screen_data import ScreenDataBinder
     from src.presentation.controllers.session_guard import SessionGuard
     from src.presentation.plugin_surface import PluginPage
-    from src.presentation.screens.group_a_kiosk import EmployeeHomeScreen
+    from src.presentation.screens.group_a_kiosk import EmployeeHomeScreen, PinPadScreen
     from src.presentation.widgets.worker_status import WorkerStatus
 
 _log = get_logger(__name__)
@@ -3782,7 +3783,7 @@ class KompasApplication:
 
     # -------------------------------- kiosk ----------------------------------- #
 
-    def _build_employee_home(
+    def _build_employee_home(  # noqa: PLR0915
         self,
         outcome: KioskOutcome,
         *,
@@ -3793,6 +3794,10 @@ class KompasApplication:
 
         Statusa uyğun TƏK bir aktiv düymə göstərilir; `🟡` vəziyyətlərində
         düymə YOXDUR, yalnız "Kamera Operatorunun təsdiqini gözləyin" mesajı.
+
+        `PLR0915` BURADA SUSDURULUB — `start_kiosk`-dəki EYNİ səbəb: bu,
+        ekran/siqnal QURUCUSUDUR, mürəkkəb budaqlı MƏNTİQ deyil. DEEP-GAP
+        U5 düzəlişi (üç kartın canlı doldurulması) hədd (50) keçdi.
         """
         from src.presentation.screens.group_a_kiosk import (  # noqa: PLC0415
             EmployeeHomeScreen,
@@ -3817,7 +3822,38 @@ class KompasApplication:
             # STEP1 onu artırır, STEP2/STEP3 isə göstəricini dəyişmir — lakin
             # ayrı-ayrı yollar yazsaydıq, biri unudulanda ekran köhnə rəqəmi
             # göstərərdi və işçi "2-ci fasilə" xəbərdarlığını görməzdi.
-            home.set_break_options(controller.break_options(employee))
+            #
+            # DEEP-GAP U5 — ÜÇ KART (tapşırıq/xal/cərimə) CANLI HEÇ VAXT
+            # DOLDURULMURDU: `set_tasks`/`set_points`/`set_fines` yalnız
+            # `show_preview_home()`-da çağırılırdı, ona görə işçi hər PIN
+            # girişində "0" / "—" görürdü, halbuki oxu yolu (`_tasks_rows`,
+            # `points_balance_summary`, `_fine_summary`) onsuz da mövcud idi
+            # ("Hamısına bax →" arxasında). Fasilə oxusu ilə BİRLİKDƏ
+            # `read_batch()`-ə salınır (PERF-3) ki, hər status dəyişikliyi
+            # DÖRD ayrı tranzaksiya yox, BİR tranzaksiya açsın. Kontroller
+            # İSTİNADI SAXLANMIR (CLAUDE.md bölmə 6, `KioskSelfServiceController`
+            # başlığındakı qayda ilə eyni) — hər `refresh()` özü üçün bir
+            # dəfəlik nüsxə yaradır və çağırışdan sonra dərhal ölür.
+            if self._context is not None:
+                with self._context.read_batch(user_id=employee.id):
+                    home.set_break_options(controller.break_options(employee))
+                    try:
+                        with self._context.session(user_id=employee.id) as session:
+                            from src.presentation.controllers.kiosk_self_service import (  # noqa: PLC0415
+                                KioskSelfServiceController,
+                            )
+
+                            KioskSelfServiceController(
+                                self._context, employee, kiosk=kiosk, theme=self._theme
+                            ).refresh_home_cards(session, home)
+                    except KompasOSError:
+                        # SÜKUTLA UDULMUR — loga düşür. Kartı burada XƏTA
+                        # EKRANINA çevirmək olmaz (bu, Ana Ekranın özüdür,
+                        # ayrıla bilən alt-ekran deyil); əvəzində köhnə dəyər
+                        # qalır və növbəti `refresh()` yenidən cəhd edir.
+                        _log.warning("KIOSK_HOME_CARDS_REFRESH_FAILED", exc_info=True)
+            else:
+                home.set_break_options(controller.break_options(employee))
 
         def show_face_overlay(outcome: KioskOutcome, status: WorkerStatus) -> None:
             """Üz təsdiqi nəticəsini kioskda göstərir (facecontrol.md bənd 3, 5, 6).
@@ -3945,6 +3981,90 @@ class KompasApplication:
         refresh(outcome)
         return home
 
+    def _kiosk_store_name(self) -> str:
+        """PIN ekranının başlıq sətri — HARDCODED sabit YOX (DEEP-GAP U5).
+
+        ƏVVƏL `PinPadScreen(store_name="Bellona — 28 May", ...)` sabit sətir
+        idi, `_build_kiosk_controller`-in artıq bildiyi `store_id` heç yerdə
+        oxunmurdu. Terminalın hansı mağazada olduğu `KOMPASOS_STORE_ID`
+        mühit dəyişənindən gəlir (bax `_build_kiosk_controller`) — həmin
+        ID-ni ada çevirmək TƏK əlavə sorğudur, açılışda BİR dəfə (mağaza
+        terminalın ömrü boyu dəyişmir).
+
+        Kontroller QURULMAYIBSA (`self._kiosk_setup_error` artıq PIN
+        klaviaturasında görünür, bax `kiosk_unconfigured_message`) generic
+        ad qaytarılır — bura İKİNCİ xəbərdarlıq YAZILMIR.
+        """
+        if self._kiosk_controller is None or self._context is None:
+            return "KompasOS Kiosk"
+
+        from src.presentation.controllers.camera_queue import _store_name  # noqa: PLC0415
+
+        # BROAD `except Exception` — `_store_name` XAM SQL işlədir
+        # (`session.uow.connection.execute`), yəni `KompasOSError` DEYİL,
+        # psycopg səviyyəli xəta ata bilər. Eyni qərar `_refresh_context_
+        # subtitles`-dədir (bu fayl) — səbəb ORADAKI şərhdədir.
+        try:
+            with self._context.session() as session:
+                return _store_name(session, self._kiosk_controller.store_id)
+        except Exception:
+            _log.warning("KIOSK_STORE_NAME_UNAVAILABLE", exc_info=True)
+            return "KompasOS Kiosk"
+
+    def _start_pin_pad_clock(self, pin_pad: PinPadScreen) -> None:
+        """PIN ekranının saatını server-lövbərli vaxta bağlayır (DEEP-GAP U5, TIME-1).
+
+        ──────────────────────────────────────────────────────────────────────
+        ƏVVƏL: SABİT SƏTIR, TƏK ÇAĞIRIŞ NÖQTƏSİ
+        ──────────────────────────────────────────────────────────────────────
+        `pin_pad.set_clock("09:42 · 12 Avqust 2026")` TƏK yerdə çağırılırdı və
+        taymer yox idi — kiosk PIN ekranı (hər işçinin gündə 3-4 dəfə gördüyü
+        BİRİNCİ ekran) 10 gün əvvələ donmuş saat göstərirdi, halbuki bütün
+        cərimə/gecikmə mexanizmi MƏHZ server-lövbərli vaxta əsaslanır (TIME-1).
+
+        Naxış `title_bar.set_clock_source`-un (`app.py::show_admin` yolu)
+        EYNİSİDİR — fərq YALNIZ mətn formatındadır: panel zolağı `HH:MM:SS`
+        göstərir, PIN ekranı isə TARİX + SAATI birlikdə (spesifikasiya
+        nümunəsi: "HH:MM · DD Ay YYYY") — işçi kiosk qarşısında saatına
+        deyil, PROQRAMIN saatına baxaraq gecikmə/vaxtında olduğunu yoxlayır.
+
+        `self._context is None` olan (önizləmə) halda taymer QURULMUR —
+        `LiveClock`-un "mənbəsiz taymer başlamır" qaydası ilə eynidir.
+        """
+        if self._context is None:
+            return
+
+        from src.infrastructure.timekeeping.clock import to_baku  # noqa: PLC0415
+        from src.presentation.widgets.live_clock import APPROXIMATE_MARK  # noqa: PLC0415
+
+        context = self._context
+
+        def tick() -> None:
+            try:
+                moment = to_baku(context.clock.now())
+            except Exception:
+                # Mənbə nasazdırsa köhnə (doğru) dəyər EKRANDA QALIR —
+                # `LiveClock.refresh`-dən FƏRQLİ qərar: burada boşaltmaq
+                # PIN ekranını "saat sındı" ilə deyil, sadəcə boş sətirlə
+                # qarşılayardı və işçi bunu fərqinə varmazdı.
+                _log.warning("KIOSK_CLOCK_TICK_FAILED", exc_info=True)
+                return
+            text = f"{moment.strftime('%H:%M')} · {_format_date_az(moment)}"
+            # STATUS OXUSU SÜKUTLA UDULUR — QƏSDƏN: `~` işarəsi YALNIZ
+            # bəzəkdir (`LiveClock.refresh` ilə eyni qərar), saatın ÖZÜ isə
+            # artıq yuxarıda uğurla oxunub. Status sorğusu sınsa saat BOŞ
+            # qalmamalıdır, sadəcə işarəsiz göstərilir.
+            with suppress(Exception):
+                if context.time_integrity_status().is_approximate:
+                    text = f"{APPROXIMATE_MARK}{text}"
+            pin_pad.set_clock(text)
+
+        timer = QTimer(pin_pad)
+        timer.setInterval(1000)
+        timer.timeout.connect(tick)
+        tick()
+        timer.start()
+
     def start_kiosk(self) -> KioskWindow:  # noqa: PLR0915
         """Kiosk axını — PIN klaviaturası ilə başlayır.
 
@@ -3966,10 +4086,10 @@ class KompasApplication:
         kiosk = KioskWindow()
         pin_pad = PinPadScreen(
             self._theme,
-            store_name="Bellona — 28 May",
+            store_name=self._kiosk_store_name(),
             terminal_name="Kiosk Terminal 01",
         )
-        pin_pad.set_clock("09:42 · 12 Avqust 2026")
+        self._start_pin_pad_clock(pin_pad)
 
         def show_preview_home() -> None:
             """Dizayn yoxlaması üçün nümunə İşçi Ana Ekranı."""

@@ -215,8 +215,15 @@ class SyncConflictController:
         conflict_id = str(payload.get("id", ""))
         item = self._items.get(conflict_id)
         if item is None:
-            screen.show_notice(ALREADY_RESOLVED_NOTICE)
+            # SIRA MƏCBURİDİR (QA-FULL FAZA 3 tapıntısı): `refresh()` →
+            # `_show()` → `set_comparison()` YENİ avtomatik seçilmiş sətirdə
+            # "seçim dəyişdi" şərtini işə salıb `show_notice("")` çağırır —
+            # `show_notice(...)` ONDAN ƏVVƏL çağırılsaydı, mesaj heç bir
+            # render arası olmadan sükutla silinərdi (bax ekranın
+            # `set_comparison` şərhi). Ona görə əvvəlcə YENİLƏNİR, mesaj
+            # SONRA yazılır.
             self.refresh(screen)
+            screen.show_notice(ALREADY_RESOLVED_NOTICE)
             return
 
         resolution = _parse_resolution(str(payload.get("resolution", "")))
@@ -237,9 +244,12 @@ class SyncConflictController:
                 session.commit()
         except ConflictNotFoundError:
             # Başqası artıq həll edib — bu, SƏHV deyil. Siyahı yenilənir ki,
-            # sətir yox olsun və HR onu bir daha seçə bilməsin.
-            screen.show_notice(ALREADY_RESOLVED_NOTICE)
+            # sətir yox olsun və HR onu bir daha seçə bilməsin. SIRA — yuxarı
+            # şərh (`item is None` qolu): `refresh()` ƏVVƏL, `show_notice(...)`
+            # SONRA, əks halda `set_comparison()`-un "seçim dəyişdi" qaydası
+            # mesajı DƏRHAL silərdi.
             self.refresh(screen)
+            screen.show_notice(ALREADY_RESOLVED_NOTICE)
             return
         except KompasOSError as error:
             # Qısa səbəb və səlahiyyət qapısı bura düşür. Siyahı YENİLƏNMİR:

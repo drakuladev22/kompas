@@ -24,6 +24,7 @@ from src.application.use_cases.fine_management import (
     DuplicateFineSubmissionError,
 )
 from src.application.use_cases.leave_verification import OperationNotPermittedError
+from src.application.use_cases.user_management import OpenFineExposure
 from src.domain.entities.attendance_record import AttendanceRecord, CheckInStatus
 from src.domain.entities.employee import Employee
 from src.domain.entities.fine import EXPORTABLE_STATUSES, Fine, FineStatus
@@ -59,6 +60,8 @@ from src.infrastructure.persistence.mappers import (
 from src.shared.logger import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from psycopg import Connection
 
     from src.infrastructure.persistence.connection import TenantContext
@@ -158,9 +161,11 @@ class _BaseRepository:
 
 
 class PostgresPositionRepository(_BaseRepository):
+    # `is_store_tier` (T6, DEEP-GAP dövrə auditi, migrations/080) — `is_camera_
+    # type`-ın EYNİ naxışı, `position_from_row`-un oxuduğu sütun.
     _SELECT = """
         SELECT id, tenant_id, code, name_az, priority, is_system,
-               is_camera_type, is_active
+               is_camera_type, is_store_tier, is_active
         FROM positions
     """
 
@@ -186,12 +191,13 @@ class PostgresPositionRepository(_BaseRepository):
             """
             INSERT INTO positions
                 (id, tenant_id, code, name_az, priority, is_system,
-                 is_camera_type, is_active)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                 is_camera_type, is_store_tier, is_active)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
                 name_az        = EXCLUDED.name_az,
                 priority       = EXCLUDED.priority,
                 is_camera_type = EXCLUDED.is_camera_type,
+                is_store_tier  = EXCLUDED.is_store_tier,
                 is_active      = EXCLUDED.is_active
             """,
             (
@@ -202,6 +208,7 @@ class PostgresPositionRepository(_BaseRepository):
                 int(position.priority),
                 position.is_system,
                 position.is_camera_type,
+                position.is_store_tier,
                 position.is_active,
             ),
         )
@@ -648,7 +655,7 @@ class PostgresEmployeeRepository(_BaseRepository):
         position_row = self._fetch_one(
             """
             SELECT id, tenant_id, code, name_az, priority, is_system,
-                   is_camera_type, is_active
+                   is_camera_type, is_store_tier, is_active
             FROM positions WHERE id = %s
             """,
             (row["position_id"],),
@@ -1219,15 +1226,66 @@ class PostgresFineRepository(_BaseRepository):
         )
         return fine_from_row(row) if row else None
 
+    def unsynced_evidence_ids(self, fine_ids: Sequence[FineId]) -> set[FineId]:
+        """`FineEvidenceSyncReader` portunu ödəyir (T3, `fine_review.py`).
+
+        MƏNBƏ SÜTUNU `evidence_upload_status`-dur (miqrasiya 002), `photo_
+        evidence_url` DEYİL — sonuncu MANUAL_CAMERA axınında LOKAL növbə
+        açarını saxlayır, "dolu" olması Drive-a yükləndiyini SÜBUT ETMİR
+        (port docstring-inin izah etdiyi qarışıqlıq). `source = 'MANUAL_
+        CAMERA'` süzgəci QƏSDƏN BURADA YOXDUR — bu, biznes qaydasıdır və
+        `MonthlyFineReviewUseCase._unsynced_evidence`-də qalır, əks halda
+        qayda İKİ yerdə yaşayardı (CLAUDE.md §5-in TƏRSİNƏ pozuntusu: burada
+        BİR qaydanın İKİ nüsxəsi yox, YERİ SƏHV olardı).
+
+        TƏK sorğu (`id = ANY(%s)`) — aylıq icmalda yüzlərlə sətir ola bilər,
+        N+1 qadağandır (`docs/performance_notes.md`).
+        """
+        rows = self._fetch_all(
+            """
+            SELECT id FROM fines
+             WHERE tenant_id = %s AND id = ANY(%s) AND evidence_upload_status <> 'SYNCED'
+            """,
+            (self._tenant, list(fine_ids)),
+        )
+        return {FineId(row["id"]) for row in rows}
+
     def list_for_employee_month(
         self, employee_id: EmployeeId, *, year: int, month: int
     ) -> list[Fine]:
+        """ "Cərimələrim" görünüşü (`ManualFineUseCase.my_fines`, bölmə 3).
+
+        D3 (dövrə audit): AY SÜZGƏCİ TƏK ŞƏRT DEYİL. Cərimə avqustda
+        `fine_date` ilə yazılır (`PENDING_REVIEW`), aylıq icmaldan sonra
+        SENTYABRDA `publish()` olunur — 72 saatlıq etiraz pəncərəsi məhz O
+        AN başlayır (`Fine.publish()`). Yalnız ay şərti saxlanılsaydı, işçi
+        sentyabrda "Cərimələrim"i açanda avqust `fine_date`-li cərimə
+        görünmür → boş siyahı, etiraz hüququ heç açılmadan bağlanır (hüquqi
+        risk — `list_exportable`-ın başlığındakı EYNİ qeydin güzgüsü, orada
+        artıq düzəldilib).
+
+        İKİNCİ ŞƏRT `list_exportable`-ın (§6 LOCK MEXANİZMİ) `Fine.
+        is_appeal_window_open` ilə eyni məntiqidir: nəşr olunub VƏ pəncərə
+        HƏLƏ bağlanmayıb. `now()` Postgres-in server vaxtıdır — bölmə 4
+        `Clock` qaydası DOMEN koduna aiddir (`require_aware`,
+        determinstik test), bu isə SADƏ OXU FİLTRİDİR və `list_for_employee_
+        month`-un Protocol imzası (`ports.py`, domen sahəsi) `now`
+        parametri DAŞIMIR — imzanı dəyişmədən DÜZGÜN nəticəni server
+        vaxtından almaq YEGANƏ yoldur.
+
+        Ay süzgəci ATILMIR (kart «bu ay» semantikasını saxlayır) — açıq
+        pəncərə şərti ƏLAVƏ (`OR`) kimi qoşulur.
+        """
         rows = self._fetch_all(
             self._SELECT
             + """
             WHERE employee_id = %s AND tenant_id = %s
-              AND EXTRACT(YEAR FROM fine_date) = %s
-              AND EXTRACT(MONTH FROM fine_date) = %s
+              AND (
+                (EXTRACT(YEAR FROM fine_date) = %s AND EXTRACT(MONTH FROM fine_date) = %s)
+                OR (published_at IS NOT NULL
+                    AND appeal_window_closes_at IS NOT NULL
+                    AND appeal_window_closes_at > now())
+              )
             ORDER BY fine_date DESC
             """,
             (employee_id, self._tenant, year, month),
@@ -1506,10 +1564,50 @@ class PostgresFineRepository(_BaseRepository):
             raise
 
 
+class PostgresOpenFineExposureReader(_BaseRepository):
+    """DEEP-GAP D2: `OpenFineExposureReader` portunu ödəyir (`user_management.py`).
+
+    Ayrı sinif olması qəsdəndir (port başlığının izahı ilə eyni): sual
+    YALNIZ deaktivasiya ön-yoxlamasına aiddir, `PostgresFineRepository`/
+    `PostgresFineAppealRepository`-yə metod əlavə etsəydik hər ikisi bu dar
+    ehtiyaca görə şişərdi.
+
+    İKİ AYRI `COUNT` sorğusu — TƏK sorğuda `UNION`/alt-sorğu birləşdirmək
+    mümkün olsa da, iki müstəqil ədəd (`OpenFineExposure`-un iki sahəsi)
+    üçün oxunaqlılıq performans qazancından ÜSTÜNDÜR: bu, hər iş axınında
+    DEYİL, YALNIZ işçi deaktiv edilərkən (nadir hadisə) bir dəfə çağırılır.
+    """
+
+    def count_open_for_employee(self, employee_id: EmployeeId) -> OpenFineExposure:
+        pending_review = self._fetch_one(
+            f"""
+            SELECT COUNT(*) AS n FROM fines
+             WHERE employee_id = %s AND tenant_id = %s AND status = {_PENDING_REVIEW_LITERAL}
+            """,  # noqa: S608 — `_PENDING_REVIEW_LITERAL` sabit sətirdir, istifadəçi girişi yoxdur
+            (employee_id, self._tenant),
+        )
+        # `_UNDECIDED_APPEAL_EXISTS`-in EYNİ status dəsti (`PENDING`, `EXPIRED`)
+        # — `list_undecided`/`Fine.is_exportable`-in "qərarsız etiraz" tərifi
+        # ilə birebir (M-6). `fine_appeals.employee_id` birbaşa sütundur,
+        # `fines` üzərindən JOIN lazım deyil.
+        open_appeals = self._fetch_one(
+            """
+            SELECT COUNT(*) AS n FROM fine_appeals
+             WHERE employee_id = %s AND tenant_id = %s AND status IN ('PENDING', 'EXPIRED')
+            """,
+            (employee_id, self._tenant),
+        )
+        return OpenFineExposure(
+            pending_review_fine_count=int(pending_review["n"]) if pending_review else 0,
+            open_appeal_count=int(open_appeals["n"]) if open_appeals else 0,
+        )
+
+
 __all__ = [
     "PostgresAttendanceRepository",
     "PostgresEmployeeRepository",
     "PostgresFineRepository",
     "PostgresLeaveRequestRepository",
+    "PostgresOpenFineExposureReader",
     "PostgresPositionRepository",
 ]

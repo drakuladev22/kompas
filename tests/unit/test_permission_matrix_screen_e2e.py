@@ -293,6 +293,23 @@ def _select_role(screen: Any, code: str) -> None:
 # --------------------------------------------------------------------------- #
 
 
+def _press_retry(screen: Any) -> None:
+    """Xəta banner-indəki «Yenidən Cəhd Et» düyməsini HƏQİQƏTƏN basır.
+
+    Siqnalı birbaşa yaymaq kifayət etməzdi: UI-R4-01-ə görə `on_retry`
+    verilməyəndə düymə ÜMUMİYYƏTLƏ çəkilmir (bax `ContentSwitcher.show_error`
+    docstring-i). Yəni düymənin MÖVCUDLUĞU testin əsl iddiasıdır — banner
+    yenilənməni istifadəçiyə buraxırsa, o yenilənməni başlatmaq YOLU da
+    olmalıdır.
+    """
+    from PySide6.QtWidgets import QPushButton
+
+    state = screen.switcher()._stack.currentWidget()
+    button = state.findChild(QPushButton)
+    assert button is not None, "Xəta banner-i «Yenidən Cəhd Et» düyməsi olmadan ölü dalandır"
+    button.click()
+
+
 @requires_qt
 def test_selecting_a_role_via_a_real_click_loads_its_matrix(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
     from src.presentation.screens.group_c import PermissionMatrixScreen
@@ -511,11 +528,22 @@ def test_a_generic_repository_failure_on_save_shows_a_clear_message_and_recovers
     screen._checkboxes[OWNED.code].click()
     screen._save.click()
 
-    assert screen.switcher().current_state() == "content", (
-        "`_on_saved` istisnadan sonra DƏRHAL `refresh()` çağırır — banner ekranı "
-        "'error' vəziyyətində DAYANDIRMAMALIDIR, əks halda admin matrisi itirmiş sanar"
+    # ƏVVƏLKİ İDDİA TƏRSİNƏ ÇEVRİLDİ (QA-FULL FAZA 3 davamı). Burada əvvəl
+    # «banner ekranı 'error' vəziyyətində DAYANDIRMAMALIDIR» yazılmışdı və test
+    # məhz qüsuru kilidləyirdi: `_on_saved` istisnadan sonra DƏRHAL `refresh()`
+    # çağırırdı, `select_role()` → `set_matrix()` → `show_content()` zənciri isə
+    # banner-in ÜSTÜNDƏN yazırdı. Nəticədə admin yazı xətasını HEÇ VAXT
+    # görmürdü — xanalar səbəbsiz geri qayıdırdı və bu, «proqram dəyişikliyimi
+    # özbaşına ləğv etdi» kimi oxunurdu. «Matrisi itirmiş sanar» narahatlığı
+    # isə yerində qalmır: banner-də İŞLƏYƏN «Yenidən Cəhd Et» düyməsi var.
+    assert screen.switcher().current_state() == "error", (
+        "Yazı xətası GÖRÜNMƏLİDİR — yenilənmə onu udmamalıdır"
     )
     assert context._session.commits == 0, "Uğursuz yazı commit OLUNMAMALIDIR"
+
+    _press_retry(screen)
+
+    assert screen.switcher().current_state() == "content"
     # `refresh()` yenidən oxuduqda flag DƏYİŞMƏMİŞ qalır — YALAN göstərilmir.
     assert screen._checkboxes[OWNED.code].isChecked() is False
 

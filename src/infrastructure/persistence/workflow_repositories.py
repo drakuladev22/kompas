@@ -308,6 +308,13 @@ class PostgresAttendanceFactProvider(_BaseRepository):
     """Tabelin ön-doldurulması üçün faktlar — TƏK sorğu (modul başlığına bax)."""
 
     def facts_for(self, store_id: StoreId, work_date: date) -> list[AttendanceFact]:
+        """DEEP-GAP D1: `is_on_annual_leave` `AnnualLeaveRequestRepository.
+        find_overlapping_approved`-in EYNİ şərtidir (`daterange(...) @> %s`
+        — `&&` ilə tək-günlük aralığı kəsişdirməkdən sadədir, eyni "hər iki
+        uc DAXİL" semantikasını daşıyır). Bu iki sorğu AYRI YERLƏRDƏ yaşayır
+        (bura N+1-dən qaçmaq üçün TƏK sorğuya yığılıb, ADI EXISTS kimi), amma
+        ŞƏRT EYNİ QALMALIDIR — `daily_attendance.py`-da HR-in TƏSDİQ etdiyi
+        məzuniyyət "avtomatik qayıb" kimi göstərilməsin deyə (§4/6)."""
         rows = self._fetch_all(
             """
             SELECT e.id                                   AS employee_id,
@@ -320,7 +327,14 @@ class PostgresAttendanceFactProvider(_BaseRepository):
                         WHERE lr.employee_id = e.id
                           AND lr.status IN ('OUTSIDE', 'PENDING_RETURN_VERIFICATION')
                           AND lr.requested_time::date = %s
-                   )                                      AS is_outside
+                   )                                      AS is_outside,
+                   EXISTS (
+                       SELECT 1 FROM annual_leave_requests alr
+                        WHERE alr.employee_id = e.id
+                          AND alr.tenant_id = %s
+                          AND alr.status = 'APPROVED'
+                          AND daterange(alr.start_date, alr.end_date, '[]') @> %s
+                   )                                      AS on_annual_leave
             FROM employees e
             LEFT JOIN shift_assignments sa
                    ON sa.employee_id = e.id AND sa.shift_date = %s
@@ -329,7 +343,7 @@ class PostgresAttendanceFactProvider(_BaseRepository):
             WHERE e.store_id = %s AND e.tenant_id = %s AND e.is_active
             ORDER BY e.last_name, e.first_name
             """,
-            (work_date, work_date, work_date, store_id, self._tenant),
+            (work_date, self._tenant, work_date, work_date, work_date, store_id, self._tenant),
         )
 
         # "Gün bitibmi" sualı SQL-də deyil, burada həll olunur: cavab çağırış
@@ -349,6 +363,7 @@ class PostgresAttendanceFactProvider(_BaseRepository):
                     is_late=bool(row["is_late"]),
                     late_minutes=int(row["late_minutes"] or 0),
                     day_is_over=day_is_over,
+                    on_annual_leave=bool(row["on_annual_leave"]),
                 )
             )
         return facts

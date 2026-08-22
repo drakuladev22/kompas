@@ -231,6 +231,57 @@ def test_role_change_to_a_custom_camera_role_revokes_the_excluded_flag() -> None
     assert employee.has_permission(CAMERA_EXCLUDED_FLAG.code, now=NOW) is False
 
 
+def _custom_store_tier_position() -> Position:
+    """CUSTOM mağaza-pilləli rol — `_custom_camera_position()`-un GÜZGÜSÜ (T6).
+
+    `code` `SystemRole(...)`-a çevrilmir, `effective_system_role`
+    `_PRIORITY_TO_ROLE[OPERATIONAL]` = `SystemRole.HR_ADMIN`-ə düşür.
+    `HR_ADMIN` `ANTI_FRAUD_FORBIDDEN_ROLES`-da DEYİL — yəni YEGANƏ siqnal
+    `Position.is_store_tier=True`-nın özüdür.
+    """
+    return Position(
+        position_id=PositionId(uuid.uuid4()),
+        code="FILIAL_RESPONSAVI",
+        name_az="Filial Responsavı",
+        priority=RolePriority.OPERATIONAL,
+        tenant_id=TENANT,
+        is_system=False,
+        is_store_tier=True,
+    )
+
+
+def test_role_change_to_a_custom_store_tier_role_revokes_the_anti_fraud_flag() -> None:
+    """T6 — `change_position()` `is_store_tier_role`-u da ötürməlidir.
+
+    `test_role_change_to_a_custom_camera_role_revokes_the_excluded_flag`-in
+    EYNİ naxışı, `is_camera_type` əvəzinə `is_store_tier` üçün: `DUAL_FLAG`
+    (`is_anti_fraud=True`) qanuni olaraq HR_Admin-ə verilir, sonra işçi
+    CUSTOM mağaza-pilləli (`FILIAL_RESPONSAVI`, `effective_system_role` =
+    `HR_ADMIN`) rola köçürülür. `is_store_tier_role=position.is_store_tier`
+    ötürülməsə, `store_capable = is_store_tier_role or role in
+    ANTI_FRAUD_FORBIDDEN_ROLES` hər iki tərəfdən `False` qalar (`HR_ADMIN`
+    qadağan siyahısında deyil) və override TƏMİZLƏNMƏZ — mağaza meneceri
+    ekvivalenti öz filialının kamera operatorunun override-unu ÖZÜNDƏ
+    saxlamış olardı.
+    """
+    employee = _employee(SystemRole.HR_ADMIN)
+    employee.apply_override(
+        PermissionOverride(
+            flag_code=DUAL_FLAG.code,
+            effect=PermissionEffect.GRANT,
+            granted_by=EmployeeId(uuid.uuid4()),
+        )
+    )
+    assert employee.has_permission(DUAL_FLAG.code, now=NOW) is True
+
+    removed = employee.change_position(
+        _custom_store_tier_position(), catalog={DUAL_FLAG.code: DUAL_FLAG}
+    )
+
+    assert removed == [DUAL_FLAG.code]
+    assert employee.has_permission(DUAL_FLAG.code, now=NOW) is False
+
+
 # --------------------------------------------------------------------------- #
 # 2. İcazə dəyişikliyi audit-lənir
 # --------------------------------------------------------------------------- #

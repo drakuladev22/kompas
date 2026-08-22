@@ -316,6 +316,23 @@ def test_dual_control_approval_never_on_camera_role() -> None:
         flag.assert_grantable_to(SystemRole.STORE_MANAGER)
 
 
+def test_store_tier_role_flag_blocked_regardless_of_role_mapping() -> None:
+    """T6: `is_store_tier_role=True` mağaza-pilləli rolu KOD-dan ASILI OLMADAN
+
+    tutur — `role in ANTI_FRAUD_FORBIDDEN_ROLES` yalnız hərfi `MAGAZA_
+    MENECERI`/`SATICI` kodunu tanıyır, custom rolun ən yaxın sistem-rol
+    ekvivalenti isə (məs. `HR_ADMIN`) siyahıda yoxdur.
+    """
+    flag = PermissionFlag(
+        code=DUAL_CONTROL_APPROVAL_FLAG, category="KAMERA_CERIME", is_anti_fraud=True
+    )
+
+    flag.assert_grantable_to(SystemRole.HR_ADMIN)  # işarəsiz — qanuni yol açıq qalır
+
+    with pytest.raises(AuthorizationError, match="ANTI-FRAUD"):
+        flag.assert_grantable_to(SystemRole.HR_ADMIN, is_store_tier_role=True)
+
+
 def test_root_only_flag_not_for_ceo() -> None:
     flag = PermissionFlag(
         code="can_manage_permissions", category="ICAZE", hardlock=HardlockLevel.ROOT_ONLY

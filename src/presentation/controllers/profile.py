@@ -139,11 +139,20 @@ class ProfileController:
         raw = payload if isinstance(payload, dict) else {}
         first, last = _split_name(str(raw.get("full_name", "")))
         if not first and not last:
+            # BANNER YENİLƏNMƏ İLƏ UDULURDU (QA-FULL FAZA 3 davamı) — eyni
+            # qüsur `announcements.py::_on_withdraw`-da tapılmışdı: `show_error(...)`
+            # ardınca DƏRHAL `self.refresh(screen)` gəlirdi, `refresh()` isə
+            # uğurla qayıdanda `set_account()` → `show_content()` zəncirini işə salır
+            # və `ContentSwitcher`-i heç bir render arası olmadan «content»-ə
+            # qaytarır. Nəticə: istifadəçi HEÇ BİR mesaj görmür, ekran sadəcə
+            # səbəbsiz yenilənir. Meyar sabitdir: yenilənmə yolu switcher-i
+            # «content»-ə qaytarırsa — qüsur. Yenilənmə indi `on_retry` ilə
+            # istifadəçinin öz qərarıdır.
             screen.show_error(
                 title="Ad boş ola bilməz",
                 message="Ad və soyadı yazın, sonra yenidən yadda saxlayın.",
+                on_retry=lambda: self.refresh(screen),
             )
-            self.refresh(screen)
             return
 
         try:

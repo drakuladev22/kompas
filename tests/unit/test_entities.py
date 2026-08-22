@@ -556,6 +556,41 @@ def test_custom_role_cannot_bypass_hardlock() -> None:
         custom.grant(root_only)
 
 
+def test_store_tier_custom_role_cannot_bypass_anti_fraud_segregation() -> None:
+    """T6: prioritet-3 custom rol `is_store_tier=True` ilə anti-fraud QALIR.
+
+    `FILIAL_RESPONSAVI` — CEO-nun Mağaza Menecerini köçürdüyü custom rol
+    ssenarisi (bax `authorization.py::assert_grantable_to`-dakı
+    `is_store_tier_role` şərhi). `is_store_tier` işarəsi OLMADAN bu rol
+    `effective_system_role`-da `HR_ADMIN`-ə düşür və qadağan siyahısında
+    görünmür — məhz bu, T6-nın tapdığı boşluqdur.
+    """
+    store_tier_custom = Position(
+        position_id=PositionId(uuid.uuid4()),
+        code="FILIAL_RESPONSAVI",
+        name_az="Filial Responsavı",
+        priority=RolePriority.OPERATIONAL,
+        tenant_id=TENANT,
+        is_store_tier=True,
+    )
+    dual_control_flag = PermissionFlag(
+        code=DUAL_CONTROL_APPROVAL_FLAG, category="KAMERA_CERIME", is_anti_fraud=True
+    )
+
+    with pytest.raises(AuthorizationError, match="ANTI-FRAUD"):
+        store_tier_custom.grant(dual_control_flag)
+
+    # İşarə YOXDURSA (köhnə davranış) eyni rol keçirdi — regressiya nişanı.
+    non_marked_custom = Position(
+        position_id=PositionId(uuid.uuid4()),
+        code="ANBAR_NEZARETCISI",
+        name_az="Anbar Nəzarətçisi",
+        priority=RolePriority.OPERATIONAL,
+        tenant_id=TENANT,
+    )
+    non_marked_custom.grant(dual_control_flag)  # HR_ADMIN semantikası — qanuni
+
+
 def test_camera_flag_only_on_camera_type_position() -> None:
     camera_flag = PermissionFlag(
         code="can_issue_fines",

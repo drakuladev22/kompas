@@ -46,7 +46,18 @@ _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 
 
 class Position(AggregateRoot):
-    """Rol (vəzifə) — sistem və ya custom."""
+    """Rol (vəzifə) — sistem və ya custom.
+
+    `is_store_tier` `is_camera_type`-ın EYNİ NAXIŞIDIR (T6): custom rol
+    prioritetinə görə `effective_system_role`-da ən yaxın SİSTEM roluna
+    (məs. `HR_ADMIN`) düşür, amma anti-fraud qadağası (`ANTI_FRAUD_
+    FORBIDDEN_ROLES`) yalnız hərfi `MAGAZA_MENECERI`/`SATICI` KODUNU
+    tanıyır. Root/CEO Mağaza Meneceri səlahiyyətli custom rol yaradıb bu
+    boşluqdan `can_approve_dual_control_override` kimi flag-ləri vermək
+    istəsə, `is_store_tier=True` işarəsi olmadan yoxlama onu keçirərdi.
+    Bax `PermissionFlag.assert_grantable_to`-dakı `is_store_tier_role`
+    şərhi — DB qarşılığı `positions.is_store_tier` (schema.sql §18).
+    """
 
     def __init__(
         self,
@@ -58,6 +69,7 @@ class Position(AggregateRoot):
         tenant_id: TenantId | None = None,
         is_system: bool = False,
         is_camera_type: bool = False,
+        is_store_tier: bool = False,
         is_active: bool = True,
     ) -> None:
         super().__init__()
@@ -71,6 +83,7 @@ class Position(AggregateRoot):
         self.priority = priority
         self.is_system = is_system
         self.is_camera_type = is_camera_type
+        self.is_store_tier = is_store_tier
         self.is_active = is_active
         self._granted_flags: set[str] = set()
 
@@ -102,7 +115,9 @@ class Position(AggregateRoot):
     def grant(self, flag: PermissionFlag) -> None:
         """Rola flag verir — bütün qoruyucu qaydalar yoxlanılır."""
         flag.assert_grantable_to(
-            self.effective_system_role, is_camera_type_role=self.is_camera_type
+            self.effective_system_role,
+            is_camera_type_role=self.is_camera_type,
+            is_store_tier_role=self.is_store_tier,
         )
         self._granted_flags.add(flag.code)
 

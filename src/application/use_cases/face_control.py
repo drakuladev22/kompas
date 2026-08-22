@@ -97,7 +97,11 @@ from datetime import timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
-from src.application.use_cases.authentication import AccountLockedError
+from src.application.use_cases.authentication import (
+    AccountLockedError,
+    TerminalLockedError,
+    TerminalThrottleUnavailableError,
+)
 from src.domain.policies import (
     DEFAULT_LIMITS,
     FACE_EXEMPTION_COMPENSATING_MODULE,
@@ -145,6 +149,7 @@ if TYPE_CHECKING:
         FaceVerificationLogRepository,
         FeatureToggles,
         Notifier,
+        PinThrottleRepository,
         SecurityEventRepository,
         SystemLimits,
     )
@@ -156,6 +161,7 @@ if TYPE_CHECKING:
         StoreId,
         TenantId,
     )
+    from src.domain.value_objects.machine_identity import MachineIdentityHash
 
 _log = get_logger(__name__)
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
@@ -228,6 +234,27 @@ MIN_EXEMPTION_REASON_LENGTH: Final = 10
 #: — "BİR NEÇƏ GÜN GERİ QAYIDILMIR") və aradakı uyğunsuzluqlar HR-in vahid
 #: siyahısına heç vaxt düşməzdi.
 MISMATCH_LOOKBACK_DAYS: Final = 7
+
+#: 1:N «Üzlə daxil ol» rəddinin `security_events` açarı (T1, DEEP-GAP Faza 4).
+#:
+#: NİYƏ `PIN_FAILED` TƏKRAR İŞLƏDİLMİR: sayğac ORTAQ olsa da (aşağı bax),
+#: HADİSƏ eyni deyil — `PIN_FAILED` «dörd rəqəm tapılmadı», bu isə «kameraya
+#: baxan adam bu mağazanın HEÇ BİR işçisi deyil» deməkdir. İkisini eyni adla
+#: yazsaydıq, araşdırma «gecə boyu kim kameraya baxırdı?» sualına heç vaxt
+#: cavab tapa bilməzdi (`COMPENSATION_UNAVAILABLE_ACTION`-un EYNİ qərarı).
+FACE_LOGIN_FAILED_EVENT: Final = "FACE_LOGIN_FAILED"
+
+#: Terminal kilidinin üzlə giriş yolundakı izi.
+#:
+#: `details["shared_counter"]` QƏSDƏN yazılır: sayğac `store_pin_throttle`-dır,
+#: yəni üz cəhdləri həddi keçirsə PIN girişi DƏ bloklanır. Bu, gizlədiləsi yan
+#: təsir deyil — MƏHZ istənilən davranışdır (terminalın ÖZÜ şübhəlidir), lakin
+#: hadisəni oxuyan adam bunu sətirdən görməlidir, kodu oxumadan.
+FACE_LOGIN_TERMINAL_LOCKED_EVENT: Final = "FACE_LOGIN_TERMINAL_LOCKED"
+
+#: `record_failure` çağırılan rədd səbəbləri — `details["reason"]`.
+FACE_LOGIN_REASON_NO_MATCH: Final = "NO_MATCH"
+FACE_LOGIN_REASON_AMBIGUOUS: Final = "AMBIGUOUS"
 
 
 class FaceControlPermissionError(KompasOSError):
@@ -819,6 +846,7 @@ class FaceVerificationUseCase:
         clock: Clock,
         notifier: Notifier,
         security_events: SecurityEventRepository,
+        pin_throttle: PinThrottleRepository,
     ) -> None:
         self._profiles = profiles
         self._verification_log = verification_log
@@ -837,6 +865,15 @@ class FaceVerificationUseCase:
         # fəlsəfəsi ilə eyni əsaslandırma: FACE_MISMATCH SEC-016-nın bioloji
         # təsdiq qapısındakı ƏN CİDDİ siqnaldır, sükutla yazılmamalıdır).
         self._security_events = security_events
+        # T1 (DEEP-GAP Faza 4) — `PinHandshakeUseCase.__init__`-in EYNİ
+        # MƏCBURİ arqument naxışı: `identify_for_login()` 1:N kiosk girişi
+        # HEÇ BİR throttle-a bağlı deyildi (kamera qarşısında foto/video ilə
+        # limitsiz cəhd mümkün idi). `None` fallback-ı QƏSDƏN YOXDUR — SEC-7/
+        # SEC-8-dəki EYNİ dərs: yazılmayan asılılıq sükutla BÜTÜN qorumanı
+        # ləğv edərdi (kompozisiya kökü onu ötürməyi UNUTSA, `TypeError`
+        # DƏRHAL görünür — sükutla "throttle yoxdur" davranışına qayıtmaq
+        # YOX). Bax `identify_for_login`-in "T1 — TERMİNAL THROTTLE" bölməsi.
+        self._pin_throttle = pin_throttle
 
     def verify(  # noqa: PLR0911
         self,
@@ -1062,6 +1099,14 @@ class FaceVerificationUseCase:
         düymə göstərilib sonra «üz tanınmadı» demək istifadəçini yanıldardı —
         o, nasazlıq sanıb təkrar-təkrar basardı. Şərtlər burada TƏKRAR
         YAZILMIR, eyni sıra ilə oxunur.
+
+        TERMİNAL KİLİDİ (T1) BU ŞƏRTƏ QƏSDƏN DAXİL DEYİL — üç sıra ilə DÖRD
+        deyil. İki səbəb: (1) bu metod hər ekran çəkilişində çağırılır, kilid
+        yoxlaması isə `SELECT ... FOR UPDATE`-dir — düymənin GÖRÜNMƏSİ üçün
+        sətir kilidləmək açılış yolunu DB-yə bağlayardı; (2) kilid MÜVƏQQƏTİdir
+        və istifadəçi səbəbi BİLMƏLİDİR — düyməni gizlətmək «üzlə giriş bu
+        mağazada yoxdur» mesajı verərdi, halbuki doğru mesaj `TerminalLocked
+        Error`-un mətnidir («bir az sonra yenidən cəhd edin»).
         """
         return bool(
             self._toggles.is_enabled(tenant_id, FeatureModule.CAMERA_VERIFICATION.value)
@@ -1074,7 +1119,10 @@ class FaceVerificationUseCase:
         *,
         tenant_id: TenantId,
         store_id: StoreId,
+        machine_key: MachineIdentityHash,
         candidates: Sequence[Employee],
+        ip_address: str | None = None,
+        machine_name: str | None = None,
     ) -> Employee | None:
         """Kioskda duran adamı MAĞAZA daxilində tanıyır (üzlə giriş).
 
@@ -1102,13 +1150,66 @@ class FaceVerificationUseCase:
         mağazanın cihazıdır.
 
         ──────────────────────────────────────────────────────────────────────
-        NİYƏ JURNAL SƏTRİ YAZILMIR
+        NİYƏ `face_verification_log` SƏTRİ YAZILMIR — İZ İSƏ `security_events`-DƏ
         ──────────────────────────────────────────────────────────────────────
         `face_verification_log` bir İŞÇİNİN doğrulama tarixçəsidir və
         `employee_id` məcburidir. Tanınmamış cəhddə isə işçi YOXDUR — sətri
         «kimsə» adına yazmaq jurnalı korlayardı. Tanınma UĞURLU olduqda isə
         giriş onsuz da `verify()`-dan keçir (bax `KioskController`), yəni sətir
         orada yazılır və ikiqat qeyd yaranmır.
+
+        T1 (DEEP-GAP Faza 4) BU QƏRARIN GİZLİ NƏTİCƏSİNİ DÜZƏLDİR: «işçi məlum
+        deyil, ona görə jurnal yazmırıq» qərarı özü ilə «deməli HEÇ BİR iz
+        yoxdur» nəticəsini gətirmişdi — halbuki `security_events` MƏHZ
+        `employee_id`-siz sətri qəbul edən cədvəldir (`PIN_FAILED` illərdir
+        oraya belə yazılır). İndi hər ƏSL rədd `FACE_LOGIN_FAILED` sətri
+        buraxır: cəhdin KİM tərəfindən edildiyi hələ də bilinmir, LAKİN «bu
+        terminalda gecə saat 3-də 40 cəhd olub» sualı artıq cavablanır.
+
+        ──────────────────────────────────────────────────────────────────────
+        T1 — TERMİNAL THROTTLE (`verify()`-DAN FƏRQLİ SAYĞAC, EYNİ MEXANİZM)
+        ──────────────────────────────────────────────────────────────────────
+        `verify()` 1:1-dir, ona görə uğursuzluğu KONKRET işçinin sayğacına
+        (`face_profiles.mismatch_attempts`) yaza bilir. Burada isə işçi
+        naməlumdur — `TerminalLockedError`-in öz başlığındakı EYNİ arqument:
+        «bloklanacaq konkret işçi yoxdur». Deməli açar `(tenant_id,
+        machine_key)` cütü olmalıdır və belə bir sayğac ARTIQ var
+        (`store_pin_throttle`, SEC-01/SEC-05). YENİ açar/cədvəl YARADILMIR —
+        `_mismatch()`-in «MÖVCUD LOCKOUT MEXANİZMİ, yeni funksiya yazılmır»
+        naxışının eynisi.
+
+        ORTAQ SAYĞACIN QƏBUL EDİLMİŞ NƏTİCƏSİ: üz cəhdləri həddi keçirsə PIN
+        girişi DƏ bloklanır. Ayrıca üz-sayğacı variantı nəzərdən keçirildi və
+        RƏDD EDİLDİ — iki müstəqil sayğac hücumçuya BUDCƏNİ İKİ QAT edərdi
+        (PIN həddinə çatanda üz yoluna, üz həddinə çatanda PIN yoluna keçmək),
+        halbuki qorunan şey EYNİ terminaldır.
+
+        KİLİD YOXLAMASI KAMERADAN ƏVVƏLDİR: `PinHandshakeUseCase.authenticate`
+        namizəd dövrəsindən ƏVVƏL yoxladığı kimi. Bloklanmış terminalda kadr
+        çəkib N profil üzərində məsafə hesablamaq BOŞA gedən işdir, üstəlik
+        hücumçuya «kamera işləyir» geribildirişi verərdi.
+
+        NƏ SAYILMIR (VƏ NİYƏ): modul/əhatə/kamera qapıları, boş kadr, üz
+        aşkarlanmaması, canlılıq uğursuzluğu və qeydiyyatdan keçmiş profilin
+        ÜMUMİYYƏTLƏ olmaması. İlk beşi TEXNİKİDİR (`_no_face`-in eyni qərarı:
+        «qoruma öz istifadəçisini cəzalandırmamalıdır» — zəif işıqda göz
+        qırpması tutulmayan vicdanlı işçi terminali kilidləməməlidir).
+        Sonuncusu isə KONFİQURASİYA halıdır: mağazada heç kim qeydiyyatdan
+        keçməyibsə HƏR cəhd uğursuzdur və sayğac tətbiqin ilk günündə bütün
+        mağazanı PIN-siz qoyardı.
+
+        Args:
+            machine_key: Terminalın aparat kimliyinin heşi — `PinHandshake
+                UseCase.authenticate` ilə EYNİ dəyər və EYNİ səbəb (SEC-05:
+                `store_id` admin hüququ olmadan dəyişdirilə bilər, deməli açar
+                ola bilməz). Çağıran onu artıq heşlənmiş şəkildə ötürür.
+
+        Raises:
+            TerminalLockedError: terminal ARTIQ bloklanıb (kadr çəkilmir).
+            TerminalThrottleUnavailableError: throttle sətri oxuna bilmədi —
+                FAIL-CLOSED. Üzlə giriş İSTƏYƏ BAĞLI yoldur (PIN həmişə
+                qalır), ona görə burada fail-closed-un qiyməti PIN axınındakı
+                qiymətindən də AŞAĞIDIR: işçi PIN-lə davam edir.
         """
         if not self._toggles.is_enabled(tenant_id, FeatureModule.CAMERA_VERIFICATION.value):
             return None
@@ -1117,13 +1218,34 @@ class FaceVerificationUseCase:
         if not self._camera.is_available():
             return None
 
+        # T1 — KİLİD YOXLAMASI KAMERADAN ƏVVƏL (bax docstring).
+        self._require_unlocked_terminal(
+            tenant_id,
+            machine_key,
+            store_id=store_id,
+            ip_address=ip_address,
+            machine_name=machine_name,
+        )
+
         gesture = secrets.choice(self._gesture_pool(tenant_id))
         frames = self._camera.capture(count=1, gesture=gesture)
         if not frames:
             return None
 
         sample = self._matcher.extract(frames[0], gesture=gesture)
-        if not sample.has_face or not sample.liveness_confirmed or sample.embedding is None:
+        if not sample.has_face or sample.embedding is None:
+            return None
+        if not sample.liveness_confirmed:
+            # SAYĞACA YAZILMIR — `verify()`-dakı "LIVENESS UĞURSUZLUĞU NİYƏ
+            # MISMATCH SAYILMIR" qərarının EYNİSİ (orada mənbə mətni ilə
+            # birlikdə oxunmalıdır). Fail-closed xassəsi İTMİR: canlılıq
+            # təsdiqlənmədən identifikasiya HEÇ VAXT davam etmir, yəni şəkil
+            # göstərən adam sonsuz cəhdlə də HEÇ NƏ əldə etmir. İz isə
+            # görünməz qalmır — `security.log`-a ayrıca açarla düşür.
+            _security_log.warning(
+                "FACE_LOGIN_LIVENESS_FAILED",
+                extra={"store_id": str(store_id), "gesture": gesture.value},
+            )
             return None
 
         band = self._tolerance_band(tenant_id)
@@ -1135,19 +1257,189 @@ class FaceVerificationUseCase:
             scored.append((self._matcher.distance(profile.embedding, sample.embedding), candidate))
 
         if not scored:
+            # KONFİQURASİYA HALI, HÜCUM SİQNALI DEYİL — sayğaca yazılmır
+            # (bax docstring "NƏ SAYILMIR").
             return None
         scored.sort(key=lambda pair: pair[0])
         best_distance, best_employee = scored[0]
         if best_distance > band.match_tolerance:
+            self._reject_login(
+                tenant_id,
+                machine_key,
+                store_id=store_id,
+                reason=FACE_LOGIN_REASON_NO_MATCH,
+                ip_address=ip_address,
+                machine_name=machine_name,
+                details={"candidate_count": len(scored)},
+            )
             return None
         if len(scored) > 1 and scored[1][0] - best_distance < _IDENTIFY_MARGIN:
             # İKİ ÜZ BİR-BİRİNƏ ÇOX YAXINDIR — seçim etmirik.
+            #
+            # NİYƏ BU DA SAYILIR (canlılıqdan FƏRQLİ OLARAQ): burada biometrik
+            # QƏRAR verilib və giriş RƏDD EDİLİB — yəni kameraya baxan adam
+            # mağazanın iki işçisinə eyni dərəcədə oxşayır. Vicdanlı işçidə bu
+            # hal TƏSADÜFİ deyil, DAİMİDİR (profil dəsti dəyişənə qədər hər
+            # cəhdində təkrarlanacaq) və məhz ona görə sayılmalıdır: həll yolu
+            # təkrar cəhd deyil, YENİDƏN QEYDİYYATdır (`FaceReEnrollmentUseCase`)
+            # və işçi bu vaxta qədər PIN-lə işləyir. Sayılmasaydı, hücumçu
+            # üçün marja qapısı LİMİTSİZ sınaq sahəsi olardı.
             _security_log.warning(
                 "FACE_LOGIN_AMBIGUOUS",
                 extra={"store_id": str(store_id), "gap": round(scored[1][0] - best_distance, 4)},
             )
+            self._reject_login(
+                tenant_id,
+                machine_key,
+                store_id=store_id,
+                reason=FACE_LOGIN_REASON_AMBIGUOUS,
+                ip_address=ip_address,
+                machine_name=machine_name,
+                details={"gap": round(scored[1][0] - best_distance, 4)},
+            )
             return None
         return best_employee
+
+    # ------------------------ 1:N girişin throttle-ı ------------------------- #
+
+    def _require_unlocked_terminal(
+        self,
+        tenant_id: TenantId,
+        machine_key: MachineIdentityHash,
+        *,
+        store_id: StoreId,
+        ip_address: str | None,
+        machine_name: str | None,
+    ) -> None:
+        """KİLİDLİ oxu — terminal bloklanıbsa `TerminalLockedError` (T1).
+
+        `PinHandshakeUseCase._require_unlocked_throttle`-ın ÜZ yolundakı
+        qarşılığıdır. İKİ FƏRQ QƏSDLİDİR:
+
+          1. KLON AŞKARLAMASI TƏKRARLANMIR. `store_id` uyğunsuzluğu siqnalını
+             PIN yolu ARTIQ yazır və `update_last_seen_store` ilə sətri
+             yeniləyir. Eyni terminalda iki giriş yolu var, maşın isə BİRDİR —
+             burada təkrar yoxlasaydıq, hər klon hadisəsi İKİ sətir yazardı və
+             "neçə dəfə baş verib?" sualı sayğac kimi işlənə bilməzdi.
+          2. `now` PARAMETR KİMİ QƏBUL EDİLMİR — `self._clock.now()` burada
+             oxunur. PIN axınında `now` PIN yoxlaması ilə PAYLAŞILIR (eyni an
+             həm kilid, həm `evaluate_pin_attempt` üçün lazımdır); burada isə
+             kilid yoxlaması TƏK istifadəçidir.
+
+        FAIL-CLOSED: throttle oxuna bilmirsə cəhd RƏDD EDİLİR (SEC-06 —
+        `identify_for_login`-un `Raises` bölməsi).
+        """
+        try:
+            throttle = self._pin_throttle.get_for_update(tenant_id, machine_key)
+        except Exception as exc:
+            _security_log.critical(
+                "FACE_LOGIN_THROTTLE_UNAVAILABLE",
+                extra={"tenant_id": str(tenant_id), "store_id": str(store_id)},
+                exc_info=True,
+            )
+            raise TerminalThrottleUnavailableError(
+                "Terminal PIN throttle sətri oxuna bilmədi",
+                context={"tenant_id": str(tenant_id), "store_id": str(store_id)},
+            ) from exc
+
+        if throttle is None or not throttle.is_locked(now=self._clock.now()):
+            return
+
+        _security_log.warning(
+            "FACE_LOGIN_TERMINAL_LOCKED",
+            extra={
+                "tenant_id": str(tenant_id),
+                "store_id": str(store_id),
+                "trigger": "REJECTED_WHILE_LOCKED",
+            },
+        )
+        self._security_events.record(
+            tenant_id=tenant_id,
+            event_type=FACE_LOGIN_TERMINAL_LOCKED_EVENT,
+            ip_address=ip_address,
+            machine_name=machine_name,
+            details={
+                "store_id": str(store_id),
+                "trigger": "REJECTED_WHILE_LOCKED",
+                "shared_counter": "store_pin_throttle",
+                "locked_until": throttle.locked_until.isoformat()
+                if throttle.locked_until
+                else None,
+            },
+        )
+        raise TerminalLockedError(
+            "Terminal PIN throttle aktivdir",
+            context={
+                "tenant_id": str(tenant_id),
+                "store_id": str(store_id),
+                "source": "FACE_LOGIN",
+            },
+        )
+
+    def _reject_login(
+        self,
+        tenant_id: TenantId,
+        machine_key: MachineIdentityHash,
+        *,
+        store_id: StoreId,
+        reason: str,
+        ip_address: str | None,
+        machine_name: str | None,
+        details: dict[str, object],
+    ) -> None:
+        """ƏSL 1:N rəddi — iz + terminal sayğacı (T1).
+
+        YALNIZ YAN TƏSİR, DƏYƏR QAYTARMIR: çağıran `return None` yazır.
+        `return self._reject_login(...)` qısaldılması nəzərdən keçirildi və
+        rədd edildi — `-> None` metodunun nəticəsini qaytarmaq mypy-ın
+        `func-returns-value` xətasıdır və oxucuya "burada nəsə qaytarılır"
+        təəssüratı verərdi.
+
+        SAYĞAC YAZISI İSTİSNA UDMUR: `record_failure` uğursuz olarsa çağıran
+        tranzaksiya geri qayıdır. Səbəb `PinThrottleRepository.record_failure`
+        şərhindəki ilə eynidir — sayğac YAZILMADAN «üz tanınmadı» göstərmək
+        SEC-01-in kök səbəbinin (sükutla söndürülmüş qoruma) təkrarı olardı.
+        `security_events` isə fail-soft bükücü ilə gəlir (SEC-7) və girişi
+        dayandırmır.
+        """
+        _security_log.warning(
+            "FACE_LOGIN_FAILED",
+            extra={"tenant_id": str(tenant_id), "store_id": str(store_id), "reason": reason},
+        )
+        self._security_events.record(
+            tenant_id=tenant_id,
+            event_type=FACE_LOGIN_FAILED_EVENT,
+            ip_address=ip_address,
+            machine_name=machine_name,
+            details={"store_id": str(store_id), "reason": reason, **details},
+        )
+        result = self._pin_throttle.record_failure(tenant_id, machine_key, store_id=store_id)
+        if result.locked_until is not None:
+            # `_require_unlocked_terminal` bu çağırışdan ƏVVƏL "bloklanmayıb"
+            # olduğunu təsdiqləyib — deməli MƏHZ BU cəhd həddi keçdi
+            # (`_record_throttle_failure`-in eyni əsaslandırması).
+            _security_log.warning(
+                "FACE_LOGIN_TERMINAL_LOCKED",
+                extra={
+                    "tenant_id": str(tenant_id),
+                    "store_id": str(store_id),
+                    "trigger": "NEW_LOCKOUT",
+                    "failed_count": result.failed_count,
+                },
+            )
+            self._security_events.record(
+                tenant_id=tenant_id,
+                event_type=FACE_LOGIN_TERMINAL_LOCKED_EVENT,
+                ip_address=ip_address,
+                machine_name=machine_name,
+                details={
+                    "store_id": str(store_id),
+                    "trigger": "NEW_LOCKOUT",
+                    "shared_counter": "store_pin_throttle",
+                    "failed_count": result.failed_count,
+                    "locked_until": result.locked_until.isoformat(),
+                },
+            )
 
     # --------------------------- nəticə yolları ------------------------------ #
 
@@ -2709,6 +3001,10 @@ __all__ = [
     "DUAL_CONTROL_CATEGORY",
     "ENROLLMENT_FLAG",
     "ESCALATION_CATEGORY",
+    "FACE_LOGIN_FAILED_EVENT",
+    "FACE_LOGIN_REASON_AMBIGUOUS",
+    "FACE_LOGIN_REASON_NO_MATCH",
+    "FACE_LOGIN_TERMINAL_LOCKED_EVENT",
     "MANAGE_EXEMPTIONS_FLAG",
     "MIN_EXEMPTION_REASON_LENGTH",
     "MISMATCH_CATEGORY",

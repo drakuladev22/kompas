@@ -107,6 +107,7 @@ from tests.fixtures.fakes import (
     InMemoryFaceExemptions,
     InMemoryFaceProfiles,
     InMemoryFaceVerificationLog,
+    InMemoryPinThrottle,
     RecordingAudit,
     RecordingNotifier,
     RecordingSecurityEvents,
@@ -235,6 +236,11 @@ class _Gate:
             clock=clock,
             notifier=self.notifier,
             security_events=self.security_events,
+            # T1 (DEEP-GAP Faza 4) — MƏCBURİ arqument. Bu fayldakı testlər
+            # `verify()` (1:1) yolunu ölçür və orada throttle ÇAĞIRILMIR;
+            # sahtə yalnız konstruktoru təmin edir. 1:N yolunun öz testləri
+            # `test_kiosk_face_login.py`-dədir.
+            pin_throttle=InMemoryPinThrottle(clock=clock),
         )
 
     def verify(

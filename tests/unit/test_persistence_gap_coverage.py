@@ -39,7 +39,9 @@ from src.domain.entities.attendance_sheet import (
 )
 from src.domain.entities.exception_record import ExceptionRecord
 from src.domain.entities.fine import Fine, FineSource
+from src.domain.entities.position import Position
 from src.domain.entities.shift import ShiftSwapRequest
+from src.domain.value_objects.authorization import RolePriority
 from src.domain.value_objects.exception_signals import ExceptionSeverity
 from src.domain.value_objects.identifiers import (
     AppealId,
@@ -47,6 +49,7 @@ from src.domain.value_objects.identifiers import (
     ExceptionId,
     FineId,
     LeaveRequestId,
+    PositionId,
     ShiftSwapRequestId,
     StoreId,
     SupportMessageId,
@@ -76,6 +79,8 @@ from src.infrastructure.persistence.report_repositories import (
 from src.infrastructure.persistence.repositories import (
     PostgresEmployeeRepository,
     PostgresFineRepository,
+    PostgresOpenFineExposureReader,
+    PostgresPositionRepository,
 )
 from src.infrastructure.persistence.support_repositories import (
     PostgresSupportTicketRepository,
@@ -888,6 +893,7 @@ def test_a_past_day_is_reported_as_over_so_absences_become_visible() -> None:
         "is_late": False,
         "late_minutes": None,
         "is_outside": False,
+        "on_annual_leave": False,
     }
     repo, _ = _build(PostgresAttendanceFactProvider, [("FROM employees", [row])])
     today = datetime.now(UTC).date()
@@ -909,6 +915,7 @@ def test_check_in_status_is_translated_into_two_independent_flags() -> None:
             "is_late": True,
             "late_minutes": 12,
             "is_outside": False,
+            "on_annual_leave": False,
         },
         {
             "employee_id": ACTOR,
@@ -917,6 +924,7 @@ def test_check_in_status_is_translated_into_two_independent_flags() -> None:
             "is_late": False,
             "late_minutes": 0,
             "is_outside": True,
+            "on_annual_leave": False,
         },
     ]
     repo, _ = _build(PostgresAttendanceFactProvider, [("FROM employees", rows)])
@@ -929,6 +937,29 @@ def test_check_in_status_is_translated_into_two_independent_flags() -> None:
     assert (facts[1].has_verified_check_in, facts[1].is_pending_verification) == (False, True)
     assert facts[1].is_currently_outside is True
     assert facts[1].planned_off is True
+
+
+def test_annual_leave_column_is_mapped_into_the_fact() -> None:
+    """DEEP-GAP D1: SQL-in `on_annual_leave` sütunu domen sahəsinə düşür.
+
+    Digər testlər qəsdən `False` göndərir (mövcud davranışı sabit saxlamaq
+    üçün) — bu test `True` yolunu təsdiqləyir ki, sahə həqiqətən OXUNSUN,
+    sadəcə defolt dəyərlə uyğunlaşmasın.
+    """
+    row = {
+        "employee_id": ACTOR,
+        "planned_off": False,
+        "check_in_status": None,
+        "is_late": False,
+        "late_minutes": None,
+        "is_outside": False,
+        "on_annual_leave": True,
+    }
+    repo, _ = _build(PostgresAttendanceFactProvider, [("FROM employees", [row])])
+
+    facts = repo.facts_for(uuid.uuid4(), date(2026, 8, 10))
+
+    assert facts[0].on_annual_leave is True
 
 
 # --------------------------------------------------------------------------- #
@@ -1551,3 +1582,172 @@ def test_save_lets_an_unrecognized_unique_violation_propagate_raw(
 
     assert not isinstance(excinfo.value, DuplicateFineSubmissionError)
     assert not isinstance(excinfo.value, ConcurrentVerificationConflictError)
+
+
+# --------------------------------------------------------------------------- #
+# `PostgresFineRepository.list_for_employee_month()` — "Cərimələrim" görünüşü
+# (D3, dövrə audit)
+# --------------------------------------------------------------------------- #
+#
+# Cərimə avqustda `fine_date` ilə yazılır (`PENDING_REVIEW`), aylıq icmaldan
+# sonra SENTYABRDA `publish()` olunur — 72 saatlıq etiraz pəncərəsi məhz O AN
+# başlayır. Yalnız `EXTRACT(...) = %s` ay şərti olsaydı, işçi sentyabrda
+# "Cərimələrim"i açanda avqust `fine_date`-li cərimə görünmür → boş siyahı,
+# 72 saatlıq etiraz hüququ heç açılmadan bağlanırdı. Fake bağlantı SQL-i
+# İCRA ETMİR (yalnız mətni qeyd edir), ona görə DB-nin özünün `now()`
+# müqayisəsini yoxlaya bilmirik — onu `tests/integration` edir. Burada
+# YOXLANAN: sorğu mətni artıq açıq-pəncərə budağını daşıyır — köhnə TƏK-ay
+# şərtinə geri qayıtma reqressiya kimi tutulur.
+
+
+def test_list_for_employee_month_query_also_includes_fines_with_an_open_appeal_window() -> None:
+    repo, conn = _build(PostgresFineRepository)
+
+    repo.list_for_employee_month(ACTOR, year=2026, month=9)
+
+    sql, params = conn.executed[-1]
+    assert "EXTRACT(YEAR FROM fine_date) = %s AND EXTRACT(MONTH FROM fine_date) = %s" in sql
+    assert "appeal_window_closes_at IS NOT NULL" in sql
+    assert "appeal_window_closes_at > now()" in sql
+    assert "published_at IS NOT NULL" in sql
+    # Ay şərti ATILMIR — əlavə budaq YALNIZ `OR` ilə qoşulub, parametr sayı
+    # (employee, tenant, year, month) DƏYİŞMƏYİB.
+    assert params == (ACTOR, TENANT, 2026, 9)
+
+
+# --------------------------------------------------------------------------- #
+# `PostgresOpenFineExposureReader` — DEEP-GAP D2 adapteri
+# --------------------------------------------------------------------------- #
+#
+# `OpenFineExposureReader` portu (`user_management.py`) əvvəllər HEÇ BİR
+# infrastruktur adapterinə malik deyildi — `composition.py` onu qəsdən boş
+# saxlayırdı (bax həmin faylın köhnə şərhi). İKİ AYRI `COUNT` sorğusu: açıq
+# (`PENDING_REVIEW`) cərimə VƏ qərarsız (`PENDING`/`EXPIRED`) etiraz.
+
+
+def test_open_fine_exposure_counts_pending_review_fines_and_undecided_appeals() -> None:
+    repo, conn = _build(
+        PostgresOpenFineExposureReader,
+        [
+            ("FROM fines", [{"n": 2}]),
+            ("FROM fine_appeals", [{"n": 1}]),
+        ],
+    )
+
+    exposure = repo.count_open_for_employee(ACTOR)
+
+    assert exposure.pending_review_fine_count == 2
+    assert exposure.open_appeal_count == 1
+    assert exposure.has_any is True
+
+    fine_sql, fine_params = conn.executed[0]
+    assert "FROM fines" in fine_sql
+    assert "status = 'PENDING_REVIEW'" in fine_sql
+    assert fine_params == (ACTOR, TENANT)
+
+    appeal_sql, appeal_params = conn.executed[1]
+    assert "FROM fine_appeals" in appeal_sql
+    assert "status IN ('PENDING', 'EXPIRED')" in appeal_sql
+    assert appeal_params == (ACTOR, TENANT)
+
+
+def test_open_fine_exposure_reports_nothing_when_both_counts_are_zero() -> None:
+    """`has_any` YALNIZ HƏR İKİ say sıfırdırsa `False` olmalıdır (bölmə 4/6)."""
+    repo, _ = _build(
+        PostgresOpenFineExposureReader,
+        [
+            ("FROM fines", [{"n": 0}]),
+            ("FROM fine_appeals", [{"n": 0}]),
+        ],
+    )
+
+    exposure = repo.count_open_for_employee(ACTOR)
+
+    assert exposure.has_any is False
+
+
+# --------------------------------------------------------------------------- #
+# `PostgresPositionRepository` — `is_store_tier` sütunu (T6, DEEP-GAP dövrə
+# auditi)
+# --------------------------------------------------------------------------- #
+#
+# `is_camera_type`-ın EYNİ naxışı: sütun oxunmayıb defolt `False` qalsaydı,
+# custom "mağaza-pilləli" rol `Position.is_store_tier=False` ilə bərpa
+# olunardı və domendəki `assert_grantable_to(is_store_tier_role=...)` heç
+# vaxt işə düşməzdi — DB trigger-i (`enforce_anti_fraud_segregation`) qoruyar,
+# LAKİN domen qatının ÖZÜ boşluğu görünməz saxlayardı.
+
+
+def test_position_hydration_reads_the_store_tier_column() -> None:
+    row = {
+        "id": uuid.uuid4(),
+        "tenant_id": TENANT,
+        "code": "FILIAL_MESULU",
+        "name_az": "Filial Məsulu",
+        "priority": 3,
+        "is_system": False,
+        "is_camera_type": False,
+        "is_store_tier": True,
+        "is_active": True,
+    }
+    repo, _ = _build(PostgresPositionRepository, [("FROM positions", [row])])
+
+    position = repo.get(PositionId(row["id"]))
+
+    assert position is not None
+    assert position.is_store_tier is True
+
+
+def test_position_save_persists_the_store_tier_flag() -> None:
+    position = Position(
+        position_id=PositionId(uuid.uuid4()),
+        code="FILIAL_MESULU",
+        name_az="Filial Məsulu",
+        priority=RolePriority.OPERATIONAL,
+        tenant_id=TenantId(TENANT),
+        is_store_tier=True,
+    )
+    repo, conn = _build(PostgresPositionRepository)
+
+    repo.save(position)
+
+    sql, params = conn.executed[0]
+    assert "is_store_tier" in sql
+    # Sütun sırası: id, tenant_id, code, name_az, priority, is_system,
+    # is_camera_type, is_store_tier, is_active (`PostgresPositionRepository.
+    # save()`-in `VALUES` sırası) — 8-ci indeks `is_store_tier`-dir.
+    assert params[7] is True, f"`is_store_tier=True` gözlənilən yerdə deyil: {params}"
+
+
+# --------------------------------------------------------------------------- #
+# `PostgresFineRepository.unsynced_evidence_ids()` — T3 (domen2 auditi)
+# --------------------------------------------------------------------------- #
+#
+# Mənbə sütunu `evidence_upload_status`-dur, `photo_evidence_url` DEYİL —
+# sonuncu MANUAL_CAMERA axınında LOKAL növbə açarını saxlayır. `source`
+# süzgəci QƏSDƏN sorğuda YOXDUR (biznes qaydası use case-də qalır).
+
+
+def test_unsynced_evidence_ids_reads_the_upload_status_column_not_the_url() -> None:
+    fine_id = uuid.uuid4()
+    repo, conn = _build(
+        PostgresFineRepository,
+        [("FROM fines", [{"id": fine_id}])],
+    )
+
+    result = repo.unsynced_evidence_ids([FineId(fine_id)])
+
+    assert result == {FineId(fine_id)}
+    sql, params = conn.executed[-1]
+    assert "evidence_upload_status <> 'SYNCED'" in sql
+    assert "photo_evidence_url" not in sql
+    assert "source" not in sql, "mənbə süzgəci SQL-də DEYİL — biznes qaydası use case-dədir"
+    assert params == (TENANT, [FineId(fine_id)])
+
+
+def test_unsynced_evidence_ids_returns_empty_set_when_everything_is_synced() -> None:
+    repo, _ = _build(PostgresFineRepository, [("FROM fines", [])])
+
+    result = repo.unsynced_evidence_ids([FineId(uuid.uuid4())])
+
+    assert result == set()

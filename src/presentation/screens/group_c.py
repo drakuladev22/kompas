@@ -1084,11 +1084,21 @@ class RoleCreateDialog(QDialog):
     case onu operativ pillə ilə məhdudlaşdırır; dialoq isə həmin nəticəni
     seçimdən ƏVVƏL yazır ki, qərar məlumatlı olsun.
 
+    ──────────────────────────────────────────────────────────────────────────
+    "MAĞAZA-PİLLƏLİ" SEÇİMİ (T6) — `is_camera_type`-IN GÜZGÜSÜ
+    ──────────────────────────────────────────────────────────────────────────
+    CEO/Root Mağaza Menecerini prioritet-3 custom rola köçürüb anti-fraud
+    qadağasını (satıcı-pilləli rollara verilə bilməyən flag-lər) yan keçə
+    bilməsin deyə, "mağaza-pilləli" custom rol AÇIQ işarələnməlidir —
+    `PermissionFlag.is_grantable_to()` bu bayraq olmadan yeni rolu tanımır və
+    checkbox-ları YALNIŞ aktiv göstərər (bax `permission_matrix.py::
+    _flag_groups`).
+
     Signals:
-        submitted: (ad, prioritet dəyəri, kamera-tipli).
+        submitted: (ad, prioritet dəyəri, kamera-tipli, mağaza-pilləli).
     """
 
-    submitted = Signal(str, int, bool)
+    submitted = Signal(str, int, bool, bool)
 
     #: Açılan siyahıdakı pillələr — `RolePriority` dəyərləri ilə eyni sıra.
     #:
@@ -1154,6 +1164,16 @@ class RoleCreateDialog(QDialog):
             )
         )
 
+        self._store = QCheckBox("Mağaza-pilləli rol")
+        card.add(self._store)
+        card.add(
+            muted_label(
+                "Mağaza-pilləli rol satıcı sinfindəndir və anti-fraud vəzifə "
+                "ayrılığına (cərimə yazma/təsdiq, cüt-nəzarət) tabedir.",
+                size=12,
+            )
+        )
+
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
@@ -1176,10 +1196,12 @@ class RoleCreateDialog(QDialog):
         create.setAutoDefault(True)
         cancel.setAutoDefault(False)
 
-        # Fokus sırası vizual sıra ilə: ad → pillə → kamera-tipi → düymələr.
+        # Fokus sırası vizual sıra ilə: ad → pillə → kamera-tipi →
+        # mağaza-pilləli → düymələr.
         QWidget.setTabOrder(self._name.input_widget(), self._priority)
         QWidget.setTabOrder(self._priority, self._camera)
-        QWidget.setTabOrder(self._camera, cancel)
+        QWidget.setTabOrder(self._camera, self._store)
+        QWidget.setTabOrder(self._store, cancel)
         QWidget.setTabOrder(cancel, create)
 
         self._name.focus_input()
@@ -1190,7 +1212,12 @@ class RoleCreateDialog(QDialog):
         if not name:
             self._name.set_error("Vəzifə adı məcburidir")
             return
-        self.submitted.emit(name, int(self._priority.currentData()), self._camera.isChecked())
+        self.submitted.emit(
+            name,
+            int(self._priority.currentData()),
+            self._camera.isChecked(),
+            self._store.isChecked(),
+        )
         self.accept()
 
 

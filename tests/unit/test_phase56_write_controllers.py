@@ -93,8 +93,15 @@ class _BuilderScreen:
         self.placements.append(dict(placements or {}))
         self.columns.append(columns)
 
-    def show_error(self, *, title: str, message: str) -> None:
+    def show_error(self, *, title: str, message: str, on_retry: Any = None) -> None:
+        # `on_retry` SAXLANIR (QA-FULL FAZA 3 davamı): xəta banner-indən sonra
+        # siyahı ARTIQ DƏRHAL yenilənmir — yenilənməni «Yenidən Cəhd Et»
+        # başladır. Sahtə geri-çağırışı saxlamasaydı test yalnız «yenilənmə
+        # olmadı» deyə bilərdi, «istifadəçi onu başlada BİLİR» hissəsini isə
+        # sübut edə bilməzdi — halbuki UI-R4-01-ə görə `on_retry` verilməyəndə
+        # düymə ÜMUMİYYƏTLƏ çəkilmir və banner ölü dalana çevrilir.
         self.errors.append((title, message))
+        self.retry = on_retry
 
 
 class _View:
@@ -193,8 +200,15 @@ class _PluginScreen:
     def set_plugins(self, plugins: list[dict[str, str]]) -> None:
         self.rows = plugins
 
-    def show_error(self, *, title: str, message: str) -> None:
+    def show_error(self, *, title: str, message: str, on_retry: Any = None) -> None:
+        # `on_retry` SAXLANIR (QA-FULL FAZA 3 davamı): xəta banner-indən sonra
+        # siyahı ARTIQ DƏRHAL yenilənmir — yenilənməni «Yenidən Cəhd Et»
+        # başladır. Sahtə geri-çağırışı saxlamasaydı test yalnız «yenilənmə
+        # olmadı» deyə bilərdi, «istifadəçi onu başlada BİLİR» hissəsini isə
+        # sübut edə bilməzdi — halbuki UI-R4-01-ə görə `on_retry` verilməyəndə
+        # düymə ÜMUMİYYƏTLƏ çəkilmir və banner ölü dalana çevrilir.
         self.errors.append((title, message))
+        self.retry = on_retry
 
 
 class _PluginUseCase:
@@ -256,8 +270,15 @@ def test_plugin_rows_use_the_screen_key_namespace() -> None:
     assert screen.rows[0]["enabled"] == "1"
 
 
-def test_rejected_toggle_refreshes_so_the_screen_does_not_lie() -> None:
-    """İmzasız plugin aktivləşdirilə bilməz — açar geri qayıtmalıdır."""
+def test_a_rejected_toggle_shows_the_reason_and_refreshes_only_on_retry() -> None:
+    """İmzasız plugin aktivləşdirilə bilməz — açar geri qayıtmalıdır.
+
+    LAKİN GERİ QAYITMA DƏRHAL DEYİL: əvvəl rədd cavabından sonra
+    `self.refresh(screen)` çağırılırdı və `set_plugins()` → `show_content()`
+    zənciri rədd səbəbini daşıyan banner-in ÜSTÜNDƏN yazırdı — admin heç bir
+    izahat görmürdü, açar isə səbəbsiz geri qayıdırdı. İndi səbəb qalır,
+    yenilənməni isə istifadəçi «Yenidən Cəhd Et» ilə başladır.
+    """
     use_case = _PluginUseCase([_installed()], toggle_error=_DeniedError("imza yoxdur"))
     session = _PluginSession(use_case)
     controller = PluginAdminController(_Context(session), _actor())  # type: ignore[arg-type]
@@ -268,9 +289,14 @@ def test_rejected_toggle_refreshes_so_the_screen_does_not_lie() -> None:
     assert use_case.toggled == []
     assert session.commits == 0
     assert screen.errors[0][0] == "Plugin dəyişdirilmədi"
-    # Rədd edildikdən SONRA siyahı yenidən oxunub — ekrandakı açar bazadakı
-    # vəziyyəti göstərir.
-    assert screen.rows, "Rədd edilmiş dəyişiklikdən sonra siyahı yenilənməlidir"
+    assert screen.rows == [], (
+        "Rədd cavabı ilə eyni anda yenilənmə banner-i udurdu — səbəb görünmədən siyahı yenilənirdi"
+    )
+    assert screen.retry is not None, "«Yenidən Cəhd Et» ölü düymə OLMAMALIDIR (UI-R4-01)"
+
+    screen.retry()
+
+    assert screen.rows, "Təkrar cəhd açarı bazadakı vəziyyətə qaytarır — ekran YALAN danışmır"
 
 
 # --------------------------------------------------------------------------- #
@@ -294,8 +320,15 @@ class _SalesScreen:
     def set_low_confidence_threshold(self, percent: int) -> None:
         self.low_confidence = percent
 
-    def show_error(self, *, title: str, message: str) -> None:
+    def show_error(self, *, title: str, message: str, on_retry: Any = None) -> None:
+        # `on_retry` SAXLANIR (QA-FULL FAZA 3 davamı): xəta banner-indən sonra
+        # siyahı ARTIQ DƏRHAL yenilənmir — yenilənməni «Yenidən Cəhd Et»
+        # başladır. Sahtə geri-çağırışı saxlamasaydı test yalnız «yenilənmə
+        # olmadı» deyə bilərdi, «istifadəçi onu başlada BİLİR» hissəsini isə
+        # sübut edə bilməzdi — halbuki UI-R4-01-ə görə `on_retry` verilməyəndə
+        # düymə ÜMUMİYYƏTLƏ çəkilmir və banner ölü dalana çevrilir.
         self.errors.append((title, message))
+        self.retry = on_retry
 
 
 class _QueueUseCase:
@@ -448,8 +481,15 @@ class _ProfileScreen:
         """
         self.face_enrollment = enrollment
 
-    def show_error(self, *, title: str, message: str) -> None:
+    def show_error(self, *, title: str, message: str, on_retry: Any = None) -> None:
+        # `on_retry` SAXLANIR (QA-FULL FAZA 3 davamı): xəta banner-indən sonra
+        # siyahı ARTIQ DƏRHAL yenilənmir — yenilənməni «Yenidən Cəhd Et»
+        # başladır. Sahtə geri-çağırışı saxlamasaydı test yalnız «yenilənmə
+        # olmadı» deyə bilərdi, «istifadəçi onu başlada BİLİR» hissəsini isə
+        # sübut edə bilməzdi — halbuki UI-R4-01-ə görə `on_retry` verilməyəndə
+        # düymə ÜMUMİYYƏTLƏ çəkilmir və banner ölü dalana çevrilir.
         self.errors.append((title, message))
+        self.retry = on_retry
 
 
 class _Users:

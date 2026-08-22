@@ -12,6 +12,7 @@ from src.application.use_cases.daily_attendance import (
     SheetPermissionError,
 )
 from src.domain.entities.attendance_sheet import (
+    AttendanceCountingPolicy,
     AttendanceFact,
     AutoAttendanceStatus,
     DailyAttendanceSheet,
@@ -129,6 +130,14 @@ class Ctx:
             AttendanceFact(employee_id=WORKER, planned_off=True, has_verified_check_in=True),
             AutoAttendanceStatus.UNPLANNED,
         ),
+        (
+            # DEEP-GAP D1 — regressiya testi: təsdiqlənmiş illik məzuniyyət
+            # günündə növbə matrisində sətir açılmayıb (`planned_off=False`,
+            # adi hal) VƏ heç bir check-in qeydi yoxdur. Düzəlişdən ƏVVƏL bu
+            # kombinasiya `ABSENT` ("🔴 İcazəsiz qayıb") verirdi.
+            AttendanceFact(employee_id=WORKER, planned_off=False, on_annual_leave=True),
+            AutoAttendanceStatus.ANNUAL_LEAVE,
+        ),
     ],
 )
 def test_status_is_derived_from_facts(fact: AttendanceFact, expected: AutoAttendanceStatus) -> None:
@@ -139,6 +148,57 @@ def test_day_not_over_shows_pending_not_absent() -> None:
     """Səhər saat 10-da gəlməmiş işçi "qayıb" DEYİL (modul başlığı)."""
     fact = AttendanceFact(employee_id=WORKER, planned_off=False, day_is_over=False)
     assert fact.derive_status() is AutoAttendanceStatus.PENDING
+
+
+def test_currently_outside_outranks_annual_leave() -> None:
+    """Fiziki iştirak faktı (`OUTSIDE`) HR-ın illik məzuniyyət qeydindən üstündür."""
+    fact = AttendanceFact(
+        employee_id=WORKER, planned_off=False, is_currently_outside=True, on_annual_leave=True
+    )
+    assert fact.derive_status() is AutoAttendanceStatus.OUTSIDE
+
+
+def test_annual_leave_outranks_stray_check_in() -> None:
+    """HR-ın təsdiqlədiyi məzuniyyət qeydi ötəri check-in siqnalından üstündür."""
+    fact = AttendanceFact(
+        employee_id=WORKER, planned_off=False, has_verified_check_in=True, on_annual_leave=True
+    )
+    assert fact.derive_status() is AutoAttendanceStatus.ANNUAL_LEAVE
+
+
+def test_annual_leave_label_is_never_absent() -> None:
+    assert AutoAttendanceStatus.ANNUAL_LEAVE.label_az == "🟣 Məzuniyyətdə"
+
+
+def test_annual_leave_is_never_a_mismatch() -> None:
+    """DEEP-GAP D1 — `planned_off` istənilən dəyərdə uyğunsuzluq yaranmamalıdır."""
+    for planned_off in (True, False):
+        line = SheetLine(
+            employee_id=WORKER,
+            auto_status=AutoAttendanceStatus.ANNUAL_LEAVE,
+            planned_off=planned_off,
+        )
+        assert line.has_mismatch is False
+
+
+def test_annual_leave_counting_follows_the_root_policy() -> None:
+    """`counts_as_worked` sabitdir (False); Root-lu variant keçidli olmalıdır."""
+    assert AutoAttendanceStatus.ANNUAL_LEAVE.counts_as_worked is False
+    assert AutoAttendanceStatus.ANNUAL_LEAVE.counts_as_worked_with(
+        AttendanceCountingPolicy(annual_leave_counts_as_worked=True)
+    )
+    assert not AutoAttendanceStatus.ANNUAL_LEAVE.counts_as_worked_with(
+        AttendanceCountingPolicy(annual_leave_counts_as_worked=False)
+    )
+    # Digər statuslar üçün Root parametri təsirsizdir — yalnız ANNUAL_LEAVE fərqlənir.
+    assert AutoAttendanceStatus.VERIFIED.counts_as_worked_with(
+        AttendanceCountingPolicy(annual_leave_counts_as_worked=False)
+    )
+
+
+def test_attendance_counting_policy_default_matches_default_limits() -> None:
+    """`DEFAULT_LIMITS[ANNUAL_LEAVE_COUNTS_AS_WORKED_DAY]` "1"-dir — sayılır."""
+    assert AttendanceCountingPolicy.defaults().annual_leave_counts_as_worked is True
 
 
 def test_mismatch_is_computed_not_stored() -> None:

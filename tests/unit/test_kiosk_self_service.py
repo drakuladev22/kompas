@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -55,10 +55,20 @@ class _Money:
 
 
 class _Fine:
-    def __init__(self) -> None:
+    def __init__(self, *, appeal_hours_left: float | None = 1.0) -> None:
         self.id = FINE_ID
         self.amount = _Money(Decimal("25"))
         self.issued_at = NOW
+        # `datetime.now(UTC)`-DAN gəlir, `NOW`-DAN YOX: `_fine_summary`
+        # (`kiosk_self_service.py`) qalan müddəti HƏQİQİ "indi"-yə görə
+        # hesablayır (`_fine_rows`-un mövcud naxışı ilə eyni), test isə
+        # bunu SABİT `NOW`-a bağlasaydı, real vaxt keçdikcə pəncərə "artıq
+        # bağlanıb" görünərdi.
+        self.appeal_window_closes_at = (
+            None
+            if appeal_hours_left is None
+            else datetime.now(UTC) + timedelta(hours=appeal_hours_left)
+        )
 
 
 class _Appeal:
@@ -126,12 +136,50 @@ class _Appeals:
         return object()
 
 
+class _RewardItem:
+    def __init__(self, cost_points: int) -> None:
+        self.cost_points = cost_points
+
+
+class _Period:
+    def __init__(self, start: Any) -> None:
+        self.start = start
+
+
+class _Balance:
+    def __init__(self, available: int) -> None:
+        self.available = available
+        self.period = _Period(NOW.date().replace(day=1))
+
+
+class _SalesPoints:
+    """`points_balance_summary` (`screen_data.py`) burdan oxuyur — bax onun başlığı."""
+
+    def __init__(self, *, available: int = 0, reward_costs: list[int] | None = None) -> None:
+        self._available = available
+        self._reward_costs = reward_costs or []
+
+    def balance_for(self, _employee_id: Any, *, tenant_id: Any) -> _Balance:
+        return _Balance(self._available)
+
+    def list_rewards_for_employee(self, _tenant_id: Any) -> list[tuple[Any, _RewardItem]]:
+        return [(uuid.uuid4(), _RewardItem(cost)) for cost in self._reward_costs]
+
+
 class _Session:
-    def __init__(self, *, tasks: list[_Task], fines: list[_Fine], appeals: list[_Appeal]) -> None:
+    def __init__(
+        self,
+        *,
+        tasks: list[_Task],
+        fines: list[_Fine],
+        appeals: list[_Appeal],
+        sales_points: _SalesPoints | None = None,
+    ) -> None:
         self.tenant_id = uuid.uuid4()
         self.uow = _Uow(tasks)
         self.manual_fines = _ManualFines(fines)
         self.fine_appeals = _Appeals(appeals)
+        self.sales_points = sales_points or _SalesPoints()
         self.committed = 0
 
     def commit(self) -> None:
@@ -163,7 +211,14 @@ class _Actor:
         self.full_name = "Rəşad Məmmədov"
 
 
-def _wire(theme: Any, *, tasks: Any = None, fines: Any = None, appeals: Any = None) -> Any:
+def _wire(
+    theme: Any,
+    *,
+    tasks: Any = None,
+    fines: Any = None,
+    appeals: Any = None,
+    sales_points: _SalesPoints | None = None,
+) -> Any:
     from src.presentation.controllers.kiosk_self_service import KioskSelfServiceController
     from src.presentation.screens.group_a_kiosk import EmployeeHomeScreen
 
@@ -171,6 +226,7 @@ def _wire(theme: Any, *, tasks: Any = None, fines: Any = None, appeals: Any = No
         tasks=tasks if tasks is not None else [],
         fines=fines if fines is not None else [],
         appeals=appeals if appeals is not None else [],
+        sales_points=sales_points,
     )
     context = _Context(session)
     kiosk = _Kiosk()
@@ -306,3 +362,86 @@ def test_attached_document_is_reported_not_silently_dropped(qtbot, theme) -> Non
     assert len(session.fine_appeals.submitted) == 1
     # … lakin ekran vəziyyəti AÇIQ xəbərdarlığa keçir.
     assert screen.switcher().current_state() == "error"
+
+
+# --------------------------------------------------------------------------- #
+# DEEP-GAP U5 — İşçi Ana Ekranının üç kartı canlı rejimdə HEÇ VAXT doldurulmurdu
+# --------------------------------------------------------------------------- #
+#
+# `home.set_tasks`/`set_points`/`set_fines` bütün `src/presentation/` boyu
+# YALNIZ `app.py::show_preview_home`-da (dizayn nümunəsi) çağırılırdı — canlı
+# yolda işçi HƏR PIN girişində "0"/"—" görürdü. Aşağıdakı testlər `refresh_
+# home_cards`-ı REAL `EmployeeHomeScreen` üzərində çağırır və kartların
+# faktiki widget mətnini (`tasks_count_text` və s. — `group_a_kiosk.py`
+# "test üçün" bölməsi) yoxlayır, sadəcə setter-in ÇAĞIRILDIĞINI deyil.
+
+
+@requires_qt
+def test_refresh_home_cards_fills_all_three_cards_with_live_data(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """Tapşırıq/xal/cərimə kartları canlı sessiyadan HƏQİQİ rəqəmlə dolur."""
+    home, _kiosk, session = _wire(
+        theme,
+        tasks=[_Task("Vitrin yenilənməsi")],
+        fines=[_Fine(appeal_hours_left=1.0)],
+        appeals=[],
+        sales_points=_SalesPoints(available=1240, reward_costs=[500, 2000]),
+    )
+    qtbot.addWidget(home)
+    from src.presentation.controllers.kiosk_self_service import KioskSelfServiceController
+
+    controller = KioskSelfServiceController(
+        _Context(session), _Actor(), kiosk=_Kiosk(), theme=theme
+    )
+
+    controller.refresh_home_cards(session, home)
+
+    assert home.tasks_count_text == "1"
+    assert home.points_balance_text == "1 240"
+    assert "1 bu ay" in home.fines_summary_text
+    assert "25" in home.fines_summary_text
+    # Pəncərə HƏLƏ AÇIQDIR (1 saat qalıb) — "1 gün qalıb" (`ceil(1/24)=1`),
+    # sıfır DEYİL: `_fine_summary`-nin `ceil` şərhinə bax (yuxarı yuvarlaqlaşdırma).
+    assert "1 gün qalıb" in home.fines_deadline_text
+
+
+@requires_qt
+def test_refresh_home_cards_shows_no_fines_message_when_there_are_none(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """Cərimə yoxdursa kart "0" YOX, "Bu ay cərimə yoxdur" göstərir."""
+    home, _kiosk, session = _wire(theme, tasks=[], fines=[], appeals=[])
+    qtbot.addWidget(home)
+    from src.presentation.controllers.kiosk_self_service import KioskSelfServiceController
+
+    controller = KioskSelfServiceController(
+        _Context(session), _Actor(), kiosk=_Kiosk(), theme=theme
+    )
+
+    controller.refresh_home_cards(session, home)
+
+    assert home.tasks_count_text == "0"
+    assert home.fines_summary_text == "Bu ay cərimə yoxdur"
+    # Etiraz sayğacı GÖRÜNMÜR (heç bir cərimə yoxdursa müddət mənasızdır).
+    assert home.fines_deadline_text == ""
+
+
+@requires_qt
+def test_refresh_home_cards_keeps_the_deadline_hidden_once_the_appeal_window_closed(  # type: ignore[no-untyped-def]
+    qtbot, theme
+) -> None:
+    """Pəncərə artıq bağlanıbsa "0 gün qalıb" YOX — sayğac heç göstərilmir.
+
+    "0 gün qalıb" işçini "bu gün hələ hüququm var" zənn etdirərdi, halbuki
+    hüquq artıq itib (bax `_fine_summary`-nin `ceil` şərhi).
+    """
+    home, _kiosk, session = _wire(
+        theme, tasks=[], fines=[_Fine(appeal_hours_left=-2.0)], appeals=[]
+    )
+    qtbot.addWidget(home)
+    from src.presentation.controllers.kiosk_self_service import KioskSelfServiceController
+
+    controller = KioskSelfServiceController(
+        _Context(session), _Actor(), kiosk=_Kiosk(), theme=theme
+    )
+
+    controller.refresh_home_cards(session, home)
+
+    assert home.fines_deadline_text == ""

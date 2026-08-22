@@ -213,6 +213,15 @@ class _FinesRepo:
         self.saved: list[Fine] = []
         self.list_calls = 0
         self._journal = journal
+        #: DEEP-GAP T3 — `has_evidence`-in real mənbəyi. Defolt BOŞ dəst =
+        #: "hamısı Drive-a yüklənib" (mövcud testlərin gizli fərziyyəsi —
+        #: `_fine()` HƏMİŞƏ `photo_evidence_url` doldurur, yəni sətir SÜBUTLU
+        #: görünməlidir). `test_...` konkret `FineId`-ni buraya əlavə edərək
+        #: "hələ yüklənməyib" halını modelləşdirə bilər.
+        self.unsynced: set[FineId] = set()
+
+    def unsynced_evidence_ids(self, fine_ids: list[FineId]) -> set[FineId]:
+        return {fine_id for fine_id in fine_ids if fine_id in self.unsynced}
 
     def pending_review_periods(self, tenant_id: Any) -> list[str]:
         return sorted(
@@ -548,6 +557,29 @@ def test_automatic_fine_shows_its_source_and_missing_evidence() -> None:
     assert row.fine_type == "Gecikmə (avtomatik)"
     assert row.operator == "Sistem (avtomatik)"
     assert row.has_evidence is False
+
+
+def test_manual_camera_fine_shows_evidence_only_after_it_reaches_drive() -> None:
+    """DEEP-GAP T3 — `has_evidence` ARTIQ `photo_evidence_url`-a görə DEYİL.
+
+    ƏVVƏL: `bool(fine.photo_evidence_url)` MANUAL_CAMERA-da HƏMİŞƏ `True`
+    idi — sütun sübutun DİSKƏ (lokal növbəyə) yazıldığı andaca dolur, Drive-a
+    HƏQİQƏTƏN çatıb-çatmadığını demir. İndi `session.uow.fines.unsynced_
+    evidence_ids()` sorğusu (T3) MƏNBƏDİR: eyni `Fine` sətri hələ növbədəykən
+    "sübutsuz", Drive-a düşəndən sonra "sübutlu" göstərilməlidir.
+    """
+    pending = _fine()
+    controller, screen, _session, _context, repo, _review = _build([pending])
+    repo.unsynced = {pending.id}  # hələ Drive-a YÜKLƏNMƏYİB
+
+    controller.refresh(screen)  # type: ignore[arg-type]
+
+    assert _rows(screen)[0].has_evidence is False
+
+    repo.unsynced = set()  # yükləmə tamamlandı
+    controller.refresh(screen)  # type: ignore[arg-type]
+
+    assert _rows(screen)[0].has_evidence is True
 
 
 # --------------------------------------------------------------------------- #

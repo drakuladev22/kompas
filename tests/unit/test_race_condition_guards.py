@@ -170,6 +170,64 @@ def test_claim_removes_the_item_from_the_pending_view(queue: EvidenceUploadQueue
     assert entry.status is UploadStatus.PROCESSING
 
 
+def test_pending_and_claim_are_scoped_to_the_queues_own_tenant(tmp_path: Path) -> None:
+    """D2 (dövrə audit): tenant-siz növbə faylı KEÇMİŞ tenant-ı yükləmirdi.
+
+    `evidence_uploads.db` bir DATA QOVLUĞUNA bağlıdır, tenant-a YOX
+    (`resolve_data_file`). Maşın YENİ tenant üçün yenidən quraşdırılsa (və ya
+    köhnə fayl silinməyibsə), köhnə tenant-ın gözləyən sətirləri qalırdı.
+    Filtrsiz `claim_pending()` onları CARİ (`self._factory.active()`)
+    tenant-ın Drive-ına yükləyirdi — sübut zənciri qırılırdı: `file_id` A-nın
+    `fines` sətrinə yazılır, fayl B-nin Drive-ındadır.
+
+    Konstruktora `tenant_id` verildikdə (kompozisiya kökünün YEGANƏ yolu,
+    bax `composition.py::evidence_queue`) B tenant-ının növbəsi A-nın
+    sətrini nə `pending()`-də, nə `claim_pending()`-də GÖRMƏMƏLİDİR.
+    """
+    tenant_a = str(uuid.uuid4())
+    tenant_b = str(uuid.uuid4())
+
+    # A tenant-ı ÖZ növbəsini qurur və bir şəkil əlavə edir — B-nin növbəsi
+    # İLƏ EYNİ SQLite faylını paylaşır (köhnə quraşdırmanın qalığı ssenarisi).
+    queue_a = EvidenceUploadQueue(
+        tmp_path / "uploads.db", spool_dir=tmp_path / "spool", tenant_id=tenant_a
+    )
+    queue_a.enqueue(
+        tenant_id=tenant_a,
+        owner_type=UploadOwnerType.FINE,
+        owner_id=str(uuid.uuid4()),
+        store_id=STORE,
+        filename="a.png",
+        content=_png(),
+        taken_at=AUGUST,
+        now=AUGUST,
+    )
+    queue_a.close()
+
+    queue_b = EvidenceUploadQueue(
+        tmp_path / "uploads.db", spool_dir=tmp_path / "spool", tenant_id=tenant_b
+    )
+    try:
+        assert queue_b.pending(now=AUGUST) == [], "B tenant-ı A-nın sətrini görür"
+        assert queue_b.claim_pending(now=AUGUST) == [], "B tenant-ı A-nın sətrini claim etdi"
+    finally:
+        queue_b.close()
+
+
+def test_tenant_id_none_keeps_the_old_unscoped_behaviour(queue: EvidenceUploadQueue) -> None:
+    """`tenant_id=None` (defolt) — bu faylın DİGƏR testlərinin tarixçəsi.
+
+    Kompozisiya kökü onu HƏMİŞƏ ötürür (bax `composition.py`), amma sinif
+    ÖZÜ `tenant_id` tələb ETMİR — çoxlu mövcud testin (bu faylda, `test_
+    drive_storage.py`, `test_audit_and_queue_recovery.py`, `test_security_
+    hardening.py`) sınaq niyyəti tenant izolyasiyası DEYİL və onları
+    dəyişməyə ehtiyac yaratmamalıdır.
+    """
+    _enqueue(queue)
+    assert len(queue.pending(now=AUGUST)) == 1
+    assert len(queue.claim_pending(now=AUGUST + timedelta(seconds=1))) == 1
+
+
 def test_two_workers_upload_the_photo_only_once(queue: EvidenceUploadQueue) -> None:
     """TAPINTININ ÖZÜ: paralel iki işçi → Drive-a BİR fayl.
 
@@ -416,6 +474,38 @@ def test_check_constraint_allows_the_never_published_reversal() -> None:
         assert "status = 'REVERSED' AND published_at IS NULL" in sql, (
             f"{path.name}: kompensasiya budağı yoxdur"
         )
+
+
+def test_check_constraint_requires_drive_evidence_for_published_manual_camera_fines() -> None:
+    """`chk_fine_published` (081, T3, DEEP-GAP dövrə 4) — sübutsuz NƏŞR bloklanır.
+
+    `photo_evidence_url` MANUAL_CAMERA axınında LOKAL NÖVBƏ AÇARINI saxlayır
+    (`upload_queue.py`), Drive-a çatdığını SÜBUT ETMİR — `evidence_drive_
+    file_id` (migrations/002) HƏQİQİ göstəricidir. Bu test `migrations/081`-
+    in dörd budağının hamısını (015-in ÜÇÜ + YENİ evidence budağı) daşıdığını
+    təsdiqləyir.
+
+    `schema.sql` BU MİQRASİYA ilə YENİLƏNMİR (qəsdən) — `evidence_drive_
+    file_id` sütunu bazis `fines` tərifində YOXDUR (CLAUDE.md §7). Ona görə
+    schema.sql BURADA YOXLANILMIR — yalnız `081`-in özü.
+    """
+    path = MIGRATIONS_DIR / "081_fine_published_requires_drive_evidence.sql"
+    sql = _normalized(_sql_without_comments(path))
+
+    # 015-in üç budağı İTİRİLMƏYİB (saga kompensasiyası çökməsin).
+    assert "status = 'PENDING_REVIEW'" in sql
+    assert "published_at IS NOT NULL AND appeal_window_closes_at IS NOT NULL" in sql
+    assert "status = 'REVERSED' AND published_at IS NULL" in sql
+
+    # YENİ (081) budaq: EXPORTABLE statusda MANUAL_CAMERA sübutu tələb edir.
+    assert "status NOT IN ('PUBLISHED', 'REDUCED')" in sql, (
+        "evidence budağı `EXPORTABLE_STATUSES`-ə (PUBLISHED+REDUCED) uyğun deyil"
+    )
+    assert "source <> 'MANUAL_CAMERA'" in sql
+    assert "evidence_drive_file_id IS NOT NULL" in sql
+    # İrs sətir istisnası (`team-lead`-in qərarı — ölçmə mümkün olmadığı üçün
+    # `NOT VALID` əvəzinə açıq budaq): 002-dən ƏVVƏLKİ sübut HTTP URL-idir.
+    assert "photo_evidence_url LIKE 'http%'" in sql
 
 
 def test_guard_suite_covers_the_new_race_conditions() -> None:

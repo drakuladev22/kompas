@@ -71,8 +71,13 @@ class _Screen:
     def set_entries(self, rows: list[dict[str, str]]) -> None:
         self.rows = rows
 
-    def show_error(self, *, title: str, message: str) -> None:
+    def show_error(self, *, title: str, message: str, on_retry: Any = None) -> None:
+        # `on_retry` SAXLANIR (QA-FULL FAZA 3 davamı): köhnəlmiş sətir
+        # xəbərdarlığından sonra siyahı ARTIQ DƏRHAL yenilənmir — `set_entries()`
+        # → `show_content()` banner-in üstündən yazırdı və istifadəçi səbəbi HEÇ
+        # VAXT görmürdü. Yenilənməni indi «Yenidən Cəhd Et» başladır.
         self.errors.append((title, message))
+        self.retry = on_retry
 
 
 class _CatalogUseCase:
@@ -275,17 +280,33 @@ def test_edit_keeps_the_current_active_state() -> None:
     assert saved.deactivated_at is not None
 
 
-def test_missing_row_key_refreshes_instead_of_failing() -> None:
-    """Siyahı köhnəlibsə istifadəçi səbəbi görür və siyahı yenilənir."""
+def test_missing_row_key_shows_the_reason_and_refreshes_only_on_retry() -> None:
+    """Siyahı köhnəlibsə istifadəçi əvvəlcə SƏBƏBİ görür, sonra yeniləyir.
+
+    Əvvəl bu test «səbəbi görür VƏ siyahı yenilənir» deyirdi, halbuki ikisi
+    eyni anda MÜMKÜN DEYİL: `refresh()` `set_entries()` → `show_content()`
+    zəncirini işə salır və `ContentSwitcher`-i heç bir render arası olmadan
+    «content»-ə qaytarır — yəni banner yazıldığı an silinirdi. Sahtə ekran
+    `show_content()` çağırmadığı üçün qüsur məhz burada GÖRÜNMÜRDÜ.
+    """
     use_case = _CatalogUseCase([_work_mode()])
-    controller, _ = _controller("work_modes", use_case)
+    controller, context = _controller("work_modes", use_case)
     screen = _Screen()
     controller.refresh(screen)  # type: ignore[arg-type]
+    reads_before = context.opened
 
     controller._on_toggle(screen, "naməlum-açar")  # type: ignore[arg-type]
 
     assert use_case.deactivated == []
     assert screen.errors[0][0] == "Sətir tapılmadı"
+    assert context.opened == reads_before, (
+        "Xəbərdarlıqla EYNİ ANDA yenilənmə sessiya açsaydı, banner də həmin an silinərdi"
+    )
+    assert screen.retry is not None, "«Yenidən Cəhd Et» ölü düymə OLMAMALIDIR (UI-R4-01)"
+
+    screen.retry()
+
+    assert context.opened == reads_before + 1, "Təkrar cəhd siyahını yenidən oxuyur"
 
 
 # --------------------------------------------------------------------------- #

@@ -159,11 +159,20 @@ class SalesReviewController:
             if isinstance(pair, (list, tuple)) and len(pair) == 2  # noqa: PLR2004 — (çek, ad)
         ]
         if not cleaned:
+            # BANNER YENİLƏNMƏ İLƏ UDULURDU (QA-FULL FAZA 3 davamı) — eyni
+            # qüsur `announcements.py::_on_withdraw`-da tapılmışdı: `show_error(...)`
+            # ardınca DƏRHAL `self.refresh(screen)` gəlirdi, `refresh()` isə
+            # uğurla qayıdanda `set_sales()` → `show_content()` zəncirini işə salır
+            # və `ContentSwitcher`-i heç bir render arası olmadan «content»-ə
+            # qaytarır. Nəticə: istifadəçi HEÇ BİR mesaj görmür, ekran sadəcə
+            # səbəbsiz yenilənir. Meyar sabitdir: yenilənmə yolu switcher-i
+            # «content»-ə qaytarırsa — qüsur. Yenilənmə indi `on_retry` ilə
+            # istifadəçinin öz qərarıdır.
             screen.show_error(
                 title="Sətir seçilməyib",
                 message="Toplu təyinat üçün ən azı bir sətirdə işçi seçin.",
+                on_retry=lambda: self.refresh(screen),
             )
-            self.refresh(screen)
             return
         self._apply(screen, cleaned, reason=BULK_REASON)
 
@@ -181,11 +190,13 @@ class SalesReviewController:
         """
         unknown = [receipt for receipt, _ in pairs if receipt not in self._items]
         if unknown:
+            # Eyni banner qüsuru (bax `_on_bulk`): `set_sales()` →
+            # `show_content()` xəbərdarlığı udurdu.
             screen.show_error(
                 title="Siyahı köhnəlib",
-                message="Bəzi sətirlər artıq emal edilib. Siyahı yenilənir.",
+                message="Bəzi sətirlər artıq emal edilib. «Yenidən Cəhd Et» siyahını yeniləyir.",
+                on_retry=lambda: self.refresh(screen),
             )
-            self.refresh(screen)
             return
 
         try:

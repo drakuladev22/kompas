@@ -179,11 +179,20 @@ class CatalogAdminController:
         entry = self._entries.get(row_key)
         if entry is None:
             # Sətir başqa bir sessiyada dəyişdirilib: siyahı köhnəlib.
+            # BANNER YENİLƏNMƏ İLƏ UDULURDU (QA-FULL FAZA 3 davamı) — eyni
+            # qüsur `announcements.py::_on_withdraw`-da tapılmışdı: `show_error(...)`
+            # ardınca DƏRHAL `self.refresh(screen)` gəlirdi, `refresh()` isə
+            # uğurla qayıdanda `set_entries()` → `show_content()` zəncirini işə salır
+            # və `ContentSwitcher`-i heç bir render arası olmadan «content»-ə
+            # qaytarır. Nəticə: istifadəçi HEÇ BİR mesaj görmür, ekran sadəcə
+            # səbəbsiz yenilənir. Meyar sabitdir: yenilənmə yolu switcher-i
+            # «content»-ə qaytarırsa — qüsur. Yenilənmə indi `on_retry` ilə
+            # istifadəçinin öz qərarıdır.
             screen.show_error(
                 title="Sətir tapılmadı",
-                message="Bu sətir artıq dəyişdirilib. Siyahı yenilənir.",
+                message="Bu sətir artıq dəyişdirilib. «Yenidən Cəhd Et» siyahını yeniləyir.",
+                on_retry=lambda: self.refresh(screen),
             )
-            self.refresh(screen)
             return
         self._open_dialog(screen, existing=entry)
 
@@ -240,11 +249,13 @@ class CatalogAdminController:
         """Aktiv → deaktiv (soft delete) və ya deaktiv → aktiv (bax modul başlığı)."""
         entry = self._entries.get(row_key)
         if entry is None:
+            # Eyni banner qüsuru (bax `_on_edit`): `set_entries()` →
+            # `show_content()` xəbərdarlığı udurdu.
             screen.show_error(
                 title="Sətir tapılmadı",
-                message="Bu sətir artıq dəyişdirilib. Siyahı yenilənir.",
+                message="Bu sətir artıq dəyişdirilib. «Yenidən Cəhd Et» siyahını yeniləyir.",
+                on_retry=lambda: self.refresh(screen),
             )
-            self.refresh(screen)
             return
 
         try:

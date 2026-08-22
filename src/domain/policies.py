@@ -58,6 +58,18 @@ class SystemLimitKey(str, Enum):
     # --- BR-001 ilə əlavə olunanlar (bax aşağı) ---
     LEAVE_ALLOWANCE_SOURCE = "LEAVE_ALLOWANCE_SOURCE"
     LEAVE_ALLOWANCE_FIXED_MINUTES = "LEAVE_ALLOWANCE_FIXED_MINUTES"
+    # --- DEEP-GAP D1: Gündəlik Tabeldə təsdiqlənmiş illik məzuniyyət ---
+    #
+    # Təsdiqlənmiş illik məzuniyyət günü Attendance Report-un "faktiki
+    # işlənilən gün" sayğacına DÜŞSÜNMÜ? Bu, mühasibatlıq SİYASƏTİDİR: bəzi
+    # müəssisə ödənişli məzuniyyəti norma/bonus hesablamasında iş günü kimi
+    # sayır, bəzisi YALNIZ fiziki iş günlərini sayır. `AttendanceCountingPolicy`
+    # (bax `entities.attendance_sheet`) bu açarı oxuyur. EKRAN ETİKETİ bu
+    # açardan ASILI DEYİL — status HƏMİŞƏ "🟣 Məzuniyyətdə"dir və HEÇ VAXT
+    # "🔴 İcazəsiz qayıb" olmur (struktur zəmanət, §5-in xaricindədir çünki
+    # anti-fraud/hardlock deyil, lakin `derive_status` sırasında HƏMİŞƏ
+    # `ABSENT`-dən ƏVVƏL yoxlanır — bu açar yalnız SAYĞACI dəyişir).
+    ANNUAL_LEAVE_COUNTS_AS_WORKED_DAY = "ANNUAL_LEAVE_COUNTS_AS_WORKED_DAY"
     # --- BR-002 ilə əlavə olunan (bax aşağı) ---
     DELAY_FINE_RATE_PER_MINUTE = "DELAY_FINE_RATE_PER_MINUTE"
     # --- Vahid İstisna Motoru (#9, kompasos11.md Faza 3) ---
@@ -1553,6 +1565,13 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # sistemdə artıq QƏBUL EDİLMİŞ "soyuma müddəti" ölçüsüdür.
     SystemLimitKey.KIOSK_STORE_PIN_MAX_FAILED_ATTEMPTS: "20",
     SystemLimitKey.KIOSK_STORE_PIN_LOCKOUT_MINUTES: "15",
+    # Defolt "1" (sayılır) — `OUTSIDE` (qısa fasilə/icazə zamanı mağazadan
+    # kənarda olmaq) onsuz da `counts_as_worked=True`-dir (bax
+    # `AutoAttendanceStatus`); illik məzuniyyətin defolt istiqaməti onunla
+    # eynidir ki, ödənişli məzuniyyət götürən işçi sayğacda "sanki işləməyib"
+    # görünməsin. Root bunu "0"-a endirərsə sayğac YALNIZ fiziki iş günlərini
+    # göstərər (ekran etiketi bundan asılı deyil — həmişə "🟣 Məzuniyyətdə").
+    SystemLimitKey.ANNUAL_LEAVE_COUNTS_AS_WORKED_DAY: "1",
 }
 
 

@@ -178,9 +178,12 @@ class PinPadScreen(QWidget):
         header.setSpacing(4)
         header.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        store = title_label(store_name, size=19)
-        store.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.addWidget(store)
+        # `self._store` (`store` yerinə) — DEEP-GAP U5 test dəstəyi: mağaza
+        # adı artıq sabit deyil (`app.py::_kiosk_store_name`), testlər onu
+        # `_message`/`_clock` ilə EYNİ naxışla oxuya bilməlidir.
+        self._store = title_label(store_name, size=19)
+        self._store.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.addWidget(self._store)
 
         terminal = muted_label(terminal_name)
         terminal.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1183,6 +1186,31 @@ class EmployeeHomeScreen(QWidget):
         ötürsəydik, tema dəyişəndə dialoq köhnə palitrada açılardı.
         """
         return self._theme
+
+    # ------------------------------- test üçün -------------------------------- #
+    # `LiveClock.text`-in EYNİ naxışı (`widgets/live_clock.py`): kartların
+    # DAXİLİ etiketlərinə birbaşa girmək əvəzinə, testlər bu xassələri oxuyur
+    # — DEEP-GAP U5 (üç kartın canlı doldurulması) buna görə yazıldı.
+
+    @property
+    def tasks_count_text(self) -> str:
+        """«Açıq Tapşırıqlarım» kartındakı say."""
+        return self._tasks_count.text()
+
+    @property
+    def points_balance_text(self) -> str:
+        """«Xal Balansım» kartındakı rəqəm."""
+        return self._points_value.text()
+
+    @property
+    def fines_summary_text(self) -> str:
+        """«Cərimələrim» kartındakı qısa mətn."""
+        return self._fines_summary.text()
+
+    @property
+    def fines_deadline_text(self) -> str:
+        """«Etiraz müddəti: N gün qalıb» sətri (boşdursa görünmür)."""
+        return self._fines_deadline.text()
 
 
 __all__ = [

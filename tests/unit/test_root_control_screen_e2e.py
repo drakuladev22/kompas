@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -260,6 +261,14 @@ class _Session:
         self.committed = True
 
 
+class _Clock:
+    """`ServerTimeService`-in yerini tutur (T5) — `_permitted()` artıq
+    `self._context.clock.now()` çağırır, OS saatı `datetime.now(UTC)` YOX."""
+
+    def now(self) -> datetime:
+        return datetime.now(UTC)
+
+
 class _Context:
     def __init__(
         self,
@@ -271,6 +280,7 @@ class _Context:
         self._use_case = use_case
         self._stores = stores or []
         self._scope = scope or _FaceScopeRepo()
+        self.clock = _Clock()
         self.sessions: list[_Session] = []
 
     @contextmanager
@@ -683,13 +693,33 @@ def test_flag_creation_domain_rejection_shows_a_real_error_without_crashing(qtbo
 # --------------------------------------------------------------------------- #
 
 
+def _answer_scope_dialog(monkeypatch, *, confirm: bool) -> None:
+    """T4 təsdiq modalını sahtələyir.
+
+    NİYƏ LAZIMDIR: `group_d.py::_confirm_face_scope_narrowing` əhatə QLOBAL
+    ikən İLK mağaza seçiləndə `QMessageBox.question(...)` açır. Offscreen
+    platformada modal cavab gözləyərək ƏBƏDİ bloklanır — dəst «asmış» kimi
+    görünür və `pytest-timeout` 60 saniyədən sonra prosesi öldürür (bu, real
+    ölçüdə bir dəfə baş verdi və tam dəsti korladı).
+
+    Layihədəki mövcud naxış budur (`tests/e2e/test_developer_panel_ui.py:174`):
+    modal `staticmethod` ilə əvəzlənir. Dialoqu ekrandan gizlətmək DEYİL,
+    CAVABINI təyin etmək lazımdır — çünki «Xeyr» cavabı ayrıca davranışdır.
+    """
+    from PySide6.QtWidgets import QMessageBox
+
+    answer = QMessageBox.StandardButton.Yes if confirm else QMessageBox.StandardButton.No
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: answer))
+
+
 @requires_qt
-def test_a_real_face_scope_toggle_click_writes_and_audits(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+def test_a_real_face_scope_toggle_click_writes_and_audits(qtbot, theme, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     store_id = STORE_A
     use_case = _RootUseCase()
     scope = _FaceScopeRepo()
     context = _Context(use_case, stores=[{"id": store_id, "name": "Mərkəz"}], scope=scope)
     screen = _attach(context, theme, qtbot=qtbot)
+    _answer_scope_dialog(monkeypatch, confirm=True)
 
     toggle = screen._face_scope_toggles[store_id]
     assert not toggle.isChecked()
@@ -702,7 +732,9 @@ def test_a_real_face_scope_toggle_click_writes_and_audits(qtbot, theme) -> None:
 
 
 @requires_qt
-def test_face_scope_change_denied_without_the_flag_reverts_the_real_toggle(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+def test_face_scope_change_denied_without_the_flag_reverts_the_real_toggle(  # type: ignore[no-untyped-def]
+    qtbot, theme, monkeypatch
+) -> None:
     """`_permitted()` `can_manage_system_limits` yoxlayır — bu, `list_limits`-
     dən AYRI bir yoxlamadır (kontroller özü aparır). Burada limitlərə icazə
     VAR (panel açılır), lakin `_permitted()` `False` qaytarır."""
@@ -711,6 +743,7 @@ def test_face_scope_change_denied_without_the_flag_reverts_the_real_toggle(qtbot
     scope = _FaceScopeRepo()
     context = _Context(use_case, stores=[{"id": store_id, "name": "Mərkəz"}], scope=scope)
     screen = _attach(context, theme, qtbot=qtbot, actor=_Actor(permitted=False))
+    _answer_scope_dialog(monkeypatch, confirm=True)
 
     toggle = screen._face_scope_toggles[store_id]
     toggle.click()  # ÇÖKMƏMƏLİDİR
@@ -718,3 +751,30 @@ def test_face_scope_change_denied_without_the_flag_reverts_the_real_toggle(qtbot
     assert scope.written == []
     assert not toggle.isChecked(), "rədd edilmiş dəyişiklik geri qaytarılmalıdır"
     assert screen.switcher().current_state() == "error"
+
+
+@requires_qt
+def test_declining_the_narrowing_dialog_writes_nothing_and_reverts_the_toggle(  # type: ignore[no-untyped-def]
+    qtbot, theme, monkeypatch
+) -> None:
+    """T4 — «Xeyr» cavabı əməliyyatı TAM dayandırır.
+
+    Əhatə QLOBAL ikən (heç bir mağaza seçilməyib) İLK mağazanı seçmək DİGƏR
+    bütün mağazalarda üz təsdiqini söndürür — bir toggle kliki bütün şəbəkənin
+    Face Control-unu söndürməyə bərabərdir. Modal məhz buna görə var; onun
+    HƏQİQƏTƏN qapı olduğunu sınayan yeganə test budur, çünki «Bəli» yolu
+    modalın mövcudluğunu SÜBUT ETMİR (dialoq ümumiyyətlə açılmasaydı da həmin
+    test yaşıl qalardı).
+    """
+    store_id = STORE_A
+    use_case = _RootUseCase()
+    scope = _FaceScopeRepo()
+    context = _Context(use_case, stores=[{"id": store_id, "name": "Mərkəz"}], scope=scope)
+    screen = _attach(context, theme, qtbot=qtbot)
+    _answer_scope_dialog(monkeypatch, confirm=False)
+
+    toggle = screen._face_scope_toggles[store_id]
+    toggle.click()
+
+    assert scope.written == [], "rədd edilmiş daralma bazaya YAZILMAMALIDIR"
+    assert not toggle.isChecked(), "açar əvvəlki vəziyyətinə qaytarılmalıdır"

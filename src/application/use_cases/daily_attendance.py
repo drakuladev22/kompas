@@ -50,10 +50,12 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from src.domain.entities.attendance_sheet import (
+    AttendanceCountingPolicy,
     AutoAttendanceStatus,
     DailyAttendanceSheet,
     build_lines,
 )
+from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.identifiers import new_daily_sheet_id
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
@@ -68,6 +70,7 @@ if TYPE_CHECKING:
         Clock,
         DailyAttendanceSheetRepository,
         Notifier,
+        SystemLimits,
     )
     from src.domain.value_objects.identifiers import EmployeeId, StoreId, TenantId
 
@@ -114,6 +117,7 @@ class DailyAttendanceSheetUseCase:
         clock: Clock,
         notifier: Notifier,
         overtime: OvertimeTrackingUseCase | None = None,
+        limits: SystemLimits | None = None,
     ) -> None:
         self._sheets = sheets
         self._facts = facts
@@ -123,6 +127,25 @@ class DailyAttendanceSheetUseCase:
         #: #15 — norma üstü saat jurnalı. `None` = modul qoşulmayıb; tabel
         #: axını tam əvvəlki kimi işləyir (bax modul başlığı).
         self._overtime = overtime
+        #: DEEP-GAP D1 — `ANNUAL_LEAVE_COUNTS_AS_WORKED_DAY` Root parametri.
+        #: `None` = kompozisiya kökü hələ ötürməyib; `_counting_policy()`
+        #: bu halda `AttendanceCountingPolicy.defaults()`-a düşür, yəni
+        #: köhnə çağıranlar QIRILMIR.
+        self._limits = limits
+
+    def _counting_policy(self, tenant_id: TenantId) -> AttendanceCountingPolicy:
+        """Root parametrini oxuyur (DEEP-GAP D1: illik məzuniyyət sayğacı).
+
+        Tenant-a görə BİR dəfə oxunur, hər sətir üçün ayrıca YOX — əks halda
+        Root dəyəri hesablama ərzində dəyişsə, eyni tabeldə iki sətir fərqli
+        qaydayla sayıla bilərdi (`LaborLimits`/`AttritionWeights` ilə eyni
+        əsaslandırma, bax `attendance_sheet.AttendanceCountingPolicy`).
+        """
+        if self._limits is None:
+            return AttendanceCountingPolicy.defaults()
+        key = SystemLimitKey.ANNUAL_LEAVE_COUNTS_AS_WORKED_DAY
+        raw = self._limits.get_int(tenant_id, key.value, int(DEFAULT_LIMITS[key]))
+        return AttendanceCountingPolicy(annual_leave_counts_as_worked=raw != 0)
 
     # -------------------------------- açmaq ---------------------------------- #
 
@@ -301,7 +324,7 @@ class DailyAttendanceSheetUseCase:
                 "sheet_date": sheet_date.isoformat(),
                 "line_count": len(sheet.lines),
                 "mismatch_count": sheet.mismatch_count,
-                "worked_count": sheet.worked_count,
+                "worked_count": sheet.worked_count_with(self._counting_policy(tenant_id)),
             },
             reason=sheet.manager_note,
         )
@@ -345,6 +368,7 @@ class DailyAttendanceSheetUseCase:
     def worked_days_in_period(
         self,
         *,
+        tenant_id: TenantId,
         store_id: StoreId,
         start: date,
         end: date,
@@ -353,14 +377,22 @@ class DailyAttendanceSheetUseCase:
 
         Tabel təsdiqlənməmiş günlər DƏ sayılır: hesabat ayın 1-də çıxarılır və
         bir mağazanın bir günü təsdiqləməməsi 20 işçinin maaşını gecikdirməməlidir.
+
+        `tenant_id` DEEP-GAP D1 ilə ƏLAVƏ OLUNDU (imza dəyişikliyi): illik
+        məzuniyyətin sayıla-bilməsi Root parametridir və tenant-a görə oxunur
+        (`_counting_policy`). Bu metodun `src/`-də hələ HEÇ BİR çağıranı yoxdur
+        (yalnız `tests/unit/test_use_case_gap_coverage.py`) — Attendance
+        Report ekranı bu funksiyanı hələ bağlamayıb, ona görə imza dəyişikliyi
+        `ui`-də mövcud bir ekranı POZMUR.
         """
+        policy = self._counting_policy(tenant_id)
         totals: dict[EmployeeId, int] = {}
         day = start
         while day <= end:
             sheet = self._sheets.get_for_day(store_id, day)
             if sheet is not None:
                 for line in sheet.lines:
-                    if line.auto_status.counts_as_worked:
+                    if line.auto_status.counts_as_worked_with(policy):
                         totals[line.employee_id] = totals.get(line.employee_id, 0) + 1
             day = date.fromordinal(day.toordinal() + 1)
         return totals

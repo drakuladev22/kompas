@@ -422,6 +422,51 @@ def test_anti_fraud_flag_cannot_reach_store_manager(
         guard.assert_allowed(request_for(root, manager, flag=CAMERA_FLAG))
 
 
+def test_anti_fraud_flag_cannot_reach_a_store_tier_custom_role_via_override(
+    guard: PermissionHierarchyGuardUseCase,
+) -> None:
+    """T6 — `is_store_tier` yoxlaması FƏRDİ OVERRIDE yolunda da tətbiq olunur.
+
+    `Position.grant()` (rol-defolt yolu) `is_store_tier`-i onsuz da yoxlayır
+    (`test_store_tier_custom_role_cannot_bypass_anti_fraud_segregation`,
+    `test_entities.py`) — bu test EYNİ qadağanın FƏRDİ OVERRIDE yolunda
+    (`PermissionHierarchyGuardUseCase._assert_flag_grantable_to_subject`) da
+    işlədiyini sübut edir, çünki iki yol MÜSTƏQİL çağırış nöqtəsidir.
+
+    Ssenari: CEO `FILIAL_RESPONSAVI` adlı prioritet-3 custom rol yaradıb
+    Mağaza Menecerini ora köçürür. `is_store_tier=True` işarəsi OLMADAN bu
+    rol `effective_system_role`-da `HR_Admin` sayılır (kod `STORE_MANAGER`
+    deyil) — Root həmin işçiyə `can_approve_dual_control_override`-ı FƏRDİ
+    OVERRIDE ilə verə bilərdi və mağaza meneceri öz filialının kamera
+    operatorunun manual vaxt düzəlişini ÖZÜ təsdiqləyərdi (SEC-001).
+    """
+    root = make_employee(SystemRole.ROOT)
+    store_tier_custom = Position(
+        position_id=PositionId(uuid.uuid4()),
+        code="FILIAL_RESPONSAVI",
+        name_az="Filial Responsavı",
+        priority=RolePriority.OPERATIONAL,
+        tenant_id=TENANT,
+        is_store_tier=True,
+    )
+    subject = Employee(
+        employee_id=EmployeeId(uuid.uuid4()),
+        tenant_id=TENANT,
+        position=store_tier_custom,
+        first_name="T",
+        last_name="FILIAL_RESPONSAVI",
+        store_id=STORE,
+        username=Username.parse(f"u{uuid.uuid4().hex[:8]}"),
+        has_password=True,
+    )
+    flag = PermissionFlag(
+        code=DUAL_CONTROL_APPROVAL_FLAG, category="KAMERA_CERIME", is_anti_fraud=True
+    )
+
+    with pytest.raises(AuthorizationError, match="ANTI-FRAUD"):
+        guard.assert_allowed(request_for(root, subject, flag=flag))
+
+
 def test_dual_control_flag_cannot_reach_camera_operator(
     guard: PermissionHierarchyGuardUseCase,
 ) -> None:

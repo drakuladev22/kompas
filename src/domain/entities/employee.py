@@ -253,9 +253,18 @@ class Employee(AggregateRoot):
                 # (`position.py`) və `_assert_flag_grantable_to_subject`
                 # (`permission_guards.py`) bu parametri artıq ötürür, burada
                 # unudulmuşdu.
+                #
+                # `is_store_tier_role` EYNİ NAXIŞDIR (T6): custom mağaza-pilləli
+                # rol da `effective_system_role` ilə ən yaxın sistem roluna
+                # düşür və həmin sistem rolun özü `ANTI_FRAUD_FORBIDDEN_ROLES`-də
+                # olmaya bilər. Parametr ötürülməsə anti-fraud vəzifə ayrılığı
+                # kataloqdan silinmiş flag-in TƏMİZLƏNMƏ yolunda yan keçilə bilər
+                # — bu yol nadir işləsə də (flag kataloqdan silinəndə), SEC-001
+                # ilə eyni səbəbdən mütləq bağlı qalmalıdır.
                 flag.assert_grantable_to(
                     position.effective_system_role,
                     is_camera_type_role=position.is_camera_type,
+                    is_store_tier_role=position.is_store_tier,
                 )
             except AuthorizationError:
                 del self._overrides[flag_code]

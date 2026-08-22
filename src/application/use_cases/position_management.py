@@ -19,7 +19,7 @@ yeni ROL təşkil edə bilər, sadəcə yeni FLAG yarada bilməz".
 CUSTOM ROL QADAĞANI YAN KEÇƏ BİLMİR
 ──────────────────────────────────────────────────────────────────────────────
 Ən aşkar hücum yolu budur: "Mağaza_Meneceri kamera flag-i ala bilmirsə, ona
-kamera flag-i olan CUSTOM rol verərəm". Bu bağlıdır və üç qatda:
+kamera flag-i olan CUSTOM rol verərəm". Bu bağlıdır və dörd qatda:
 
     1. `Position.effective_system_role` — custom rol prioritetinə görə ən yaxın
        sistem rolu kimi qiymətləndirilir, yəni prioritet 3-lü (OPERATIONAL)
@@ -28,6 +28,13 @@ kamera flag-i olan CUSTOM rol verərəm". Bu bağlıdır və üç qatda:
     2. `PermissionFlag.assert_grantable_to()` — hardlock + anti-fraud.
     3. `is_camera_type` bayrağı — kamera flag-ləri YALNIZ açıq şəkildə
        "kamera-tipli" işarələnmiş rollarda ola bilər (bölmə 3).
+    4. `is_store_tier` bayrağı (T6) — `is_camera_type`-ın GÜZGÜSÜ: anti-fraud
+       flag-lər YALNIZ açıq şəkildə "mağaza-pilləli" (Mağaza Meneceri
+       ekvivalenti) işarələnmiş rollarda ola bilməz. Bu bayraq olmadan CEO
+       "Filial_Məsulu" adlı prioritet-3 custom rol yaradıb Mağaza Menecerini
+       ora köçürə bilərdi — `effective_system_role` onu `HR_Admin` sayardı
+       (kod `STORE_MANAGER` deyil) və `ANTI_FRAUD_FORBIDDEN_ROLES` süzgəci
+       yan keçilərdi.
 
 Bu modul həmin qatları ÇAĞIRIR, təkrar yazmır.
 
@@ -101,6 +108,11 @@ class RoleDraft:
     name_az: str
     priority: RolePriority
     is_camera_type: bool = False
+    #: `is_camera_type`-ın GÜZGÜSÜ (T6) — mağaza-pilləli (Mağaza Meneceri
+    #: ekvivalenti) custom rol açıq işarələnir, əks halda anti-fraud vəzifə
+    #: ayrılığı yalnız `STORE_MANAGER`/`SELLER` KODUNU tanıyır və custom rol
+    #: onu yan keçə bilər (bax modul başlığı, dördüncü qat).
+    is_store_tier: bool = False
     #: Rola dərhal veriləcək flag kodları (boş da ola bilər).
     flag_codes: tuple[str, ...] = ()
 
@@ -211,6 +223,7 @@ class PositionManagementUseCase:
             tenant_id=tenant_id,
             is_system=False,
             is_camera_type=draft.is_camera_type,
+            is_store_tier=draft.is_store_tier,
         )
         # ──────────────────────────────────────────────────────────────────────
         # YARADILAN ROL AKTORDAN CİDDİ ŞƏKİLDƏ AŞAĞI OLMALIDIR
@@ -241,6 +254,7 @@ class PositionManagementUseCase:
                 "name_az": name,
                 "priority": int(draft.priority),
                 "is_camera_type": draft.is_camera_type,
+                "is_store_tier": draft.is_store_tier,
                 "flags": sorted(granted),
             },
         )

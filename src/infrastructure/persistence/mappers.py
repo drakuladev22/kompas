@@ -84,6 +84,14 @@ def position_from_row(row: Row) -> Position:
         tenant_id=TenantId(row["tenant_id"]) if row.get("tenant_id") else None,
         is_system=row["is_system"],
         is_camera_type=row["is_camera_type"],
+        # T6 (DEEP-GAP dövrə auditi, migrations/080) — `is_camera_type`-ın
+        # EYNİ naxışı. `.get(..., False)`: hər iki SELECT (bax
+        # `repositories.py::PostgresPositionRepository`/`PostgresEmployee
+        # Repository._hydrate`) sütunu ARTIQ gətirir, LAKİN test sahtələri
+        # köhnə sətir formasını daşıya bilər — defolt `False` köhnə davranışı
+        # SAXLAYIR (yeni sahə üçün eyni qərar, `AttendanceFact.on_annual_
+        # leave`-in D1-dəki defoltu ilə eyni).
+        is_store_tier=row.get("is_store_tier", False),
         is_active=row["is_active"],
     )
 

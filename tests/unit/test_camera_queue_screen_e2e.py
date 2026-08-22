@@ -439,6 +439,11 @@ def test_rejecting_a_check_in_prompts_for_a_reason_and_commits(
 def test_a_reject_reason_shorter_than_the_domain_minimum_never_reaches_the_use_case(
     qtbot, theme, monkeypatch: pytest.MonkeyPatch
 ) -> None:  # type: ignore[no-untyped-def]
+    """`_ask_reason` indi DÖVRƏDİR (DEEP-GAP U9) — birinci qısa cavabdan sonra
+    operator dialoqu LƏĞV edir (`accepted=False`) və heç nə yazılmır.
+    `test_a_short_reason_is_re_prompted_with_the_typed_text_preserved`
+    həmin dövrənin ÖZÜNÜ (mətnin İTMƏMƏSİNİ) sınayır.
+    """
     from PySide6.QtWidgets import QInputDialog, QMessageBox
 
     from src.presentation.controllers import screen_data as screen_data_module
@@ -451,7 +456,15 @@ def test_a_reject_reason_shorter_than_the_domain_minimum_never_reaches_the_use_c
             "_Binder", (), {"__init__": lambda self, *a: None, "populate": lambda self, k, s: None}
         ),
     )
-    monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(lambda *a, **k: ("x", True)))
+    calls: list[tuple[Any, ...]] = []
+
+    def _multiline(*args: Any, **kwargs: Any) -> tuple[str, bool]:
+        calls.append(args)
+        # Birinci çağırış: qısa cavab. İkinci (yenidən açılan) dialoqda
+        # operator LƏĞV EDİR — dövrə sonsuz olmamalıdır.
+        return ("x", True) if len(calls) == 1 else ("", False)
+
+    monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(_multiline))
     monkeypatch.setattr(QMessageBox, "exec", lambda self: None)
 
     context = _Context(attendance={ATTENDANCE_ID: _AttendanceRecord()})
@@ -459,9 +472,58 @@ def test_a_reject_reason_shorter_than_the_domain_minimum_never_reaches_the_use_c
     screen.set_entries([_check_in_entry()])
     CameraQueueController(context, _Actor()).attach(screen)  # type: ignore[arg-type]
 
-    _click(screen, "Rədd Et")  # ÇÖKMƏMƏLİDİR
+    _click(screen, "Rədd Et")  # ÇÖKMƏMƏLİDİR, SONSUZ DÖVRƏYƏ DÜŞMƏMƏLİDİR
 
     assert context.morning_check_in.rejections == []
+    assert len(calls) == 2, "Qısa cavabdan sonra dialoq YENİDƏN açılmalı idi"
+
+
+@requires_qt
+def test_a_short_reason_is_re_prompted_with_the_typed_text_preserved(
+    qtbot, theme, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """DEEP-GAP U9 — qısa cavabdan sonra dialoq YAZILAN MƏTNLƏ yenidən açılır.
+
+    ƏVVƏL: xəbərdarlıqdan sonra `return None` edilirdi və `cleaned` heç yerə
+    ötürülmürdü — operator dialoqu YENİDƏN açanda BOŞ sahə görürdü və
+    yazdığı (sadəcə qısa) mətni SIFIRDAN yazmalı olurdu.
+    """
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+    from src.presentation.controllers import screen_data as screen_data_module
+    from src.presentation.controllers.camera_queue import CameraQueueController
+
+    monkeypatch.setattr(
+        screen_data_module,
+        "ScreenDataBinder",
+        type(
+            "_Binder", (), {"__init__": lambda self, *a: None, "populate": lambda self, k, s: None}
+        ),
+    )
+    calls: list[tuple[Any, ...]] = []
+
+    def _multiline(*args: Any, **kwargs: Any) -> tuple[str, bool]:
+        calls.append(args)
+        if len(calls) == 1:
+            return ("qısa", True)  # < MIN_REJECT_REASON_LENGTH
+        return ("qısa amma indi uzun səbəb", True)
+
+    monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(_multiline))
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: None)
+
+    context = _Context(attendance={ATTENDANCE_ID: _AttendanceRecord()})
+    screen = _build_screen(theme, qtbot)
+    screen.set_entries([_check_in_entry()])
+    CameraQueueController(context, _Actor()).attach(screen)  # type: ignore[arg-type]
+
+    _click(screen, "Rədd Et")
+
+    assert len(calls) == 2
+    # `getMultiLineText(parent, title, label, text)` — SONUNCU mövqe arqumenti
+    # ƏVVƏLKİ çağırışda yazılan XAM mətndir, boş sətir DEYİL.
+    assert calls[1][-1] == "qısa", "Yazılan mətn İKİNCİ dialoqa ötürülməli idi"
+    assert len(context.morning_check_in.rejections) == 1
+    assert context.morning_check_in.rejections[0]["reason"] == "qısa amma indi uzun səbəb"
 
 
 @requires_qt
@@ -473,14 +535,22 @@ def test_rejecting_a_return_row_shows_the_no_reject_message_and_writes_nothing(
     Səbəb HƏMİŞƏ ƏVVƏLCƏ soruşulur (`_on_reject` → `_ask_reason`), mənbə
     yalnız SONRA `_run()`-da müəyyən edilir — real modalı monkeypatch etmək
     LAZIMDIR, əks halda test sapı bloklanar.
+
+    DEEP-GAP U8 — `screen.show_error()` ARTIQ ÇAĞIRILMIR: xəbərdarlıq
+    `QMessageBox`-a keçdi ki, növbənin QALAN sətirləri ekranda qalsın (bax
+    `CameraQueueController._notify` başlığı). Ona görə bu test artıq
+    `current_state() == "error"` YOX, ekranın MƏZMUNDA QALDIĞINI (`"content"`)
+    və modalın REAL göstərildiyini yoxlayır.
     """
-    from PySide6.QtWidgets import QInputDialog
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
 
     from src.presentation.controllers.camera_queue import CameraQueueController
 
     monkeypatch.setattr(
         QInputDialog, "getMultiLineText", staticmethod(lambda *a, **k: ("real səbəb budur", True))
     )
+    shown: list[str] = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: shown.append(self.text()) or None)
 
     context = _Context(leave_requests={LEAVE_REQUEST_ID: _LeaveRequest()})
     screen = _build_screen(theme, qtbot)
@@ -489,7 +559,11 @@ def test_rejecting_a_return_row_shows_the_no_reject_message_and_writes_nothing(
 
     _click(screen, "Rədd Et")  # ÇÖKMƏMƏLİDİR
 
-    assert screen.switcher().current_state() == "error"
+    assert screen.switcher().current_state() == "content", (
+        "Növbə silinməməli idi — DEEP-GAP U8, digər sətirlər hələ etibarlıdır"
+    )
+    assert len(shown) == 1
+    assert "təsdiqləyin" in shown[0].lower() or "vaxtı əllə düzəldin" in shown[0].lower()
     assert context.leave_verification.verify_return_calls == []
 
 
@@ -527,6 +601,49 @@ def test_adjusting_time_via_the_real_dialog_commits(
         "İşçi əslində 13:40-da qayıtmışdı"
     )
     assert any(s.committed for s in context.sessions)
+
+
+@requires_qt
+def test_adjusting_time_failure_shows_a_message_and_keeps_the_queue_visible(
+    qtbot, theme, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """DEEP-GAP U8 — `_submit()`-in domen rəddi ekranı SİLMİR.
+
+    `apply_override` rədd edərsə (məs. həddi keçən fərq ikinci təsdiq
+    tələb edir və operator ona malik deyil), qalan növbə sətirləri hələ
+    ekranda qalmalıdır — `QMessageBox` göstərilir, `show_error()` YOX.
+    """
+    from PySide6.QtWidgets import QMessageBox, QPushButton
+
+    from src.presentation.controllers.camera_queue import CameraQueueController
+    from src.presentation.screens.group_b import ManualTimeOverrideDialog
+
+    shown: list[str] = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: shown.append(self.text()) or None)
+
+    context = _Context(leave_requests={LEAVE_REQUEST_ID: _LeaveRequest()})
+    context.leave_verification.override_error = KompasOSError(
+        "dual control required", user_message="Bu düzəliş ikinci təsdiq tələb edir."
+    )
+    screen = _build_screen(theme, qtbot, may_override_return_time=True)
+    screen.set_entries([_return_entry()])
+    CameraQueueController(context, _Actor()).attach(screen)  # type: ignore[arg-type]
+
+    def fake_exec(self: ManualTimeOverrideDialog) -> int:
+        self._reason.setPlainText("İşçi əslində 13:40-da qayıtmışdı")
+        submit = next(b for b in self.findChildren(QPushButton) if b.text() == "Təsdiqə Göndər")
+        submit.click()
+        return 0
+
+    monkeypatch.setattr(ManualTimeOverrideDialog, "exec", fake_exec)
+
+    _click(screen, "Vaxtı Düzəlt")  # ÇÖKMƏMƏLİDİR
+
+    assert not any(s.committed for s in context.sessions)
+    assert screen.switcher().current_state() == "content", (
+        "Növbə silinməməli idi — qalan sətirlər hələ etibarlıdır (DEEP-GAP U8)"
+    )
+    assert shown == ["Bu düzəliş ikinci təsdiq tələb edir."]
 
 
 @requires_qt
@@ -587,9 +704,21 @@ def test_a_large_time_difference_shows_the_real_dual_control_warning(qtbot, them
 
 
 @requires_qt
-def test_an_unknown_request_id_shows_a_clear_message_not_a_crash(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
-    """Sətir artıq emal edilib (paralel operator basıb) — real klik AÇIQ mesaj verir."""
+def test_an_unknown_request_id_shows_a_clear_message_not_a_crash(
+    qtbot, theme, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """Sətir artıq emal edilib (paralel operator basıb) — real klik AÇIQ mesaj verir.
+
+    DEEP-GAP U8 — bu, məhz "14 sətirdən 1-i emal olunub" ssenarisidir:
+    `show_error()` bütün növbəni silərdi, halbuki qalan sətirlər hələ
+    gözləyir. İndi `QMessageBox` göstərilir, ekran isə MƏZMUNDA qalır.
+    """
+    from PySide6.QtWidgets import QMessageBox
+
     from src.presentation.controllers.camera_queue import CameraQueueController
+
+    shown: list[str] = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: shown.append(self.text()) or None)
 
     context = _Context()  # heç bir sorğu/qeyd YOXDUR
     screen = _build_screen(theme, qtbot)
@@ -598,13 +727,27 @@ def test_an_unknown_request_id_shows_a_clear_message_not_a_crash(qtbot, theme) -
 
     _click(screen, "Təsdiqlə")  # ÇÖKMƏMƏLİDİR
 
-    assert screen.switcher().current_state() == "error"
+    assert screen.switcher().current_state() == "content", (
+        "Növbə silinməməli idi — qalan sətirlər hələ etibarlıdır (DEEP-GAP U8)"
+    )
+    assert shown == ["Bu sətir artıq emal edilib. Növbəni yeniləyin."]
 
 
 @requires_qt
-def test_verify_return_failure_shows_the_domain_message_and_does_not_commit(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
-    """Anti-fraud rəddi (`FinePermissionError`/SEC-001) — real klik AÇIQ mesaj göstərir."""
+def test_verify_return_failure_shows_the_domain_message_and_does_not_commit(
+    qtbot, theme, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """Anti-fraud rəddi (`FinePermissionError`/SEC-001) — real klik AÇIQ mesaj göstərir.
+
+    DEEP-GAP U8 — eyni səbəbdən `show_error()` YOX, `QMessageBox`: bir
+    sətrin anti-fraud rəddi digər sətirləri ekrandan silməməlidir.
+    """
+    from PySide6.QtWidgets import QMessageBox
+
     from src.presentation.controllers.camera_queue import CameraQueueController
+
+    shown: list[str] = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: shown.append(self.text()) or None)
 
     context = _Context(leave_requests={LEAVE_REQUEST_ID: _LeaveRequest()})
     context.leave_verification.verify_return_error = KompasOSError(
@@ -618,4 +761,7 @@ def test_verify_return_failure_shows_the_domain_message_and_does_not_commit(qtbo
     _click(screen, "Təsdiqlə")  # ÇÖKMƏMƏLİDİR
 
     assert not any(s.committed for s in context.sessions)
-    assert screen.switcher().current_state() == "error"
+    assert screen.switcher().current_state() == "content", (
+        "Növbə silinməməli idi — qalan sətirlər hələ etibarlıdır (DEEP-GAP U8)"
+    )
+    assert shown == ["Kamera operatoru cüt-nəzarətli təsdiqi daşıya bilməz."]

@@ -244,15 +244,32 @@ def test_task_cancelled_dialog_writes_nothing(monkeypatch: pytest.MonkeyPatch) -
 def test_camera_queue_reason_dialog_uses_the_domain_constant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Qısa səbəb `None` qaytarır — yəni yazı yolu heç başlamır."""
+    """Qısa səbəbdən sonra dialoq YENİDƏN açılır (DEEP-GAP U9); operator LƏĞV
+    EDİR (`accepted=False`) — yalnız BU HALDA `None` qaytarılır, yazı yolu
+    başlamır. Sabit `_answer(text, accepted=True)` burada YARARSIZDIR: `_ask_
+    reason` indi dövrədir, sabit cavab sonsuz dövrəyə düşərdi.
+    """
     from src.presentation.controllers.camera_queue import CameraQueueController
 
     _MessageBox.shown = []
-    _answer(monkeypatch, "az")
+    calls = {"n": 0}
+
+    class _Dialog:
+        @staticmethod
+        def getMultiLineText(*_args: Any, **_kwargs: Any) -> tuple[str, bool]:  # noqa: N802
+            calls["n"] += 1
+            return ("az", True) if calls["n"] == 1 else ("", False)
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "PySide6.QtWidgets",
+        type("_Stub", (), {"QInputDialog": _Dialog, "QMessageBox": _MessageBox})(),
+    )
 
     assert CameraQueueController._ask_reason(_Screen()) is None  # type: ignore[arg-type]
     assert _MessageBox.shown != []
     assert str(MIN_REJECT_REASON_LENGTH) in _MessageBox.shown[0]
+    assert calls["n"] == 2, "Qısa cavabdan sonra dialoq YENİDƏN açılmalı idi (DEEP-GAP U9)"
 
 
 def test_camera_queue_reason_at_the_boundary_passes(monkeypatch: pytest.MonkeyPatch) -> None:

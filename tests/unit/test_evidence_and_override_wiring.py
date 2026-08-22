@@ -66,13 +66,26 @@ def test_combine_rejects_bad_input(text: str) -> None:
 
 
 class _Screen:
-    """`show_error` çağırışlarını yığan minimal ekran əvəzi."""
+    """`show_error` çağırışlarını yığan minimal ekran əvəzi.
+
+    `clear_photo`/`set_success_message` DEEP-GAP U1-lə əlavə olundu —
+    `FineEntryController._issue`-un UĞUR yolu bunları çağırır (bax onun
+    başlığı), sahtə onlarsız `AttributeError` atardı.
+    """
 
     def __init__(self) -> None:
         self.errors: list[tuple[str, str]] = []
+        self.photo_cleared = False
+        self.success_message = ""
 
     def show_error(self, *, title: str, message: str, **_: Any) -> None:
         self.errors.append((title, message))
+
+    def clear_photo(self) -> None:
+        self.photo_cleared = True
+
+    def set_success_message(self, message: str) -> None:
+        self.success_message = message
 
 
 class _Queue:
@@ -195,6 +208,9 @@ def test_evidence_is_spooled_before_the_fine_row_is_written(tmp_path: Any) -> No
     # `sessions[0]` — cərimə tranzaksiyası. Sonrakı sessiya siyahının
     # yenilənməsinə aiddir və commit-ə ehtiyacı yoxdur.
     assert context.sessions[0].committed
+    # DEEP-GAP U1 — foto TƏMİZLƏNMƏLİ, operator bir təsdiq mesajı almalıdır.
+    assert screen.photo_cleared
+    assert "Aysel Quliyeva" in screen.success_message
 
 
 def test_upload_is_attempted_immediately_after_the_fine(tmp_path: Any) -> None:

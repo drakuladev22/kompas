@@ -56,6 +56,9 @@ class FineEntryController:
         self._context = context
         self._actor = actor
         self._fine_types: dict[str, Any] = {}
+        #: Ad → «25 ₼» mətni (DEEP-GAP U1 uğur mesajı üçün). `options()`-un
+        #: eyni sorğusundan doldurulur — İKİNCİ sorğu AÇILMIR.
+        self._fine_type_amounts: dict[str, str] = {}
         self._stores: dict[str, Any] = {}
         self._employees: dict[str, Any] = {}
         #: Fon icraçısı — istehsalatda Qt hovuzu, testlərdə `InlineExecutor`.
@@ -76,10 +79,17 @@ class FineEntryController:
         """
         try:
             with self._context.session(user_id=self._actor.id) as session:
-                self._fine_types = {
-                    fine_type.name: fine_type.fine_type_id
+                fine_types = [
+                    fine_type
                     for fine_type in session.manual_fines.selectable_fine_types(session.tenant_id)
                     if fine_type.fine_type_id is not None
+                ]
+                self._fine_types = {
+                    fine_type.name: fine_type.fine_type_id for fine_type in fine_types
+                }
+                self._fine_type_amounts = {
+                    fine_type.name: fine_type.standard_amount.format_az()
+                    for fine_type in fine_types
                 }
                 store_ids = session.manual_fines.allowed_stores(self._actor)
                 self._stores = _store_names(session, store_ids)
@@ -87,6 +97,7 @@ class FineEntryController:
         except Exception:
             _error_log.exception("FINE_OPTIONS_LOAD_FAILED")
             self._fine_types, self._stores, self._employees = {}, {}, {}
+            self._fine_type_amounts = {}
 
         return (
             sorted(self._fine_types),
@@ -106,9 +117,11 @@ class FineEntryController:
             screen.show_error(title="Cərimə yaradıla bilmədi", message=NO_STORES_MESSAGE)
             return
 
-        fine_type_id = self._fine_types.get(str(payload.get("fine_type", "")).strip())
+        fine_type_name = str(payload.get("fine_type", "")).strip()
+        employee_name = str(payload.get("employee", "")).strip()
+        fine_type_id = self._fine_types.get(fine_type_name)
         store_id = self._stores.get(str(payload.get("store", "")).strip())
-        employee_id = self._employees.get(str(payload.get("employee", "")).strip())
+        employee_id = self._employees.get(employee_name)
         if fine_type_id is None or store_id is None or employee_id is None:
             screen.show_error(
                 title="Forma tamamlanmayıb",
@@ -133,6 +146,8 @@ class FineEntryController:
             employee_id=employee_id,
             filename=photo.name,
             content=content,
+            employee_name=employee_name,
+            amount_text=self._fine_type_amounts.get(fine_type_name, ""),
         )
 
     def _issue(
@@ -144,6 +159,8 @@ class FineEntryController:
         employee_id: Any,
         filename: str,
         content: bytes,
+        employee_name: str,
+        amount_text: str,
     ) -> None:
         from src.domain.value_objects.identifiers import new_fine_id  # noqa: PLC0415
         from src.infrastructure.storage.upload_queue import UploadOwnerType  # noqa: PLC0415
@@ -191,7 +208,21 @@ class FineEntryController:
             )
             return
 
-        # 3) Yükləməni DƏRHAL bir dəfə sınayırıq — şəbəkə varsa şəkil saniyələr
+        # 3) DEEP-GAP U1 — forma TƏMİZLƏNİR, operator NƏTİCƏNİ görür.
+        #    `clear_photo()` MÜTLƏQDİR (bax `FineEntryScreen.clear_photo`
+        #    başlığı): əks halda köhnə şəkil sükutla qalır və NÖVBƏTİ işçi
+        #    üçün göndərilən cərimə BAŞQASININ sübutu ilə yaranır. Görünən
+        #    təsdiq mesajı isə İKİNCİ effekti — kor-koranə təkrar klik
+        #    (`DUPLICATE_SUBMISSION_WINDOW_SECONDS` pəncərəsini udan) —
+        #    aradan qaldırır: operator artıq "heç nə olmadı" güman edib
+        #    yenidən basmır.
+        screen.clear_photo()
+        message = f"Cərimə qeydə alındı — {employee_name}"
+        if amount_text:
+            message += f" · {amount_text}"
+        screen.set_success_message(message)
+
+        # 4) Yükləməni DƏRHAL bir dəfə sınayırıq — şəbəkə varsa şəkil saniyələr
         #    içində Drive-a düşür. Uğursuzluq əhəmiyyətsizdir: element növbədə
         #    qalır və taymer onu təkrar götürür.
         self._trigger_evidence_upload(screen)

@@ -591,10 +591,22 @@ BEGIN
     -- (b) `granted_by IS NULL` (sistem seed-i) İSTİSNADIR — §23/§24 seed-i və
     --     ilk Root bootstrap-ı məhz bu yolla yazılır; istisna olmasaydı bu
     --     faylın yuxarısındakı `seed_tenant_defaults()` çağırışı belə çökərdi.
+    --
+    -- T2 (DEEP-GAP dövrə auditi): nümunə flag `can_manage_backups`-dan
+    -- `can_manage_fine_types`-a DƏYİŞDİRİLİB — `can_manage_backups`-ın
+    -- hardlock-u `ROOT_CEO`-ya (2) qaldırılıb (migrations/078), ona görə
+    -- (a)-dakı INSERT artıq `enforce_grantor_owns_flag()`-dan ƏVVƏL
+    -- `enforce_permission_hardlock()`-a ilişərdi (v_pos_seller nə ROOT, nə
+    -- CEO-dur) — DOĞRU sədddən YANLIŞ SƏBƏBLƏ keçərdi. Daha PİSİ: (b)-dəki
+    -- "seed yolu AÇIQDIR" iddiası `enforce_permission_hardlock()` `granted_
+    -- by`-a heç baxmadığı üçün TAMAMİLƏ PARÇALANARDI. `can_manage_fine_types`
+    -- hardlock=0-dır (schema.sql:2756) və Admin-in defolt flag dəstində
+    -- YOXDUR (§23) — TEST-in orijinal fərziyyəsini saxlayır: yeganə maneə
+    -- `enforce_grantor_owns_flag()` olsun.
     v_failed := FALSE;
     BEGIN
         INSERT INTO position_permissions (position_id, flag_code, granted, granted_by)
-        VALUES (v_pos_seller, 'can_manage_backups', TRUE, v_admin);
+        VALUES (v_pos_seller, 'can_manage_fine_types', TRUE, v_admin);
     EXCEPTION WHEN OTHERS THEN
         v_failed := TRUE;
     END;
@@ -604,7 +616,7 @@ BEGIN
     END IF;
 
     INSERT INTO position_permissions (position_id, flag_code, granted)
-    VALUES (v_pos_seller, 'can_manage_backups', TRUE);
+    VALUES (v_pos_seller, 'can_manage_fine_types', TRUE);
     v_passed := v_passed + 1;
     RAISE NOTICE 'TEST 23 ✓ rol yolu bağlıdır, seed yolu (granted_by IS NULL) açıqdır';
 
@@ -1356,6 +1368,120 @@ BEGIN
     v_passed := v_passed + 1;
     RAISE NOTICE 'TEST 41 ✓ user_permission_overrides: EYNİ qapı fərdi override yolunda da işləyir';
 
+    -- =====================================================================
+    -- TEST 42: İ6/İ7 (DEEP-GAP dövrə auditi) — ROL SƏLAHİYYƏTLƏRİNİN
+    --   İCTİMAİ VƏZİYYƏTİ. `has_*_privilege()` YALNIZ kataloqu sorğulayır —
+    --   DATA TOXUNULMUR, SET ROLE lazım deyil.
+    -- =====================================================================
+    -- `kompasos_app` mövcud olmaya bilər (Supabase-idarəli platforma, §28
+    -- şərhi) — o halda `schema.sql`-in özü GRANT/REVOKE-u ATLAYIR, bu test
+    -- də EYNİ şərtlə keçir (aşağıdakı hər iki test buna görə IF-lə əhatə
+    -- olunub, sadəcə v_passed artırılmır).
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'kompasos_app') THEN
+        -- İ6: `permission_flags` — İNSERT açıq qalır (Root `create()` yolu,
+        -- `config_repositories.py::PostgresPermissionFlagRepository.create`),
+        -- UPDATE/DELETE bağlıdır (Python-da HEÇ BİR `UPDATE permission_flags`
+        -- çağırışı yoxdur — yoxlanılıb).
+        IF NOT has_table_privilege('kompasos_app', 'permission_flags', 'INSERT') THEN
+            RAISE EXCEPTION
+                'TEST 42a UĞURSUZ: kompasos_app permission_flags-a İNSERT edə bilmir '
+                '— Root-un create() yolu qırılıb';
+        END IF;
+        IF has_table_privilege('kompasos_app', 'permission_flags', 'UPDATE') THEN
+            RAISE EXCEPTION
+                'TEST 42b UĞURSUZ: kompasos_app permission_flags-ı HƏLƏ DƏ UPDATE edə bilir (İ6)';
+        END IF;
+        IF has_table_privilege('kompasos_app', 'permission_flags', 'DELETE') THEN
+            RAISE EXCEPTION
+                'TEST 42c UĞURSUZ: kompasos_app permission_flags-ı HƏLƏ DƏ DELETE edə bilir';
+        END IF;
+
+        -- İ7: `scheduled_job_runs` — Python tətbiqinin heç bir qanuni yolu
+        -- yoxdur (əvəzinə `app_scheduled_job_runs`, migrations/036), yeganə
+        -- yazan `run_scheduled_job()` indi `run_all_scheduled_jobs()`-un
+        -- `SECURITY DEFINER` kontekstində işləyir.
+        IF has_table_privilege('kompasos_app', 'scheduled_job_runs', 'SELECT')
+        OR has_table_privilege('kompasos_app', 'scheduled_job_runs', 'INSERT')
+        OR has_table_privilege('kompasos_app', 'scheduled_job_runs', 'UPDATE')
+        OR has_table_privilege('kompasos_app', 'scheduled_job_runs', 'DELETE') THEN
+            RAISE EXCEPTION
+                'TEST 42d UĞURSUZ: kompasos_app scheduled_job_runs cədvəlinə birbaşa girişi var (İ7)';
+        END IF;
+        IF NOT has_function_privilege('kompasos_app', 'run_all_scheduled_jobs()', 'EXECUTE') THEN
+            RAISE EXCEPTION
+                'TEST 42e UĞURSUZ: xarici scheduler girişi (run_all_scheduled_jobs) bağlanıb '
+                '— docs/scheduler_setup.md Variant B qırılar';
+        END IF;
+        IF has_function_privilege('kompasos_app', 'run_scheduled_job(text, text)', 'EXECUTE') THEN
+            RAISE EXCEPTION
+                'TEST 42f UĞURSUZ: kompasos_app ixtiyari SQL icra edən run_scheduled_job-u '
+                'birbaşa çağıra bilir';
+        END IF;
+        -- `schema_migrations` (migrations/061) — reyestr tətbiq rolunun heç
+        -- görmədiyi bir faktdır (bax faylın öz başlığı).
+        IF has_table_privilege('kompasos_app', 'schema_migrations', 'SELECT')
+        OR has_table_privilege('kompasos_app', 'schema_migrations', 'INSERT') THEN
+            RAISE EXCEPTION
+                'TEST 42g UĞURSUZ: kompasos_app schema_migrations reyestrinə görünürlüyə malikdir';
+        END IF;
+
+        v_passed := v_passed + 1;
+        RAISE NOTICE 'TEST 42 ✓ İ6/İ7 rol səlahiyyətləri gözlənilən vəziyyətdədir';
+    ELSE
+        RAISE NOTICE 'TEST 42 ATLANDI: kompasos_app rolu mövcud deyil (Supabase-idarəli platforma)';
+    END IF;
+
+    -- =====================================================================
+    -- TEST 43: İ5 (DEEP-GAP dövrə auditi) — mövqe ŞABLONU (`positions.
+    --   tenant_id IS NULL`) kirayəçi sessiyasından UPDATE/DELETE edilə
+    --   bilmir, `enforce_position_template_protection()` İKİNCİ QATI
+    -- =====================================================================
+    -- Owner bağlantısı RLS-dən azaddır (§27 başlığı), ona görə RLS SİYASƏTİ
+    -- (`tenant_isolation_write`) BURADA TƏSDİQLƏNMİR — TEST 42-dəki
+    -- `has_table_privilege` da yalnız cədvəl-səviyyəli GRANT-ı görür, RLS
+    -- predikatını yox. Trigger isə HƏR KƏSƏ (owner DAXİL) tətbiq olunur,
+    -- ona görə owner bağlantısında da doğrulana bilir (`enforce_append_
+    -- only()`-un başlığındakı EYNİ arqument).
+    PERFORM set_config('app.tenant_id', v_tenant::TEXT, TRUE);
+
+    v_failed := FALSE;
+    BEGIN
+        UPDATE positions SET name_az = name_az WHERE tenant_id IS NULL AND code = 'ROOT';
+    EXCEPTION WHEN OTHERS THEN
+        v_failed := TRUE;
+    END;
+    IF NOT v_failed THEN
+        RAISE EXCEPTION 'TEST 43a UĞURSUZ: kirayəçi kontekstində şablon UPDATE edildi!';
+    END IF;
+
+    v_failed := FALSE;
+    BEGIN
+        DELETE FROM positions WHERE tenant_id IS NULL AND code = 'ROOT';
+    EXCEPTION WHEN OTHERS THEN
+        v_failed := TRUE;
+    END;
+    IF NOT v_failed THEN
+        RAISE EXCEPTION 'TEST 43b UĞURSUZ: kirayəçi kontekstində şablon DELETE edildi!';
+    END IF;
+
+    -- Sessiya kontekstsiz (miqrasiya/owner) icra HƏLƏ DƏ mümkün olmalıdır —
+    -- əks halda gələcək bir miqrasiyanın şablonu ÖZÜ dəyişdirməsi (yeni ad,
+    -- s.) trigger-ə ilişərdi. Real dəyişiklik BURAXILMIR: özümüzün atdığı
+    -- marker istisnası bu sub-tranzaksiyanı geri qaytarır.
+    PERFORM set_config('app.tenant_id', '', TRUE);
+    BEGIN
+        UPDATE positions SET name_az = name_az WHERE tenant_id IS NULL AND code = 'ROOT';
+        RAISE EXCEPTION 'İ5_TEST_ROLLBACK_MARKER';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM <> 'İ5_TEST_ROLLBACK_MARKER' THEN
+            RAISE EXCEPTION
+                'TEST 43c UĞURSUZ: kontekstsiz UPDATE trigger tərəfindən bloklandı (%)', SQLERRM;
+        END IF;
+    END;
+
+    v_passed := v_passed + 1;
+    RAISE NOTICE 'TEST 43 ✓ mövqe şablonu kirayəçi sessiyasından qorunur, kontekstsiz icra açıqdır';
+
     -- Sessiya kontekstini TƏMİZLƏYİRİK: aşağıdakı `DELETE FROM license_tenants`
     -- `positions`/`position_permissions`-ı KASKAD silir — `app.user_id` CEO-da
     -- qalsaydı, ROOT-un digər (hələ silinməmiş) ROOT_ONLY sətirləri üzərində
@@ -1365,7 +1491,7 @@ BEGIN
 
     RAISE NOTICE '';
     RAISE NOTICE '===========================================';
-    RAISE NOTICE 'BÜTÜN GUARD TESTLƏRİ UĞURLU: %/41', v_passed;
+    RAISE NOTICE 'BÜTÜN GUARD TESTLƏRİ UĞURLU: %/43', v_passed;
     RAISE NOTICE '===========================================';
 
     -- Test məlumatlarının təmizlənməsi

@@ -21,6 +21,7 @@ from src.application.use_cases.audit_query import (
     AuditQueryUseCase,
 )
 from src.application.use_cases.backup_access import (
+    MANAGE_BACKUPS_FLAG,
     BackupAccessError,
     BackupAccessUseCase,
 )
@@ -250,6 +251,35 @@ def test_camera_type_role_cannot_sit_at_the_staff_level() -> None:
                 is_camera_type=True,
             ),
         )
+
+
+def test_is_store_tier_flag_is_wired_from_draft_to_position_and_audit() -> None:
+    """T6 — `RoleDraft.is_store_tier` `Position`-a VƏ audit sətrinə çatır.
+
+    Yalnız `Position(is_store_tier=...)`-un ÖZÜ (`test_entities.py`-dəki
+    `test_store_tier_custom_role_cannot_bypass_anti_fraud_segregation`) yetərli
+    deyil — əgər bu use case bayrağı `draft`-dan `Position`-a ÖTÜRMƏSƏYDİ,
+    entity-dəki qorunma heç vaxt İŞƏ DÜŞMƏZDİ, çünki hər yaradılan custom rol
+    sükutla `is_store_tier=False` alardı. Bu test məhz o "naqil"i yoxlayır.
+    """
+    use_case, positions, audit = _role_use_case()
+    ceo = make_employee(SystemRole.CEO, flags=[MANAGE_POSITIONS])
+
+    position = use_case.create_role(
+        tenant_id=TENANT,
+        actor=ceo,
+        draft=RoleDraft(
+            code="FILIAL_RESPONSAVI",
+            name_az="Filial Responsavı",
+            priority=RolePriority.OPERATIONAL,
+            is_store_tier=True,
+        ),
+    )
+
+    assert position.is_store_tier is True
+    assert positions.items[position.id].is_store_tier is True
+    created = next(e for e in audit.entries if e["action"] == "POSITION_CREATED")
+    assert created["after_state"]["is_store_tier"] is True
 
 
 # --------------------------------------------------------------------------- #
@@ -562,6 +592,12 @@ class _BackupOps:
     ) -> None:
         self.restored = True
 
+    def list_available(self, tenant_id: TenantId, *, limit: int = 30) -> list[Any]:
+        """`BackupCatalog` tərəfi — dəyişən testlərdən əvvəl heç kim çağırmırdı,
+        yeni müsbət-hal testi (`restore_points` icazə qapısından KEÇİR) üçün
+        lazımdır."""
+        return []
+
 
 def test_restore_requires_the_backup_flag() -> None:
     use_case = BackupAccessUseCase(
@@ -574,6 +610,49 @@ def test_restore_requires_the_backup_flag() -> None:
 
     with pytest.raises(BackupAccessError, match="can_manage_backups"):
         use_case.restore_points(tenant_id=TENANT, actor=hr)
+
+
+def test_restore_is_blocked_for_a_non_root_ceo_role_even_holding_the_flag() -> None:
+    """T2 — ikinci qat: DB hardlock-dan ASILI OLMAYAN müstəqil zəmanət.
+
+    `can_manage_backups`-ın hardlock-u `ROOT_CEO`-ya (2) qaldırılıb
+    (migrations/078, DEEP-GAP dövrə 4) — DB artıq bu flag-i ROOT/CEO-dan
+    kənar rola verməyə İCAZƏ VERMİR. Bu test isə FAKE bir `PermissionFlag`
+    (defolt hardlock) qurur ki, `_require()`-in İKİNCİ (açıq rol) qatının DB
+    hardlock-undan ASILI OLMADAN, TƏK BAŞINA da qapını tutduğunu sübut etsin
+    — məqsəd defense-in-depth-i yoxlamaqdır, DB-nin cari vəziyyətini yox: HR-
+    Admin flag-i DAŞISA BELƏ (`db_switch` naxışı ilə eyni) bərpanı işlədə
+    bilmir.
+    """
+    use_case = BackupAccessUseCase(
+        catalog=_BackupOps(),  # type: ignore[arg-type]
+        operations=_BackupOps(),  # type: ignore[arg-type]
+        audit=RecordingAudit(),  # type: ignore[arg-type]
+        clock=FakeClock(NOW),  # type: ignore[arg-type]
+    )
+    backup_flag = PermissionFlag(code=MANAGE_BACKUPS_FLAG, category="SISTEM")
+    hr = make_employee(SystemRole.HR_ADMIN, flags=[backup_flag])
+
+    with pytest.raises(BackupAccessError, match="YALNIZ Root və ya CEO"):
+        use_case.restore_points(tenant_id=TENANT, actor=hr)
+
+
+def test_restore_is_allowed_for_ceo_holding_the_flag() -> None:
+    """Müsbət hal — özünə-xidmət alətinin əsas mövcudluq səbəbi (bölmə 7):
+
+    CEO Root-un köməyi OLMADAN öz backup-ını bərpa edə bilməlidir. İkinci qat
+    "hər şeyi bloklayan" deyil, YALNIZ Root/CEO-dan kənarı tutur.
+    """
+    use_case = BackupAccessUseCase(
+        catalog=_BackupOps(),  # type: ignore[arg-type]
+        operations=_BackupOps(),  # type: ignore[arg-type]
+        audit=RecordingAudit(),  # type: ignore[arg-type]
+        clock=FakeClock(NOW),  # type: ignore[arg-type]
+    )
+    backup_flag = PermissionFlag(code=MANAGE_BACKUPS_FLAG, category="SISTEM")
+    ceo = make_employee(SystemRole.CEO, flags=[backup_flag])
+
+    assert use_case.restore_points(tenant_id=TENANT, actor=ceo) == []
 
 
 # --------------------------------------------------------------------------- #

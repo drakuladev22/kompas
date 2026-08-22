@@ -26,7 +26,6 @@ və audit jurnalı real dəyişiklikləri gizlədərdi (bölmə 3, bənd 4).
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from src.application.use_cases.root_control import RootControlError
@@ -647,6 +646,19 @@ class RootControlController:
 
         SƏTİR SİLİNMİR (`set_active(active=False)`): sxem `chk_face_scope_
         deactivation` ilə çıxarılmış sətrin `deactivated_at`-ını MƏCBUR edir.
+
+        ──────────────────────────────────────────────────────────────────────
+        QLOBAL → DAR ƏHATƏ KEÇİDİ AYRICA SƏNƏDLƏŞDİRİLİR (DEEP-GAP FAZA 4, T4)
+        ──────────────────────────────────────────────────────────────────────
+        `FaceStoreScope.is_global` boş dəst = qlobal davranış deyir (bax onun
+        şərhi). Yəni `active=True` ilə ƏLAVƏ OLUNAN İLK mağaza — hazırkı əhatə
+        `is_global`-dırsa — audit mətnindəki "aktivləşdirildi" sözü YALANDIR:
+        faktiki nəticə budur ki, BÜTÜN DİGƏR mağazalarda üz təsdiqi SÜKUTLA
+        SÖNÜR (yalnız seçilən mağaza qalır). Bu, əvvəl `after_state`-də HEÇ
+        GÖRÜNMÜRDÜ. İndi keçiddən ƏVVƏL cari əhatə oxunur və `is_global`-dırsa
+        digər bütün AKTİV mağazaların ID-ləri `implicitly_disabled_store_ids`
+        açarı ilə eyni audit sətrinə yazılır — "aktivləşdirildi" yox, "əhatə
+        DARALDI, qalanlar sükutla söndürüldü" mənasında.
         """
         if not self._permitted():
             _security_log.warning(
@@ -670,20 +682,40 @@ class RootControlController:
 
         try:
             with self._context.session(user_id=self._actor.id) as session:
-                session.uow.repository("face_store_scope").set_active(
+                scope_repo = session.uow.repository("face_store_scope")
+                narrowed_from: list[str] = []
+                if active and scope_repo.active_scope(session.tenant_id).is_global:
+                    # QLOBAL İDİ, bu mağaza ONU DARALDIR — digər bütün AKTİV
+                    # mağazalar bu andan üz təsdiqindən KƏNARDA qalır.
+                    rows = session.uow.connection.execute(
+                        "SELECT id FROM stores WHERE tenant_id = %s AND is_active AND id <> %s",
+                        (session.tenant_id, target),
+                    ).fetchall()
+                    narrowed_from = [str(row["id"]) for row in rows]
+
+                scope_repo.set_active(
                     session.tenant_id,
                     target,
                     active=active,
                     changed_by=self._actor.id,
                 )
+                after_state: dict[str, Any] = {"store_id": str(target), "is_active": active}
+                reason = "Face Control mağaza əhatəsi dəyişdirildi (facecontrol.md bənd 15)"
+                if narrowed_from:
+                    after_state["implicitly_disabled_store_ids"] = narrowed_from
+                    reason = (
+                        "Face Control əhatəsi qlobaldan DAR əhatəyə keçdi — "
+                        f"{len(narrowed_from)} digər mağazada üz təsdiqi sükutla "
+                        "söndürüldü (facecontrol.md bənd 15)"
+                    )
                 session.uow.audit.record(
                     tenant_id=session.tenant_id,
                     actor_id=self._actor.id,
                     action="FACE_SCOPE_CHANGED",
                     entity_type="face_control_store_scope",
                     entity_id=target,
-                    after_state={"store_id": str(target), "is_active": active},
-                    reason=("Face Control mağaza əhatəsi dəyişdirildi (facecontrol.md bənd 15)"),
+                    after_state=after_state,
+                    reason=reason,
                 )
                 session.commit()
         except KompasOSError as error:
@@ -702,8 +734,17 @@ class RootControlController:
         self.refresh(screen)
 
     def _permitted(self) -> bool:
-        """`can_manage_system_limits` — `drive_connection._permitted` naxışı."""
-        return bool(self._actor.has_permission(FACE_SCOPE_FLAG, now=datetime.now(UTC)))
+        """`can_manage_system_limits` — `drive_connection._permitted` naxışı.
+
+        VAXT `self._context.clock`-DAN GƏLİR, `datetime.now(UTC)`-DAN YOX
+        (DEEP-GAP FAZA 4, T5): bu, yeganə qapıdır — use case yoxdur,
+        kontroller birbaşa repository-yə yazır. `datetime.now(UTC)` OS
+        saatındandır, halbuki TIME-1 (`migrations/062`) portun SERVER-
+        lövbərli olmasını vəd edir. OS saatı geri çəkilsə, artıq müddəti
+        bitmiş fərdi override yenidən "aktiv" görünə bilərdi
+        (`PermissionOverride.is_active`-in `expires_at > now` şərti).
+        """
+        return bool(self._actor.has_permission(FACE_SCOPE_FLAG, now=self._context.clock.now()))
 
     def _on_flag_created(
         self,

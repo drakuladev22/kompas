@@ -271,6 +271,16 @@ CREATE TABLE IF NOT EXISTS positions (
     -- "kamera-tipli" custom rol işarəsi: yalnız belə rollar anti-fraud
     -- flag-lərini daşıya bilər (bölmə 3, QORUYUCU QAYDALAR)
     is_camera_type BOOLEAN NOT NULL DEFAULT FALSE,
+    -- T6 (DEEP-GAP dövrə auditi): `is_camera_type`-ın EYNİ NAXIŞI — "mağaza-
+    -- pilləli" (Mağaza Meneceri EKVİVALENTİ) custom rol işarəsi. Custom rol
+    -- prioritetinə görə `effective_system_role`-da ən yaxın SİSTEM roluna
+    -- (məs. `HR_ADMIN`) düşür, `enforce_anti_fraud_segregation()`-un (a)/(b)
+    -- budağı isə YALNIZ hərfi `MAGAZA_MENECERI`/`SATICI` KODUNU tanıyırdı —
+    -- CEO "Mağaza Meneceri" səlahiyyətli, LAKİN fərqli kodlu custom rol
+    -- yaratsa, anti-fraud qadağası DB səviyyəsində sükutla keçirdi (domen
+    -- tərəfi `Position.is_store_tier`/`assert_grantable_to`-da ARTIQ tutur —
+    -- bax `position.py` sinif başlığı, CLAUDE.md §5 pozuntusu idi).
+    is_store_tier  BOOLEAN NOT NULL DEFAULT FALSE,
     description    TEXT,
     is_active      BOOLEAN NOT NULL DEFAULT TRUE,
     created_by     UUID,
@@ -1408,6 +1418,35 @@ CREATE INDEX IF NOT EXISTS idx_notifications_unread
 CREATE INDEX IF NOT EXISTS idx_notifications_email_pending
     ON notifications (created_at) WHERE is_critical AND NOT email_sent;
 
+-- Köhnə bildirişlərin təmizlənməsi (migrations/007) — D4 auditinin ÜÇÜNCÜ
+-- yan tapıntısı: `notifications` bazis sxemdə mövcuddur, funksiya isə
+-- (`cron_prune_expired_sessions`/`cron_prune_expired_backups` ilə EYNİ
+-- naxış) heç vaxt köçürülməmişdi. 90 gün seçilib: oxunmuş bildirişin
+-- bundan sonra dəyəri yoxdur, KRİTİK olanlar isə audit dəyəri daşıyır və
+-- SAXLANILIR (`audit_logs` ilə uyğunluq). `email_sent`/`email_attempts`
+-- (007-nin ƏLAVƏ etdiyi sütunlar, yuxarıdakı indeks şərhinə bax) BURADA
+-- İŞLƏNMİR — funksiya yalnız bazis sxemdə onsuz da mövcud olan `read_at`/
+-- `is_critical`-dan istifadə edir.
+CREATE OR REPLACE FUNCTION cron_prune_notifications() RETURNS INTEGER AS $$
+DECLARE
+    v_count INTEGER;
+BEGIN
+    WITH pruned AS (
+        DELETE FROM notifications
+        WHERE created_at < now() - INTERVAL '90 days'
+          AND read_at IS NOT NULL
+          AND NOT is_critical
+        RETURNING 1
+    )
+    SELECT count(*) INTO v_count FROM pruned;
+    RETURN v_count;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION cron_prune_notifications() IS
+    'Oxunmuş, qeyri-kritik bildirişləri 90 gündən sonra silir (migrations/007). '
+    'Kritik bildirişlər audit dəyəri üçün saxlanılır.';
+
 
 CREATE TABLE IF NOT EXISTS support_tickets (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1570,9 +1609,12 @@ $$ LANGUAGE plpgsql;
 -- baxırdı, yəni `is_camera_only` və `excludes_camera_role` yoxlamaları
 -- anti-fraud OLMAYAN flag üçün heç vaxt işə düşmürdü.
 --
--- Aşağıdakı gövdə miqrasiya 048-in son versiyasının HƏRFƏN eynisidir. Onu
--- dəyişəndə 048-i də dəyişin — `tests/unit/test_schema_migration_parity.py`
--- bu cütü avtomatik müqayisə edir.
+-- Aşağıdakı gövdə miqrasiya 080-in son versiyasının HƏRFƏN eynisidir (T6,
+-- DEEP-GAP dövrə auditi: `v_is_store_tier` budağı 048-in gövdəsinə ƏLAVƏ
+-- edildi, 048-in ÖZÜ dəyişmədi — checksum-u pozmamaq üçün YENİ miqrasiya
+-- YARADILDI, köhnəsi əl DƏYMƏDƏN qalır). Onu dəyişəndə 080-i də dəyişin —
+-- `tests/unit/test_schema_migration_parity.py` bu cütü avtomatik müqayisə
+-- edir.
 CREATE OR REPLACE FUNCTION enforce_anti_fraud_segregation()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -1582,6 +1624,7 @@ DECLARE
     v_position_code   TEXT;
     v_priority        SMALLINT;
     v_is_camera_type  BOOLEAN;
+    v_is_store_tier   BOOLEAN;
 BEGIN
     SELECT is_anti_fraud, is_camera_only, excludes_camera_role
       INTO v_is_anti_fraud, v_is_camera_only, v_excl_camera
@@ -1595,12 +1638,12 @@ BEGIN
     END IF;
 
     IF TG_TABLE_NAME = 'position_permissions' THEN
-        SELECT code, priority, is_camera_type
-          INTO v_position_code, v_priority, v_is_camera_type
+        SELECT code, priority, is_camera_type, is_store_tier
+          INTO v_position_code, v_priority, v_is_camera_type, v_is_store_tier
           FROM positions WHERE id = NEW.position_id;
     ELSE
-        SELECT p.code, p.priority, p.is_camera_type
-          INTO v_position_code, v_priority, v_is_camera_type
+        SELECT p.code, p.priority, p.is_camera_type, p.is_store_tier
+          INTO v_position_code, v_priority, v_is_camera_type, v_is_store_tier
           FROM employees e JOIN positions p ON p.id = e.position_id
          WHERE e.id = NEW.user_id;
     END IF;
@@ -1609,8 +1652,14 @@ BEGIN
     -- (b) Prioritet 4 (ən aşağı pillə, `RolePriority.STAFF`) — HƏR rol,
     --     custom da daxil. Domen `_PRIORITY_TO_ROLE[STAFF] = SELLER` ilə
     --     eyni nəticəni verir. 048-ə qədər burada 3 yazılırdı.
+    -- (c) T6: `is_store_tier` — custom rol AÇIQ ŞƏKİLDƏ "mağaza-pilləli"
+    --     işarələnibsə, kodundan/prioritetindən ASILI OLMAYARAQ (a)/(b) ilə
+    --     EYNİ qadağaya tabedir (bax `positions.is_store_tier` sütun şərhi,
+    --     §3; domen qarşılığı `PermissionFlag.assert_grantable_to`-dakı
+    --     `is_store_tier_role`).
     IF v_position_code IN ('MAGAZA_MENECERI', 'SATICI')
-       OR COALESCE(v_priority, 0) >= 4 THEN
+       OR COALESCE(v_priority, 0) >= 4
+       OR COALESCE(v_is_store_tier, FALSE) THEN
         RAISE EXCEPTION
             'ANTI-FRAUD POZUNTUSU: "%" flag-i "%" rolundakı istifadəçiyə verilə bilməz '
             '(bölmə 3, vəzifə ayrılığı hardlock-u; prioritet=%)',
@@ -1649,6 +1698,44 @@ DROP TRIGGER IF EXISTS trg_anti_fraud_override ON user_permission_overrides;
 CREATE TRIGGER trg_anti_fraud_override
     BEFORE INSERT OR UPDATE ON user_permission_overrides
     FOR EACH ROW EXECUTE FUNCTION enforce_anti_fraud_segregation();
+
+
+-- FLAG ATRİBUTLARI DƏYİŞMƏZDİR (migrations/013) — D4 auditinin İKİNCİ YAN
+-- TAPINTISI (birincisi TIME-1, yuxarıda).
+-- ---------------------------------------------------------------------------
+-- `is_anti_fraud`/`is_camera_only`/`excludes_camera_role`/`hardlock_level`
+-- yuxarıdakı `enforce_anti_fraud_segregation()`/`enforce_permission_hardlock()`-
+-- un GİRİŞİDİR. `permission_flags` `schema.sql`-də mövcuddur (§2), lakin bu
+-- funksiya heç vaxt köçürülməmişdi — `schema.sql`-dən quraşdırılan bazada
+-- bu DÖRD atribut `UPDATE permission_flags SET ...` ilə birbaşa
+-- dəyişdirilə bilirdi, yəni yuxarıdakı İKİ trigger-in girişi qorunmasız
+-- qalırdı ("hardcoded" zəmanət faktiki KONFİQURASİYAYA çevrilirdi).
+-- Yeni flag YARADILA bilər (Permission Registry, bölmə 3) — qadağa yalnız
+-- MÖVCUD sistem flag-lərinin təhlükəsizlik atributlarının dəyişdirilməsinədir.
+CREATE OR REPLACE FUNCTION enforce_flag_attributes_immutable()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.is_anti_fraud       IS DISTINCT FROM OLD.is_anti_fraud
+    OR NEW.is_camera_only      IS DISTINCT FROM OLD.is_camera_only
+    OR NEW.excludes_camera_role IS DISTINCT FROM OLD.excludes_camera_role
+    OR NEW.hardlock_level      IS DISTINCT FROM OLD.hardlock_level THEN
+        RAISE EXCEPTION
+            'DƏYİŞMƏZ ATRİBUT: "%" flag-inin təhlükəsizlik atributları '
+            'dəyişdirilə bilməz (bölmə 3 — struktur zəmanət, konfiqurasiya deyil). '
+            'Fərqli davranış lazımdırsa YENİ flag yaradın.', OLD.code;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_flag_attributes_immutable ON permission_flags;
+CREATE TRIGGER trg_flag_attributes_immutable
+    BEFORE UPDATE ON permission_flags
+    FOR EACH ROW EXECUTE FUNCTION enforce_flag_attributes_immutable();
+
+COMMENT ON FUNCTION enforce_flag_attributes_immutable() IS
+    'Anti-fraud/hardlock atributlarını UPDATE-dən qoruyur. Ad/təsvir '
+    'dəyişdirilə bilər — yalnız təhlükəsizlik semantikası qıfıllıdır.';
 
 
 CREATE OR REPLACE FUNCTION enforce_permission_hardlock() RETURNS TRIGGER AS $$
@@ -2017,6 +2104,222 @@ DROP TRIGGER IF EXISTS trg_hierarchy_guard ON user_permission_overrides;
 CREATE TRIGGER trg_hierarchy_guard
     BEFORE INSERT OR UPDATE ON user_permission_overrides
     FOR EACH ROW EXECUTE FUNCTION enforce_hierarchy_guard();
+
+
+-- ROL → FLAG YOLUNDA STRICT HIERARCHY + MÜTLƏQ ROOT_ONLY GUARD (migrations/046)
+-- ---------------------------------------------------------------------------
+-- D4 (DEEP-GAP dövrə auditi): yuxarıdakı `enforce_hierarchy_guard()` YALNIZ
+-- `user_permission_overrides`-a bağlıdır — `position_permissions` (rol → flag
+-- yolu) üzərində iyerarxiya yoxlaması BU FUNKSİYA olmadan YOXDUR. Funksiya
+-- 046-da yaradılıb, lakin bu bazis sxemə HEÇ VAXT köçürülməmişdi: `schema.sql`
+-- CLAUDE.md §7-nin "tək başına tam quraşdırma" iddiasına baxmayaraq, ondan
+-- QURULAN bazada `can_manage_positions` sahibi (defolt Root VƏ CEO) öz
+-- pilləsindən YUXARI rolun flag dəstini redaktə edə bilirdi — parity qapısı
+-- (`test_schema_migration_parity.py`) bunu tutmurdu, çünki testin `_pairs()`
+-- funksiyası YALNIZ hər İKİ tərəfdə DƏ mövcud olan obyektləri müqayisə edir
+-- (miqrasiyada yaranıb bura köçürülməyən obyekt heç vaxt müqayisəyə düşmür).
+CREATE OR REPLACE FUNCTION enforce_position_flag_hierarchy() RETURNS TRIGGER AS $$
+DECLARE
+    v_result           position_permissions%ROWTYPE;
+    v_position_id      UUID;
+    v_flag_code        TEXT;
+    v_actor            UUID;
+    v_actor_code       TEXT;
+    v_actor_priority   SMALLINT;
+    v_target_code      TEXT;
+    v_target_priority  SMALLINT;
+    v_hardlock         SMALLINT;
+BEGIN
+    -- BEFORE trigger-i sətri qaytarmalıdır; `DELETE` üçün bu, `OLD`-dur.
+    IF TG_OP = 'DELETE' THEN
+        v_result      := OLD;
+        v_position_id := OLD.position_id;
+        v_flag_code   := OLD.flag_code;
+        -- Silmədə aktor yalnız sessiya kontekstindən bilinir (046 başlığına bax).
+        -- Pozulmuş GUC dəyəri `current_tenant_id()` (§27) ilə EYNİ cür udulur:
+        -- kontekst oxuna bilmirsə "aktor naməlumdur" halına düşürük, çünki
+        -- `::uuid` çevirmə xətası bütün texniki silmə əməliyyatlarını
+        -- (miqrasiya 003-dəki təmizləmə kimi) anlaşılmaz şəkildə çökdürərdi.
+        BEGIN
+            v_actor := NULLIF(current_setting('app.user_id', TRUE), '')::uuid;
+        EXCEPTION WHEN invalid_text_representation THEN
+            v_actor := NULL;
+        END;
+    ELSE
+        v_result      := NEW;
+        v_position_id := NEW.position_id;
+        v_flag_code   := NEW.flag_code;
+        -- INSERT/UPDATE-də `granted_by` avtoritetdir: digər üç trigger də
+        -- (anti-fraud, hardlock, sahiblik) qərarını məhz ona görə verir.
+        v_actor       := NEW.granted_by;
+    END IF;
+
+    -- Sistem seed-i / kontekstsiz texniki yazı — 046 başlığındakı izaha bax.
+    IF v_actor IS NULL THEN
+        RETURN v_result;
+    END IF;
+
+    SELECT p.code, p.priority INTO v_actor_code, v_actor_priority
+      FROM employees e
+      JOIN positions p ON p.id = e.position_id
+     WHERE e.id = v_actor;
+
+    -- Aktor tapılmadı: `position_permissions.granted_by`-da FK yoxdur, həmçinin
+    -- RLS aktorun sətrini gizlədə bilər. `enforce_hierarchy_guard` eyni halda
+    -- sətri buraxır — iki trigger eyni yazıya fərqli qərar verməməlidir.
+    IF v_actor_code IS NULL THEN
+        RETURN v_result;
+    END IF;
+
+    SELECT p.code, p.priority INTO v_target_code, v_target_priority
+      FROM positions p
+     WHERE p.id = v_position_id;
+
+    IF v_target_priority IS NULL THEN
+        RETURN v_result;
+    END IF;
+
+    SELECT hardlock_level INTO v_hardlock
+      FROM permission_flags
+     WHERE code = v_flag_code;
+
+    -- (b) MÜTLƏQ ROOT_ONLY — iyerarxiya müqayisəsindən AYRI və ona BAXMAYARAQ.
+    --     `ROOT` üçün SEC-006 istisnası BURADA tətbiq olunmur: bu, pillə
+    --     müqayisəsi deyil, mütləq sahiblik qaydasıdır.
+    IF COALESCE(v_hardlock, 0) = 1 THEN
+        IF v_actor_code <> 'ROOT' THEN
+            RAISE EXCEPTION
+                'HARDLOCK POZUNTUSU (səviyyə 1): "%" flag-inə YALNIZ Root toxuna '
+                'bilər — verilməsi də, geri alınması da (bölmə 3). Aktor rolu: %',
+                v_flag_code, v_actor_code;
+        END IF;
+        IF v_target_code <> 'ROOT' THEN
+            RAISE EXCEPTION
+                'HARDLOCK POZUNTUSU (səviyyə 1): "%" flag-i yalnız Root rolunda '
+                'ola bilər — "%" roluna əlavə edilə və oradan götürülə bilməz '
+                '(bölmə 3)', v_flag_code, v_target_code;
+        END IF;
+    END IF;
+
+    -- (a) STRICT HIERARCHY GUARD.
+    -- QƏRAR SEC-006: YALNIZ `Root` bərabər-pillə qaydasından azaddır — bölmə 3
+    -- eyni pilləyə müdaxiləni qadağan edir (CEO ↔ CEO, Admin ↔ Admin).
+    -- Root istisnası zəruridir: əks halda Root ÖZ rolunun flag dəstini redaktə
+    -- edə bilməzdi (`v_target_priority <= v_actor_priority` özünə də düşür).
+    --
+    -- SEC-019 QEYDİ (miqrasiya 048): bu fayl yazılanda `CEO` də priority
+    -- 0-da idi, yəni «CEO Root roluna toxuna bilmir» nəticəsi bərabər-pillə
+    -- şərtindən çıxırdı. 048 modeli düzəltdi (`Root`=0, `CEO`=1) və AŞAĞIDAKI
+    -- SQL DƏYİŞMƏDİ: müqayisə NİSBİDİR, `ROOT` istisnası isə rol KODU ilə
+    -- verilir — hər ikisi sürüşmədən asılı deyil. `0 <= 1` şərti indi
+    -- iyerarxiyanın təbii nəticəsi kimi işə düşür.
+    IF v_actor_code = 'ROOT' THEN
+        RETURN v_result;
+    END IF;
+
+    IF v_target_priority <= v_actor_priority THEN
+        RAISE EXCEPTION
+            'STRICT HIERARCHY GUARD: yalnız öz iyerarxiya pilləsindən CİDDİ '
+            'ŞƏKİLDƏ aşağı rolun icazələrinə toxunmaq olar (aktor priority=%, '
+            'hədəf rol=%, hədəf priority=%) (bölmə 3)',
+            v_actor_priority, v_target_code, v_target_priority;
+    END IF;
+
+    RETURN v_result;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION enforce_position_flag_hierarchy() IS
+    'Strict Hierarchy Guard + mütləq ROOT_ONLY qoruması (bölmə 3), rol → flag '
+    'yolu üçün. Domen qarşılıqları: `Position.assert_may_be_edited_by`, '
+    '`Position.assert_root_only_flag_allowed` və `Position.revoke`; use case '
+    'tərəfi `position_management.set_role_flags`/`_apply_flags`. INSERT/UPDATE '
+    'ilə yanaşı DELETE-i də tutur, çünki `_sync_flags()` geri almanı DELETE ilə '
+    'edir. Aktor tapılmadıqda (seed / kontekstsiz yazı) sətir buraxılır — '
+    '`enforce_hierarchy_guard` və `enforce_grantor_owns_flag` ilə eyni qərar.';
+
+DROP TRIGGER IF EXISTS trg_position_flag_hierarchy ON position_permissions;
+CREATE TRIGGER trg_position_flag_hierarchy
+    BEFORE INSERT OR UPDATE OR DELETE ON position_permissions
+    FOR EACH ROW EXECUTE FUNCTION enforce_position_flag_hierarchy();
+
+
+-- SERVER-ƏSASLI VAXT BÜTÖVLÜYÜ (TIME-1, migrations/062)
+-- ---------------------------------------------------------------------------
+-- D4 auditinin YAN TAPINTISI (DEEP-GAP dövrəsi): `enforce_position_flag_
+-- hierarchy()` üçün yazılan parity testi (`test_schema_migration_parity.py`)
+-- BUNU DA aşkarladı — CLAUDE.md §5 TIME-1 "HARDCODED" zəmanəti (created_at/
+-- published_at server vaxtına MƏCBUR edilir) bazis sxemdə HEÇ VAXT olmayıb.
+-- `schema.sql`-dən quraşdırılan bazada `fines`/`fine_appeals`/`leave_requests`/
+-- `attendance_records`-un `created_at`-ı VƏ `fines.published_at`-ı client
+-- dəyərini SƏSSİZCƏ qəbul edirdi — mağaza PC-sinin saatını geri çəkmək
+-- gecikməni/cəriməni silə, 72 saatlıq etiraz pəncərəsini sürüşdürə bilərdi.
+-- Domen tərəfi (`require_aware`, `ServerTimeService`) bunu YALNIZ tətbiq
+-- qatında tuturdu — §5-in "hər qayda İKİ yerdə" tələbinin İKİNCİ qatı
+-- BUNDAN ƏVVƏL YOX idi.
+--
+-- `time_trust_level` sütunu (attendance_records) BURAYA KÖÇÜRÜLMÜR — o, bir
+-- SÜTUNDUR (§7: "schema.sql miqrasiya SÜTUNLARINI ehtiva etmir"), QAYDA
+-- DEYİL; sıralı tətbiqdə 062 onu ƏLAVƏ edir. Aşağıdakı İKİ funksiya isə
+-- QAYDADIR — cədvəl adından ASILI olmayan generic trigger-lər (§7 sonuncu
+-- bənd).
+CREATE OR REPLACE FUNCTION enforce_server_created_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Şərtsiz təyinat: `IS NULL` yoxlaması qoyulsaydı, client sadəcə dəyər
+    -- göndərməklə qapını yan keçərdi — halbuki qapının SƏBƏBİ məhz odur.
+    NEW.created_at := now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION enforce_server_created_at() IS
+    'INSERT anında `created_at`-ı Postgres server vaxtı ilə əvəz edir '
+    '(migrations/062). `DEFAULT now()`-dan güclüdür: sütunun adı açıq '
+    'çəkilsə belə client dəyəri qəbul edilmir.';
+
+DROP TRIGGER IF EXISTS trg_server_created_at_fines ON fines;
+CREATE TRIGGER trg_server_created_at_fines
+    BEFORE INSERT ON fines
+    FOR EACH ROW EXECUTE FUNCTION enforce_server_created_at();
+
+DROP TRIGGER IF EXISTS trg_server_created_at_fine_appeals ON fine_appeals;
+CREATE TRIGGER trg_server_created_at_fine_appeals
+    BEFORE INSERT ON fine_appeals
+    FOR EACH ROW EXECUTE FUNCTION enforce_server_created_at();
+
+DROP TRIGGER IF EXISTS trg_server_created_at_leave_requests ON leave_requests;
+CREATE TRIGGER trg_server_created_at_leave_requests
+    BEFORE INSERT ON leave_requests
+    FOR EACH ROW EXECUTE FUNCTION enforce_server_created_at();
+
+DROP TRIGGER IF EXISTS trg_server_created_at_attendance ON attendance_records;
+CREATE TRIGGER trg_server_created_at_attendance
+    BEFORE INSERT ON attendance_records
+    FOR EACH ROW EXECUTE FUNCTION enforce_server_created_at();
+
+-- `fines.published_at` — ETİRAZ PƏNCƏRƏSİNİN LÖVBƏRİ.
+-- Yalnız NULL → NOT NULL keçidində möhürlənir: hər UPDATE-də təyin etsəydi,
+-- geri-qaytarma (`reversed_at`) və ya sonrakı redaktə pəncərəni SÜRÜŞDÜRƏRDİ
+-- — nəşr anı bir dəfə baş verir.
+CREATE OR REPLACE FUNCTION enforce_server_published_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.published_at IS NOT NULL AND OLD.published_at IS NULL THEN
+        NEW.published_at := now();
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION enforce_server_published_at() IS
+    'Cərimənin nəşr anını server vaxtı ilə möhürləyir (migrations/062). '
+    '72 saatlıq etiraz pəncərəsi bu andan hesablanır.';
+
+DROP TRIGGER IF EXISTS trg_server_published_at_fines ON fines;
+CREATE TRIGGER trg_server_published_at_fines
+    BEFORE UPDATE ON fines
+    FOR EACH ROW EXECUTE FUNCTION enforce_server_published_at();
 
 
 -- Etiraz pəncərəsinin avtomatik təyini (system_limits-dən oxuyur)
@@ -2435,15 +2738,21 @@ $$;
 -- hardlock-un yan təsiri kimi işləyirdi. Mövcud quraşdırmalar üçün eyni
 -- sürüşdürməni `migrations/048_root_ceo_priority_split.sql` aparır — bu
 -- fayl ilə həmin miqrasiya EYNİ son vəziyyəti verməlidir.
-INSERT INTO positions (tenant_id, code, name_az, priority, is_system, is_camera_type, description)
+-- T6: `is_store_tier` sütunu əlavə edildi (§18). Yalnız `MAGAZA_MENECERI`
+-- üçün `TRUE` — `is_camera_type`-ın `KAMERA_NEZARETCISI`-də etdiyi ilə EYNİ
+-- naxış. Kod-əsaslı yoxlama (`enforce_anti_fraud_segregation()`-un (a)/(b)
+-- budağı) bu sətri onsuz da tanıyır, sütun isə "mağaza-pilləli" faktını TƏK
+-- MƏNBƏYƏ (kod DEYİL, atribut) köçürür ki, custom rol da EYNİ yolla yoxlana
+-- bilsin.
+INSERT INTO positions (tenant_id, code, name_az, priority, is_system, is_camera_type, is_store_tier, description)
 VALUES
-    (NULL, 'ROOT',               'Root',                0, TRUE,  FALSE, 'Sistem sahibi — TƏK BAŞINA ən üst pillə; Permission Registry və sistem limitləri yalnız bu roldadır'),
-    (NULL, 'CEO',                'CEO',                 1, TRUE,  FALSE, 'Şirkət rəhbəri — Root-dan DƏRHAL aşağı; rol yaratma və biznes konfiqurasiyası'),
-    (NULL, 'ADMIN',              'Admin',               2, TRUE,  FALSE, 'CEO-dan bir pillə aşağı — gündəlik icazə idarəetməsi (həvalə edilmiş)'),
-    (NULL, 'HR_ADMIN',           'HR_Admin',            3, TRUE,  FALSE, 'İşçi/növbə/cərimə/etiraz idarəetməsi'),
-    (NULL, 'MAGAZA_MENECERI',    'Mağaza Meneceri',     3, TRUE,  FALSE, 'Gündəlik Tabel + öz filialının tapşırıqları (növbə PLANLAMASI YOX)'),
-    (NULL, 'KAMERA_NEZARETCISI', 'Kamera Nəzarətçisi',  3, TRUE,  TRUE,  'iVMS-də görüntünü yoxlayıb təsdiq/vaxt düzəlişi/cərimə verir'),
-    (NULL, 'SATICI',             'Satıcı',              4, TRUE,  FALSE, 'İşçi — Kiosk PIN handshake və İşçi Ana Ekranı')
+    (NULL, 'ROOT',               'Root',                0, TRUE,  FALSE, FALSE, 'Sistem sahibi — TƏK BAŞINA ən üst pillə; Permission Registry və sistem limitləri yalnız bu roldadır'),
+    (NULL, 'CEO',                'CEO',                 1, TRUE,  FALSE, FALSE, 'Şirkət rəhbəri — Root-dan DƏRHAL aşağı; rol yaratma və biznes konfiqurasiyası'),
+    (NULL, 'ADMIN',              'Admin',               2, TRUE,  FALSE, FALSE, 'CEO-dan bir pillə aşağı — gündəlik icazə idarəetməsi (həvalə edilmiş)'),
+    (NULL, 'HR_ADMIN',           'HR_Admin',            3, TRUE,  FALSE, FALSE, 'İşçi/növbə/cərimə/etiraz idarəetməsi'),
+    (NULL, 'MAGAZA_MENECERI',    'Mağaza Meneceri',     3, TRUE,  FALSE, TRUE,  'Gündəlik Tabel + öz filialının tapşırıqları (növbə PLANLAMASI YOX)'),
+    (NULL, 'KAMERA_NEZARETCISI', 'Kamera Nəzarətçisi',  3, TRUE,  TRUE,  FALSE, 'iVMS-də görüntünü yoxlayıb təsdiq/vaxt düzəlişi/cərimə verir'),
+    (NULL, 'SATICI',             'Satıcı',              4, TRUE,  FALSE, FALSE, 'İşçi — Kiosk PIN handshake və İşçi Ana Ekranı')
 ON CONFLICT DO NOTHING;
 
 
@@ -2497,7 +2806,11 @@ VALUES
     ('can_manage_license',          'SISTEM', 'Lisenziya vəziyyətinə bax', 'Lokal lisenziya vəziyyəti + aktivasiya açarı (aktiv/deaktiv etmə YOX)', 1, FALSE, FALSE),
     ('can_view_audit_logs',         'SISTEM', 'Audit log-lara bax',        'Audit Log Viewer', 0, FALSE, FALSE),
     ('can_export_reports',          'SISTEM', 'Hesabatları export et',     'Attendance + Bonus&Penalty Excel export', 0, FALSE, FALSE),
-    ('can_manage_backups',          'SISTEM', 'Ehtiyat nüsxə/bərpa',       'Nöqtə-zamanlı bərpa funksiyası', 0, FALSE, FALSE),
+    -- T2 (DEEP-GAP dövrə auditi): hardlock 0 → 2 (ROOT_CEO). `ROOT_ONLY`(1)
+    -- DEYİL — bərpa özünə-xidmət alətidir, CEO (müştərinin öz hesabı, Root
+    -- TƏCHİZATÇININ hesabıdır) öz bazasını Root-un köməyi OLMADAN bərpa
+    -- edə bilməlidir (bölmə 7, `backup_access.py::_require` başlığı).
+    ('can_manage_backups',          'SISTEM', 'Ehtiyat nüsxə/bərpa',       'Nöqtə-zamanlı bərpa funksiyası', 2, FALSE, FALSE),
 
     -- İcazə İdarəetməsi (HƏSSAS)
     ('can_manage_permissions',      'ICAZE', 'Yeni icazə flag-i yarat',     'System Permission Registry — YALNIZ Root', 1, FALSE, FALSE),
@@ -2604,9 +2917,12 @@ ON CONFLICT DO NOTHING;
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION seed_tenant_defaults(p_tenant_id UUID) RETURNS VOID AS $$
 BEGIN
-    -- Sistem rollarının tenant-a kopyalanması
-    INSERT INTO positions (tenant_id, code, name_az, priority, is_system, is_camera_type, description)
-    SELECT p_tenant_id, code, name_az, priority, is_system, is_camera_type, description
+    -- Sistem rollarının tenant-a kopyalanması. `is_store_tier` DAXİLDİR (T6)
+    -- — köçürülməsə, hər YENİ tenant-ın `MAGAZA_MENECERI` sətri `FALSE`
+    -- defoltu ilə yaranar və şablonun ÖZÜNDƏKİ `TRUE` işarəsi itər.
+    INSERT INTO positions
+        (tenant_id, code, name_az, priority, is_system, is_camera_type, is_store_tier, description)
+    SELECT p_tenant_id, code, name_az, priority, is_system, is_camera_type, is_store_tier, description
     FROM positions WHERE tenant_id IS NULL
     ON CONFLICT (tenant_id, code) DO NOTHING;
 
@@ -2809,10 +3125,43 @@ BEGIN
         EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);
         -- `positions` sistem şablonları (tenant_id IS NULL) hər tenant üçün
         -- oxunabilən olmalıdır — yeni tenant seed-i onlardan kopyalayır.
+        --
+        -- İ5 (DEEP-GAP dövrə auditi): TƏK `USING (... OR tenant_id IS NULL)
+        -- WITH CHECK (tenant_id = current_tenant_id())` siyasəti YAZI qapısı
+        -- kimi SIZIRDI — `WITH CHECK` yalnız INSERT/yeni UPDATE sətrini
+        -- yoxlayır, DELETE-ə HEÇ TƏTBİQ OLUNMUR və UPDATE-in "hansı köhnə
+        -- sətrə toxunmaq olar" sualını YALNIZ `USING` cavablandırır. Nəticədə
+        -- kirayəçi sessiyası `DELETE FROM positions WHERE tenant_id IS NULL`
+        -- ilə qlobal şablonu SİLƏ, ya da `UPDATE ... SET tenant_id =
+        -- current_tenant_id() WHERE tenant_id IS NULL` ilə ÖZ TENANT-INA
+        -- KEÇİRƏ (digər tenant-lardan gizlədə) bilirdi — sonrakı
+        -- `seed_tenant_defaults()` çağırışı həmin şablonsuz işləyirdi.
+        -- Həll: OXU (`FOR SELECT`, bütün NULL sətirlər DAXİL) və YAZI
+        -- (`FOR ALL`, yalnız öz tenant-ı) ayrı siyasətlərə bölünür. `FOR ALL`
+        -- SELECT-i DƏ əhatə edir, LAKİN PERMISSIVE siyasətlər əmr üzrə OR
+        -- olunur — SELECT üçün nəticə İKİ predikatın GENİŞİ (NULL DAXİL)
+        -- qalır, INSERT/UPDATE/DELETE üçün isə `FOR SELECT` siyasəti
+        -- ÜMUMİYYƏTLƏ İŞTİRAK ETMİR (yalnız öz SELECT əmrinə aiddir).
         IF t = 'positions' THEN
+            EXECUTE format('DROP POLICY IF EXISTS tenant_isolation_read ON %I', t);
+            EXECUTE format('DROP POLICY IF EXISTS tenant_isolation_write ON %I', t);
             EXECUTE format(
-                'CREATE POLICY tenant_isolation ON %I
-                     USING (tenant_id = current_tenant_id() OR tenant_id IS NULL)
+                'CREATE POLICY tenant_isolation_read ON %I
+                     FOR SELECT
+                     USING (tenant_id = current_tenant_id() OR tenant_id IS NULL)', t
+            );
+            -- `FOR ALL` (`FOR INSERT, UPDATE, DELETE` KİMİ bir siyahı Postgres-
+            -- də SİNTAKSİS SƏHVİDİR — `FOR` YALNIZ TƏK əmr adı qəbul edir).
+            -- `FOR ALL` SELECT-i də əhatə edir, LAKİN daha yuxarıdakı `tenant_
+            -- isolation_read` PERMISSIVE siyasəti onunla OR olunur — nəticə
+            -- SELECT üçün İKİ predikatın GENİŞİ (NULL DAXİL) qalır, INSERT/
+            -- UPDATE/DELETE üçün isə YALNIZ bu siyasət keçərlidir (`tenant_
+            -- isolation_read` `FOR SELECT`-ə MƏHDUDDUR, digər əmrlərə HEÇ
+            -- TƏTBİQ OLUNMUR).
+            EXECUTE format(
+                'CREATE POLICY tenant_isolation_write ON %I
+                     FOR ALL
+                     USING (tenant_id = current_tenant_id())
                      WITH CHECK (tenant_id = current_tenant_id())', t
             );
         ELSE
@@ -2826,11 +3175,53 @@ BEGIN
 END
 $$;
 
+-- İ5 İKİNCİ QAT: RLS "sadəcə görünməzdir" — sətri owner bağlantısı (RLS-dən
+-- azad) və ya `FORCE ROW LEVEL SECURITY` qoyulmamış hər hansı gələcək yol
+-- hələ də toxuna bilər. Trigger HƏR KƏSƏ tətbiq olunur (`enforce_append_
+-- only()`-un başlığındakı EYNİ arqument) — şablon sətrini YALNIZ sessiya
+-- kontekstsiz (miqrasiya/owner/seed) icra dəyişə bilər, `enforce_root_only_
+-- flag_revoke()`-un "sessiya kontekstsiz → bloklamır" naxışı təkrarlanır.
+CREATE OR REPLACE FUNCTION enforce_position_template_protection() RETURNS TRIGGER AS $$
+BEGIN
+    IF current_tenant_id() IS NULL THEN
+        RETURN OLD;
+    END IF;
+
+    IF OLD.tenant_id IS NULL THEN
+        RAISE EXCEPTION
+            'İ5 QORUYUCUSU: qlobal şablon mövqe (id=%) kirayəçi sessiyasından '
+            'dəyişdirilə/silinə bilməz — bu RLS yazı siyasətinin ARTIQ '
+            'bloklaması lazım olan hərəkətin İKİNCİ qatıdır', OLD.id;
+    END IF;
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_position_template_protection ON positions;
+CREATE TRIGGER trg_position_template_protection
+    BEFORE UPDATE OR DELETE ON positions
+    FOR EACH ROW EXECUTE FUNCTION enforce_position_template_protection();
+
+COMMENT ON FUNCTION enforce_position_template_protection() IS
+    'İ5 (DEEP-GAP dövrə auditi): qlobal mövqe şablonlarını (`tenant_id IS '
+    'NULL`) kirayəçi sessiyasından UPDATE/DELETE-dən qoruyan İKİNCİ qat — '
+    'birinci qat `tenant_isolation_write` RLS siyasətidir (yuxarıda, §27).';
+
 
 -- `tenant_id` sütunu OLMAYAN alt-cədvəllər: izolyasiya valideyn sətir
 -- üzərindən EXISTS ilə tətbiq olunur. Bu cədvəllər RLS-siz qalsaydı, tətbiq
 -- rolu (UUID-ni bilməklə) başqa tenant-ın icazə matrisini və ya kamera
 -- təyinatlarını oxuya bilərdi.
+-- İ5: `position_permissions` üçün `write_predicate` OXU predikatından FƏRQLİ
+-- — şablon mövqeyə (`positions.tenant_id IS NULL`) bağlı sətir YAZI
+-- siyasətinin `USING`-ində görünmür (yuxarıdakı `positions` düzəlişi ilə EYNİ
+-- səbəb: tək predikat həm `USING`, həm `WITH CHECK` üçün işlədiləndə DELETE
+-- şablon-bağlı sətirlərə tətbiq oluna bilirdi). `seed_tenant_defaults()`
+-- (§ aşağıda) BU CÜTÜ YALNIZ tenant-ın ÖZ kopyalanmış mövqeyinə (`tp.id`)
+-- yazır — heç bir qanuni yol `position_id`-ni şablon sətrinə YÖNƏLTMİR, ona
+-- görə tənzimlənmiş yazı predikatı heç nəyi qırmır. `write_predicate` NULL
+-- olan cədvəllər üçün köhnə tək-siyasət davranışı saxlanılır.
 DO $$
 DECLARE
     spec RECORD;
@@ -2838,31 +3229,57 @@ BEGIN
     FOR spec IN
         SELECT * FROM (VALUES
             ('user_permission_overrides',
-             'EXISTS (SELECT 1 FROM employees e WHERE e.id = user_permission_overrides.user_id AND e.tenant_id = current_tenant_id())'),
+             'EXISTS (SELECT 1 FROM employees e WHERE e.id = user_permission_overrides.user_id AND e.tenant_id = current_tenant_id())',
+             NULL::TEXT),
             ('position_permissions',
-             'EXISTS (SELECT 1 FROM positions p WHERE p.id = position_permissions.position_id AND (p.tenant_id = current_tenant_id() OR p.tenant_id IS NULL))'),
+             'EXISTS (SELECT 1 FROM positions p WHERE p.id = position_permissions.position_id AND (p.tenant_id = current_tenant_id() OR p.tenant_id IS NULL))',
+             'EXISTS (SELECT 1 FROM positions p WHERE p.id = position_permissions.position_id AND p.tenant_id = current_tenant_id())'),
             ('user_preferences',
-             'EXISTS (SELECT 1 FROM employees e WHERE e.id = user_preferences.user_id AND e.tenant_id = current_tenant_id())'),
+             'EXISTS (SELECT 1 FROM employees e WHERE e.id = user_preferences.user_id AND e.tenant_id = current_tenant_id())',
+             NULL::TEXT),
             ('camera_operator_store_assignment',
-             'EXISTS (SELECT 1 FROM employees e WHERE e.id = camera_operator_store_assignment.operator_id AND e.tenant_id = current_tenant_id())'),
+             'EXISTS (SELECT 1 FROM employees e WHERE e.id = camera_operator_store_assignment.operator_id AND e.tenant_id = current_tenant_id())',
+             NULL::TEXT),
             ('task_evidence',
-             'EXISTS (SELECT 1 FROM tasks t WHERE t.id = task_evidence.task_id AND t.tenant_id = current_tenant_id())'),
+             'EXISTS (SELECT 1 FROM tasks t WHERE t.id = task_evidence.task_id AND t.tenant_id = current_tenant_id())',
+             NULL::TEXT),
             ('support_messages',
-             'EXISTS (SELECT 1 FROM support_tickets st WHERE st.id = support_messages.ticket_id AND st.tenant_id = current_tenant_id())'),
+             'EXISTS (SELECT 1 FROM support_tickets st WHERE st.id = support_messages.ticket_id AND st.tenant_id = current_tenant_id())',
+             NULL::TEXT),
             ('erp_server_config_backups',
-             'EXISTS (SELECT 1 FROM erp_servers s WHERE s.id = erp_server_config_backups.server_id AND s.tenant_id = current_tenant_id())'),
+             'EXISTS (SELECT 1 FROM erp_servers s WHERE s.id = erp_server_config_backups.server_id AND s.tenant_id = current_tenant_id())',
+             NULL::TEXT),
             ('daily_attendance_sheet_lines',
-             'EXISTS (SELECT 1 FROM daily_attendance_sheets d WHERE d.id = daily_attendance_sheet_lines.sheet_id AND d.tenant_id = current_tenant_id())'),
+             'EXISTS (SELECT 1 FROM daily_attendance_sheets d WHERE d.id = daily_attendance_sheet_lines.sheet_id AND d.tenant_id = current_tenant_id())',
+             NULL::TEXT),
             ('store_server_mapping',
-             'EXISTS (SELECT 1 FROM stores s WHERE s.id = store_server_mapping.store_id AND s.tenant_id = current_tenant_id())')
-        ) AS t(table_name, predicate)
+             'EXISTS (SELECT 1 FROM stores s WHERE s.id = store_server_mapping.store_id AND s.tenant_id = current_tenant_id())',
+             NULL::TEXT)
+        ) AS t(table_name, read_predicate, write_predicate)
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', spec.table_name);
         EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', spec.table_name);
-        EXECUTE format(
-            'CREATE POLICY tenant_isolation ON %I USING (%s) WITH CHECK (%s)',
-            spec.table_name, spec.predicate, spec.predicate
-        );
+        IF spec.write_predicate IS NULL THEN
+            EXECUTE format(
+                'CREATE POLICY tenant_isolation ON %I USING (%s) WITH CHECK (%s)',
+                spec.table_name, spec.read_predicate, spec.read_predicate
+            );
+        ELSE
+            EXECUTE format('DROP POLICY IF EXISTS tenant_isolation_read ON %I', spec.table_name);
+            EXECUTE format('DROP POLICY IF EXISTS tenant_isolation_write ON %I', spec.table_name);
+            EXECUTE format(
+                'CREATE POLICY tenant_isolation_read ON %I FOR SELECT USING (%s)',
+                spec.table_name, spec.read_predicate
+            );
+            -- `FOR ALL` (bax `positions` üzərindəki EYNİ izah, yuxarıda) —
+            -- `FOR INSERT, UPDATE, DELETE` siyahısı Postgres-də SİNTAKSİS
+            -- SƏHVİDİR.
+            EXECUTE format(
+                'CREATE POLICY tenant_isolation_write ON %I
+                     FOR ALL USING (%s) WITH CHECK (%s)',
+                spec.table_name, spec.write_predicate, spec.write_predicate
+            );
+        END IF;
     END LOOP;
 END
 $$;
@@ -2911,11 +3328,22 @@ BEGIN
     -- Audit izi: yalnız yazmaq və oxumaq (trigger-ə əlavə, defense-in-depth)
     EXECUTE format('REVOKE UPDATE, DELETE ON audit_logs FROM %I', v_role);
     EXECUTE format('REVOKE UPDATE, DELETE ON security_events FROM %I', v_role);
-    -- İcazə reyestri: yalnız Root GUI-dan dəyişir, lakin DDL-ə bənzər
-    -- əməliyyat olduğu üçün silmə hüququ verilmir.
-    EXECUTE format('REVOKE DELETE ON permission_flags FROM %I', v_role);
+    -- İ6 (DEEP-GAP dövrə auditi): İcazə reyestri yalnız Root GUI-dan
+    -- dəyişir. `create()` (`config_repositories.py::PostgresPermissionFlagRepository`)
+    -- yeni flag üçün İNSERT edir — o YOL AÇIQ qalır. LAKİN Python-da HEÇ BİR
+    -- `UPDATE permission_flags` çağırışı YOXDUR (yoxlanılıb) — köhnə
+    -- `REVOKE DELETE` təkbaşına kifayət etmirdi, çünki `UPDATE ... SET
+    -- hardlock_level = 0 WHERE code = ...` HƏLƏ DƏ mümkün idi. Dörd
+    -- təhlükəsizlik atributu artıq `enforce_flag_attributes_immutable()`
+    -- trigger-i ilə qorunur (§18), amma bu REVOKE İKİNCİ qatdır: `name_az`/
+    -- `category` kimi immutable OLMAYAN sütunlar da artıq UPDATE-ə bağlı
+    -- deyil — tətbiqin heç bir qanuni yolu bunu tələb etmir.
+    EXECUTE format('REVOKE UPDATE, DELETE ON permission_flags FROM %I', v_role);
     -- Lisenziya statusu YALNIZ Developer Panelindən dəyişir (bölmə 8)
     EXECUTE format('REVOKE UPDATE, DELETE ON license_tenants FROM %I', v_role);
+    -- `scheduled_job_runs`/`v_scheduled_job_health` BU NÖQTƏDƏ HƏLƏ MÖVCUD
+    -- DEYİL (§29-da yaradılır, bu blokdan SONRA) — onların REVOKE/GRANT-ı
+    -- §30 "YEKUN SƏLAHİYYƏTLƏR" blokundadır (İ7, DEEP-GAP dövrə auditi).
 
     -- Gələcəkdə yaradılacaq cədvəllər üçün defolt səlahiyyətlər
     EXECUTE format(
@@ -2953,10 +3381,29 @@ CREATE TABLE IF NOT EXISTS scheduled_job_runs (
 CREATE INDEX IF NOT EXISTS idx_job_runs_name_time
     ON scheduled_job_runs (job_name, started_at DESC);
 
+-- İ7: DELETE-ə qarşı append-only (§26-dakı `enforce_append_only()` ilə EYNİ
+-- qərar) — yalnız DELETE bloklanır, UPDATE YOX: `run_scheduled_job()` hər
+-- sətri əvvəl `PENDING` kimi INSERT edir, sonra NƏTİCƏ ilə UPDATE edir (iki
+-- mərhələli həyat dövrü) — `security_events`-in "yalnız UPDATE qadağandır"
+-- güzgüsüdür, burada isə əksinədir, çünki bu cədvəldə UPDATE QANUNİDİR,
+-- DELETE isə yalnız uğursuzluq izini silmək üçün işlədilə bilər.
+DROP TRIGGER IF EXISTS trg_scheduled_job_runs_append_only ON scheduled_job_runs;
+CREATE TRIGGER trg_scheduled_job_runs_append_only
+    BEFORE DELETE ON scheduled_job_runs
+    FOR EACH ROW EXECUTE FUNCTION enforce_append_only();
+
 -- TƏHLÜKƏSİZLİK: `p_sql` dinamik icra olunur, ona görə bu funksiya HEÇ VAXT
 -- istifadəçi girişi ilə çağırılmamalıdır. Yalnız aşağıdakı
 -- `run_all_scheduled_jobs()` onu sabit sətir literalları ilə çağırır və
 -- tətbiq rolundan EXECUTE hüququ §28-də geri alınır.
+--
+-- İ7 (DEEP-GAP dövrə auditi): `error_message` əvvəllər xam `SQLERRM` idi —
+-- bu cədvəl RLS-siz, tenant_id-siz və §30-dakı REVOKE-ə qədər tətbiq roluna
+-- açıq idi, ona görə bir tenant-ın job xətası (məs. constraint pozuntusu
+-- daxilində görünən başqa kirayəçinin açarı/ID-si) İSTƏNİLƏN kompasos_app
+-- sessiyasından oxuna bilirdi. `SQLSTATE + job adı` ilə məhdudlaşdırılır —
+-- tam mətn HƏLƏ DƏ `RAISE WARNING` ilə server loquna düşür (aşağıda), yəni
+-- DBA diaqnostikası itmir, yalnız CƏDVƏLDƏ geniş görünmə bağlanır.
 CREATE OR REPLACE FUNCTION run_scheduled_job(p_job_name TEXT, p_sql TEXT)
 RETURNS INTEGER AS $$
 DECLARE
@@ -2972,7 +3419,8 @@ BEGIN
         RETURN v_result;
     EXCEPTION WHEN OTHERS THEN
         UPDATE scheduled_job_runs
-        SET finished_at = now(), succeeded = FALSE, error_message = SQLERRM
+        SET finished_at = now(), succeeded = FALSE,
+            error_message = 'SQLSTATE ' || SQLSTATE || ' (' || p_job_name || ')'
         WHERE id = v_id;
         RAISE WARNING 'Planlaşdırılmış job uğursuz oldu (%): %', p_job_name, SQLERRM;
         RETURN -1;
@@ -2982,9 +3430,22 @@ $$ LANGUAGE plpgsql;
 
 -- Xarici scheduler (Windows Task Scheduler / systemd timer / GitHub Actions)
 -- yalnız BU funksiyanı çağırır: SELECT kompasos.run_all_scheduled_jobs();
+--
+-- İ7: `SECURITY DEFINER` — §30-da `scheduled_job_runs` üzərində birbaşa
+-- cədvəl SƏLAHİYYƏTİ `kompasos_app`-dan GERİ ALINIR (Python tətbiqi bu
+-- cədvələ toxunmur, bax §30 şərhi). Xarici scheduler isə MƏHZ `kompasos_app`
+-- ilə qoşulub bu funksiyanı çağırır (`docs/scheduler_setup.md`, Variant B) —
+-- `SECURITY DEFINER` OLMASAYDI, daxildəki `run_scheduled_job()` çağırışı
+-- (SECURITY INVOKER) çağıran rolun (indi cədvəl səlahiyyəti olmayan
+-- `kompasos_app`-ın) adından yazmağa cəhd edərdi və REVOKE-dən sonra
+-- SİLİNMİŞ SCHEDULER kimi sükutla uğursuz olardı. `SET search_path` axtarış
+-- yolu manipulyasiyasının qarşısını alır (standart SECURITY DEFINER
+-- bərkitməsi) — `run_scheduled_job` ÖZÜ SECURITY DEFINER DEYİL: ona EXECUTE
+-- birbaşa verilmir (yuxarı şərh), ona görə `p_sql` inyeksiya səthini
+-- GENİŞLƏNDİRMİR, yalnız BU sabit-çağırış zəncirinin daxilində işləyir.
 CREATE OR REPLACE FUNCTION run_all_scheduled_jobs() RETURNS TABLE (
     job_name TEXT, affected_rows INTEGER
-) AS $$
+) SECURITY DEFINER SET search_path = kompasos, pg_temp AS $$
 BEGIN
     RETURN QUERY
     SELECT 'escalate_verification_timeouts'::TEXT,
@@ -3079,8 +3540,21 @@ BEGIN
     -- Append-only qaytarılır (yeni GRANT onları geri açmış ola bilər)
     EXECUTE format('REVOKE UPDATE, DELETE ON audit_logs FROM %I', v_role);
     EXECUTE format('REVOKE UPDATE, DELETE ON security_events FROM %I', v_role);
-    EXECUTE format('REVOKE DELETE ON permission_flags FROM %I', v_role);
+    -- İ6 (DEEP-GAP dövrə auditi): §28-dəki EYNİ REVOKE-in güzgüsü — yuxarıdakı
+    -- wildcard GRANT onu geri açır.
+    EXECUTE format('REVOKE UPDATE, DELETE ON permission_flags FROM %I', v_role);
     EXECUTE format('REVOKE UPDATE, DELETE ON license_tenants FROM %I', v_role);
+
+    -- İ7 (DEEP-GAP dövrə auditi): `scheduled_job_runs` (§29) YALNIZ BURADA
+    -- (§30) REVOKE edilə bilər — obyekt §28-dən SONRA yaranır, orada hələ
+    -- mövcud deyildi. Python tətbiqi bu cədvələ HEÇ VAXT toxunmur (əvəzinə
+    -- `app_scheduled_job_runs`, migrations/036) — yeganə yazan `run_scheduled_
+    -- job()`-dur və o, indi `run_all_scheduled_jobs()` üzərindən `SECURITY
+    -- DEFINER` kontekstində işləyir (§29 şərhi), ona görə birbaşa cədvəl
+    -- səlahiyyətinin geri alınması xarici scheduler-i (Variant B) QIRMIR.
+    EXECUTE format(
+        'REVOKE SELECT, INSERT, UPDATE, DELETE ON scheduled_job_runs FROM %I', v_role
+    );
 
     -- KRİTİK: `run_scheduled_job(TEXT, TEXT)` ixtiyari SQL icra edir.
     -- Tətbiq roluna verilsə, kompromis halında istənilən funksiyanı çağırmaq

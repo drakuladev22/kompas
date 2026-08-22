@@ -1303,27 +1303,12 @@ class ScreenDataBinder:
         """
         balance = session.sales_points.balance_for(self._actor.id, tenant_id=session.tenant_id)
         available = int(balance.available)
-
-        catalog = [
-            item
-            for _reward_id, item in session.sales_points.list_rewards_for_employee(
-                session.tenant_id
-            )
-        ]
-        # "Növbəti mükafat" = balansı hələ ÇATMAYAN ən ucuz mükafat. Hamısı
-        # əlçatandırsa ən BAHALI götürülür ki, ölçən 100%-də dolu görünsün —
-        # sıfır dəyər ölçəni "hədəf yoxdur" halında bölmə xətasına salardı.
-        out_of_reach = sorted(item.cost_points for item in catalog if item.cost_points > available)
-        next_cost = (
-            out_of_reach[0]
-            if out_of_reach
-            else max((item.cost_points for item in catalog), default=0)
-        )
+        to_next_reward, next_reward_cost = _next_reward_gap(session, session.tenant_id, available)
         screen.set_balance(
             available,
             monthly_delta=_monthly_points_delta(session, self._actor.id),
-            to_next_reward=max(0, next_cost - available),
-            next_reward_cost=next_cost,
+            to_next_reward=to_next_reward,
+            next_reward_cost=next_reward_cost,
             rank_text=_points_rank_text(session, self._actor.id, period_start=balance.period.start),
         )
 
@@ -1724,6 +1709,41 @@ def _points_status_text(row: Any) -> str:
     if str(row["appeal_status"] or "") == "PENDING":
         return "Gözləyir"
     return "Təsdiqli"
+
+
+def _next_reward_gap(session: Session, tenant_id: Any, available: int) -> tuple[int, int]:
+    """`(to_next_reward, next_reward_cost)` — "Növbəti mükafat" düsturu.
+
+    Balansı hələ ÇATMAYAN ən ucuz mükafat götürülür. Hamısı əlçatandırsa ən
+    BAHALI götürülür ki, ölçən 100%-də dolu görünsün — sıfır dəyər ölçəni
+    "hədəf yoxdur" halında bölmə xətasına salardı. `_sales_points` VƏ
+    `points_balance_summary` bu düsturu PAYLAŞIR (bax aşağıdakı başlıq) —
+    balans obyektini hər çağıran ÖZÜ gətirir ki, əlavə `balance_for`
+    sorğusu yaranmasın.
+    """
+    catalog = [
+        item for _reward_id, item in session.sales_points.list_rewards_for_employee(tenant_id)
+    ]
+    out_of_reach = sorted(item.cost_points for item in catalog if item.cost_points > available)
+    next_cost = (
+        out_of_reach[0] if out_of_reach else max((item.cost_points for item in catalog), default=0)
+    )
+    return max(0, next_cost - available), next_cost
+
+
+def points_balance_summary(session: Session, employee_id: Any) -> tuple[int, int, int]:
+    """Balans + aylıq dəyişim + növbəti mükafata qalan xal.
+
+    `_sales_points` (Xallarım ekranı) VƏ `KioskSelfServiceController`-in İşçi
+    Ana Ekranındakı «Xal Balansım» kartı EYNİ rəqəmi göstərməlidir (bölmə 3,
+    6) — ikisi düsturu ayrı-ayrı yazsaydı, biri dəyişəndə digəri arxada
+    qalardı və eyni işçi iki fərqli balans görərdi (DEEP-GAP U5-in özü məhz
+    bu qüsurun bir forması idi: kart tamamilə doldurulmurdu).
+    """
+    balance = session.sales_points.balance_for(employee_id, tenant_id=session.tenant_id)
+    available = int(balance.available)
+    to_next_reward, _next_cost = _next_reward_gap(session, session.tenant_id, available)
+    return available, _monthly_points_delta(session, employee_id), to_next_reward
 
 
 def _monthly_points_delta(session: Session, employee_id: Any) -> int:
@@ -2314,4 +2334,5 @@ __all__ = [
     "ScreenDataBinder",
     "late_threshold_minutes",
     "matrix_window_days",
+    "points_balance_summary",
 ]

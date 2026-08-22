@@ -233,17 +233,47 @@ class PermissionFlag:
 
     # --------------------------- qoruyucu qaydalar -------------------------- #
 
-    def assert_grantable_to(self, role: SystemRole, *, is_camera_type_role: bool = False) -> None:
+    def assert_grantable_to(
+        self,
+        role: SystemRole,
+        *,
+        is_camera_type_role: bool = False,
+        is_store_tier_role: bool = False,
+    ) -> None:
         """Flag-in bu rola verilə biləcəyini yoxlayır, əks halda istisna atır.
 
         Args:
             role: Hədəf rol (custom rol üçün ən yaxın sistem rolu semantikası).
             is_camera_type_role: Custom rol açıq şəkildə "kamera-tipli"
                 işarələnibsə `True`.
+            is_store_tier_role: Custom rol açıq şəkildə "mağaza-pilləli"
+                (Mağaza Meneceri ekvivalenti) işarələnibsə `True`.
+
+                ────────────────────────────────────────────────────────────
+                T6 — CUSTOM ROL ANTİ-FRAUD VƏZİFƏ AYRILIĞINI YAN KEÇİRDİ
+                ────────────────────────────────────────────────────────────
+                `is_camera_type_role`-un GÜZGÜSÜ, EYNİ SƏBƏBDƏN: prioritet
+                OPERATIONAL (3) `effective_system_role`-da `HR_ADMIN`-ə
+                düşür (`_PRIORITY_TO_ROLE`), `role in ANTI_FRAUD_FORBIDDEN_ROLES`
+                isə YALNIZ `STORE_MANAGER`/`SELLER` KODUNU tanıyır. CEO
+                `FILIAL_RESPONSAVI` adlı prioritet-3 custom rol yaradıb
+                Mağaza Menecerini ora köçürsə, bu yoxlama onu `HR_ADMIN`
+                sayır və `can_approve_dual_control_override` sükutla keçir
+                — mağaza meneceri öz filialının kamera operatorunun manual
+                vaxt düzəlişini ÖZÜ təsdiqləyir.
+
+                Parametr `False` DEFOLTLUDUR, `is_camera_type_role` kimi: bu
+                "qorumasız keç" demək DEYİL, çağıran YERİN bunu AÇIQ
+                ötürməli olduğu deməkdir (`Position.grant()`,
+                `permission_guards.py`, `employee.py` bax). DB tərəfindəki
+                qarşılıq `positions.is_store_tier` sütunudur
+                (`enforce_anti_fraud_segregation()`, schema.sql §18) —
+                qayda YENƏ İKİ yerdədir (CLAUDE.md §5).
         """
         camera_capable = is_camera_type_role or role.is_camera_type
+        store_capable = is_store_tier_role or role in ANTI_FRAUD_FORBIDDEN_ROLES
 
-        if self.is_anti_fraud and role in ANTI_FRAUD_FORBIDDEN_ROLES:
+        if self.is_anti_fraud and store_capable:
             raise AuthorizationError(
                 f"ANTI-FRAUD: '{self.code}' flag-i '{role.value}' rolunda ola bilməz "
                 f"— vəzifə ayrılığı (bölmə 3)",
@@ -279,10 +309,20 @@ class PermissionFlag:
                 context={"flag": self.code, "role": role.value},
             )
 
-    def is_grantable_to(self, role: SystemRole, *, is_camera_type_role: bool = False) -> bool:
+    def is_grantable_to(
+        self,
+        role: SystemRole,
+        *,
+        is_camera_type_role: bool = False,
+        is_store_tier_role: bool = False,
+    ) -> bool:
         """İstisna atmayan variant — UI-da elementi gizlətmək üçün."""
         try:
-            self.assert_grantable_to(role, is_camera_type_role=is_camera_type_role)
+            self.assert_grantable_to(
+                role,
+                is_camera_type_role=is_camera_type_role,
+                is_store_tier_role=is_store_tier_role,
+            )
         except AuthorizationError:
             return False
         return True

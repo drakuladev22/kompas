@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -37,6 +38,7 @@ from src.domain.value_objects.identifiers import (
     EmployeeId,
     FineId,
     FineTypeId,
+    LeaveRequestId,
     PositionId,
     StoreId,
     TenantId,
@@ -463,6 +465,364 @@ def test_publish_batch_applies_keep_and_discard(
     assert drop.status is FineStatus.REVERSED
     assert "MONTHLY_FINES_PUBLISHED" in audit.actions()
     assert len(notifier.messages) == 1
+
+
+# --------------------------------------------------------------------------- #
+# DEEP-GAP D2 — deaktiv işçinin cəriməsi nəşr edilmir
+# --------------------------------------------------------------------------- #
+
+
+class _EmployeeActiveLookup:
+    """`employees` portunun sahtəsi — yalnız `.get(id).is_active` lazımdır."""
+
+    def __init__(self, active_by_id: dict[EmployeeId, bool]) -> None:
+        self._active_by_id = active_by_id
+
+    def get(self, employee_id: EmployeeId) -> SimpleNamespace | None:
+        if employee_id not in self._active_by_id:
+            return None
+        return SimpleNamespace(is_active=self._active_by_id[employee_id])
+
+
+def test_publish_batch_holds_fine_when_employee_is_inactive() -> None:
+    """ƏSAS HƏLL: deaktiv işçinin cəriməsi `PENDING_REVIEW`-də qalır, nəşr olunmur."""
+    audit = RecordingAudit()
+    notifier = RecordingNotifier()
+    use_case = MonthlyFineReviewUseCase(
+        clock=FakeClock(PUSHED),  # type: ignore[arg-type]
+        audit=audit,  # type: ignore[arg-type]
+        notifier=notifier,  # type: ignore[arg-type]
+        limits=FakeSystemLimits(),  # type: ignore[arg-type]
+        review_batches=RecordingFineReviewBatches(),  # type: ignore[arg-type]
+        employees=_EmployeeActiveLookup({WORKER: False}),  # type: ignore[arg-type]
+    )
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+    fine = make_fine()
+
+    result = use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={fine.id: fine},
+        decisions=[],
+    )
+
+    assert result.published == []
+    assert result.discarded == []
+    assert result.held_inactive_employee == [fine.id]
+    assert fine.status is FineStatus.PENDING_REVIEW, "Sətir mutasiya OLUNMAMALIDIR"
+    assert fine.published_at is None
+
+
+def test_publish_batch_notifies_can_publish_fines_holders_when_holding_a_fine() -> None:
+    audit = RecordingAudit()
+    notifier = RecordingNotifier()
+    use_case = MonthlyFineReviewUseCase(
+        clock=FakeClock(PUSHED),  # type: ignore[arg-type]
+        audit=audit,  # type: ignore[arg-type]
+        notifier=notifier,  # type: ignore[arg-type]
+        limits=FakeSystemLimits(),  # type: ignore[arg-type]
+        review_batches=RecordingFineReviewBatches(),  # type: ignore[arg-type]
+        employees=_EmployeeActiveLookup({WORKER: False}),  # type: ignore[arg-type]
+    )
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+    fine = make_fine()
+
+    use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={fine.id: fine},
+        decisions=[],
+    )
+
+    categories = [message["category"] for message in notifier.messages]
+    assert "MONTHLY_FINES_HELD_INACTIVE_EMPLOYEE" in categories
+    audit_after = audit.entries[-1]["after_state"]
+    assert audit_after["held_inactive_employee"] == 1
+
+
+def test_publish_batch_still_publishes_fines_of_active_employees_in_the_same_batch() -> None:
+    """Bir partiyada aktiv VƏ deaktiv işçi qarışsa YALNIZ deaktivin sətri saxlanılır."""
+    other_worker = EmployeeId(uuid.uuid4())
+    use_case = MonthlyFineReviewUseCase(
+        clock=FakeClock(PUSHED),  # type: ignore[arg-type]
+        audit=RecordingAudit(),  # type: ignore[arg-type]
+        notifier=RecordingNotifier(),  # type: ignore[arg-type]
+        limits=FakeSystemLimits(),  # type: ignore[arg-type]
+        review_batches=RecordingFineReviewBatches(),  # type: ignore[arg-type]
+        employees=_EmployeeActiveLookup({WORKER: False, other_worker: True}),  # type: ignore[arg-type]
+    )
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+    held = make_fine()
+    active = make_fine()
+    active.employee_id = other_worker
+
+    result = use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={held.id: held, active.id: active},
+        decisions=[],
+    )
+
+    assert result.published == [active.id]
+    assert result.held_inactive_employee == [held.id]
+
+
+def test_publish_batch_publishes_normally_when_employee_port_is_not_wired(
+    review_uc: tuple[MonthlyFineReviewUseCase, RecordingAudit, RecordingNotifier],
+) -> None:
+    """`employees=None` (defolt) — köhnə davranış qırılmır."""
+    use_case, _, _ = review_uc
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+    fine = make_fine()
+
+    result = use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={fine.id: fine},
+        decisions=[],
+    )
+
+    assert result.published == [fine.id]
+    assert result.held_inactive_employee == []
+
+
+# --------------------------------------------------------------------------- #
+# DEEP-GAP T3 — sübutu Drive-a yüklənməmiş cərimə nəşr edilmir
+# --------------------------------------------------------------------------- #
+#
+# NİYƏ BU TESTLƏR VAR
+# ───────────────────────────────────────────────────────────────────────────
+# `photo_evidence_url` MANUAL_CAMERA axınında LOKAL növbə açarını saxlayır
+# (`fine_entry.py` şəkli əvvəlcə diskə yazır), yəni "dolu" olması şəklin
+# Drive-da olduğunu SÜBUT ETMİR. Növbə faylı silinsə (admin hüququ TƏLƏB
+# ETMİR) cərimə "sübutu var" görünüşü ilə nəşr olunurdu və işçiyə 72 saatlıq
+# etiraz pəncərəsi açılırdı — etiraza baxan şəxs üçün foto isə HEÇ YERDƏ
+# yox idi.
+
+
+class _EvidenceSyncLookup:
+    """`FineEvidenceSyncReader` sahtəsi — hansı id-lərin soruşulduğunu SAXLAYIR.
+
+    Çağırış SAYI da ölçülür: aylıq icmalda yüzlərlə sətir olur və hər sətir
+    üçün ayrıca sorğu "[Bütün Filiallara Göndər]" düyməsini N+1 gediş-gəlişə
+    çevirərdi.
+    """
+
+    def __init__(self, unsynced: set[FineId]) -> None:
+        self._unsynced = unsynced
+        self.calls: list[list[FineId]] = []
+
+    def unsynced_evidence_ids(self, fine_ids: list[FineId]) -> set[FineId]:
+        self.calls.append(list(fine_ids))
+        return {fine_id for fine_id in fine_ids if fine_id in self._unsynced}
+
+
+def make_delay_fine() -> Fine:
+    """AUTO_DELAY cəriməsi — şəkli YOXDUR və olmamalıdır."""
+    return Fine(
+        fine_id=FineId(uuid.uuid4()),
+        tenant_id=TENANT,
+        employee_id=WORKER,
+        store_id=STORE_A,
+        source=FineSource.AUTO_DELAY,
+        amount=Money.parse("5.00"),
+        issued_at=CREATED,
+        leave_request_id=LeaveRequestId(uuid.uuid4()),
+    )
+
+
+def _review_use_case(
+    *,
+    evidence: _EvidenceSyncLookup | None = None,
+    employees: object | None = None,
+    audit: RecordingAudit | None = None,
+    notifier: RecordingNotifier | None = None,
+) -> MonthlyFineReviewUseCase:
+    return MonthlyFineReviewUseCase(
+        clock=FakeClock(PUSHED),  # type: ignore[arg-type]
+        audit=audit or RecordingAudit(),  # type: ignore[arg-type]
+        notifier=notifier or RecordingNotifier(),  # type: ignore[arg-type]
+        limits=FakeSystemLimits(),  # type: ignore[arg-type]
+        review_batches=RecordingFineReviewBatches(),  # type: ignore[arg-type]
+        employees=employees,  # type: ignore[arg-type]
+        evidence_sync=evidence,  # type: ignore[arg-type]
+    )
+
+
+def test_publish_batch_holds_manual_fine_whose_evidence_is_not_synced() -> None:
+    """ƏSAS HƏLL: şəkil Drive-da deyilsə cərimə `PENDING_REVIEW`-də qalır."""
+    fine = make_fine()
+    use_case = _review_use_case(evidence=_EvidenceSyncLookup({fine.id}))
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+
+    result = use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={fine.id: fine},
+        decisions=[],
+    )
+
+    assert result.published == []
+    assert result.held_missing_evidence == [fine.id]
+    assert fine.status is FineStatus.PENDING_REVIEW, "Sətir mutasiya OLUNMAMALIDIR"
+    assert fine.published_at is None
+
+
+def test_publish_batch_publishes_when_the_evidence_is_already_on_drive() -> None:
+    """Şəkil yükləndikdə cərimə NORMAL nəşr olunur — saxlama TƏXİRDİR, rədd deyil."""
+    fine = make_fine()
+    use_case = _review_use_case(evidence=_EvidenceSyncLookup(set()))
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+
+    result = use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={fine.id: fine},
+        decisions=[],
+    )
+
+    assert result.published == [fine.id]
+    assert result.held_missing_evidence == []
+    assert fine.status is FineStatus.PUBLISHED
+
+
+def test_delay_fines_are_never_asked_about_evidence() -> None:
+    """AUTO_DELAY sorğuya DÜŞMÜR — düşsəydi HAMISI əbədi gözləyən qalardı."""
+    delay = make_delay_fine()
+    lookup = _EvidenceSyncLookup({delay.id})
+    use_case = _review_use_case(evidence=lookup)
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+
+    result = use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={delay.id: delay},
+        decisions=[],
+    )
+
+    assert result.published == [delay.id]
+    assert lookup.calls == [], "MANUAL_CAMERA yoxdursa sorğu ÜMUMİYYƏTLƏ getməməlidir"
+
+
+def test_evidence_is_asked_once_for_the_whole_batch() -> None:
+    """N+1 gediş-gəliş qadağandır — bir sorğu, bütün kamera cərimələri."""
+    first, second = make_fine(), make_fine(store_id=STORE_B)
+    delay = make_delay_fine()
+    lookup = _EvidenceSyncLookup(set())
+    use_case = _review_use_case(evidence=lookup)
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+
+    use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={first.id: first, second.id: second, delay.id: delay},
+        decisions=[],
+    )
+
+    assert len(lookup.calls) == 1
+    assert sorted(map(str, lookup.calls[0])) == sorted(map(str, [first.id, second.id]))
+
+
+def test_holding_for_missing_evidence_notifies_and_is_audited() -> None:
+    """Bildiriş AYRI kateqoriyadadır: həlli TEXNİKİdir, HR qərarı deyil."""
+    audit = RecordingAudit()
+    notifier = RecordingNotifier()
+    fine = make_fine()
+    use_case = _review_use_case(
+        evidence=_EvidenceSyncLookup({fine.id}), audit=audit, notifier=notifier
+    )
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+
+    use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={fine.id: fine},
+        decisions=[],
+    )
+
+    categories = [message["category"] for message in notifier.messages]
+    assert "MONTHLY_FINES_HELD_MISSING_EVIDENCE" in categories
+    assert audit.entries[-1]["after_state"]["held_missing_evidence"] == 1
+
+
+def test_inactive_employee_is_reported_before_missing_evidence() -> None:
+    """İki saxlama üst-üstə düşəndə İŞÇİ vəziyyəti öndədir.
+
+    Şəkil yüklənsə belə deaktiv işçinin etiraz pəncərəsi açıla bilmir — yəni
+    o səbəb TEXNİKİ səbəbdən ÜSTÜNDÜR və HR-ə göstərilməli olan da odur.
+    """
+    fine = make_fine()
+    use_case = _review_use_case(
+        evidence=_EvidenceSyncLookup({fine.id}),
+        employees=_EmployeeActiveLookup({WORKER: False}),
+    )
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+
+    result = use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={fine.id: fine},
+        decisions=[],
+    )
+
+    assert result.held_inactive_employee == [fine.id]
+    assert result.held_missing_evidence == []
+
+
+def test_publish_batch_publishes_normally_when_evidence_port_is_not_wired(
+    review_uc: tuple[MonthlyFineReviewUseCase, RecordingAudit, RecordingNotifier],
+) -> None:
+    """`evidence_sync=None` (defolt) — köhnə davranış qırılmır."""
+    use_case, _, _ = review_uc
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+    fine = make_fine()
+
+    result = use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={fine.id: fine},
+        decisions=[],
+    )
+
+    assert result.published == [fine.id]
+    assert result.held_missing_evidence == []
+
+
+def test_discard_wins_over_a_missing_evidence_hold() -> None:
+    """«Sil» qərarı verilən sətir saxlanmır — sübut onsuz da lazım deyil.
+
+    Əks halda səhvən yazılmış cərimə şəkli itdiyi üçün ƏBƏDİ olaraq
+    `PENDING_REVIEW`-də ilişib qalardı və hər aylıq icmalda təkrar görünərdi.
+    """
+    fine = make_fine()
+    use_case = _review_use_case(evidence=_EvidenceSyncLookup({fine.id}))
+    actor = make_employee(SystemRole.HR_ADMIN, PUBLISH_FINES_FLAG)
+
+    result = use_case.publish_batch(
+        actor=actor,
+        tenant_id=TENANT,
+        review_month="2026-08",
+        fines={fine.id: fine},
+        decisions=[
+            FineDecision(
+                fine_id=fine.id, decision=ReviewDecision.DISCARD, reason="Səhv qeyd edilib"
+            )
+        ],
+    )
+
+    assert result.discarded == [fine.id]
+    assert result.held_missing_evidence == []
 
 
 def test_default_decision_is_keep(

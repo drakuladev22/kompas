@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from src.application.root_limits import fallback_int, limit_int
 from src.domain.policies import SystemLimitKey
+from src.domain.value_objects.authorization import SystemRole
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
@@ -205,6 +206,24 @@ class BackupAccessUseCase:
         )
 
     def _require(self, actor: Employee) -> None:
+        """`can_manage_backups` + `Root`/`CEO` rolu (T2, ikinci qat).
+
+        İKİ QAT — naxış `db_switch._require_permission`-dəki ilə EYNİDİR
+        (həmin docstring-ə bax): flag qatı YETƏRLİDİR (`can_manage_backups`
+        hardlock `ROOT_CEO`-ya qaldırılır — bax bu faylın son commit-i), rol
+        qatı isə DEFANS-İN-DEPTH üçün AÇIQ saxlanılır və PRAKTİKADA HEÇ VAXT
+        tək başına icra olunmur. Fərq yalnız icazə verilən rol dəstindədir:
+        `db_switch` YALNIZ `Root`, bu isə `Root` VƏ `CEO` — çünki bərpa
+        özünə-xidmət alətidir və CEO onu Root-un köməyi OLMADAN işlətməlidir
+        (bölmə 7, bax modul başlığı) — `ROOT_ONLY` seçsəydi müştəri öz
+        backup-ını bərpa edə bilməzdi.
+
+        BU ƏMƏLİYYAT NİYƏ İKİNCİ QAT TƏLƏB EDİR: `restore()` bütün tenant-ın
+        audit/fines/override cədvəllərini DROP+CREATE edir — `db_switch` ilə
+        EYNİ risk sinfi. Tək flag qatına etibar etmək kifayət edərdi, LAKİN
+        hardlock miqrasiyası tətbiq OLUNANA qədər (infra-nın işi) bu qat
+        YEGANƏ maneədir, ona görə indi əlavə olunur, sonra deyil.
+        """
         if not actor.has_permission(MANAGE_BACKUPS_FLAG, now=self._clock.now()):
             _security_log.warning(
                 "BACKUP_ACCESS_DENIED",
@@ -213,6 +232,16 @@ class BackupAccessUseCase:
             raise BackupAccessError(
                 f"«{MANAGE_BACKUPS_FLAG}» səlahiyyəti yoxdur",
                 context={"actor_id": str(actor.id)},
+            )
+        if actor.position.effective_system_role not in (SystemRole.ROOT, SystemRole.CEO):
+            _security_log.warning(
+                "BACKUP_ACCESS_DENIED_ROLE",
+                extra={"actor_id": str(actor.id), "role": actor.position.code},
+            )
+            raise BackupAccessError(
+                "Ehtiyat nüsxə/bərpa YALNIZ Root və ya CEO tərəfindən icra edilə bilər (bölmə 7)",
+                user_message="Bu əməliyyat yalnız Root və ya CEO üçündür.",
+                context={"role": actor.position.code},
             )
 
 

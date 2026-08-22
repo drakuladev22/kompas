@@ -175,11 +175,21 @@ class PermissionMatrixController:
         """
         position = self._roles.get(role_code)
         if position is None:
+            # BANNER YENİLƏNMƏ İLƏ UDULURDU (QA-FULL FAZA 3 davamı) — eyni
+            # qüsur `announcements.py::_on_withdraw`-da tapılmışdı: `show_error(...)`
+            # ardınca DƏRHAL `self.refresh(screen)` gəlirdi, `refresh()` isə
+            # uğurla qayıdanda `select_role()` → `set_matrix()` →
+            # `show_content()` zəncirini işə salır və `ContentSwitcher`-i
+            # heç bir render arası olmadan «content»-ə
+            # qaytarır. Nəticə: istifadəçi HEÇ BİR mesaj görmür, ekran sadəcə
+            # səbəbsiz yenilənir. Meyar sabitdir: yenilənmə yolu switcher-i
+            # «content»-ə qaytarırsa — qüsur. Yenilənmə indi `on_retry` ilə
+            # istifadəçinin öz qərarıdır.
             screen.show_error(
                 title="Rol tapılmadı",
-                message="Bu rol artıq dəyişdirilib. Siyahı yenilənir.",
+                message="Bu rol artıq dəyişdirilib. «Yenidən Cəhd Et» matrisi yeniləyir.",
+                on_retry=lambda: self.refresh(screen),
             )
-            self.refresh(screen)
             return
 
         selected = tuple(str(code) for code, enabled in (flags or {}).items() if bool(enabled))
@@ -197,18 +207,32 @@ class PermissionMatrixController:
             # Self-Escalation istisnalarının hamısı `KompasOSError`-dur və
             # `user_message` səbəbi Azərbaycanca deyir. Səssiz udulma admin-ə
             # "dəyişiklik tətbiq olundu" təəssüratı verərdi.
-            screen.show_error(title="İcazələr yazılmadı", message=error.user_message)
-            # Ekran YALAN göstərməməlidir: rədd edilmiş xanalar bazadakı
-            # vəziyyətə qaytarılır.
-            self.refresh(screen)
+            # QÜSUR BU EKRANDA ƏN AĞIR NƏTİCƏNİ VERİRDİ (QA-FULL FAZA 3
+            # davamı): `show_error(...)` ardınca gələn `self.refresh(screen)`
+            # `select_role()` → `set_matrix()` → `show_content()` zəncirini işə
+            # salır və guard səbəbini daşıyan banner-in ÜSTÜNDƏN yazırdı. Admin
+            # yuxarıdakı `user_message`-i HEÇ VAXT görmürdü — xanalar səbəbsiz
+            # geri qayıdırdı və bu, "proqram dəyişikliyimi özbaşına ləğv etdi"
+            # kimi oxunurdu. Halbuki səbəb məhz burada ən vacibdir: hardlock,
+            # anti-fraud, SEC-001 və Self-Escalation rədd cavabları admin-ə
+            # NƏYİN qadağan olduğunu deyən yeganə mesajdır.
+            #
+            # «Ekran YALAN göstərməməlidir» tələbi İTMİR: `on_retry` həmin
+            # `refresh()`-i çağırır, yəni rədd edilmiş xanalar bazadakı
+            # vəziyyətə qayıdır — sadəcə admin SƏBƏBİ oxuduqdan SONRA.
+            screen.show_error(
+                title="İcazələr yazılmadı",
+                message=error.user_message,
+                on_retry=lambda: self.refresh(screen),
+            )
             return
         except Exception:
             _error_log.exception("PERMISSION_MATRIX_SAVE_FAILED", extra={"role": role_code})
             screen.show_error(
                 title="İcazələr yazılmadı",
                 message="Dəyişiklik saxlanmadı. Yenidən cəhd edin.",
+                on_retry=lambda: self.refresh(screen),
             )
-            self.refresh(screen)
             return
 
         self.refresh(screen)
@@ -218,14 +242,20 @@ class PermissionMatrixController:
 
         dialog = RoleCreateDialog(screen.theme, parent=screen)
         dialog.submitted.connect(
-            lambda name, priority, is_camera: self._create_role(
-                screen, name=name, priority=priority, is_camera=is_camera
+            lambda name, priority, is_camera, is_store: self._create_role(
+                screen, name=name, priority=priority, is_camera=is_camera, is_store=is_store
             )
         )
         dialog.exec()
 
     def _create_role(
-        self, screen: PermissionMatrixScreen, *, name: str, priority: int, is_camera: bool
+        self,
+        screen: PermissionMatrixScreen,
+        *,
+        name: str,
+        priority: int,
+        is_camera: bool,
+        is_store: bool,
     ) -> None:
         """Yeni custom rol — İCAZƏSİZ yaradılır, flag-lər sonra verilir.
 
@@ -245,6 +275,8 @@ class PermissionMatrixController:
                 name_az=name,
                 priority=RolePriority(priority),
                 is_camera_type=is_camera,
+                # T6 (`security` sahibi) — `is_camera_type`-ın GÜZGÜSÜ.
+                is_store_tier=is_store,
                 flag_codes=(),
             )
         except ValueError:
@@ -361,6 +393,12 @@ def _flag_groups(
     now = datetime.now(UTC)
     role = position.effective_system_role
     is_camera = bool(position.is_camera_type)
+    # `is_store_tier` `is_camera_type`-ın EYNİ NAXIŞIDIR (T6, `security`
+    # sahibi): bayraq olmadan `is_grantable_to()` "mağaza-pilləli" custom
+    # rolu tanımır və anti-fraud checkbox-ları YANLIŞ AKTİV göstərir —
+    # admin işarələyib "Yadda Saxla" basana qədər rəddi görmür (bax
+    # yuxarıdakı "DÖRDÜNCÜ SAHƏ" şərhi, eyni qapı, eyni gecikmə riski).
+    is_store = bool(position.is_store_tier)
 
     grouped: dict[str, list[tuple[str, str, bool, bool, bool]]] = {}
     for flag in session.uow.repository("permission_flags").list_all():
@@ -370,7 +408,9 @@ def _flag_groups(
                 flag.code,
                 labels.get(flag.code, flag.code),
                 flag.code in granted,
-                not flag.is_grantable_to(role, is_camera_type_role=is_camera),
+                not flag.is_grantable_to(
+                    role, is_camera_type_role=is_camera, is_store_tier_role=is_store
+                ),
                 actor is None or actor.has_permission(flag.code, now=now),
             )
         )

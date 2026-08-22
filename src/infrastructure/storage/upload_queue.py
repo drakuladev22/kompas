@@ -299,6 +299,7 @@ class EvidenceUploadQueue:
         self,
         db_path: Path | str,
         *,
+        tenant_id: str | None = None,
         spool_dir: Path | str | None = None,
         backoff_schedule: tuple[int, ...] | None = None,
         max_upload_bytes: int = MAX_UPLOAD_BYTES,
@@ -307,6 +308,18 @@ class EvidenceUploadQueue:
         encryption: EncryptionService | None = None,
     ) -> None:
         """Args:
+        tenant_id: D2 (dövrə audit) — `pending()`/`claim_pending()` YALNIZ bu
+            kirayəçinin sətirlərini seçir (naxış: `DriveConnectionRepository`-
+            nin konstruktoru). SQLite indeksi `evidence_uploads.db` bir DATA
+            QOVLUĞUNA bağlıdır (`resolve_data_file`), tenant-a YOX — maşın
+            tenant DƏYİŞDİRİLƏRƏK yenidən quraşdırılsa (və ya köhnə fayl
+            silinməyibsə), köhnə tenant-ın gözləyən sətirləri qalır. Filtrsiz
+            `claim_pending()` onları CARİ (`self._factory.active()`) tenant-ın
+            Drive-ına yükləyirdi — sübut zənciri qırılırdı: `file_id` A-nın
+            `fines` sətrinə yazılır, fayl isə B-nin Drive-ındadır. `None` =
+            KÖHNƏ (filtrsiz) davranış — YALNIZ `tests/`-in tenant-a əhəmiyyət
+            verməyən ssenariləri üçün; kompozisiya kökü ONU HƏMİŞƏ ötürür
+            (bax `composition.py::evidence_queue`).
         max_upload_bytes: `enqueue()`-dəki ölçü həddi. Defolt `MAX_UPLOAD_BYTES`
             FALLBACK-dır (həqiqi mənbə `system_limits.MAX_UPLOAD_SIZE_BYTES`);
             provider öz həddini ayrıca tətbiq edir. Sıfır/mənfi dəyər həddi
@@ -331,6 +344,7 @@ class EvidenceUploadQueue:
             encrypted_column`), sükutla "təhlükəsizdir" görünən YALANÇI qat
             DEYİL. İSTEHSALATDA kompozisiya kökü onu HƏMİŞƏ ötürür.
         """
+        self._tenant_id = tenant_id
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._spool = Path(spool_dir) if spool_dir else self._path.parent / "evidence_spool"
@@ -681,16 +695,30 @@ class EvidenceUploadQueue:
 
     # -------------------------------- oxuma ---------------------------------- #
 
+    def _tenant_clause(self) -> tuple[str, tuple[str, ...]]:
+        """D2: `self._tenant_id` verilibsə SQL-ə `AND tenant_id = ?` qoşur.
+
+        `None` halı (naxış: konstruktor şərhi) YALNIZ tenant-a əhəmiyyət
+        verməyən köhnə testlər üçün qalır — boş sətir + boş parametr
+        qaytarır, sorğu filtrsiz qalır.
+        """
+        if self._tenant_id is None:
+            return "", ()
+        return " AND tenant_id = ?", (self._tenant_id,)
+
     def pending(self, *, now: datetime | None = None, limit: int = 20) -> list[PendingUpload]:
         moment = now or datetime.now(UTC)
+        clause, clause_params = self._tenant_clause()
         with self._lock:
             rows = self._conn.execute(
-                """
+                # `clause` sabit İKİ variantdan biridir (`_tenant_clause`) —
+                # bölmə 4 qaydası.
+                f"""
                 SELECT * FROM evidence_uploads
-                 WHERE status = 'PENDING' AND next_attempt_at <= ?
+                 WHERE status = 'PENDING' AND next_attempt_at <= ?{clause}
                  ORDER BY seq LIMIT ?
-                """,
-                (moment.isoformat(), limit),
+                """,  # noqa: S608 — şərtlər sabit siyahıdandır
+                (moment.isoformat(), *clause_params, limit),
             ).fetchall()
         return [_row_to_upload(row) for row in rows]
 
@@ -717,15 +745,17 @@ class EvidenceUploadQueue:
         """
         moment = now or datetime.now(UTC)
         stale_at = moment + timedelta(seconds=self._claim_stale_after())
+        clause, clause_params = self._tenant_clause()
         with self._lock, self._transaction() as conn:
             rows = conn.execute(
-                """
+                # `clause` sabit İKİ variantdan biridir (`_tenant_clause`).
+                f"""
                 SELECT * FROM evidence_uploads
                  WHERE next_attempt_at <= ?
-                   AND status IN ('PENDING', 'PROCESSING')
+                   AND status IN ('PENDING', 'PROCESSING'){clause}
                  ORDER BY seq LIMIT ?
-                """,
-                (moment.isoformat(), limit),
+                """,  # noqa: S608 — şərtlər sabit siyahıdandır
+                (moment.isoformat(), *clause_params, limit),
             ).fetchall()
             for row in rows:
                 # Sətir-sətir UPDATE: `IN (?,?,...)` siyahısını sətir

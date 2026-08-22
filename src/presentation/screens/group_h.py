@@ -1472,6 +1472,14 @@ class HelpCenterScreen(Screen):
         """
         clear_layout(self._chip_layout)
         clear_layout(self._topics_layout, keep_last=1)
+        # QA-FULL FAZA 3 tapıntısı: `_topic_cards` BURADA, hər iki yoldan
+        # (boş VƏ dolu) ƏVVƏL təmizlənir. Əvvəl yalnız aşağıdakı qeyri-boş
+        # qolda təmizlənirdi — filtr NƏTİCƏSİ boş olanda `clear_layout()`
+        # köhnə `HelpTopicCard` widget-lərinə `deleteLater()` çağırırdı, LAKİN
+        # `return` bu sətrə çatmadan geri qayıdırdı və dict silinmiş Qt
+        # obyektlərinə köhnəlmiş istinadlar saxlayırdı (`shiboken` "already
+        # deleted" RuntimeError-ı üçün hazır tələ).
+        self._topic_cards.clear()
 
         topics = [topic for topic in HELP_TOPICS if keys is None or topic[0] in keys]
         if not topics:
@@ -1492,7 +1500,6 @@ class HelpCenterScreen(Screen):
             self._chip_layout.addWidget(chip)
         self._chip_layout.addWidget(stretch())
 
-        self._topic_cards.clear()
         for key, title, steps in topics:
             card = HelpTopicCard(title, steps, self.theme)
             self._topic_cards[key] = card

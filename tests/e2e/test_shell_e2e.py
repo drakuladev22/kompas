@@ -12,6 +12,7 @@ davranışları təsdiqlənir:
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 
@@ -470,6 +471,25 @@ def test_drive_screen_button_label_reflects_an_existing_account(qtbot, theme) ->
     assert screen._connect.text() == "Hesabı Dəyiş"
 
 
+class _StubClock:
+    """`ServerTimeService`-in yerini tutur (DEEP-GAP FAZA 4, T5): `_permitted()`
+    artıq `self._context.clock.now()` çağırır, OS saatını YOX — ona görə
+    kontekst əvəzinə çılpaq `object()` vermək kifayət etmir."""
+
+    def now(self) -> datetime:
+        return datetime.now(UTC)
+
+
+class _StubContext:
+    """Kontrollerin bu testlərdə toxunduğu YEGANƏ sahə — `clock`.
+
+    Sessiya açılmır: üç testin hər biri ya səlahiyyət qapısında, ya da Google
+    konfiqurasiyası yoxlanışında dayanır, DB-yə çatmır."""
+
+    def __init__(self) -> None:
+        self.clock = _StubClock()
+
+
 class _StubActor:
     """`has_permission` və `id` — kontrollerin toxunduğu yeganə sahələr."""
 
@@ -492,7 +512,7 @@ def test_drive_consent_is_blocked_without_the_permission(qtbot, theme, monkeypat
 
     screen = DriveConnectionScreen(theme)
     qtbot.addWidget(screen)
-    controller = DriveConnectionController(object(), _StubActor(allowed=False))  # type: ignore[arg-type]
+    controller = DriveConnectionController(_StubContext(), _StubActor(allowed=False))  # type: ignore[arg-type]
     controller._on_connect(screen)
 
     # EKRAN ARTIQ XƏTA VƏZİYYƏTİNƏ KEÇMİR (QA-FULL Faza 3): `show_error()`
@@ -517,7 +537,7 @@ def test_drive_consent_reports_missing_google_config(qtbot, theme, monkeypatch) 
 
     screen = DriveConnectionScreen(theme)
     qtbot.addWidget(screen)
-    controller = DriveConnectionController(object(), _StubActor(allowed=True))  # type: ignore[arg-type]
+    controller = DriveConnectionController(_StubContext(), _StubActor(allowed=True))  # type: ignore[arg-type]
     controller._on_connect(screen)
 
     # SƏTİR-İÇİ BANNER, TAM-EKRAN XƏTA DEYİL (bax yuxarıdakı testin şərhi).
@@ -543,7 +563,7 @@ def test_drive_consent_starts_a_flow_and_cancel_releases_it(qtbot, theme, monkey
 
     screen = DriveConnectionScreen(theme)
     qtbot.addWidget(screen)
-    controller = DriveConnectionController(object(), _StubActor(allowed=True))  # type: ignore[arg-type]
+    controller = DriveConnectionController(_StubContext(), _StubActor(allowed=True))  # type: ignore[arg-type]
     controller._on_connect(screen)
 
     assert controller._flow is not None

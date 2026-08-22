@@ -79,8 +79,16 @@ class _Screen:
     def select_role(self, key: str) -> None:
         self.selected.append(key)
 
-    def show_error(self, *, title: str, message: str) -> None:
+    def show_error(self, *, title: str, message: str, on_retry: Any = None) -> None:
         self.errors.append((title, message))
+        # `on_retry` YALNIZ SAXLANIR, ÇAĞIRILMIR — bu sahtə `banner refresh()
+        # ilə sükutla üstündən yazılır` reqressiyasını (bax `permission_
+        # matrix.py::_on_saved` şərhi) yoxlayan testlərin `_Screen.show_error`
+        # çağırışını real imza ilə uyğunlaşdırır. `Screen.show_error`
+        # (`base.py`) `on_retry=None` olanda "Yenidən Cəhd Et" düyməsini
+        # ümumiyyətlə çəkmir — sahtə bunu simulyasiya etmir, çünki heç bir
+        # test düymənin RENDER olub-olmadığını bu fayldan yoxlamır.
+        self.on_retry = on_retry
 
 
 class _Positions:

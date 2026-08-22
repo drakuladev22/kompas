@@ -74,6 +74,7 @@ if TYPE_CHECKING:
 
     from src.domain.entities.employee import Employee
     from src.domain.entities.fine import Fine
+    from src.domain.value_objects.identifiers import FineId
     from src.presentation.composition import ApplicationContext, Session
     from src.presentation.screens.fine_review import MonthlyFineReviewScreen
 
@@ -201,7 +202,8 @@ class MonthlyFineReviewController:
         self._store_of = {str(fine.id): str(fine.store_id) for fine in fines}
 
         names = _display_names(session, fines)
-        groups = _group_rows(fines, names)
+        unsynced = _unsynced_camera_evidence(session, fines)
+        groups = _group_rows(fines, names, unsynced)
         total = sum((fine.amount.amount for fine in fines), Decimal("0"))
         summary = (
             f"{len(fines)} cərimə · {len(groups)} filial · {_amount_text(total)} nəşr gözləyir"
@@ -585,7 +587,41 @@ def _lookup(
     return {str(row["id"]): to_name(row) for row in rows}
 
 
-def _group_rows(fines: list[Fine], names: dict[str, dict[str, str]]) -> list[FineReviewGroup]:
+def _unsynced_camera_evidence(session: Session, fines: list[Fine]) -> set[FineId]:
+    """MANUAL_CAMERA cərimələrindən şəkli hələ Drive-a YÜKLƏNMƏYƏNLƏR (T3).
+
+    ──────────────────────────────────────────────────────────────────────────
+    `has_evidence` ƏVVƏL HƏMİŞƏ `True` İDİ
+    ──────────────────────────────────────────────────────────────────────────
+    `bool(fine.photo_evidence_url)` MANUAL_CAMERA axınında YANLIŞ mənbədir:
+    həmin sütun sübutun DİSKƏ yazıldığı andaca (yəni növbə açarı kimi) dolur
+    (bax `fine_entry.py::_issue` — "SIRA: ƏVVƏLCƏ ŞƏKİL DİSKƏ" bölməsi),
+    Drive-a HƏQİQƏTƏN yüklənib-yüklənmədiyini demir. Nəticədə operator kartda
+    "sübut var" görürdü, halbuki şəkil hələ lokal növbədə gözləyirdi.
+
+    MƏNBƏ SÜZGƏCİ (`MANUAL_CAMERA`) BURADADIR, `unsynced_evidence_ids`-DƏ YOX
+    — sorğu YALNIZ id dəsti oxuyur (`repositories.py`), "hansı mənbənin sübutu
+    MƏCBURİDİR" isə biznes qaydasıdır və `_to_row`-un yanında qalmalıdır (bax
+    `MonthlyFineReviewUseCase._unsynced_evidence`-in EYNİ qərarı — qayda İKİ
+    yerdə YAŞAMIR, sadəcə İKİ yerdə İSTİFADƏ olunur).
+
+    Boş `camera_ids` üçün sorğu AÇILMIR (`_lookup`-un eyni qaydası).
+    """
+    from src.domain.entities.fine import FineSource  # noqa: PLC0415
+
+    camera_ids = [fine.id for fine in fines if fine.source is FineSource.MANUAL_CAMERA]
+    if not camera_ids:
+        return set()
+    # `uow.fines` `Any` qaytarır (`connection.py::UnitOfWork.fines`) — yerli
+    # tipli dəyişən mypy-ın `--warn-return-any` xəbərdarlığını qapadır, açıq
+    # `cast()`-dən fərqli olaraq NƏTİCƏNİN ÖZÜNÜ dəyişmir.
+    result: set[FineId] = session.uow.fines.unsynced_evidence_ids(camera_ids)
+    return result
+
+
+def _group_rows(
+    fines: list[Fine], names: dict[str, dict[str, str]], unsynced: set[FineId]
+) -> list[FineReviewGroup]:
     """Cərimələri filiala görə qruplaşdırır; qruplar filial ADINA görə sıralanır.
 
     Sətirlərin öz sırası SQL-dən gəlir (`fine_date`), burada dəyişdirilmir:
@@ -602,7 +638,7 @@ def _group_rows(fines: list[Fine], names: dict[str, dict[str, str]]) -> list[Fin
     for fine in fines:
         store_key = str(fine.store_id)
         labels[store_key] = names["stores"].get(store_key) or _short(store_key)
-        buckets.setdefault(store_key, []).append(_to_row(fine, names))
+        buckets.setdefault(store_key, []).append(_to_row(fine, names, unsynced))
         totals[store_key] = totals.get(store_key, Decimal("0")) + fine.amount.amount
 
     return [
@@ -617,13 +653,15 @@ def _group_rows(fines: list[Fine], names: dict[str, dict[str, str]]) -> list[Fin
     ]
 
 
-def _to_row(fine: Fine, names: dict[str, dict[str, str]]) -> FineReviewRow:
+def _to_row(fine: Fine, names: dict[str, dict[str, str]], unsynced: set[FineId]) -> FineReviewRow:
     """`Fine` → ekranın FAKTİKİ gözlədiyi sətir.
 
     Açarlar HƏM maket (`preview_data.FINE_REVIEW_GROUPS`), HƏM canlı yol üçün
     eynidir — CLAUDE.md §6 (burada `NamedTuple` işlədilir, yəni uyğunsuzluğu
     tip yoxlayıcısı da tutur).
     """
+    from src.domain.entities.fine import FineSource  # noqa: PLC0415
+
     employee_key = str(fine.employee_id)
     operator_key = str(fine.issued_by) if fine.issued_by is not None else ""
     type_key = str(fine.fine_type_id) if fine.fine_type_id is not None else ""
@@ -637,7 +675,12 @@ def _to_row(fine: Fine, names: dict[str, dict[str, str]]) -> FineReviewRow:
         date_text=fine.issued_at.astimezone().strftime("%d.%m.%Y"),
         # Avtomatik cərimədə operator YOXDUR — sistem yazıb.
         operator=names["employees"].get(operator_key) or "Sistem (avtomatik)",
-        has_evidence=bool(fine.photo_evidence_url),
+        # DEEP-GAP T3 — AUTO_DELAY-də sübut anlayışı YOXDUR (əvvəlki halda da
+        # `photo_evidence_url` orada `None` idi, yəni nəticə DƏYİŞMİR — sadəcə
+        # artıq TƏSADÜFƏN yox, QƏSDƏN). Köhnə (miqrasiya 002-dən əvvəlki)
+        # sətirlər `unsynced`-ə DÜŞMÜR (sütun defolt `'SYNCED'`-dir), ona görə
+        # onlara retroaktiv "sübutsuz" damğası VURULMUR.
+        has_evidence=fine.source is FineSource.MANUAL_CAMERA and fine.id not in unsynced,
     )
 
 

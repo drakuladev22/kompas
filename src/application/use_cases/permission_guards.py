@@ -273,6 +273,7 @@ class PermissionHierarchyGuardUseCase:
             request.flag.assert_grantable_to(
                 request.subject.position.effective_system_role,
                 is_camera_type_role=request.subject.position.is_camera_type,
+                is_store_tier_role=request.subject.position.is_store_tier,
             )
         except AuthorizationError as exc:
             self._deny(request, reason="HARDLOCK_OR_ANTIFRAUD", message=exc.message)

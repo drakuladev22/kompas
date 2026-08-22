@@ -153,6 +153,38 @@ class EmployeeDraft:
     camera_store_ids: tuple[StoreId, ...] = ()
 
 
+@dataclass(frozen=True)
+class OpenFineExposure:
+    """Deaktiv ediləcək işçinin AÇIQ maliyyə izi (DEEP-GAP D2).
+
+    "Açıq" o deməkdir ki, sətir hələ SON hala çatmayıb: `PENDING_REVIEW`
+    cərimə hələ nəşr olunmayıb (nəşrdən sonra `MonthlyFineReviewUseCase`
+    artıq deaktiv işçini avtomatik saxlayır, bax `fine_review.py`), açıq
+    etiraz isə HƏLƏ qərar verilməmiş deməkdir. İkisi bir dataclass-dadır,
+    çünki hər ikisinin köküsü EYNİDİR: işçi girişsiz qalanda öz tərəfindən
+    heç bir addım ata bilmir.
+    """
+
+    pending_review_fine_count: int
+    open_appeal_count: int
+
+    @property
+    def has_any(self) -> bool:
+        return self.pending_review_fine_count > 0 or self.open_appeal_count > 0
+
+
+class OpenFineExposureReader(Protocol):
+    """`fines`/`fine_appeals`-dan işçinin açıq sayını oxuyur (yalnız DEAKTİVASİYA ön-yoxlaması).
+
+    `FineRepository`/`FineAppealRepository`-yə birbaşa metod əlavə etmək RƏDD
+    EDİLDİ (CLAUDE.md §3-ün `ReportFactProvider` əsaslandırması ilə eyni):
+    onları ödəyən HƏR sinif (test sahtələri daxil) dərhal uyğunsuz olardı,
+    halbuki bu sual YALNIZ bu axına aiddir.
+    """
+
+    def count_open_for_employee(self, employee_id: EmployeeId) -> OpenFineExposure: ...
+
+
 class UserManagementUseCase:
     """İşçi yaratma/redaktə, şifrə & PIN sıfırlama, mağaza təyinatı."""
 
@@ -168,6 +200,7 @@ class UserManagementUseCase:
         notifier: Notifier | None = None,
         deadlock_guard: DualControlDeadlockGuardUseCase | None = None,
         face_embeddings: FaceEmbeddingRepository | None = None,
+        fine_exposure: OpenFineExposureReader | None = None,
     ) -> None:
         self._employees = employees
         self._credentials = credentials
@@ -200,6 +233,12 @@ class UserManagementUseCase:
         # sətrinə `face_embedding_purged` açarını `None` kimi yazır, yəni
         # "təmizləmə cəhdi edilməyib" faktı jurnalda görünür.
         self._face_embeddings = face_embeddings
+        # DEEP-GAP D2 — deaktivasiyadan ƏVVƏL açıq cərimə/etiraz sayını
+        # yoxlayır (`_check_deadlock` ilə EYNİ yerdə, EYNİ "BLOKLAMIR, yalnız
+        # görünən edir" fəlsəfəsi). `None` = köhnə kompozisiya, sükutla
+        # UDULMUR — `deactivate_employee` audit sətrinə `open_fine_count`/
+        # `open_appeal_count` açarlarını `None` kimi yazır.
+        self._fine_exposure = fine_exposure
 
     # ------------------------------- yaratma --------------------------------- #
 
@@ -357,6 +396,11 @@ class UserManagementUseCase:
             )
 
         deadlock = self._check_deadlock(tenant_id, subject=employee)
+        # DEEP-GAP D2 — `_check_deadlock` İLƏ EYNİ YERDƏ: hər ikisi
+        # deaktivasiyanın "geri dönüşü olmayan" nəticələrini ƏVVƏLCƏDƏN
+        # görünən edir. BLOKLAMIR: son haqq-hesab, əl ilə HR qərarı kimi
+        # meşru yollar deaktivasiyanı gözləyə bilməz.
+        exposure = self._check_open_fine_exposure(employee_id)
         employee.deactivate()
         self._employees.save(employee)
         purged = self._purge_face_embedding(actor=actor, employee_id=employee_id, reason=reason)
@@ -380,6 +424,13 @@ class UserManagementUseCase:
                 # sualının yeganə cavabı budur. `None` = Face Control portu
                 # qoşulmayıb (modul quraşdırılmayıb).
                 "face_embedding_purged": purged,
+                # DEEP-GAP D2 — "niyə bu cərimə etiraz edilə bilmədi" sualının
+                # cavabı: deaktivasiya anında NEÇƏ sətir açıq idi. `None` =
+                # `fine_exposure` portu qoşulmayıb (yoxlama aparılmayıb).
+                "open_fine_count": exposure.pending_review_fine_count
+                if exposure is not None
+                else None,
+                "open_appeal_count": exposure.open_appeal_count if exposure is not None else None,
             },
             reason=reason,
         )
@@ -387,7 +438,42 @@ class UserManagementUseCase:
             "EMPLOYEE_DEACTIVATED",
             extra={"actor_id": str(actor.id), "employee_id": str(employee_id)},
         )
+        if exposure is not None and exposure.has_any:
+            self._notify_open_fine_exposure(
+                tenant_id=tenant_id, employee=employee, exposure=exposure
+            )
         return employee
+
+    def _check_open_fine_exposure(self, employee_id: EmployeeId) -> OpenFineExposure | None:
+        """`fine_exposure` portu yoxdursa (`None`) YOXLAMA APARILMIR — köhnə davranış."""
+        if self._fine_exposure is None:
+            return None
+        return self._fine_exposure.count_open_for_employee(employee_id)
+
+    def _notify_open_fine_exposure(
+        self, *, tenant_id: TenantId, employee: Employee, exposure: OpenFineExposure
+    ) -> None:
+        """`can_publish_fines` sahiblərinə bildiriş (auditoriya `value_objects/notifications.py`).
+
+        BLOKLAMIR — `_check_deadlock`-un öz bildirişi ilə eyni fəlsəfə: sətrin
+        özü audit-də onsuz da qalıcıdır, bildiriş yalnız gözdən qaçmamasına
+        kömək edir.
+        """
+        if self._notifier is None:
+            return
+        self._notifier.notify(
+            tenant_id=tenant_id,
+            recipient_id=None,
+            category="EMPLOYEE_DEACTIVATED_WITH_OPEN_FINES",
+            title_az="Deaktiv edilən işçinin açıq cərimələri var",
+            body_az=(
+                f"{employee.first_name} {employee.last_name} deaktiv edildi. "
+                f"{exposure.pending_review_fine_count} nəşr gözləyən cərimə və "
+                f"{exposure.open_appeal_count} qərar gözləyən etiraz açıq qalıb — "
+                f"əl ilə qərar tələb olunur."
+            ),
+            is_critical=True,
+        )
 
     def _purge_face_embedding(
         self, *, actor: Employee, employee_id: EmployeeId, reason: str

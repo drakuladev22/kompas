@@ -111,19 +111,32 @@ class CameraQueueController:
         atır və YAZILAN MƏTN İTİR; (b) `MIN_REJECT_REASON_LENGTH` domendə
         dəyişsəydi dialoq sükutla yalan rəqəm göstərərdi. İndi hədd domendən
         İDXAL olunur və dialoqun ÖZÜNDƏ yoxlanılır.
+
+        ──────────────────────────────────────────────────────────────────────
+        DEEP-GAP U9 — QISA CAVABDA YAZILAN MƏTN YENƏ İTİRDİ
+        ──────────────────────────────────────────────────────────────────────
+        Yuxarıdakı (a) düzəlişi istisnanı aradan qaldırdı, LAKİN mətn itkisini
+        yox: xəbərdarlıqdan sonra `return None` edilirdi və `cleaned` heç yerə
+        ötürülmürdü — operator "Girişi rədd et" dialoqunu YENİDƏN açanda BOŞ
+        sahə görürdü, halbuki əvvəl yazdığı (sadəcə qısa) mətn hələ də
+        etibarlı başlanğıc nöqtəsi idi. İndi dövrə YAZILAN MƏTNİ SAXLAYIR və
+        dialoqu `value=` ilə YENİDƏN açır — operator sıfırdan yazmır, sadəcə
+        əlavə edir.
         """
         from PySide6.QtWidgets import QInputDialog, QMessageBox  # noqa: PLC0415
 
-        text, accepted = QInputDialog.getMultiLineText(
-            screen,
-            "Girişi rədd et",
+        prompt = (
             f"Səbəb (məcburi, minimum {MIN_REJECT_REASON_LENGTH} simvol) — audit\n"
-            "jurnalına düşür və HR_Admin ilə Mağaza Menecerinə bildiriş gedir:",
+            "jurnalına düşür və HR_Admin ilə Mağaza Menecerinə bildiriş gedir:"
         )
-        if not accepted:
-            return None
-        cleaned = text.strip()
-        if len(cleaned) < MIN_REJECT_REASON_LENGTH:
+        text = ""
+        while True:
+            text, accepted = QInputDialog.getMultiLineText(screen, "Girişi rədd et", prompt, text)
+            if not accepted:
+                return None
+            cleaned = text.strip()
+            if len(cleaned) >= MIN_REJECT_REASON_LENGTH:
+                return cleaned
             # Modal, `show_error` DEYİL: növbənin qalan sətirləri etibarlıdır
             # və operator onları görməyə davam etməlidir.
             box = QMessageBox(screen)
@@ -131,8 +144,8 @@ class CameraQueueController:
             box.setWindowTitle("Rədd yazılmadı")
             box.setText(f"Səbəb ən azı {MIN_REJECT_REASON_LENGTH} simvol olmalıdır.")
             box.exec()
-            return None
-        return cleaned
+            # `text` (XAM, budaqsız) burada QƏSDƏN SAXLANILIR — dövrə
+            # `QInputDialog`-u `value=text` ilə yenidən açır.
 
     def _verify_return(self, session: Session, request: Any) -> None:
         """STEP 3 Saga-sı `async`-dir — GUI-də sinxron icra edilir.
@@ -151,6 +164,35 @@ class CameraQueueController:
             )
         )
 
+    @staticmethod
+    def _notify(screen: OperatorQueueScreen, *, title: str, message: str) -> None:
+        """Bloklayan, LAKİN YIXICI OLMAYAN xəbərdarlıq (DEEP-GAP U8).
+
+        ──────────────────────────────────────────────────────────────────────
+        `screen.show_error()` NİYƏ İŞLƏDİLMİR
+        ──────────────────────────────────────────────────────────────────────
+        `Screen.show_error()` bütün ekranın MƏZMUNUNU bir sətrin uğursuzluğu
+        ilə ƏVƏZ EDİR (bax `screens/base.py::ContentSwitcher._present`) —
+        halbuki bu ekranda göstərilən DİGƏR növbə sətirləri etibarlıdır və
+        operator onlarla işini davam etdirməlidir. Doqquz çağırış nöqtəsi
+        (təsdiq/rədd/düzəliş yolları) məhz bu qaydanı pozurdu: 14 sətirlik
+        növbədə YALNIZ 1 sətir uğursuz olanda operator qalan 13-ü İTİRİRDİ,
+        `on_retry` da verilmədiyi üçün bərpa yolu yalnız başqa ekrana keçib
+        qayıtmaq idi. Eyni qərar artıq `_ask_reason`-da var idi — bura o
+        naxışı GENİŞLƏNDİRİR.
+
+        `on_retry` YOXDUR: modalın ÖZÜ "OK" düyməsi ilə bağlanır, əməliyyatı
+        təkrarlamaq üçün operator eyni sətrin düyməsinə YENİDƏN basa bilər —
+        növbə silinmədiyi üçün bu mümkündür.
+        """
+        from PySide6.QtWidgets import QMessageBox  # noqa: PLC0415
+
+        box = QMessageBox(screen)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(title)
+        box.setText(message)
+        box.exec()
+
     def _run(
         self,
         screen: OperatorQueueScreen,
@@ -166,7 +208,8 @@ class CameraQueueController:
                 request = session.uow.leave_requests.get(_leave_id(request_id))
                 if request is not None:
                     if leave_action is None:
-                        screen.show_error(
+                        self._notify(
+                            screen,
                             title="Bu sətir rədd edilə bilməz",
                             message=(
                                 "Qayıdış təsdiqində rədd yoxdur — təsdiqləyin "
@@ -178,7 +221,8 @@ class CameraQueueController:
                 else:
                     record = session.uow.attendance.get(_attendance_id(request_id))
                     if record is None:
-                        screen.show_error(
+                        self._notify(
+                            screen,
                             title="Sorğu tapılmadı",
                             message="Bu sətir artıq emal edilib. Növbəni yeniləyin.",
                         )
@@ -186,11 +230,12 @@ class CameraQueueController:
                     attendance_action(session, record)
                 session.commit()
         except KompasOSError as error:
-            screen.show_error(title=failure_title, message=error.user_message)
+            self._notify(screen, title=failure_title, message=error.user_message)
             return
         except Exception:
             _error_log.exception("QUEUE_ACTION_FAILED", extra={"request_id": request_id})
-            screen.show_error(
+            self._notify(
+                screen,
                 title=failure_title,
                 message="Əməliyyat tamamlanmadı. Yenidən cəhd edin.",
             )
@@ -204,18 +249,20 @@ class CameraQueueController:
         try:
             details = self._load(request_id)
         except KompasOSError as error:
-            screen.show_error(title="Düzəliş açıla bilmədi", message=error.user_message)
+            self._notify(screen, title="Düzəliş açıla bilmədi", message=error.user_message)
             return
         except Exception:
             _error_log.exception("OVERRIDE_LOAD_FAILED", extra={"request_id": request_id})
-            screen.show_error(
+            self._notify(
+                screen,
                 title="Düzəliş açıla bilmədi",
                 message="Sorğu məlumatı oxuna bilmədi. Yenidən cəhd edin.",
             )
             return
 
         if details is None:
-            screen.show_error(
+            self._notify(
+                screen,
                 title="Bu sətir üçün düzəliş yoxdur",
                 message="Manual vaxt düzəlişi yalnız qayıdış təsdiqinə tətbiq olunur.",
             )
@@ -276,7 +323,10 @@ class CameraQueueController:
     ) -> None:
         overridden = _combine(reference, time_text)
         if overridden is None:
-            screen.show_error(title="Vaxt oxunmadı", message="Vaxt formatı SS:DD olmalıdır.")
+            # DEEP-GAP U8 — eyni siyahının onuncu üzvü: format səhvi başqa
+            # sətirlərin görünüşünü poza bilməz, ona görə `_notify` (bax
+            # onun başlığı), `show_error` yox.
+            self._notify(screen, title="Vaxt oxunmadı", message="Vaxt formatı SS:DD olmalıdır.")
             return
 
         try:
@@ -290,11 +340,12 @@ class CameraQueueController:
                 )
                 session.commit()
         except KompasOSError as error:
-            screen.show_error(title="Düzəliş yazılmadı", message=error.user_message)
+            self._notify(screen, title="Düzəliş yazılmadı", message=error.user_message)
             return
         except Exception:
             _error_log.exception("OVERRIDE_SAVE_FAILED", extra={"request_id": request_id})
-            screen.show_error(
+            self._notify(
+                screen,
                 title="Düzəliş yazılmadı",
                 message="Dəyişiklik saxlanmadı. Yenidən cəhd edin.",
             )

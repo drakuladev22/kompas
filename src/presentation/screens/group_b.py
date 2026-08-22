@@ -1013,6 +1013,15 @@ class FineEntryScreen(Screen):
         submit_layout.addWidget(self._submit)
         card.add(submit_row)
 
+        # Göndərişdən sonrakı təsdiq (DEEP-GAP U1) — `set_annual_leave_
+        # message` (`group_a_kiosk.py`) ilə EYNİ naxış: sükutla "hər şey
+        # qaydasındadır" güman etmək əvəzinə operator NƏ baş verdiyini görür
+        # və növbəti klikdən əvvəl köhnə şəklin sildiyinə ƏMİN olur.
+        self._success_message = plain_label()
+        self._success_message.setProperty("variant", "success")
+        self._success_message.setVisible(False)
+        card.add(self._success_message)
+
         # Zəncir bütün sahələr yarandıqdan SONRA qurulur (bax
         # `group_a_entry.AdminLoginScreen`): Qt `setTabOrder`-i yalnız MÖVCUD
         # widget cütünə tətbiq edir və sonradan yaradılan hər şeyi zəncirin
@@ -1049,7 +1058,32 @@ class FineEntryScreen(Screen):
         """Cərimə növü seçildikdə avtomatik doldurulur ("25 ₼ · avtomatik")."""
         self._price.set_text(text)
 
+    def set_success_message(self, message: str) -> None:
+        """Göndərişin nəticəsini bildirir (DEEP-GAP U1).
+
+        Boş sətir mesajı GİZLƏDİR — kontroller həm uğurda göstərmək, həm
+        növbəti göndərişdən əvvəl `""` ilə silmək üçün eyni metodu işlədir.
+        """
+        self._success_message.setText(message)
+        self._success_message.setVisible(bool(message))
+
+    def clear_photo(self) -> None:
+        """Sübut şəklini TƏMİZLƏYİR (DEEP-GAP U1).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ MÜTLƏQDİR
+        ──────────────────────────────────────────────────────────────────────
+        Göndərişdən SONRA çağırılır. Sahə əvvəlki şəkli saxlasaydı, operator
+        NÖVBƏTİ işçi üçün yalnız dropdown-ları dəyişəndə (növ/mağaza/işçi/
+        tarix) foto YERİNDƏ QALIRDI — nəticədə yeni cərimə köhnə işçinin
+        sübut şəkli ilə yaranırdı. Foto MƏHZ mübahisə halında sübut rolunu
+        oynadığı üçün bu, sükutla "yanlış işçiyə BAŞQASININ sübutu" deməkdir.
+        """
+        self._photo.clear()
+        self._photo_error.setVisible(False)
+
     def _on_submit(self) -> None:
+        self.set_success_message("")
         if not self._photo.file_path:
             self._photo_error.setText("Foto sübutu məcburidir")
             self._photo_error.setVisible(True)

@@ -266,6 +266,23 @@ def _attach(sales_review: _FakeSalesReview, *, qtbot: Any, theme: Any, limits: A
 # --------------------------------------------------------------------------- #
 
 
+def _press_retry(screen: Any) -> None:
+    """Xəta banner-indəki «Yenidən Cəhd Et» düyməsini HƏQİQƏTƏN basır.
+
+    Siqnalı birbaşa yaymaq kifayət etməzdi: UI-R4-01-ə görə `on_retry`
+    verilməyəndə düymə ÜMUMİYYƏTLƏ çəkilmir (bax `ContentSwitcher.show_error`
+    docstring-i). Yəni düymənin MÖVCUDLUĞU testin əsl iddiasıdır — banner
+    yenilənməni istifadəçiyə buraxırsa, o yenilənməni başlatmaq YOLU da
+    olmalıdır.
+    """
+    from PySide6.QtWidgets import QPushButton
+
+    state = screen.switcher()._stack.currentWidget()
+    button = state.findChild(QPushButton)
+    assert button is not None, "Xəta banner-i «Yenidən Cəhd Et» düyməsi olmadan ölü dalandır"
+    button.click()
+
+
 @requires_qt
 def test_attach_loads_the_real_queue_and_shows_content(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
     sales_review = _FakeSalesReview(
@@ -374,7 +391,17 @@ def test_bulk_assign_with_nothing_selected_shows_an_error_and_writes_nothing(qtb
 
     assert sales_review.confirms == []
     assert sales_review.reassigns == []
-    assert sales_review.queue_calls > calls_before  # "Sətir seçilməyib" refresh edir
+    # ƏVVƏL BURADA `queue_calls > calls_before` YAZILMIŞDI və test qüsuru
+    # kilidləyirdi: «Sətir seçilməyib» banner-i göstərildikdən DƏRHAL sonra
+    # `refresh()` çağırılır, `set_sales()` → `show_content()` isə switcher-i
+    # «content»-ə qaytarıb xəbərdarlığın üstündən yazırdı — operator boş
+    # seçimlə düyməni basır və HEÇ NƏ görmürdü.
+    assert sales_review.queue_calls == calls_before, "Xəbərdarlıq yenilənmə ilə udulmamalıdır"
+    assert screen.switcher().current_state() == "error"
+
+    _press_retry(screen)
+
+    assert sales_review.queue_calls > calls_before
     assert screen.switcher().current_state() == "content"
 
 
@@ -428,7 +455,9 @@ def test_a_rapid_double_click_on_assign_does_not_write_twice(qtbot, theme) -> No
 
 
 @requires_qt
-def test_an_unknown_receipt_from_a_stale_row_shows_an_error_and_refreshes(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+def test_an_unknown_receipt_from_a_stale_row_shows_an_error_and_refreshes_on_retry(
+    qtbot, theme
+) -> None:  # type: ignore[no-untyped-def]
     sales_review = _FakeSalesReview([_item(receipt="R-1")])
     screen, context = _attach(sales_review, qtbot=qtbot, theme=theme)
 
@@ -437,6 +466,13 @@ def test_an_unknown_receipt_from_a_stale_row_shows_an_error_and_refreshes(qtbot,
     assert sales_review.confirms == []
     assert sales_review.reassigns == []
     assert not any(s.committed for s in context.sessions)
+    assert screen.switcher().current_state() == "error", (
+        "«Siyahı köhnəlib» səbəbi görünməlidir — əvvəl dərhal gələn `refresh()` "
+        "onu `set_sales()` → `show_content()` ilə udurdu"
+    )
+
+    _press_retry(screen)
+
     assert screen.switcher().current_state() == "content"  # R-1 hələ növbədədir
 
 

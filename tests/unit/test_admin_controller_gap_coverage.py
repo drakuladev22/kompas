@@ -228,8 +228,15 @@ class _PluginScreen:
         self.rows = plugins
         self.fills += 1
 
-    def show_error(self, *, title: str, message: str) -> None:
+    def show_error(self, *, title: str, message: str, on_retry: Any = None) -> None:
+        # `on_retry` SAXLANIR (QA-FULL FAZA 3 davamı): xəta banner-indən sonra
+        # siyahı ARTIQ DƏRHAL yenilənmir — yenilənməni «Yenidən Cəhd Et»
+        # başladır. Sahtə geri-çağırışı saxlamasaydı test yalnız «yenilənmə
+        # olmadı» deyə bilərdi, «istifadəçi onu başlada BİLİR» hissəsini isə
+        # sübut edə bilməzdi — halbuki UI-R4-01-ə görə `on_retry` verilməyəndə
+        # düymə ÜMUMİYYƏTLƏ çəkilmir və banner ölü dalana çevrilir.
         self.errors.append((title, message))
+        self.retry = on_retry
 
 
 class _PluginUseCase:
@@ -325,7 +332,13 @@ def test_removing_a_plugin_commits_and_re_reads_the_list() -> None:
     assert screen.fills == 1, "Silmədən sonra siyahı yenidən oxunmalıdır"
 
 
-def test_a_refused_removal_still_refreshes_so_the_screen_does_not_lie() -> None:
+def test_a_refused_removal_shows_the_reason_and_refreshes_only_on_retry() -> None:
+    """Rədd səbəbi banner-də QALIR, siyahı isə təkrar cəhddə bazaya qayıdır.
+
+    Əvvəl `show_error(...)` ardınca DƏRHAL `refresh()` gəlirdi: `set_plugins()`
+    → `show_content()` `ContentSwitcher`-i «content»-ə qaytarırdı və hər
+    uğursuz silmə SÜKUTLA keçirdi.
+    """
     use_case = _PluginUseCase([_PluginRow("pl-1")], remove_error=_DeniedError("icazə yoxdur"))
     controller, session = _plugin_controller(use_case)
     screen = _PluginScreen()
@@ -335,10 +348,14 @@ def test_a_refused_removal_still_refreshes_so_the_screen_does_not_lie() -> None:
     assert use_case.removed == []
     assert session.commits == 0
     assert screen.errors[0][0] == "Plugin silinmədi"
-    assert screen.fills == 1, "Rədd edilən dəyişiklikdən SONRA da siyahı yenilənir"
+    assert screen.fills == 0, "Yenilənmə banner-dən ƏVVƏL baş versəydi səbəb görünməzdi"
+
+    screen.retry()
+
+    assert screen.fills == 1, "Yenilənmə İTMİR — «Yenidən Cəhd Et» onu başladır"
 
 
-def test_an_unexpected_removal_failure_also_refreshes() -> None:
+def test_an_unexpected_removal_failure_also_offers_a_working_retry() -> None:
     use_case = _PluginUseCase([_PluginRow("pl-1")], remove_error=RuntimeError("şəbəkə"))
     controller, session = _plugin_controller(use_case)
     screen = _PluginScreen()
@@ -347,6 +364,11 @@ def test_an_unexpected_removal_failure_also_refreshes() -> None:
 
     assert session.commits == 0
     assert screen.errors[0][1] == "Dəyişiklik yazılmadı. Yenidən cəhd edin."
+    assert screen.fills == 0
+    assert screen.retry is not None, "Gözlənilməz xəta da ölü dalan OLMAMALIDIR"
+
+    screen.retry()
+
     assert screen.fills == 1
 
 
@@ -373,8 +395,15 @@ class _MatrixScreen:
     def select_role(self, code: str) -> None:
         self.selected.append(code)
 
-    def show_error(self, *, title: str, message: str) -> None:
+    def show_error(self, *, title: str, message: str, on_retry: Any = None) -> None:
+        # `on_retry` SAXLANIR (QA-FULL FAZA 3 davamı): xəta banner-indən sonra
+        # siyahı ARTIQ DƏRHAL yenilənmir — yenilənməni «Yenidən Cəhd Et»
+        # başladır. Sahtə geri-çağırışı saxlamasaydı test yalnız «yenilənmə
+        # olmadı» deyə bilərdi, «istifadəçi onu başlada BİLİR» hissəsini isə
+        # sübut edə bilməzdi — halbuki UI-R4-01-ə görə `on_retry` verilməyəndə
+        # düymə ÜMUMİYYƏTLƏ çəkilmir və banner ölü dalana çevrilir.
         self.errors.append((title, message))
+        self.retry = on_retry
 
 
 class _Cursor:
@@ -497,6 +526,7 @@ class _FakePosition:
         granted: set[str],
         *,
         is_camera_type: bool = False,
+        is_store_tier: bool = False,
     ) -> None:
         self.id = PositionId(uuid.uuid4())
         self.code = code
@@ -504,6 +534,10 @@ class _FakePosition:
         self.priority = priority
         self.granted_flags = granted
         self.is_camera_type = is_camera_type
+        # T6 (`security` sahibi) — `is_camera_type` ilə EYNİ naxış:
+        # `permission_matrix.py::_flag_groups` `is_grantable_to(...,
+        # is_store_tier_role=position.is_store_tier)` çağırır.
+        self.is_store_tier = is_store_tier
 
     @property
     def effective_system_role(self) -> SystemRole:
@@ -769,20 +803,38 @@ def test_a_guard_violation_is_shown_and_the_grid_is_restored() -> None:
         "İcazələr yazılmadı",
         "Bu əməliyyat üçün səlahiyyətiniz yoxdur.",
     )
-    assert len(screen.selected) > selections_before, "Rədd sonrası matris bərpa olunur"
+    assert len(screen.selected) == selections_before, (
+        "Rədd cavabı DƏRHAL `refresh()` çağırsaydı `select_role()` → `set_matrix()` → "
+        "`show_content()` zənciri guard səbəbini daşıyan banner-i udardı — admin "
+        "hardlock/anti-fraud/SEC-001 rəddinin SƏBƏBİNİ heç vaxt oxuya bilməzdi"
+    )
+    assert screen.retry is not None, "Guard rəddi ölü düymə ilə qalmamalıdır"
+
+    screen.retry()
+
+    assert len(screen.selected) > selections_before, "Matris təkrar cəhddə bərpa olunur"
 
 
-def test_an_unexpected_save_failure_also_restores_the_grid() -> None:
+def test_an_unexpected_save_failure_also_restores_the_grid_on_retry() -> None:
     root = _FakePosition("ROOT", "Root", RolePriority.ROOT, set())
     positions = _Positions([_Summary(root)], save_error=RuntimeError("bağlantı"))
     controller, session = _matrix(positions=positions)
     screen = _MatrixScreen()
     controller.refresh(screen)  # type: ignore[arg-type]
+    # `selected` sayılır, `matrix` YOX: sahtənin `select_role()`-u siqnal
+    # yaymır, ona görə `set_matrix()` yalnız REAL ekranda çağırılır (məhz bu
+    # boşluq `*_screen_e2e.py` fayllarının yaranma səbəbidir).
+    selections_before = len(screen.selected)
 
     controller._on_saved(screen, "ROOT", {EXPORT.code: True})  # type: ignore[arg-type]
 
     assert session.commits == 0
     assert screen.errors[0][1] == "Dəyişiklik saxlanmadı. Yenidən cəhd edin."
+    assert len(screen.selected) == selections_before, "Banner yenilənmə ilə udulmamalıdır"
+
+    screen.retry()
+
+    assert len(screen.selected) > selections_before, "Matris təkrar cəhddə bərpa olunur"
 
 
 def test_the_selected_role_survives_a_refresh() -> None:

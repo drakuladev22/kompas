@@ -121,6 +121,21 @@ class DashboardBuilderController:
         ekranda qalan dəst yazılandan fərqli ola bilər. Onu göstərməsək,
         istifadəçi gizlətdiyi bölmənin növbəti girişdə geri qayıtdığını görüb
         səbəbini tapa bilməzdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        `on_retry` NİYƏ MƏCBURİDİR (QA-FULL FAZA 3 tapıntısı)
+        ──────────────────────────────────────────────────────────────────────
+        `refresh()` DƏRHAL burdan çağırılsaydı, `set_widgets()` → `_render()`
+        → `show_content()` heç bir render arası olmadan bu banner-in
+        ÜSTÜNDƏN yazardı (`sales_review.py`/`annual_leave.py` ilə eyni ailə)
+        — VƏ DAHA PİSİ, `on_retry` verilmədən `show_error()` çağırmaq
+        `base.py:442` qaydasınca "Yenidən Cəhd Et" düyməsini ÜMUMİYYƏTLƏ
+        çəkmir. Layihə-boyu 15+ oxşar kontroller (`plugin_admin.py`,
+        `annual_leave.py`, `catalog_admin.py`, …) `on_retry=lambda: self.
+        refresh(screen)` ötürür — bu fayl YEGANƏ İSTİSNA idi. Modulun
+        başlığındakı "düzülüş yenidən oxunub qaytarılır" iddiası da YALNIZ
+        bununla doğrudur: xəta vəziyyəti QALIR, təzə oxu isə istifadəçinin
+        «Yenidən Cəhd Et» kliki ilə baş verir.
         """
         try:
             with self._context.session(user_id=self._actor.id) as session:
@@ -128,14 +143,19 @@ class DashboardBuilderController:
                 session.commit()
         except KompasOSError as error:
             # Ekran BOŞALDILMIR (bax modul başlığı) — səbəb xəta vəziyyətində
-            # göstərilir, lakin düzülüş məlumatı yenidən oxunub qaytarılır.
-            screen.show_error(title="Düzülüş saxlanmadı", message=error.user_message)
+            # göstərilir, düzülüş isə `on_retry` ilə yenidən oxunur.
+            screen.show_error(
+                title="Düzülüş saxlanmadı",
+                message=error.user_message,
+                on_retry=lambda: self.refresh(screen),
+            )
             return
         except Exception:
             _error_log.exception("DASHBOARD_LAYOUT_SAVE_FAILED")
             screen.show_error(
                 title="Düzülüş saxlanmadı",
                 message="Dəyişiklik yazılmadı. Yenidən cəhd edin.",
+                on_retry=lambda: self.refresh(screen),
             )
             return
 

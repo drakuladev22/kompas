@@ -172,19 +172,31 @@ class PluginAdminController:
                 operation(session)
                 session.commit()
         except KompasOSError as error:
-            # Rədd edilmiş dəyişiklikdən SONRA siyahı yenidən oxunur: ekrandakı
-            # açar artıq yeni vəziyyəti göstərir və onu belə buraxsaq ekran
-            # YALAN danışardı (eyni naxış `root_control.reject_module_change`).
-            screen.show_error(title=failure_title, message=error.user_message)
-            self.refresh(screen)
+            # Rədd edilmiş dəyişiklikdən SONRA siyahı yenidən oxunmalıdır:
+            # ekrandakı açar artıq yeni vəziyyəti göstərir və onu belə buraxsaq
+            # ekran YALAN danışardı (eyni naxış
+            # `root_control.reject_module_change`).
+            #
+            # LAKİN YENİLƏNMƏ DƏRHAL EDİLMİR (QA-FULL FAZA 3 davamı):
+            # `refresh()` → `set_plugins()` → `show_content()` zənciri
+            # `ContentSwitcher`-i «content»-ə qaytarır və banner-in ÜSTÜNDƏN
+            # yazırdı — hər uğursuz quraşdırma/söndürmə/silmə SÜKUTLA keçirdi,
+            # açar isə səbəbsiz geri qayıdırdı. `on_retry` hər iki tələbi
+            # ödəyir: səbəb görünür, siyahı isə istifadəçi təsdiqləyəndə
+            # bazadakı vəziyyətə qayıdır.
+            screen.show_error(
+                title=failure_title,
+                message=error.user_message,
+                on_retry=lambda: self.refresh(screen),
+            )
             return
         except Exception:
             _error_log.exception("PLUGIN_OPERATION_FAILED")
             screen.show_error(
                 title=failure_title,
                 message="Dəyişiklik yazılmadı. Yenidən cəhd edin.",
+                on_retry=lambda: self.refresh(screen),
             )
-            self.refresh(screen)
             return
 
         self.refresh(screen)

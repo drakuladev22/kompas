@@ -241,6 +241,11 @@ def test_twenty_rapid_clicks_on_fine_entry_within_the_dedupe_window_reuse_a_sing
     açar 1-ci klikdəkindən FƏRQLƏNMİR, yəni pəncərə məntiqi uzun sıra üzərində
     deqradasiya OLMUR (məs. `_recent_idempotency`-nin hər yeniləməsi vaxtı
     irəli sürükləyib pəncərədən erkən çıxarmır).
+
+    DEEP-GAP U1: hər uğurlu göndəriş sübut şəklini TƏMİZLƏYİR (bax
+    `FineEntryController._issue`), ona görə hər klikdən ƏVVƏL foto YENİDƏN
+    seçilir — real operator da eyni "sürətli, ardıcıl 20 cərimə" ssenarisində
+    hər sətir üçün yeni foto seçərdi, köhnəni YENİDƏN göndərməzdi.
     """
     from src.presentation.controllers import fine_entry as fine_entry_module
 
@@ -254,10 +259,10 @@ def test_twenty_rapid_clicks_on_fine_entry_within_the_dedupe_window_reuse_a_sing
     screen._employee.set_text("Aygün Məmmədova")
     photo = tmp_path / "subut.jpg"
     photo.write_bytes(b"\xff\xd8\xff fake jpeg")
-    screen._photo.set_file(str(photo))
 
     for i in range(RAPID_CLICKS):
         clock["t"] = i * 0.1  # 20 klik, cəmi 1.9 saniyə — pəncərədən (10s) çox uzaqda deyil
+        screen._photo.set_file(str(photo))  # U1: əvvəlki klik fotonu TƏMİZLƏYİB
         _click(screen, "Cəriməni Qeyd Et")  # ÇÖKMƏMƏLİDİR
 
     assert len(context.manual_fines.issued) == RAPID_CLICKS
@@ -279,6 +284,9 @@ def test_rapid_clicks_straddling_the_dedupe_window_boundary_rotate_keys_correctl
     İki qrup arasında YENİ açar yaranmalıdır (bax `fine_entry.py::
     _idempotency_key_for_submission` başlığı) — əks halda tamamilə ayrı iki
     cərimə partiyası eyni DB unikal indeksinə toqquşardı.
+
+    DEEP-GAP U1: hər uğurlu göndəriş fotonu TƏMİZLƏYİR — hər klikdən ƏVVƏL
+    yenidən seçilir (bax yuxarıdakı testin eyni şərhi).
     """
     from src.application.use_cases.fine_management import DUPLICATE_SUBMISSION_WINDOW_SECONDS
     from src.presentation.controllers import fine_entry as fine_entry_module
@@ -293,15 +301,16 @@ def test_rapid_clicks_straddling_the_dedupe_window_boundary_rotate_keys_correctl
     screen._employee.set_text("Aygün Məmmədova")
     photo = tmp_path / "subut.jpg"
     photo.write_bytes(b"\xff\xd8\xff fake jpeg")
-    screen._photo.set_file(str(photo))
 
     for i in range(10):
         clock["t"] = i * 0.1
+        screen._photo.set_file(str(photo))
         _click(screen, "Cəriməni Qeyd Et")
 
     clock["t"] = DUPLICATE_SUBMISSION_WINDOW_SECONDS + 1.0
     for _i in range(10):
         clock["t"] += 0.1
+        screen._photo.set_file(str(photo))
         _click(screen, "Cəriməni Qeyd Et")  # ÇÖKMƏMƏLİDİR
 
     keys = [issued["idempotency_key"] for issued in context.manual_fines.issued]

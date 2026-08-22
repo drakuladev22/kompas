@@ -8,6 +8,7 @@ avtomatik `skip` olunur — CI erkən fazalarda qırmızı olmasın.
 
 from __future__ import annotations
 
+import gc
 import os
 import sys
 from collections.abc import Iterator
@@ -196,3 +197,63 @@ def qt_app(qapp):  # type: ignore[no-untyped-def]
     olunacaq ki, E2E testlər real tema ilə işləsin.
     """
     return qapp
+
+
+# --------------------------------------------------------------------------- #
+# QT OBYEKTLƏRİ HƏR TESTİN SONUNDA — MƏHZ ORADA — ÖLÜR (QA-FULL FAZA 6)
+# --------------------------------------------------------------------------- #
+#
+# HANSI ÇÖKMƏNİ BAĞLAYIR — tam dəst Windows-da ara-sıra
+# `Windows fatal exception: access violation` ilə prosesi ORTADA söndürürdü
+# (sonuncu müşahidə: dəstin 84%-i, `test_session_touch_guard.py::
+# test_touch_session_survives_an_ordinary_network_failure` içində, əsas sap
+# `_drain_until`-in `processEvents()` dövrəsində idi). Həmin fayl TƏKBAŞINA
+# 6/6 keçir — yəni qüsur testin ÖZÜNDƏ deyil, ondan ƏVVƏLKİ testlərdən qalan
+# vəziyyətdədir.
+#
+# ÖLÇÜLMÜŞ FAKT (bu iki bənd fərziyyə deyil, ölçüdür):
+#
+#   1. `processEvents()` `deleteLater()` ilə qoyulmuş `QEvent::DeferredDelete`
+#      hadisələrini bu mühitdə FLUSH ETMİR — yalnız `sendPostedEvents(None,
+#      DeferredDelete)` (və ya həqiqi iç-içə dövrə) faktiki silməni tətikləyir
+#      (500 widget `clear_layout()`-dan sonra `processEvents()`-dən SONRA da
+#      canlı qalır). Testlərin əksəriyyəti iç-içə dövrə fırlatmır.
+#   2. `KompasApplication` quran testlərdən sonra ~21 `QObject` ƏLÇATMAZ,
+#      lakin HƏLƏ SİLİNMƏMİŞ qalır: onlar Python-un DÖVRİ zibil toplayıcısını
+#      gözləyir (ölçüldü: `test_session_touch_guard.py`-nin hər testindən
+#      sonra 23 → 2). 13 test faylı `KompasApplication`-ı `qtbot`-a QEYD
+#      ETMƏDƏN qurur, yəni onların pəncərə ağacı belə qalır.
+#
+# İKİSİ BİRLİKDƏ ÇÖKMƏ VERİR: toplayıcı İSTƏNİLƏN yerdə — o cümlədən BAŞQA
+# bir testin `processEvents()` dövrəsinin İÇİNDƏ — işə düşə bilər. Onda Qt
+# destruktoru hadisə dispetçerinin ortasında REENTRANT çağırılır və silinən
+# widget-in göstəricisi (`QStyleSheetStyle` keşi, gözlənilən hadisələr) hələ
+# dispetçerin əlindədir. Windows-da bunun adı access violation-dır.
+#
+# DÜZƏLİŞ ONA GÖRƏ İKİ ADDIMDIR: gecikmiş silinmələr boşaldılır, SONRA dövri
+# toplayıcı AÇIQ çağırılır — hər ikisi test SONUNDA, əsas sapda, HEÇ BİR
+# hadisə dispetçerinin içində olmadan. Yəni obyektlər ölür, sadəcə BİLDİYİMİZ
+# yerdə ölür. Bu, səthi `try/except` deyil: ölüm anını təsadüfdən çıxarıb
+# determinstik nöqtəyə bağlayır.
+#
+# QİYMƏTİ: `gc.collect()` bu heap-də millisaniyələrlə ölçülür (dəst müddətinə
+# təsiri ölçülməyəcək qədər azdır) — hər testdən sonra çağırmaq tam dəstin
+# ~50 dəqiqəsi yanında əhəmiyyətsizdir.
+@pytest.fixture(autouse=True)
+def _settle_qt_objects() -> Iterator[None]:
+    yield
+    if not PYSIDE6_AVAILABLE:
+        return
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QApplication
+
+    if QApplication.instance() is None:
+        return
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    # `deleteLater()` ilə yox, YALNIZ istinadsız qalmaqla ölən obyektlər
+    # (dövrə içindədirlər, ona görə refcount onları tutmur) BURADA toplanır.
+    gc.collect()
+    # Toplama ZAMANI yeni `deleteLater()` çağırışları yarana bilər (Qt
+    # valideyni ölən uşağı belə buraxır) — ikinci flush onları da eyni
+    # nöqtədə bitirir, əks halda növbəti testə keçərdilər.
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

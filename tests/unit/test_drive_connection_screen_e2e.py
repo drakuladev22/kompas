@@ -218,12 +218,21 @@ class _Limits:
         return self._seconds
 
 
+class _FakeClock:
+    """`ServerTimeService`-in yerini tutur (T5, DEEP-GAP FAZA 4) — `_permitted()`
+    artıq `self._context.clock.now()` çağırır, OS saatı `datetime.now(UTC)` YOX."""
+
+    def now(self) -> datetime:
+        return datetime.now(UTC)
+
+
 class _FakeContext:
     """`ApplicationContext`-in yerini tutur — real DB bağlantısı AÇILMIR."""
 
     def __init__(self, *, audit_fails: bool = False, timeout_seconds: float = 5.0) -> None:
         self.tenant_id = TENANT
         self.database = object()  # `_repository()` instansiya səviyyəsində əvəzlənir
+        self.clock = _FakeClock()
         self._audit = _FakeAudit(fails=audit_fails)
         self._timeout = timeout_seconds
         self.commits: list[bool] = []

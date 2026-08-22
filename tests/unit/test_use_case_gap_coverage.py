@@ -1134,7 +1134,7 @@ def test_worked_days_counts_only_statuses_that_mean_work() -> None:
     use_case = ctx.use_case()
     use_case.open_sheet(tenant_id=TENANT, actor=manager, store_id=STORE)
 
-    totals = use_case.worked_days_in_period(store_id=STORE, start=DAY, end=DAY)
+    totals = use_case.worked_days_in_period(tenant_id=TENANT, store_id=STORE, start=DAY, end=DAY)
 
     assert totals == {present: 1}
     assert AutoAttendanceStatus.ABSENT.counts_as_worked is False
@@ -1144,7 +1144,9 @@ def test_worked_days_over_an_empty_period_returns_nothing() -> None:
     """Sərhəd: heç bir tabel açılmayıbsa nəticə BOŞ lüğətdir, istisna deyil."""
     ctx = _SheetCtx()
 
-    totals = ctx.use_case().worked_days_in_period(store_id=STORE, start=DAY, end=date(2026, 8, 13))
+    totals = ctx.use_case().worked_days_in_period(
+        tenant_id=TENANT, store_id=STORE, start=DAY, end=date(2026, 8, 13)
+    )
 
     assert totals == {}
 

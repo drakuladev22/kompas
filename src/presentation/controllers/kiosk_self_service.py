@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from math import ceil
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -106,6 +107,46 @@ class KioskSelfServiceController:
         home.tasks_requested.connect(lambda: self._open_tasks())  # noqa: PLW0108
         home.rewards_requested.connect(lambda: self._open_points())  # noqa: PLW0108
         home.appeal_requested.connect(lambda: self._open_fines())  # noqa: PLW0108
+
+    def refresh_home_cards(self, session: Session, home: EmployeeHomeScreen) -> None:
+        """İşçi Ana Ekranının üç kartını CANLI məlumatla doldurur (DEEP-GAP U5).
+
+        ──────────────────────────────────────────────────────────────────────
+        ÜÇ KART HEÇ VAXT DOLDURULMURDU
+        ──────────────────────────────────────────────────────────────────────
+        `EmployeeHomeScreen.set_tasks`/`set_points`/`set_fines` bütün
+        `src/presentation/` boyu YALNIZ `app.py::show_preview_home`-da (dizayn
+        nümunəsi) çağırılırdı. Canlı yol yalnız statusu və fasilə seçimlərini
+        yeniləyirdi — işçi hər PIN girişində "Açıq Tapşırıqlarım 0", "Xal
+        Balansım 0", "Cərimələrim —" görürdü, halbuki real rəqəmlər "Hamısına
+        bax →" düymələrinin ARXASINDA onsuz da mövcud idi. Ən ağırı: "Etiraz
+        müddəti: N gün qalıb" xəbərdarlığı MƏHZ bu kartda yaşayır və işçi
+        sıfır göstərən karta baxmamağa öyrəşirdi.
+
+        SƏLAHİYYƏT YOXLAMASI YOXDUR: hər üç oxu artıq `_tasks_rows`/
+        `points_balance_summary`/`_fine_summary` daxilində "işçinin ÖZ"
+        şərtinə bağlıdır (bax həmin metodların başlığı) — bura əlavə yoxlama
+        qoymaq eyni qaydanı İKİ yerdə saxlayardı.
+
+        `home` PARAMETR KİMİ GƏLİR, `self._home` YOX: bu metod `attach()`
+        çağırılmadan da (yəni bağlı düymələr olmadan) TƏK dəfəlik çağırıla
+        bilməlidir — çağıran (`app.py::_build_employee_home::refresh`) hər
+        yeniləmədə YENİ, İSTİNADI SAXLANMAYAN kontroller yaradır (modul
+        başlığındakı «kontrollerə istinad saxlanmır» qaydası ilə eynidir).
+
+        ÇAĞIRAN ÜÇÜNÜ TƏK sessiyada oxuyur (PERF-3, `read_batch`) — burada
+        YENİ `context.session()` AÇILMIR, ötürülən `session` təkrar işlədilir.
+        """
+        from src.presentation.controllers.screen_data import (  # noqa: PLC0415
+            points_balance_summary,
+        )
+
+        home.set_tasks([task["title"] for task in self._tasks_rows(session)])
+
+        balance, monthly_delta, to_next_reward = points_balance_summary(session, self._actor.id)
+        home.set_points(balance, monthly_delta=monthly_delta, to_next_reward=to_next_reward)
+
+        home.set_fines(**self._fine_summary(session))
 
     # ------------------------------- sarğı ----------------------------------- #
 
@@ -222,16 +263,65 @@ class KioskSelfServiceController:
         open_fines = {str(appeal.fine_id) for appeal in appeals if appeal.status.is_open}
         rows = [
             {
-                "fine_id": str(fine.id),
+                # AÇAR `"id"`-DİR, `"fine_id"` YOX (QA-FULL FAZA 3 tapıntısı):
+                # `FineAppealScreen.set_history()` sətir düyməsini `fine.get(
+                # "id", "")` ilə qurur — köhnə `"fine_id"` açarı HEÇ VAXT
+                # oxunmurdu, yəni `fine_id` HƏMİŞƏ boş sətir olurdu və düymə
+                # `lambda`-sı işə düşsə belə heç bir cəriməyə bağlanmırdı.
+                # `"appealable"` DƏ YOX İDİ: onsuz `set_history` düyməni
+                # ÜMUMİYYƏTLƏ çəkmirdi — kiosk-da HEÇ BİR cəriməyə etiraz
+                # açıla bilmirdi (bax modul başlığındakı ilkin qüsur, sükutla
+                # geri qayıtmışdı).
+                "id": str(fine.id),
                 "type": _fine_type_name(session, fine.id),
                 "meta": fine.issued_at.strftime("%d.%m.%Y %H:%M"),
                 "amount": f"{fine.amount.amount} ₼",
                 "status": "Etiraz baxılır" if str(fine.id) in open_fines else "Təsdiqlənib",
+                # Açıq etirazı olan cərimə YENİDƏN etiraz oluna bilməz —
+                # `FineAppealUseCase.submit` onsuz da bunu rədd edərdi, lakin
+                # düyməni əvvəlcədən gizlətmək istifadəçini boş yerə forma
+                # doldurub rədd cavabı almaqdan qoruyur.
+                "appealable": "0" if str(fine.id) in open_fines else "1",
             }
             for fine in fines
         ]
         total = sum((fine.amount.amount for fine in fines), start=Decimal(0))
         return rows, len(open_fines), f"{total} ₼"
+
+    def _fine_summary(self, session: Session) -> dict[str, Any]:
+        """«Cərimələrim» kartının QISA görünüşü (bax `_fine_rows` — tam siyahı).
+
+        Kart YALNIZ ən son cərimənin etiraz sayğacını göstərir (bölmə 3):
+        "Etiraz müddəti: N gün qalıb" `Fine.appeal_window_closes_at`-dan
+        (server-lövbərli, TIME-1) hesablanır — kliyent saatından yox, çünki
+        bütün cərimə/gecikmə mexanizmi məhz buna əsaslanır.
+        """
+        now = datetime.now(UTC)
+        fines = session.manual_fines.my_fines(employee=self._actor, year=now.year, month=now.month)
+        if not fines:
+            return {"count": 0, "total_text": "0 ₼"}
+
+        from src.presentation.controllers.screen_data import _fine_type_name  # noqa: PLC0415
+
+        total = sum((fine.amount.amount for fine in fines), start=Decimal(0))
+        latest = max(fines, key=lambda fine: fine.issued_at)
+        appeal_days_left: int | None = None
+        closes_at = latest.appeal_window_closes_at
+        if closes_at is not None:
+            remaining = (closes_at - now).total_seconds()
+            if remaining > 0:
+                # Yuvarlaqlaşdırma YUXARI gedir (`ceil`): pəncərəyə 30 dəqiqə
+                # qalanda "0 gün qalıb" göstərmək işçini "hüquq bitib" zənn
+                # etdirərdi, halbuki pəncərə HƏLƏ AÇIQDIR.
+                appeal_days_left = ceil(remaining / 86400)
+        return {
+            "count": len(fines),
+            "total_text": f"{total} ₼",
+            "latest": (
+                f"{_fine_type_name(session, latest.id)} — {latest.issued_at.strftime('%d.%m.%Y')}"
+            ),
+            "appeal_days_left": appeal_days_left,
+        }
 
     def _submit_appeal(self, screen: Any, payload: dict[str, str]) -> None:
         """Etirazı `FineAppealUseCase.submit`-ə ötürür.

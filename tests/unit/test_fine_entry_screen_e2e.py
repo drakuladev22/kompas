@@ -111,6 +111,24 @@ class _Uow:
     def mark_evidence_pending(self, fine_id: Any) -> None:
         self.fines_marked_pending.append(fine_id)
 
+    def repository(self, key: str) -> Any:
+        """`screen_data._fines` kamera operatorunun ÖZ filiallarını soruşur.
+
+        Sahtədə bu metod YOX İDİ və `AttributeError` `populate()`-in geniş
+        `except`-inə düşürdü: ekran boş qalırdı, test isə YAŞIL — çünki heç
+        biri `SCREEN_BIND_FAILED` yazılmadığını yoxlamırdı. Boş siyahı burada
+        DOĞRU sahtədir: bu faylın mövzusu cərimə FORMASIDIR, əhatə süzgəci
+        deyil (o, `test_camera_queue_screen_e2e.py`-də ayrıca sınanır).
+        """
+        if key == "camera_assignments":
+            return _CameraAssignments()
+        raise AssertionError(f"Gözlənilməyən repo açarı: {key}")
+
+
+class _CameraAssignments:
+    def stores_for_operator(self, operator_id: Any) -> list[Any]:
+        return []
+
 
 class _ManualFines:
     def __init__(self, *, fine_types: list[Any], allowed_stores: list[Any]) -> None:
@@ -251,6 +269,71 @@ def test_submitting_the_real_form_issues_the_fine_and_enqueues_the_photo(
     assert context.upload_runs == 1
 
 
+# --------------------------------------------------------------------------- #
+# 1b. DEEP-GAP U1 — göndərişdən sonra forma TƏMİZLƏNİR, uğur mesajı görünür
+# --------------------------------------------------------------------------- #
+
+
+@requires_qt
+def test_a_successful_submission_clears_the_photo_and_shows_a_confirmation(
+    qtbot, theme, tmp_path: Any
+) -> None:  # type: ignore[no-untyped-def]
+    """DEEP-GAP U1 — köhnə şəkil NÖVBƏTİ işçiyə keçmir.
+
+    ƏVVƏL: uğurlu göndərişdən sonra `_photo` YERİNDƏ QALIRDI — operator
+    yalnız dropdown-ları dəyişəndə yeni cərimə ƏVVƏLKİ işçinin sübut
+    şəkli ilə yaranırdı. İndi `PhotoDropZone.clear()` MÜTLƏQ çağırılır və
+    operator görünən bir təsdiq mesajı alır (kor-koranə təkrar klikin
+    qarşısı da bununla alınır).
+    """
+    from src.presentation.background_task import InlineExecutor
+
+    context = _Context()
+    screen, _controller = _build(theme, qtbot, context, executor=InlineExecutor())
+    _fill_valid_form(screen, tmp_path)
+    assert screen._photo.file_path  # ilkin vəziyyət: şəkil seçilib
+
+    _click(screen, "Cəriməni Qeyd Et")
+
+    assert screen._photo.file_path == "", "Sübut şəkli göndərişdən sonra TƏMİZLƏNMƏLİ idi"
+    # `isVisibleTo(screen)`, `isVisible()` YOX: sonuncu YALNIZ pəncərə HƏQİQƏTƏN
+    # göstəriləndə `True` olur, offscreen testdə isə valideyn zənciri heç vaxt
+    # render olunmur — yəni `isVisible()` widget düzgün qurulsa da `False`
+    # qaytarır və testi YALANDAN qırardı. `isVisibleTo()` məhz «valideyn
+    # göstərilsəydi görünərdimi?» sualına cavab verir.
+    assert screen._success_message.isVisibleTo(screen)
+    assert "Aygün Məmmədova" in screen._success_message.text()
+    assert "25" in screen._success_message.text()
+
+
+@requires_qt
+def test_a_second_submission_without_reselecting_a_photo_is_rejected(
+    qtbot, theme, tmp_path: Any
+) -> None:  # type: ignore[no-untyped-def]
+    """Formanın özü ARTIQ bilir foto məcburidir — təmizlənmə bunu SİLMİR.
+
+    Uğurlu göndərişdən sonra operator YENİ foto seçmədən ikinci dəfə
+    "Cəriməni Qeyd Et" bassa, mövcud "Foto sübutu məcburidir" qapısı
+    yenidən işə düşməlidir — köhnə foto sükutla YENİDƏN işlədilməməlidir.
+    """
+    from src.presentation.background_task import InlineExecutor
+
+    context = _Context()
+    screen, _controller = _build(theme, qtbot, context, executor=InlineExecutor())
+    _fill_valid_form(screen, tmp_path)
+
+    _click(screen, "Cəriməni Qeyd Et")
+    assert len(context.manual_fines.issued) == 1
+
+    _click(screen, "Cəriməni Qeyd Et")  # foto YENİDƏN seçilməyib
+
+    assert len(context.manual_fines.issued) == 1, "İkinci göndəriş yazılmamalı idi"
+    assert screen._photo_error.isVisibleTo(screen)  # bax yuxarıdakı `isVisibleTo` qeydi
+    assert not screen._success_message.isVisibleTo(screen), (
+        "Köhnə uğur mesajı yeni cəhddə TƏMİZLƏNMƏLİ idi"
+    )
+
+
 @requires_qt
 def test_submitting_without_a_photo_shows_the_real_validation_message(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
     context = _Context()
@@ -265,7 +348,7 @@ def test_submitting_without_a_photo_shows_the_real_validation_message(qtbot, the
     _click(screen, "Cəriməni Qeyd Et")
 
     assert context.manual_fines.issued == []
-    assert screen._photo_error.isVisible()
+    assert screen._photo_error.isVisibleTo(screen)  # bax yuxarıdakı `isVisibleTo` qeydi
     assert screen._photo_error.text() == "Foto sübutu məcburidir"
 
 
@@ -297,6 +380,13 @@ def test_a_rapid_double_click_reuses_the_same_idempotency_key_within_the_window(
     `FineEntryController._idempotency_key_for_submission()` `sales_points.py::
     _redemption_id_for` ilə EYNİ naxışdır. `monotonic()` bu testdə İDARƏ
     OLUNUR — real gözləmə YOXDUR, ona görə test sürətli və sabitdir.
+
+    DEEP-GAP U1: uğurlu göndərişdən sonra `clear_photo()` çağırılır (bax
+    `FineEntryController._issue`), ona görə hər klikdən ƏVVƏL foto YENİDƏN
+    seçilir — dropdown-lar (növ/mağaza/işçi/tarix) toxunulmaz qalır, çünki
+    `clear_photo()` YALNIZ fotonu təmizləyir. Bu, «operator eyni niyyətlə
+    qısa aralıqla iki dəfə TAM formanı göndərir» ssenarisini modelləşdirir —
+    məhz bu halda idempotency açarının EYNİ qalması vacibdir.
     """
     from src.presentation.controllers import fine_entry as fine_entry_module
 
@@ -309,6 +399,7 @@ def test_a_rapid_double_click_reuses_the_same_idempotency_key_within_the_window(
 
     _click(screen, "Cəriməni Qeyd Et")
     clock["t"] = 2.0  # pəncərə daxilində (DUPLICATE_SUBMISSION_WINDOW_SECONDS = 10)
+    _fill_valid_form(screen, tmp_path)  # foto U1-lə TƏMİZLƏNİB, yenidən seçilir
     _click(screen, "Cəriməni Qeyd Et")
 
     assert len(context.manual_fines.issued) == 2
@@ -318,6 +409,7 @@ def test_a_rapid_double_click_reuses_the_same_idempotency_key_within_the_window(
     assert first_key is not None
 
     clock["t"] = 15.0  # pəncərə bitib
+    _fill_valid_form(screen, tmp_path)
     _click(screen, "Cəriməni Qeyd Et")
 
     third_key = context.manual_fines.issued[2]["idempotency_key"]

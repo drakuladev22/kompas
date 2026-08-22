@@ -2299,6 +2299,11 @@ class RootControlScreen(Screen):
         self._module_toggles: dict[str, ToggleSwitch] = {}
         self._structural: set[str] = set()
         self._face_scope_toggles: dict[str, ToggleSwitch] = {}
+        #: Son `set_face_scope()` çağırışında əhatə QLOBAL idimi (heç bir
+        #: mağaza seçilməyib) — DEEP-GAP FAZA 4, T4: bu vəziyyətdə İLK
+        #: mağazanı aktivləşdirmək bütün DİGƏR mağazalarda üz təsdiqini
+        #: sükutla söndürür, ona görə həmin keçid TƏSDİQ tələb edir.
+        self._face_scope_was_global = True
 
         banner = Card(padding=16, spacing=8)
         banner_row = QWidget()
@@ -2739,6 +2744,9 @@ class RootControlScreen(Screen):
         clear_layout(self._face_scope_rows)
         self._face_scope_toggles.clear()
 
+        selected = sum(1 for store in stores if store.get("active") == "1")
+        self._face_scope_was_global = selected == 0
+
         for store in stores:
             key = store.get("id", "")
             row = QWidget()
@@ -2750,13 +2758,12 @@ class RootControlScreen(Screen):
 
             toggle = ToggleSwitch(self.theme, checked=store.get("active") == "1")
             toggle.toggled.connect(
-                lambda checked, k=key: self.face_scope_changed.emit(k, bool(checked))
+                lambda checked, k=key: self._on_face_scope_toggled(k, bool(checked))
             )
             self._face_scope_toggles[key] = toggle
             layout.addWidget(toggle)
             self._face_scope_rows.addWidget(row)
 
-        selected = sum(1 for store in stores if store.get("active") == "1")
         if not stores:
             self._face_scope_summary.setText("Mağaza siyahısı boşdur.")
         elif selected == 0:
@@ -2767,6 +2774,38 @@ class RootControlScreen(Screen):
             self._face_scope_summary.setText(
                 f"{selected} mağaza seçilib — üz təsdiqi YALNIZ orada tətbiq olunur."
             )
+
+    def _on_face_scope_toggled(self, store_id: str, checked: bool) -> None:
+        """Toggle klikləndi — QLOBAL-dan DAR əhatəyə keçid TƏSDİQ tələb edir.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ BURADA (DEEP-GAP FAZA 4, T4)
+        ──────────────────────────────────────────────────────────────────────
+        Əhatə hazırda QLOBALDIRSA (heç bir mağaza seçilməyib), İLK mağazanı
+        aktivləşdirmək DİGƏR BÜTÜN mağazalarda üz təsdiqini SÜKUTLA söndürür
+        (bax `controllers/root_control.py::_on_face_scope_changed` şərhi —
+        eyni keçid audit sətrində DƏ ayrıca işarələnir). Bir toggle kliki ilə
+        bütün şəbəkənin Face Control-unu söndürmək ekvivalenti olan bir
+        əməliyyatı XƏBƏRDARLIQSIZ buraxmaq olmazdı.
+        """
+        if checked and self._face_scope_was_global and not self._confirm_face_scope_narrowing():
+            self.reject_face_scope_change(store_id)
+            return
+        self.face_scope_changed.emit(store_id, checked)
+
+    def _confirm_face_scope_narrowing(self) -> bool:
+        from PySide6.QtWidgets import QMessageBox  # noqa: PLC0415
+
+        answer = QMessageBox.question(
+            self,
+            "Face Control əhatəsi daralır",
+            "Hazırda Face Control BÜTÜN mağazalarda aktivdir (qlobal rejim). "
+            "Bu mağazanı seçmək DİGƏR bütün mağazalarda üz təsdiqini "
+            "SÖNDÜRƏCƏK — yalnız seçdiyiniz mağaza(lar)da qalacaq. Davam edilsin?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return bool(answer == QMessageBox.StandardButton.Yes)
 
     def reject_face_scope_change(self, store_id: str) -> None:
         """Yazı rədd edildi — açar geri qaytarılır (siqnal təkrar yayılmadan).

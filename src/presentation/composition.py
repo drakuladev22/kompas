@@ -1263,6 +1263,13 @@ class ApplicationContext:
             # sübutu qaytarır.
             self._evidence_queue = EvidenceUploadQueue(
                 path,
+                # D2 (dövrə audit): `tenant_id` VERİLMƏSƏ `claim_pending()`
+                # QLOBAL FIFO-dur — köhnə/başqa tenant-a aid sətirlər CARİ
+                # (`self._factory.active()`) tenant-ın Drive-ına yüklənə
+                # bilər (bax `upload_queue.py::__init__` şərhi). Bu YEGANƏ
+                # kompozisiya yoludur, ona görə `None` buraya HEÇ VAXT
+                # ötürülmür.
+                tenant_id=str(self._tenant_id),
                 max_upload_bytes=self._upload_limit(),
                 limits=self._infrastructure_limits,
                 encryption=EncryptionService(),
@@ -2829,12 +2836,28 @@ class ApplicationContext:
             # PIN/şifrə sıfırlaması sahibinə bildiriş göndərir (bölmə 2).
             notifier=notifier,
             # Son Dual-Control təsdiqçisi itiriləndə xəbərdarlıq (bölmə 3).
-            deadlock_guard=DualControlDeadlockGuardUseCase(uow.employees, notifier),
+            deadlock_guard=DualControlDeadlockGuardUseCase(
+                uow.employees,
+                notifier,
+                # PRE-EXISTING boşluq (wiring qapısının tapıntısı, bugünkü
+                # DEEP-GAP işindən DEYİL) — `security_events` BAĞLANMIRDI,
+                # son dual-control təsdiqçisi itiriləndə təhlükəsizlik
+                # hadisəsi jurnala düşmürdü. `notifier` ilə EYNİ "SEC-7,
+                # QEYD-ŞƏRTSİZ yazılır" naxışıdır (bax use case-in öz
+                # şərhi). SARILMIŞ forma MƏCBURİDİR — `face_verification`
+                # ilə EYNİ qərar: yazı uğursuzluğu deadlock yoxlamasının
+                # ÖZÜNÜ dayandırmamalıdır.
+                security_events=FailSoftSecurityEventRecorder(repo("security_events")),
+            ),
             # `facecontrol.md` bənd 8 — işçi deaktiv ediləndə üz vektoru HƏMİN
             # ANDA silinir. EYNİ `uow` bağlantısı MƏCBURİDİR: `is_active =
             # FALSE` yazısı ilə vektorun silinməsi bir tranzaksiyada olmalıdır,
             # əks halda biri commit olunub digəri geri qayıda bilərdi.
             face_embeddings=repo("face_embeddings"),
+            # DEEP-GAP D2 — `PostgresOpenFineExposureReader` (`repositories.py`)
+            # indi bağlanır: deaktiv edilən işçinin AÇIQ cərimə/etiraz izi
+            # yoxlanılır (bölmə 4/6). `fines` İLƏ EYNİ `uow` bağlantısıdır.
+            fine_exposure=repo("fine_exposure"),
         )
 
         def _bulk_create_employee_row(
@@ -2990,6 +3013,11 @@ class ApplicationContext:
                 # #15 — təsdiqdən sonra norma üstü saatlar jurnala yazılır.
                 # Tabelin öz axını (ön-doldurma → müqayisə → təsdiq) DƏYİŞMİR.
                 overtime=overtime_tracking,
+                # DEEP-GAP D1 — bu port BAĞLANMAMIŞDI: `ANNUAL_LEAVE_COUNTS_
+                # AS_WORKED_DAY` Root parametri istehsalatda TƏSİRSİZ qalırdı,
+                # `_counting_policy()` həmişə `AttendanceCountingPolicy.
+                # defaults()`-a düşürdü (bax use case-in öz şərhi).
+                limits=repo("limits"),
             ),
             manual_fines=ManualFineUseCase(
                 fines=uow.fines,
@@ -3033,6 +3061,18 @@ class ApplicationContext:
                 # YAZILMAYIBSA `mypy`/işə salınma xətası GÖZLƏNİLƏNDİR, bu
                 # sətir öz tərəfini artıq TAMAMLAYIB.
                 review_batches=repo("fine_review_batches"),
+                # DEEP-GAP D2 — bu port ƏVVƏL BAĞLANMAMIŞDI, yəni deaktiv
+                # işçinin cəriməsi `_is_employee_inactive()`-in yoxlamasından
+                # KEÇMƏDƏN nəşr olunurdu (istehsalatda qapı SÖNÜK idi, halbuki
+                # use case-in ÖZÜ artıq yazılmışdı). `PostgresEmployeeRepository.
+                # get()` MÖVCUDDUR, ona görə bura TƏHLÜKƏSİZ bağlanır.
+                employees=repo("employees"),
+                # DEEP-GAP T3 — indi bağlıdır: `PostgresFineRepository.
+                # unsynced_evidence_ids()` yazıldı (`repositories.py`, TƏK
+                # `id = ANY(%s)` sorğusu, `evidence_upload_status` sütunu).
+                # Kamera cərimələrinin nəşri artıq sübutun HƏQİQƏTƏN Drive-a
+                # yükləndiyini yoxlayır (SEC-8).
+                evidence_sync=repo("fines"),
             ),
             tasks=task_workflow,
             sales_points=sales_points,
@@ -3097,6 +3137,14 @@ class ApplicationContext:
                 # kamera-tipli sətirdə çalışır, `security_events` yazısının
                 # uğursuzluğu doğrulamanın ÖZÜNÜ dayandırmamalıdır.
                 security_events=FailSoftSecurityEventRecorder(repo("security_events")),
+                # T1 (DEEP-GAP Faza 4) — `identify_for_login()` (1:N kiosk üz
+                # girişi) HEÇ BİR sürət-limitinə bağlı deyildi (bax use case-in
+                # "T1 — TERMİNAL THROTTLE" bölməsi): foto/video ilə limitsiz
+                # cəhd mümkün idi. XAM repo, SARILMIR — `authenticate_with_pin`
+                # (`controllers/kiosk.py`) ilə EYNİ SEC-01 qərarı: bu, TƏHLÜKƏ­
+                # SİZLİK QAPISININ ÖZÜDÜR, fail-soft bükücü onu sükutla
+                # söndürərdi.
+                pin_throttle=repo("pin_throttle"),
             ),
             # `limits=repo("limits")` — AÇIQ BAĞLANTININ repo-su: istisnanın
             # maksimum müddəti (`FACE_EXEMPTION_MAX_DAYS`) sətrin yazıldığı
@@ -3157,7 +3205,19 @@ class ApplicationContext:
             # `users` YUXARIDA yerli dəyişən kimi qurulub — bax orada
             # ("İKİ yerdə lazımdır", toplu CSV idxalı ilə paylaşılır).
             users=users,
-            permission_guard=PermissionHierarchyGuardUseCase(audit=audit, clock=clock),
+            permission_guard=PermissionHierarchyGuardUseCase(
+                audit=audit,
+                clock=clock,
+                # PRE-EXISTING boşluq (wiring qapısının tapıntısı, bugünkü
+                # DEEP-GAP işindən DEYİL) — `security_events` BAĞLANMIRDI:
+                # `apply()`-in `AuthorizationError` atdığı hər hal (kiminsə
+                # öz səlahiyyətindən yuxarı toxunma cəhdi, Strict Hierarchy/
+                # Self-Escalation Guard rəddi) təhlükəsizlik hadisəsi
+                # jurnalına DÜŞMÜRDÜ. SARILMIŞ forma MƏCBURİDİR — `face_
+                # verification`/`deadlock_guard` ilə EYNİ SEC-7 qərarı: yazı
+                # uğursuzluğu icazə rəddinin ÖZÜNÜ dayandırmamalıdır.
+                security_events=FailSoftSecurityEventRecorder(repo("security_events")),
+            ),
             positions=PositionManagementUseCase(
                 positions=uow.positions,
                 flags=repo("permission_flags"),
