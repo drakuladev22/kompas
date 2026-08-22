@@ -40,7 +40,21 @@
       "Bash(git log*)",
       "Bash(git show*)",
       "Bash(git ls-files*)",
-      "Bash(.venv/Scripts/python.exe .claude/hooks/ruff_fix.py*)"
+      "Bash(.venv/Scripts/python.exe .claude/hooks/ruff_fix.py*)",
+      "Bash(python -)",
+      "Bash(cd *)",
+      "Bash(git add *)",
+      "Bash(PYTHONIOENCODING=utf-8 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m src.main --help)",
+      "Bash(PYTHONIOENCODING=utf-8 QT_QPA_PLATFORM=offscreen timeout 120 .venv/Scripts/python.exe -m src.main --check)",
+      "Bash(PYTHONIOENCODING=utf-8 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -c ' *)",
+      "Bash(git tag -a qa-full-comprehensive-v1 -m 'QA-FULL + DEEP-GAP + ONBOARD dövrəsinin yekunu *)",
+      "Bash(git tag *)",
+      "Bash(git push *)",
+      "Bash(git ls-remote *)",
+      "Bash(git fetch *)",
+      "Bash(git checkout *)",
+      "Bash(git merge *)",
+      "Bash(git branch *)"
     ]
   },
   "hooks": {
