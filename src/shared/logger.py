@@ -28,6 +28,7 @@ import sys
 import threading
 import traceback
 from collections.abc import MutableMapping
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -283,6 +284,49 @@ def _usable_log_dir(requested: Path | None) -> tuple[Path, _LogDirFallback | Non
     return primary, None
 
 
+def _console_stream() -> Any:
+    r"""Konsol kanalının AXINI — yoxdursa `None` (o zaman handler QURULMUR).
+
+    ──────────────────────────────────────────────────────────────────────────
+    HANSI QÜSURU BAĞLAYIR — PAKETLƏNMİŞ `.exe`-DƏ REPRO EDİLİB
+    ──────────────────────────────────────────────────────────────────────────
+    `dist\KompasOS\KompasOS.exe --check` çıxışı belə idi:
+
+        --- Logging error ---
+        UnicodeEncodeError: 'charmap' codec can't encode character 'ı'
+
+    Səbəb: `StreamHandler` axının ÖZ kodlaşdırmasını işlədir. Windows-da boru
+    (pipe) və ya yönləndirilmiş çıxış `cp1252`-dir, layihənin HƏR log sətri isə
+    Azərbaycan hərfləri daşıyır (bölmə 4: interfeys dili birdir). Nəticədə hər
+    sətir `logging` daxilində istisna verirdi — mesaj FAYLA düşürdü (fayl
+    handler-i `encoding="utf-8"`-dir), lakin stderr yığınla «Logging error»
+    ilə dolurdu. Planlaşdırılmış işlər (`--run-scheduled-jobs`, Task Scheduler)
+    məhz belə, yönləndirilmiş çıxışla işləyir.
+
+    İKİ hal ayrıca emal olunur:
+
+      1. `sys.stdout` YOXDUR (`--windowed` paket: PyInstaller onu `None` edir).
+         `StreamHandler(None)` sükutla `sys.stderr`-ə keçir, o da `None`
+         ola bilər — nəticədə HƏR log sətri istisna verər. Belə halda konsol
+         handler-i ÜMUMİYYƏTLƏ qurulmur: fayl kanalı onsuz da yazır.
+      2. Axın var, lakin kodlaşdırması UTF-8 DEYİL. `reconfigure()` ilə
+         UTF-8-ə keçirilir və `errors="replace"` verilir — kodlaşdırma yenə
+         uğursuz olsa sətir İTMİR, simvol əvəzlənir. `reconfigure` mümkün
+         olmayan axınlarda (məs. test qoşquları) axın OLDUĞU KİMİ qaytarılır:
+         itirilən şey yalnız konsol gözəlliyidir, fayl kanalı toxunulmazdır.
+    """
+    stream = sys.stdout
+    if stream is None:
+        return None
+    encoding = (getattr(stream, "encoding", "") or "").lower().replace("-", "")
+    if encoding not in {"utf8", "utf8sig"}:
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            with suppress(Exception):
+                reconfigure(encoding="utf-8", errors="replace")
+    return stream
+
+
 def configure_logging(
     *,
     log_dir: Path | None = None,
@@ -332,9 +376,13 @@ def configure_logging(
             logger.addHandler(file_handler)
 
             if console and channel is LogChannel.APP:
-                stream_handler = logging.StreamHandler(stream=sys.stdout)
-                stream_handler.setFormatter(JsonFormatter(channel=channel, app_version=app_version))
-                logger.addHandler(stream_handler)
+                console_stream = _console_stream()
+                if console_stream is not None:
+                    stream_handler = logging.StreamHandler(stream=console_stream)
+                    stream_handler.setFormatter(
+                        JsonFormatter(channel=channel, app_version=app_version)
+                    )
+                    logger.addHandler(stream_handler)
 
         _configured = True
 

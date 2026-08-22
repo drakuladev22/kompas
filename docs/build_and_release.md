@@ -43,7 +43,8 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q
 * Qurma təsviri TƏK yerdədir: `src/KompasOS.spec`. Bayraqları əmr sətrinə
   yazmayın — CI eyni spec-i işlədir və iki mənbə səssizcə ayrılar.
 * Nəticə: **`dist\KompasOS\`** qovluğu (`--onedir`) — içində `KompasOS.exe`
-  və `_internal\` (Qt, şriftlər, ikon, üz modelləri; 960+ fayl, ~430 MB).
+  və `_internal\` (Qt, şriftlər, ikon, üz modelləri). Ölçüldü (0.1.0):
+  **1044 fayl, 433 MB**, `KompasOS.exe` 15.5 MB.
 * `--onedir` QƏSDƏNDİR: `--onefile` hər açılışda arxivi `%TEMP%`-ə açırdı və
   müştəri maşınında 5-15 saniyə çəkirdi. Ölçülmüş isti açılış: **0.7 s**
   (ilk açılış ~5 s — Defender 960 yeni faylı bir dəfəlik yoxlayır).
@@ -53,7 +54,9 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q
   məhz PAKETİN İÇİNDƏN oxuyur (`_sql_root()` əvvəlcə `bundle_root()`-a baxır),
   yəni onlar olmasaydı təmiz müştəri quraşdırması bazanı QURA BİLMƏZDİ.
   Spec onları `_DATABASE_DATAS` ilə daxil edir (`schema.sql` + kök səviyyəli
-  `NNN_*.sql`; `migrations/vendor/` DÜŞMÜR). Ölçülüb: paketdə **76 miqrasiya**.
+  `NNN_*.sql`; `migrations/vendor/` DÜŞMÜR). Ölçülüb: paketdə **83 SQL faylı**
+  (`schema.sql` + 82 miqrasiya) — rəqəm miqrasiya əlavə olunduqca ARTIR, ona
+  görə burada TARİX ilə saxlanılır: 2026-08-23.
   `.env` isə HƏQİQƏTƏN düşmür — sirr saxlayır.
 
 Yoxlama:
@@ -151,6 +154,29 @@ CI-dakı `production-release` job-u eyni ardıcıllığı avtomatik icra edir
 |---|---|---|
 | `KompasOS-Setup-<versiya>.exe` | `dist\` | **Müştəriyə** |
 | `KompasOS\` qovluğu | `dist\` | Yalnız daxili sınaq — müştəriyə TƏK BAŞINA verilmir |
+
+---
+
+## 5b. Developer maşınında ÖLÇÜLƏN dövrə (2026-08-23, versiya 0.1.0)
+
+Aşağıdakılar bu maşında FAKTİKİ icra olunub — «təmiz maşın» siyahısını (§6)
+ƏVƏZ ETMİR, lakin paketin özünün sağlam olduğunu buraxılışdan ƏVVƏL təsdiqləyir:
+
+| Addım | Nəticə |
+|---|---|
+| Silent quraşdırma (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=… /LOG=…`) | kod 0, **19 san**, 1046 fayl / 438 MB |
+| Reyestr (`HKLM\…\Uninstall\{AppId}_is1`) | `KompasOS`, `0.1.0`, uninstall sətri düzgün |
+| Qısayollar | Start menyu + ictimai masaüstü — hər ikisi yaranır |
+| Quraşdırma jurnalı (`/LOG`) | 5397 sətir, «Installation process succeeded», xəta YOX |
+| `KompasOS.exe --check` | işləyir; YALNIZ `encryption`/`hash_pepper` uğursuzdur — **gözlənilən**: açar paketə düşmür, maşın açarı İLK YAZIDA yaranır (SETUP-2) |
+| `KompasOS.exe --gui --preview` (offscreen, 45 san) | 0 traceback, 0 «Logging error», stderr BOŞ |
+| Silent uninstall (`unins000.exe /VERYSILENT`) | kod 0, **1 san**; qovluq, reyestr qeydi və qısayollar SİLİNİR |
+| Müştəri məlumatı (`%PROGRAMDATA%\KompasOS`) | `data\` və `logs\` **QALIR** — silinmə onları aparmır |
+
+Bu dövrədə TAPILAN qüsur (düzəldildi): paketlənmiş `.exe`-nin konsol log
+kanalı `cp1252` axına yazırdı və HƏR sətir `UnicodeEncodeError` verirdi
+(`src/shared/logger.py::_console_stream`). Mənbədən işləyəndə görünmürdü —
+orada konsol UTF-8-dir.
 
 ---
 

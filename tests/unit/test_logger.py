@@ -261,3 +261,60 @@ def test_main_exits_cleanly_when_even_the_fallback_is_unusable(
     code = main(["--check", "--log-dir", str(blocker / "logs")])
 
     assert code == EXIT_STARTUP_ERROR
+
+
+# --------------------------------------------------------------------------- #
+# Konsol kanalının kodlaşdırması (paketlənmiş `.exe`-də repro edilib)
+# --------------------------------------------------------------------------- #
+
+
+def test_console_handler_switches_a_cp1252_stream_to_utf8() -> None:
+    """Yönləndirilmiş çıxış `cp1252`-dirsə axın UTF-8-ə keçirilir.
+
+    QÜSUR PAKETLƏNMİŞ `.exe`-DƏ TAPILDI: `KompasOS.exe --check` çıxışı hər
+    log sətrində `UnicodeEncodeError: 'charmap' codec can't encode character
+    'ı'` verirdi — Windows-da boru/yönləndirmə `cp1252`-dir, layihənin isə
+    HƏR sətri Azərbaycan hərfi daşıyır. Mesaj fayla düşürdü (fayl handler-i
+    `utf-8`), lakin stderr «Logging error» ilə dolurdu.
+    """
+    import io
+
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+
+    resolved = _console_stream_with(stream)
+
+    assert resolved is stream
+    assert stream.encoding.lower().replace("-", "") == "utf8"
+
+
+def test_console_handler_is_skipped_when_there_is_no_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--windowed` paketdə `sys.stdout` `None`-dur — handler QURULMUR.
+
+    `StreamHandler(None)` sükutla `sys.stderr`-ə keçir, o da `None` ola bilər;
+    onda HƏR log sətri istisna verərdi. Fayl kanalı onsuz da yazır, ona görə
+    düzgün davranış konsol handler-ini ÜMUMİYYƏTLƏ qurmamaqdır.
+    """
+    import logging as std_logging
+
+    from src.shared.logger import LogChannel, configure_logging
+
+    monkeypatch.setattr("src.shared.logger.sys.stdout", None)
+    configure_logging(log_dir=tmp_path / "logs", console=True, force=True)
+
+    logger = std_logging.getLogger(LogChannel.APP.logger_name)
+    streams = [h for h in logger.handlers if type(h) is std_logging.StreamHandler]
+    assert streams == []
+
+
+def _console_stream_with(stream: object) -> object:
+    """`_console_stream()`-i verilmiş axınla çağırır (monkeypatch köməkçisi)."""
+    import src.shared.logger as logger_module
+
+    original = logger_module.sys.stdout
+    logger_module.sys.stdout = stream  # type: ignore[assignment]
+    try:
+        return logger_module._console_stream()
+    finally:
+        logger_module.sys.stdout = original
