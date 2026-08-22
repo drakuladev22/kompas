@@ -84,3 +84,7 @@ navbar.jpg
 tg_Bot.md
 tg1.md
 dbtest/
+
+# Region köçürməsinin dump faylı — MÜŞTƏRİ MƏLUMATI daşıyır, repozitoriyaya
+# DÜŞMƏMƏLİDİR (`scripts/migrate_region.py` onu bura yazır).
+output/
