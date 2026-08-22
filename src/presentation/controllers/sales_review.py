@@ -194,8 +194,14 @@ class SalesReviewController:
                     self._resolve_one(session, receipt, employee_name, reason=reason)
                 session.commit()
         except KompasOSError as error:
+            # `refresh()` BURADAN ÇAĞIRILMIR (QA-FULL FAZA 3 tapıntısı):
+            # uğurlu `refresh()` → `set_sales()` → `show_content()`/
+            # `show_empty()` heç bir render arası olmadan bu banner-in
+            # ÜSTÜNDƏN yazır və istifadəçi "niyə yazılmadı" cavabını heç
+            # vaxt görmür (`annual_leave.py::_on_approve` ilə eyni qərar).
+            # `catalog_admin.py::_save`/`_on_toggle` bu naxışı ARTIQ işlədir
+            # — xəta qollarında yalnız `return`.
             screen.show_error(title="Təyinat yazılmadı", message=error.user_message)
-            self.refresh(screen)
             return
         except Exception:
             _error_log.exception("SALES_ASSIGN_FAILED")
@@ -203,7 +209,6 @@ class SalesReviewController:
                 title="Təyinat yazılmadı",
                 message="Dəyişiklik saxlanmadı. Yenidən cəhd edin.",
             )
-            self.refresh(screen)
             return
 
         self.refresh(screen)

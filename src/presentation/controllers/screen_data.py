@@ -60,6 +60,7 @@ from typing import TYPE_CHECKING, Any, Final
 from src.domain.policies import DEFAULT_LIMITS, FeatureModule, SystemLimitKey
 from src.domain.value_objects.identifiers import StoreId
 from src.presentation.controllers.audit_log import entry_row
+from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
@@ -206,8 +207,24 @@ class ScreenDataBinder:
         #: Növbə matrisinin başlanğıc sürüşməsi (gün) — `set_shift_offset`.
         self._shift_offset_days = 0
 
-    def populate(self, key: str, screen: QWidget) -> None:
-        """Ekranı canlı məlumatla doldurur — bağlaması olmayan açar İZ QOYUR."""
+    def populate(self, key: str, screen: QWidget, *, reraise: bool = False) -> None:
+        """Ekranı canlı məlumatla doldurur — bağlaması olmayan açar İZ QOYUR.
+
+        ──────────────────────────────────────────────────────────────────────
+        `reraise` NİYƏ VAR (QA-FULL Faza 3 tapıntısı)
+        ──────────────────────────────────────────────────────────────────────
+        `fine_appeals.py::refresh`, `daily_roster.py::refresh` və
+        `shift_window.py::_on_month_changed` `populate()`-u öz `try/except
+        KompasOSError` ilə əhatə edib "Yenidən Cəhd Et" düyməli tam-ekran
+        mesaj vəd edirdi — LAKİN bu metod hər istisnanı ÖZÜ udurdu
+        (`report_section_error` ilə) və heç vaxt yenidən atmırdı, yəni həmin
+        qollar İSTEHSALATDA ÇATILMAZ idi. `reraise=True` YALNIZ
+        `KompasOSError`-u yenidən atır — digər (gözlənilməz) istisnalar KÖHNƏ
+        davranışı saxlayır (bölmə banneri, örtük ayaqda qalır): bir ekranın
+        gözlənilməz nasazlığı örtüyü çökdürməməlidir, `KompasOSError` isə artıq
+        istifadəçi mesajı daşıyan GÖZLƏNİLƏN domən xətasıdır və çağıran tərəf
+        onu mənalı şəkildə göstərə bilər.
+        """
         binder = self._binders().get(key)
         if binder is None:
             # DAVRANIŞ DƏYİŞMİR: ekran boş qalır, istisna atılmır, örtük
@@ -237,6 +254,15 @@ class ScreenDataBinder:
         try:
             with self._context.session(user_id=self._actor.id) as session:
                 binder(session, screen)
+        except KompasOSError:
+            if reraise:
+                # Jurnala BURADA YAZILMIR — çağıran tərəf (məs.
+                # `FINE_APPEAL_REFRESH_FAILED`) öz hadisə adı ilə eyni
+                # istisnanı artıq qeyd edəcək; ikisi eyni sətri iki dəfə
+                # yazardı.
+                raise
+            _error_log.exception("SCREEN_BIND_FAILED", extra={"screen": key})
+            report_section_error(screen, SECTION_SCREEN)
         except Exception:
             # Bax modul başlığı: bir ekranın problemi örtüyü çökdürmür.
             # DAVRANIŞ EYNİDİR (istisna udulur), lakin artıq İSTİFADƏÇİ də
@@ -968,6 +994,13 @@ class ScreenDataBinder:
         # tərəfindən udulurdu və matris canlı rejimdə HƏMİŞƏ boş qalırdı.
         window = [today + timedelta(days=offset) for offset in range(window_days)]
         days = [(day.day, _WEEKDAYS_AZ[day.weekday()]) for day in window]
+        # ETİKET CANLI YOLDA DA YAZILIR (QA-FULL Faza 3 tapıntısı): əvvəl
+        # `set_month()`-u YALNIZ maket çağırırdı, istehsalatda isə toolbar-dakı
+        # «‹ [aralıq] ›» HƏMİŞƏ BOŞ qalırdı — istifadəçi oxlarla gəzir, amma
+        # hansı tarix aralığına baxdığını görmürdü. Dar setter işlədilir, çünki
+        # `set_month()` iş rejimi nişanını da yazır və onu `shift_matrix.py`
+        # ARTIQ doldurub (bax `set_window_label` başlığı).
+        screen.set_window_label(f"{window[0]:%d.%m.%Y} – {window[-1]:%d.%m.%Y}")
 
         by_employee: dict[str, dict[date, str]] = {}
         for item in assignments:

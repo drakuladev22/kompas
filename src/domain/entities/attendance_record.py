@@ -48,6 +48,7 @@ from src.domain.value_objects.scheduling import (
     assess_lateness,
     require_aware,
 )
+from src.shared.text import normalise_decision_text
 
 #: Rədd səbəbi üçün minimum uzunluq — override səbəbi ilə eyni standart.
 MIN_REJECT_REASON_LENGTH = 10
@@ -206,7 +207,7 @@ class AttendanceRecord(AggregateRoot):
         require_aware(rejected_at, field="rejected_at")
         self._require_verifiable()
 
-        cleaned = reason.strip()
+        cleaned = normalise_decision_text(reason)
         if len(cleaned) < MIN_REJECT_REASON_LENGTH:
             raise DomainRuleError(
                 f"Rədd səbəbi minimum {MIN_REJECT_REASON_LENGTH} simvol olmalıdır",

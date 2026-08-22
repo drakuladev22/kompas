@@ -371,6 +371,15 @@ class ErpServersScreen(Screen):
             layout.addWidget(mono_label(value))
             self._sync_rows.addWidget(row)
 
+    def table(self) -> DataTable:
+        """Server cədvəli — testlərin sətir sayını (`row_count`) yoxlaması üçün.
+
+        `BackupScreen`/`AuditScreen`/`ExceptionsScreen`-in HAMISI eyni adda
+        aksesuar daşıyır; bu ekranda YOX idi — `test_erp_backup_screens_e2e.py`
+        (QA-FULL FAZA 3) məhz bunu çağırmağa çalışıb `AttributeError` alırdı.
+        """
+        return self._table
+
 
 #: Növ kartının ikonu (1c.md UX tələbi 1: "hər biri öz minimal line-ikonu ilə").
 _CONNECTOR_ICONS: Final[dict[ConnectorType, str]] = {
@@ -1579,7 +1588,17 @@ class AuditScreen(Screen):
 
         self._module = QComboBox()
         self._module.setProperty("variant", "form")
-        self._module.addItem("Modul: Hamısı")
+        # SƏTİR KONTROLLERDƏN GƏLİR, BURADA YAZILMIR (QA-FULL FAZA 3):
+        # əvvəl bu sətir `"Modul: Hamısı"` idi, `AuditLogController._search()`
+        # isə `ALL_MODULES = "Bütün modullar"` ilə müqayisə edirdi — İKİ mətn
+        # HEÇ VAXT üst-üstə düşmür və kombo toxunulmadıqca (defolt vəziyyət)
+        # hər sorğu mövcud olmayan bir `entity_type` süzgəci ilə gedirdi, yəni
+        # panel açılan kimi HƏMİŞƏ boş qalırdı (`menu.py` başlığındakı "maket
+        # və canlı yol eyni açarları işlətməli" səhvinin təkrarı). İndi TƏK
+        # mənbə kontrollerdədir, ekran onu idxal edir.
+        from src.presentation.controllers.audit_log import ALL_MODULES  # noqa: PLC0415
+
+        self._module.addItem(ALL_MODULES)
         self._module.addItems(modules)
         self._module.currentTextChanged.connect(self._emit_filters)
         filters_layout.addWidget(self._module, 1)
@@ -2056,6 +2075,18 @@ class DriveConnectionScreen(Screen):
         self._connect.clicked.connect(self.connect_requested)
         actions_layout.addWidget(self._connect)
         self._status_card.add(actions)
+
+        # KEÇİCİ (action-triggered) XƏTA — `show_error()` YOX (QA-FULL FAZA 3
+        # tapıntısı, `controllers/drive_connection.py` başlığında izah).
+        # İcazə qapısı, boş Google konfiqurasiyası, OAuth başlama/gözləmə
+        # uğursuzluqları hamısı BİR kliklik nəticəsidir və status kartını,
+        # düymələri, tarixçəni yox etməməlidir — `set_telegram_message`
+        # (`RootControlScreen`) ilə EYNİ naxış: mətn məzmunun İÇİNDƏ qalır,
+        # `ContentSwitcher` toxunulmur.
+        self._connect_message = muted_label("")
+        self._connect_message.setWordWrap(True)
+        self._connect_message.setVisible(False)
+        self._status_card.add(self._connect_message)
         self.add(self._status_card)
 
         # Razılıq gedərkən görünən kart — ünvan + gözləmə mətni.
@@ -2132,6 +2163,19 @@ class DriveConnectionScreen(Screen):
         self._auth_url.clear()
         self._connect.setEnabled(True)
         self._cancel.setVisible(False)
+
+    def set_connect_message(self, text: str, *, error: bool = False) -> None:
+        """Qoşulma cəhdinin KEÇİCİ nəticəsi — `_status_card` YERİNDƏ qalır.
+
+        Növbəti cəhddən əvvəl (`connect_requested` yenidən yayılanda)
+        kontroller boş sətirlə çağırır ki, köhnə xəbərdarlıq yeni cəhdi
+        maskalamasın. Uğurlu qoşulmadan sonra da eyni qayda ilə təmizlənir
+        (bax `controllers/drive_connection.py::_on_exchange_succeeded`).
+        """
+        self._connect_message.setText(text)
+        self._connect_message.setVisible(bool(text))
+        colour = "--color-danger" if error else "--color-text-muted"
+        self._connect_message.setStyleSheet(f"color: {self.theme.color(colour)};")
 
 
 #: ROOT İdarə Mərkəzinin kontekstual köməyi (audit G-4).
@@ -2306,6 +2350,14 @@ class RootControlScreen(Screen):
         self._modules.add(
             muted_label("Struktur-kritik modulları söndürərkən əlavə təsdiq tələb olunur.")
         )
+        # RƏDD MƏTNİ BURADA — `show_error()` YOX (QA-FULL FAZA 3 tapıntısı):
+        # bir modulun rəddi (məs. qısa təsdiq mətni) `set_telegram_message`
+        # ilə EYNİ naxışla göstərilir ki, limitlər, fasilə parametrləri,
+        # Face Control, brendinq və registry kartları GÖRÜNMƏZ olmasın.
+        self._module_message = muted_label("")
+        self._module_message.setWordWrap(True)
+        self._module_message.setVisible(False)
+        self._modules.add(self._module_message)
         self.add(self._modules)
 
         self.add(self._build_registry())
@@ -2979,6 +3031,18 @@ class RootControlScreen(Screen):
     def reject_module_change(self, key: str) -> None:
         """Use case dəyişikliyi rədd etdi — açar geri qaytarılır."""
         self._restore_toggle(key)
+
+    def set_module_message(self, text: str, *, error: bool = False) -> None:
+        """Modul yazı yolunun KEÇİCİ nəticəsi — kart YERİNDƏ qalır.
+
+        `set_telegram_message` ilə eyni naxış: mətn kartın İÇİNDƏ göstərilir,
+        `show_error()` ÇAĞIRILMIR — bir modulun rəddi limitləri, fasilə
+        parametrlərini, Face Control-u, brendinqi və registry-ni gizlətməsin.
+        """
+        self._module_message.setText(text)
+        self._module_message.setVisible(bool(text))
+        colour = "--color-danger" if error else "--color-text-muted"
+        self._module_message.setStyleSheet(f"color: {self.theme.color(colour)};")
 
     def set_registry(self, flags: list[tuple[str, bool]]) -> None:
         clear_layout(self._registry_rows)

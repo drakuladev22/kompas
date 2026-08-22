@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING
 
 from src.domain.entities.base import DomainRuleError, InvalidStateTransitionError
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
     from datetime import datetime, timedelta
@@ -164,7 +165,7 @@ class AuthSession:
             return
         self.revoked_at = now
         self.revoked_by = revoked_by
-        self.revocation_reason = reason.strip() or "Səbəb göstərilmədi"
+        self.revocation_reason = normalise_decision_text(reason) or "Səbəb göstərilmədi"
 
 
 __all__ = ["AuthSession", "SessionContext"]

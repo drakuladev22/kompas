@@ -172,6 +172,34 @@ class _NullNtp:
         return None
 
 
+def _batch_limits(batch: threading.local | None) -> Any | None:
+    """Aktiv açılış toplusunun `limits` repo-su — yoxdursa `None` (PERF-4).
+
+    `read_batch()` sapa görə bir iş vahidi saxlayır. Limit körpüləri
+    `ApplicationContext.session()`-dan KEÇMİR (onlar `Session`-u yox, repo-nu
+    istəyir), ona görə toplunu BURADAN görürlər. Toplu yoxdursa `None` qayıdır
+    və çağıran öz qısa tranzaksiyasını açır — köhnə davranış.
+    """
+    if batch is None:
+        return None
+    uow = getattr(batch, "uow", None)
+    if uow is None:
+        return None
+    return uow.repository("limits")
+
+
+def _drop_batch(batch: threading.local) -> None:
+    """Paylaşılan toplunu buraxır — sınan sorğudan SONRA məcburidir.
+
+    PostgreSQL sınan sorğudan sonra tranzaksiyanı ABORTED saxlayır: həmin
+    tranzaksiyada NÖVBƏTİ hər sorğu da sınar. `ApplicationContext.session()`
+    eyni qərarı verir; burada təkrarlanır, çünki limit yolu oradan keçmir.
+    """
+    batch.uow = None
+    batch.session = None
+    _log.warning("READ_BATCH_ABORTED", extra={"reason": "limit oxusu"})
+
+
 class _RootLimitReader:
     """`system_limits`-in SESSİYADAN-KƏNAR oxu körpüsü (`LimitReader`).
 
@@ -195,14 +223,47 @@ class _RootLimitReader:
 
     Xəta ATILMIR: uğursuzluq `InfrastructureLimits._raw` tərəfindən tutulur və
     fallback işə düşür (bax orada — "cavabsız qaldıqda fallback").
+
+    ──────────────────────────────────────────────────────────────────────────
+    AÇILIŞ TOPLUSU VARSA YENİ BAĞLANTI AÇILMIR (PERF-4)
+    ──────────────────────────────────────────────────────────────────────────
+    Yuxarıdakı «hər oxu üçün qısa iş vahidi» qaydası oxu TƏK olanda ucuzdur,
+    açılış anında isə DEYİL. Canlı ölçü (uzaq Supabase, girişdən sonrakı
+    `show_admin`): bu körpü DÖRD dəfə çağırılır və hər çağırış tam bir
+    tranzaksiya açır — `set_config` ilə RLS konteksti ~411 ms, sorğunun özü
+    ~206 ms. Yəni cəmi **4.53 saniyə**, halbuki həmin anda `read_batch()`
+    ARTIQ açıq bir tranzaksiya saxlayır və oxu ora düşsəydi yalnız sorğu
+    qiyməti qalardı.
+
+    Ona görə körpü topluya BAXIR: sapda aktiv `read_batch` varsa onun iş
+    vahidini işlədir, yoxdursa köhnə davranış (öz qısa tranzaksiyası) olduğu
+    kimi qalır. Sap-yerli obyektin ÖZÜ ötürülür (nüsxə deyil) — `read_batch`
+    onu açıb-bağladıqca körpü avtomatik uyğunlaşır.
+
+    PAYLAŞILAN TRANZAKSİYADA XƏTA TOPLUNU SÖNDÜRÜR: PostgreSQL sınan sorğudan
+    sonra tranzaksiyanı ABORTED saxlayır, yəni növbəti HƏR oxu da sınardı.
+    `ApplicationContext.session()` eyni qərarı verir (`READ_BATCH_ABORTED`) —
+    burada təkrarlanır, çünki bu yol `session()`-dan KEÇMİR.
     """
 
-    __slots__ = ("_database",)
+    __slots__ = ("_batch", "_database")
 
-    def __init__(self, database: TenantDatabase) -> None:
+    def __init__(self, database: TenantDatabase, *, batch: threading.local | None = None) -> None:
         self._database = database
+        self._batch = batch
 
     def get_str(self, tenant_id: TenantId, key: str, default: str) -> str:
+        batch = self._batch
+        shared = _batch_limits(batch)
+        if batch is not None and shared is not None:
+            try:
+                borrowed: str = shared.get_str(tenant_id, key, default)
+            except Exception:
+                # Çağıran `InfrastructureLimits._raw`-dır və o, istisnanı tutub
+                # fallback-a keçir — yəni limit oxunmur, LAKİN açılış davam edir.
+                _drop_batch(batch)
+                raise
+            return borrowed
         with self._database.unit_of_work(tenant_id) as uow:
             value: str = uow.repository("limits").get_str(tenant_id, key, default)
             return value
@@ -228,24 +289,65 @@ class _StandaloneLimits:
     PORTUN QALAN METODLARI DA TƏTBİQ OLUNUR (planlayıcı yalnız `all_for`
     çağırsa da): natamam obyekt `# type: ignore` tələb edərdi və o susdurma
     gələcəkdə port genişlənəndə ƏSL uyğunsuzluğu da gizlədərdi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    OXU METODLARI AÇILIŞ TOPLUSUNA QOŞULUR (PERF-4)
+    ──────────────────────────────────────────────────────────────────────────
+    Planlayıcı taymeri məhz GİRİŞ anında qurulur (`_start_scheduler_timer`) və
+    dövrənin uzunluğunu `all_for()` ilə oxuyur. Canlı ölçüdə bu TƏK oxu
+    **2.08 saniyə** çəkirdi: sorğunun özü ~206 ms idi, qalanı hovuzdan İKİNCİ
+    bağlantı almaq (~1.2 s) və ona RLS konteksti tətbiq etmək. Halbuki həmin
+    anda `read_batch()` artıq bir bağlantı saxlayır.
+
+    YAZI (`set_value`) VƏ `describe` TOPLUYA QOŞULMUR: toplu YALNIZ OXU
+    üçündür (bax `read_batch` başlığı) — orada `commit()` bütün toplunu
+    təsdiqləyərdi. `describe` isə nadir, ekran-tərəfi çağırışdır.
     """
 
-    __slots__ = ("_database",)
+    __slots__ = ("_batch", "_database")
 
-    def __init__(self, database: TenantDatabase) -> None:
+    def __init__(self, database: TenantDatabase, *, batch: threading.local | None = None) -> None:
         self._database = database
+        self._batch = batch
 
     def get_int(self, tenant_id: TenantId, key: str, default: int) -> int:
+        batch = self._batch
+        shared = _batch_limits(batch)
+        if batch is not None and shared is not None:
+            try:
+                borrowed: int = shared.get_int(tenant_id, key, default)
+            except Exception:
+                _drop_batch(batch)
+                raise
+            return borrowed
         with self._database.unit_of_work(tenant_id) as uow:
             value: int = uow.repository("limits").get_int(tenant_id, key, default)
             return value
 
     def get_str(self, tenant_id: TenantId, key: str, default: str) -> str:
+        batch = self._batch
+        shared = _batch_limits(batch)
+        if batch is not None and shared is not None:
+            try:
+                borrowed: str = shared.get_str(tenant_id, key, default)
+            except Exception:
+                _drop_batch(batch)
+                raise
+            return borrowed
         with self._database.unit_of_work(tenant_id) as uow:
             value: str = uow.repository("limits").get_str(tenant_id, key, default)
             return value
 
     def all_for(self, tenant_id: TenantId) -> dict[str, str]:
+        batch = self._batch
+        shared = _batch_limits(batch)
+        if batch is not None and shared is not None:
+            try:
+                borrowed: dict[str, str] = shared.all_for(tenant_id)
+            except Exception:
+                _drop_batch(batch)
+                raise
+            return borrowed
         with self._database.unit_of_work(tenant_id) as uow:
             snapshot: dict[str, str] = uow.repository("limits").all_for(tenant_id)
             return snapshot
@@ -907,7 +1009,7 @@ class ApplicationContext:
         # daşıyır — hər istehlakçı üçün yenisini qurmaq eyni nəticəni verər,
         # lakin "hansı nüsxə doğrudur" sualını yaradardı.
         self._infrastructure_limits = InfrastructureLimits(
-            limits=_RootLimitReader(database), tenant_id=tenant_id
+            limits=_RootLimitReader(database, batch=self._read_batch), tenant_id=tenant_id
         )
         # ──────────────────────────────────────────────────────────────────
         # VAXT SERVER LÖVBƏRLİDİR (TIME-1)
@@ -1685,7 +1787,7 @@ class ApplicationContext:
             runs=PostgresScheduledJobRepository(self._database),
             # AÇAR SÖZLƏ: `limits` qəbul edən hər sinif `limits=` almalıdır
             # (`test_root_control_parameter_parity` mövqeli ötürməni görmür).
-            limits=_StandaloneLimits(self._database),
+            limits=_StandaloneLimits(self._database, batch=self._read_batch),
             audit=_StandaloneAudit(self._database),
             clock=self._clock,
             instance_id=process_instance_id(),
@@ -2242,6 +2344,10 @@ class ApplicationContext:
                 # optimallaşdırmanın ÖZÜNÜ yeyərdi.
                 self._read_batch.session = None
                 self._read_batch.user_id = None
+                # İş vahidi də buraxılır: `_RootLimitReader` ona BİRBAŞA baxır
+                # (PERF-4) və ABORTED tranzaksiyada növbəti limit oxusu da
+                # sınardı — yəni bir sınan oxu limitləri də yıxardı.
+                self._read_batch.uow = None
                 _log.warning("READ_BATCH_ABORTED", extra={"reason": "sorğu xətası"})
                 raise
             return
@@ -2320,11 +2426,18 @@ class ApplicationContext:
 
             self._read_batch.session = self._build_session(uow)
             self._read_batch.user_id = user_id
+            # İŞ VAHİDİNİN ÖZÜ DƏ PAYLAŞILIR (PERF-4): `Session` yalnız use
+            # case qrafıdır və `system_limits` repo-suna yol vermir. Açılışdakı
+            # limit oxuları isə `_RootLimitReader`-dən keçir — o, `session()`-ı
+            # ÇAĞIRMIR, ona görə iş vahidini birbaşa görməlidir, əks halda hər
+            # oxu üçün ikinci tranzaksiya açardı (ölçü: 4 oxu = 4.53 saniyə).
+            self._read_batch.uow = uow
             try:
                 yield True
             finally:
                 self._read_batch.session = None
                 self._read_batch.user_id = None
+                self._read_batch.uow = None
 
     def _build_session(self, uow: PostgresUnitOfWork) -> Session:  # noqa: PLR0915
         """Use case qrafını cari `UnitOfWork`-un repo-ları ilə qurur.
@@ -3581,11 +3694,27 @@ def _apply_root_pool_limits(context: ApplicationContext) -> None:
     XƏTA UDULUR: limit oxuna bilmirsə tətbiq İŞLƏMƏYƏ DAVAM ETMƏLİDİR —
     fallback hovuzu onsuz da işlək ölçüdədir və "hovuz ölçüsünü oxuya
     bilmədim" səbəbi ilə mağazanı bağlamaq mütənasib olmayan reaksiyadır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    ÜÇ OXU BİR TRANZAKSİYADADIR (PERF-4)
+    ──────────────────────────────────────────────────────────────────────────
+    Burada ÜÇ limit oxunur (`DB_POOL_MIN_SIZE`, `DB_POOL_MAX_SIZE`,
+    `DB_CONNECT_TIMEOUT_SECONDS`) və hər biri `_RootLimitReader`-dən keçir.
+    Toplu AÇILMASA hər oxu öz tranzaksiyasını açır: uzaq bazada ölçüldü —
+    RLS konteksti ~410 ms + sorğu ~207 ms, yəni cəmi **2.59 saniyə**, üstəlik
+    bu, SPLASH müddətinin içindədir (istifadəçi giriş formasını gözləyir).
+    `read_batch()` üçünü bir tranzaksiyaya yığır və limitlərin repo keşi
+    sayəsində sorğu da BİR dəfə gedir.
+
+    AKTOR YOXDUR (`user_id=None`) və bu, DÜZGÜNDÜR: giriş hələ baş verməyib,
+    oxu isə tenant-səviyyəlidir (bax `session()` başlığı — `app.user_id`
+    heç bir RLS OXU siyasətində işlənmir).
     """
     try:
-        min_size, max_size = context.database.apply_root_pool_limits(
-            context.infrastructure_limits()
-        )
+        with context.read_batch():
+            min_size, max_size = context.database.apply_root_pool_limits(
+                context.infrastructure_limits()
+            )
     except Exception:
         _error_log.exception("DB_POOL_ROOT_LIMITS_NOT_APPLIED")
         return

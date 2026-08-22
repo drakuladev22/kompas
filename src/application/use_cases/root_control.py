@@ -46,6 +46,7 @@ from src.domain.policies import (
 from src.domain.value_objects.authorization import SystemRole
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -345,7 +346,7 @@ class RootControlUseCase:
 
         structural = self._toggles.is_structural(tenant_id, module_key)
         if not enabled and structural:
-            cleaned = (confirmation or "").strip()
+            cleaned = normalise_decision_text(confirmation or "")
             if len(cleaned) < MIN_CONFIRMATION_LENGTH:
                 _security_log.warning(
                     "STRUCTURAL_MODULE_DISABLE_BLOCKED",

@@ -215,8 +215,37 @@ class BulkOperationsController:
         fallback: str,
         log_key: str,
     ) -> None:
-        """Ortaq icra qabığı — iş fonda, nəticə və xəta GUI sapında."""
-        from src.presentation.background_task import run_job  # noqa: PLC0415
+        """Ortaq icra qabığı — iş fonda, nəticə və xəta GUI sapında.
+
+        ──────────────────────────────────────────────────────────────────────
+        İKİQAT BURAXILMA QAPISI (QA-FULL FAZA 3 tapıntısı)
+        ──────────────────────────────────────────────────────────────────────
+        Burada `is_running` yoxlaması YOX İDİ, halbuki layihənin qalan üç
+        yerində (`erp_servers.py::_on_test`, `root_control.py`,
+        `support_inbox.py`) o, standartdır. «İdxal Et» düyməsi fon işi
+        GEDƏRKƏN aktiv qalır — onu yalnız uğurdan SONRAKI `clear_preview()`
+        söndürür. Nəticədə istifadəçi idxal bitmədən ikinci dəfə klikləsə,
+        EYNİ fayldan İKİ paralel `import_employees()` başlayırdı: iki sessiya,
+        iki `bulk_import_log` sətri, iki nəticə dialoqu.
+
+        `run_job()` ƏVƏZİNƏ `BackgroundTask` BİRBAŞA QURULUR: `run_job()` işi
+        işə salır və obyekti YALNIZ SONRA qaytarır, yəni `self._task` hələ
+        köhnə/`None` ikən sinxron icra (testlərdəki `InlineExecutor`) qapını
+        yan keçə bilir. Tapşırıq əvvəlcə `self._task`-a yazılır, sonra
+        işləyir — `BackgroundTask.run()` `is_running`-i `submit()`-dən ƏVVƏL
+        qurur. Naxış `report_export.py::_start_task` ilə eynidir.
+        """
+        from PySide6.QtCore import QObject  # noqa: PLC0415
+
+        from src.presentation.background_task import BackgroundTask  # noqa: PLC0415
+
+        if self._task is not None and self._task.is_running:
+            return
+
+        # VALİDEYN YALNIZ HƏQİQİ `QObject` OLDUQDA VERİLİR — `run_job()`-dakı
+        # eyni qoruma (bax orada): testlər ekran əvəzinə yüngül sahtə obyekt
+        # ötürür və `QObject.__init__` belə valideynlə `TypeError` atır.
+        parent = screen if isinstance(screen, QObject) else None
 
         def failed(error: BaseException) -> None:
             if isinstance(error, KompasOSError):
@@ -225,14 +254,11 @@ class BulkOperationsController:
             _error_log.error(log_key, exc_info=error)
             screen.set_import_message(fallback, error=True)
 
-        self._task = run_job(
-            job,
-            on_success=on_success,
-            on_failure=failed,
-            owner=screen,
-            name=name,
-            executor=self._executor,
-        )
+        task = BackgroundTask(parent=parent, executor=self._executor, name=name)
+        task.succeeded.connect(on_success)
+        task.failed.connect(failed)
+        self._task = task
+        task.run(job)
 
     def _show_result(
         self,

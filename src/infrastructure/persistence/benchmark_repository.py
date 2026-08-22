@@ -27,7 +27,7 @@ sıfırdır" fərqini BUNDAN çıxarır (bax use case modul başlığı).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from src.application.use_cases.multi_store_benchmark import BenchmarkMetric
 from src.domain.value_objects.identifiers import StoreId
@@ -36,7 +36,10 @@ from src.infrastructure.persistence.repositories import _BaseRepository
 if TYPE_CHECKING:
     from datetime import date
 
+    from psycopg import Connection
+
     from src.domain.value_objects.identifiers import TenantId
+    from src.infrastructure.persistence.connection import TenantContext
 
 #: Aktiv filiallar — reytinq/outlier/store-vs-network HAMISININ bazası.
 _ACTIVE_STORES_QUERY: Final = """
@@ -137,22 +140,64 @@ _METRIC_QUERIES: Final[dict[BenchmarkMetric, str]] = {
 
 
 class PostgresMultiStoreBenchmarkRepository(_BaseRepository):
-    """`MultiStoreMetricProvider`-in Postgres tətbiqi (#24)."""
+    """`MultiStoreMetricProvider`-in Postgres tətbiqi (#24).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NÜSXƏ-SƏVİYYƏLİ KEŞ (QA-FULL Faza 5, ölçülüb)
+    ──────────────────────────────────────────────────────────────────────────
+    `MultiStoreBenchmarkUseCase`-in 4 metodu (`ranking`, `store_vs_network`,
+    `trend`, `outliers`) `screen_data.py::_populate_benchmark_sections`
+    tərəfindən EYNİ sessiyada ARDICIL çağırılır və CARİ ayın aralığı ÜÇÜNÜN
+    ÜÇÜNDƏ DƏ (ranking-in "current"i, store_vs_network, outliers) EYNİDİR —
+    `trend`-in son nöqtəsi də həmin aya düşür. Ölçü: eyni `(tenant_id, metric,
+    start, end)` üçün `metric_values` **9 dəfə** çağırılıb (biri 409 ms).
+
+    Use case-in ÖZÜ bu təkrarı BİLMİR — hər metod `_provider.metric_values(...)`
+    çağırır və aralar arasında əlaqəni GÖRMÜR (bilərəkdən: `MultiStoreMetricProvider`
+    sadə "verilmiş aralıq üçün dəyər ver" portudur). Keşi BURADA saxlamaq
+    use case-i DƏYİŞMƏDƏN eyni SQL-i təkrarlamağın qarşısını alır — repo
+    nüsxəsi `PostgresSystemLimits`/`PostgresFeatureToggles` ilə EYNİ ömrə
+    malikdir (`connection.py::_build_repositories`, bir `UnitOfWork`).
+    """
+
+    def __init__(self, conn: Connection[dict[str, Any]], context: TenantContext) -> None:
+        super().__init__(conn, context)
+        self._cache: dict[tuple[TenantId, BenchmarkMetric, date, date], dict[StoreId, float]] = {}
+        self._stores: dict[TenantId, dict[StoreId, str]] = {}
 
     def active_stores(self, tenant_id: TenantId) -> dict[StoreId, str]:
-        rows = self._fetch_all(_ACTIVE_STORES_QUERY, (tenant_id,))
-        return {StoreId(row["id"]): str(row["name"]) for row in rows}
+        """Aktiv filiallar — EYNİ tranzaksiyada TƏKRAR SORĞU ATMIR.
+
+        `metric_values` keşi ilə eyni səbəb və eyni ömür (bax sinif başlığı):
+        use case-in dörd metodundan İKİSİ (`ranking`, `outliers`) filial
+        siyahısını ayrıca istəyir və açılış ölçüsündə eyni
+        `SELECT id, name FROM stores ...` sorğusu **2 dəfə** — hər biri
+        ~206 ms — işə düşürdü.
+        """
+        cached = self._stores.get(tenant_id)
+        if cached is None:
+            rows = self._fetch_all(_ACTIVE_STORES_QUERY, (tenant_id,))
+            cached = {StoreId(row["id"]): str(row["name"]) for row in rows}
+            self._stores[tenant_id] = cached
+        return dict(cached)  # kopya — çağıran yerində dəyişsə keş korlanmasın
 
     def metric_values(
         self, tenant_id: TenantId, metric: BenchmarkMetric, *, start: date, end: date
     ) -> dict[StoreId, float]:
+        cache_key = (tenant_id, metric, start, end)
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return dict(cached)  # kopya — çağıran yerində dəyişsə keş korlanmasın
+
         query = _METRIC_QUERIES[metric]
         rows = self._fetch_all(query, (tenant_id, start, end))
-        return {
+        result = {
             StoreId(row["store_id"]): float(row["value"])
             for row in rows
             if row["store_id"] is not None and row["value"] is not None
         }
+        self._cache[cache_key] = result
+        return dict(result)
 
 
 __all__ = ["PostgresMultiStoreBenchmarkRepository"]

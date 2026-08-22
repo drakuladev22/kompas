@@ -495,7 +495,14 @@ def test_drive_consent_is_blocked_without_the_permission(qtbot, theme, monkeypat
     controller = DriveConnectionController(object(), _StubActor(allowed=False))  # type: ignore[arg-type]
     controller._on_connect(screen)
 
-    assert screen.switcher().current_state() == "error"
+    # EKRAN ARTIQ XƏTA VƏZİYYƏTİNƏ KEÇMİR (QA-FULL Faza 3): `show_error()`
+    # `ContentSwitcher`-i xəta səhifəsinə salırdı və `on_retry` ötürülmədiyi
+    # üçün «Yenidən Cəhd Et» də ÇƏKİLMİRDİ — `AdminShell` isə ekranı bir dəfə
+    # qurub saxlayır, yəni bir icazəsiz klik Drive ekranını SESSİYANIN
+    # SONUNADƏK istifadəsiz qoyurdu. İndi səbəb sətir-içi banner kimi görünür,
+    # status kartı və düymələr yerində qalır.
+    assert screen.switcher().current_state() == "content"
+    assert "səlahiyyət" in screen._connect_message.text().lower()
     assert controller._flow is None, "Səlahiyyətsiz istifadəçi üçün port AÇILMAMALIDIR"
 
 
@@ -513,7 +520,11 @@ def test_drive_consent_reports_missing_google_config(qtbot, theme, monkeypatch) 
     controller = DriveConnectionController(object(), _StubActor(allowed=True))  # type: ignore[arg-type]
     controller._on_connect(screen)
 
-    assert screen.switcher().current_state() == "error"
+    # SƏTİR-İÇİ BANNER, TAM-EKRAN XƏTA DEYİL (bax yuxarıdakı testin şərhi).
+    # Bu hal İLK QURAŞDIRMADA REALDIR — Google açarları hələ yazılmayıb — və
+    # köhnə davranış ekranı geri dönməz şəkildə bağlayırdı.
+    assert screen.switcher().current_state() == "content"
+    assert "google" in screen._connect_message.text().lower()
     assert controller._flow is None
 
 

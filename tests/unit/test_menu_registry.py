@@ -98,17 +98,27 @@ def test_registry_builds_fresh_instances() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_permission_matrix_is_gated_by_the_delegable_flag() -> None:
-    """İcazə Matrisi `can_control_user_permissions` tələb etməlidir.
+def test_permission_matrix_is_gated_by_the_flag_its_use_case_actually_requires() -> None:
+    """İcazə Matrisi `can_manage_positions` tələb etməlidir — EKRANIN QAPISI İLƏ EYNİ.
 
     `can_manage_permissions` YALNIZ `Root`-a hardlock-dur (bölmə 3) və yeni
-    FLAG yaratmaq üçündür — Permission Registry-də yaşayır. Matris ekranı isə
-    mövcud flag-ləri paylayır; bölmə 3 açıq deyir ki, `Admin` onu görür. Səhv
-    qapı ilə `Admin` VƏ `CEO` ekranı heç vaxt aça bilmirdi, yəni səlahiyyətin
-    həvalə edilməsi — `Admin` rolunun bütün mövcudluq səbəbi — işləmirdi.
+    FLAG yaratmaq üçündür — Permission Registry-də yaşayır, bu ekran deyil.
+
+    QAPI ƏVVƏL `can_control_user_permissions` İDİ VƏ BU, ÖLÜ BƏND YARADIRDI
+    (QA-FULL Faza 3, canlı sınaq): ekran `PositionManagementUseCase`-ə
+    bağlıdır və o, `can_manage_positions` tələb edir (hardlock 2, Root/CEO).
+    Yalnız menyu flag-i olan `Admin` bəndi görürdü, klik isə HƏR dəfə boş
+    xəta ilə bitirdi. «GÖRMƏK = SƏLAHİYYƏTİN OLMASI» qaydası menyu tərəfinin
+    düzəldilməsini tələb edir; use case-in hardlock-u struktur zəmanətdir və
+    ekranın xatirinə zəiflədilmir (bax `menu.py`-dəki tam əsaslandırma).
+
+    BU TEST MƏHZ HƏMİN İKİ QAPININ EYNİLİYİNİ QORUYUR — ayrılan an ölü bənd
+    geri qayıdır.
     """
+    from src.application.use_cases.position_management import MANAGE_POSITIONS_FLAG
+
     entry = next(e for e in DEFAULT_ENTRIES if e.key == "permissions")
-    assert entry.required_flag == "can_control_user_permissions"
+    assert entry.required_flag == MANAGE_POSITIONS_FLAG
 
 
 def test_feature_module_keys_match_the_toggle_namespace() -> None:

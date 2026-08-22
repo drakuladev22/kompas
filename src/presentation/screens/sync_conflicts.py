@@ -518,8 +518,12 @@ class SyncConflictScreen(Screen):
         self._sync_button_state()
 
     def _cleaned_note(self) -> str:
-        """Use case-in `resolve()`-də etdiyi EYNİ təmizləmə (artıq boşluqlar)."""
-        return " ".join(self._note.toPlainText().split())
+        """Use case-in `resolve()`-də etdiyi EYNİ təmizləmə — `src/shared/
+        text.py::normalise_decision_text` (artıq boşluqlar VƏ görünməz
+        Unicode Cf simvolları, məs. sıfır-en boşluq)."""
+        from src.shared.text import normalise_decision_text  # noqa: PLC0415
+
+        return normalise_decision_text(self._note.toPlainText())
 
     def _required_length(self) -> int:
         """Ən azı BİR simvol: `set_note_min_length` çağırılmasa da boş qeyd keçməsin."""

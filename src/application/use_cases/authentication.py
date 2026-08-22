@@ -82,6 +82,7 @@ from src.infrastructure.security.hashing import HashingService, evaluate_pin_att
 from src.infrastructure.security.hashing import PinPolicy as HashPinPolicy
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+from src.shared.text import normalise_decision_text
 
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
 
@@ -1256,7 +1257,7 @@ class EmergencyAccessRecoveryUseCase:
                 user_message="Tenant-da hələ aktiv admin hesab var.",
                 context={"active_admin_count": active_admin_count},
             )
-        if len(developer_reference.strip()) < MIN_RECOVERY_REFERENCE_LENGTH:
+        if len(normalise_decision_text(developer_reference)) < MIN_RECOVERY_REFERENCE_LENGTH:
             raise AuthenticationError(
                 f"Kimlik təsdiqi istinadı məcburidir "
                 f"(minimum {MIN_RECOVERY_REFERENCE_LENGTH} simvol)",

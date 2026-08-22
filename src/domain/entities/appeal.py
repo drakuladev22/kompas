@@ -55,6 +55,7 @@ from src.domain.value_objects.identifiers import (
 )
 from src.domain.value_objects.money import Money
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 #: `fine_appeals.reason` — DB `CHECK (char_length(trim(reason)) >= 10)`.
 MIN_APPEAL_REASON_LENGTH: Final[int] = 10
@@ -117,7 +118,7 @@ class FineAppeal(AggregateRoot):
         emit_created_event: bool = True,
     ) -> None:
         super().__init__()
-        cleaned = " ".join(reason.split())
+        cleaned = normalise_decision_text(reason)
         if len(cleaned) < MIN_APPEAL_REASON_LENGTH:
             raise DomainRuleError(
                 f"Etiraz səbəbi minimum {MIN_APPEAL_REASON_LENGTH} simvol olmalıdır",
@@ -179,7 +180,7 @@ class FineAppeal(AggregateRoot):
         self.status = AppealStatus.APPROVED
         self.decided_by = decided_by
         self.decided_at = require_aware(decided_at, field="decided_at")
-        self.decision_note = " ".join(note.split())
+        self.decision_note = normalise_decision_text(note)
         self.new_amount = new_amount
 
     def reject(self, *, decided_by: EmployeeId, decided_at: datetime, note: str) -> None:
@@ -201,7 +202,7 @@ class FineAppeal(AggregateRoot):
         self.status = AppealStatus.REJECTED
         self.decided_by = decided_by
         self.decided_at = require_aware(decided_at, field="decided_at")
-        self.decision_note = " ".join(note.split())
+        self.decision_note = normalise_decision_text(note)
 
     def expire(self, *, now: datetime) -> bool:
         """Cavabsız qalmış etirazı bağlayır (planlaşdırılmış iş).
@@ -253,7 +254,7 @@ class FineAppeal(AggregateRoot):
 
     @staticmethod
     def _require_note(note: str) -> None:
-        if len(" ".join(note.split())) < MIN_DECISION_NOTE_LENGTH:
+        if len(normalise_decision_text(note)) < MIN_DECISION_NOTE_LENGTH:
             raise DomainRuleError(
                 f"Qərar izahı minimum {MIN_DECISION_NOTE_LENGTH} simvol olmalıdır",
                 user_message="Qərarınızın səbəbini ətraflı yazın.",

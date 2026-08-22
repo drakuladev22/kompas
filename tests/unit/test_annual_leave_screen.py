@@ -315,12 +315,14 @@ class _InboxStub:
     def __init__(self) -> None:
         self.rows: list[list[dict[str, str]]] = []
         self.errors: list[tuple[str, str]] = []
+        self.retries: list[Any] = []
 
     def set_requests(self, rows: list[dict[str, str]]) -> None:
         self.rows.append(rows)
 
-    def show_error(self, *, title: str, message: str) -> None:
+    def show_error(self, *, title: str, message: str, on_retry: Any = None) -> None:
         self.errors.append((title, message))
+        self.retries.append(on_retry)
 
 
 def _kiosk_controller(
@@ -523,7 +525,14 @@ def test_approve_failure_shows_the_user_message_and_refreshes(monkeypatch: Any) 
 
     assert session.commits == 0
     assert screen.errors[-1] == ("Sorğu təsdiqlənmədi", _BalanceError.user_message)
-    assert use_case.inbox_calls == 1, "Xətadan sonra da siyahı təzələnməlidir"
+    # DAVRANIŞ DƏYİŞDİ (QA-FULL Faza 3): əvvəl xətadan DƏRHAL sonra `refresh()`
+    # çağırılırdı və uğurlu yenilənmə banner-i sükutla ÜSTÜNDƏN yazırdı — HR
+    # paralel qərarın səbəbini heç vaxt oxuya bilmirdi. İndi yenilənmə
+    # istifadəçinin ÖZ qərarına buraxılır: «Yenidən Cəhd Et» işlək düymədir.
+    assert use_case.inbox_calls == 0, "Xəta qolu artıq avtomatik yeniləmir"
+    assert screen.retries[-1] is not None, "«Yenidən Cəhd Et» ötürülməlidir"
+    screen.retries[-1]()
+    assert use_case.inbox_calls == 1, "Düymə həqiqətən siyahını yenidən oxuyur"
 
 
 def test_reject_requires_a_reason_and_rereads_the_inbox(monkeypatch: Any) -> None:

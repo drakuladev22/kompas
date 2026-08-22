@@ -77,6 +77,7 @@ from src.domain.value_objects.identifiers import (
 )
 from src.domain.value_objects.penalty import LeavePenalty, calculate_leave_penalty
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 #: Bölmə 4, validasiya 3: manual override səbəbi üçün minimum uzunluq.
 MIN_OVERRIDE_REASON_LENGTH = 10
@@ -175,7 +176,7 @@ class ManualOverride:
         demək olardı; həmin sətir isə onun cəriməsinin əsasıdır.
         """
         require_aware(rejected_at, field="rejected_at")
-        cleaned = " ".join(reason.split())
+        cleaned = normalise_decision_text(reason)
         if len(cleaned) < MIN_OVERRIDE_REASON_LENGTH:
             raise DomainRuleError(
                 f"Rədd səbəbi minimum {MIN_OVERRIDE_REASON_LENGTH} simvol olmalıdır",
@@ -435,7 +436,7 @@ class LeaveRequest(AggregateRoot):
                 user_message="Gələcək vaxt daxil edilə bilməz.",
             )
         # (3)
-        cleaned_reason = reason.strip()
+        cleaned_reason = normalise_decision_text(reason)
         if len(cleaned_reason) < MIN_OVERRIDE_REASON_LENGTH:
             raise DomainRuleError(
                 f"Override səbəbi minimum {MIN_OVERRIDE_REASON_LENGTH} simvol olmalıdır",

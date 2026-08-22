@@ -67,6 +67,7 @@ from src.presentation.screens.fine_review import (
 )
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -263,7 +264,11 @@ class MonthlyFineReviewController:
         text, accepted = QInputDialog.getMultiLineText(screen, "Cəriməni sil", DISCARD_PROMPT)
         if not accepted:
             return None
-        cleaned = " ".join(text.split())
+        # KÖHNƏ NÜSXƏ ƏVƏZLƏNDİ (`domain` sahibinin tapıntısı, `src/shared/
+        # text.py`): `use_cases/fine_review.py` artıq `normalise_decision_
+        # text` işlədir (Cf/görünməz simvolları atır) — bax `shift_swaps.py::
+        # _ask_reason` şərhi. Nüsxə buradan da eyni mənbəyə keçirilir.
+        cleaned = normalise_decision_text(text)
         if len(cleaned) < MIN_DISCARD_REASON_LENGTH:
             screen.show_form_error(SHORT_REASON)
             return None

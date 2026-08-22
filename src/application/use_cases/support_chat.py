@@ -76,6 +76,7 @@ from src.domain.value_objects.support import (
 )
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
@@ -1172,7 +1173,7 @@ class SupportInboxUseCase(_SupportBase):
 
 
 def _clean(raw: str, minimum: int, maximum: int, *, label: str) -> str:
-    cleaned = " ".join(raw.split())
+    cleaned = normalise_decision_text(raw)
     if len(cleaned) < minimum:
         raise SupportMessageError(
             f"{label} minimum {minimum} simvol olmalıdır",

@@ -1939,7 +1939,12 @@ class ResetPinDialog(QDialog):
         self._theme = theme
         self.setWindowTitle("PIN Sıfırla")
         self.setModal(True)
-        self.setMinimumWidth(420)
+        # EN 480-DİR, 420 DEYİL (simmetriya qapısı, `check_symmetry.py`):
+        # 420 layihədə YALNIZ bu üç dialoqda işlənirdi və ölçü səpələnməsini
+        # bir vahid artırırdı. Digər forma dialoqları (`annual_leave.py`,
+        # `bulk_operations.py`) 480 işlədir — eyni sıra genişlikdə iki fərqli
+        # ölçü yalnız ekranlar yan-yana görüləndə hiss olunan sürüşmə yaradır.
+        self.setMinimumWidth(480)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -2016,7 +2021,12 @@ class ResetPasswordDialog(QDialog):
         self._theme = theme
         self.setWindowTitle("Şifrəni Yenilə")
         self.setModal(True)
-        self.setMinimumWidth(420)
+        # EN 480-DİR, 420 DEYİL (simmetriya qapısı, `check_symmetry.py`):
+        # 420 layihədə YALNIZ bu üç dialoqda işlənirdi və ölçü səpələnməsini
+        # bir vahid artırırdı. Digər forma dialoqları (`annual_leave.py`,
+        # `bulk_operations.py`) 480 işlədir — eyni sıra genişlikdə iki fərqli
+        # ölçü yalnız ekranlar yan-yana görüləndə hiss olunan sürüşmə yaradır.
+        self.setMinimumWidth(480)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -2098,7 +2108,12 @@ class ChangeRoleDialog(QDialog):
         self._theme = theme
         self.setWindowTitle("Rolu Dəyiş")
         self.setModal(True)
-        self.setMinimumWidth(420)
+        # EN 480-DİR, 420 DEYİL (simmetriya qapısı, `check_symmetry.py`):
+        # 420 layihədə YALNIZ bu üç dialoqda işlənirdi və ölçü səpələnməsini
+        # bir vahid artırırdı. Digər forma dialoqları (`annual_leave.py`,
+        # `bulk_operations.py`) 480 işlədir — eyni sıra genişlikdə iki fərqli
+        # ölçü yalnız ekranlar yan-yana görüləndə hiss olunan sürüşmə yaradır.
+        self.setMinimumWidth(480)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -2404,7 +2419,6 @@ class ShiftPlanningScreen(Screen):
     """Aylıq növbə matrisi — işçi × gün.
 
     Signals:
-        template_selected: İş rejimi şablonu ("5/2", "6/1", "2/2", "custom").
         publish_requested: "Planı Yayımla".
         month_changed: (-1 və ya +1).
         open_shift_post_requested: "Açıq Növbə Elan Et" (#16).
@@ -2430,7 +2444,6 @@ class ShiftPlanningScreen(Screen):
     seçilib» sualının cavabını verir (`selected_work_mode_id()`).
     """
 
-    template_selected = Signal(str)
     publish_requested = Signal()
     month_changed = Signal(int)
     open_shift_post_requested = Signal()
@@ -2569,25 +2582,25 @@ class ShiftPlanningScreen(Screen):
             legend.add(row)
         layout.addWidget(legend, 1)
 
-        templates = Card(padding=16, spacing=12)
-        templates.add(title_label("İş Rejimi Şablonları", size=15))
-        buttons = QWidget()
-        buttons_layout = QHBoxLayout(buttons)
-        buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(8)
-        for template in self.TEMPLATES:
-            button = secondary_button(template)
-            button.clicked.connect(lambda _=False, t=template: self.template_selected.emit(t))
-            buttons_layout.addWidget(button)
-        buttons_layout.addStretch(1)
-        templates.add(buttons)
-        templates.add(
-            muted_label(
-                "Şablon seçildikdə boş xanalar avtomatik doldurulur, əl ilə "
-                "edilmiş dəyişikliklər saxlanılır."
-            )
-        )
-        layout.addWidget(templates, 1)
+        # «İŞ REJİMİ ŞABLONLARI» KARTI ÇIXARILDI (QA-FULL FAZA 3, istifadəçi qərarı)
+        #
+        # Dörd düymə (`TEMPLATES`) `template_selected` siqnalını yayırdı, onu isə
+        # HEÇ KİM dinləmirdi — nə kontroller, nə ekranın özü. Altındakı mətn
+        # «boş xanalar avtomatik doldurulur» VƏD EDİRDİ. Canlı sınaqda klik
+        # heç bir nəticə vermədi: sükutla-boş-ekrandan pisdir, çünki əməliyyatın
+        # icra olunduğu təsəvvürü yaranır.
+        #
+        # NİYƏ DOLDURMA YAZILMADI, NİYƏ SİLİNDİ: bu ekranın YAZI yolu YOXDUR —
+        # «Planı Yayımla» əvvəlki fazada QƏSDƏN çıxarılıb və matris xanaları
+        # sadəcə etiketdir. Şablon doldurması yazı yolu, əmək-uyğunluq qaydası
+        # və yayımlama axını tələb edir; düymələr həmin çıxarılmış funksiyanın
+        # QALIĞI idi. Təyinetmə məntiqi yenə `ShiftPlanningUseCase.
+        # assign_work_day`-dədir (bax sinif başlığı) — ekran ona bir sətir də
+        # əlavə etmirdi.
+        #
+        # `TEMPLATES` SABİTİ QALIR: `tests/unit/test_labor_rules.py` 6/1 rejimini
+        # məhz bu siyahıya istinadla sınayır — sabit iş rejimlərinin ADLARIDIR,
+        # düymələrin deyil.
 
         self._summary = Card(padding=16, spacing=12)
         self._summary.add(title_label("Ayın xülasəsi", size=15))
@@ -2634,10 +2647,30 @@ class ShiftPlanningScreen(Screen):
         (`set_work_modes`) dolur, bu isə yalnız nişan mətnidir. İkisini
         birləşdirmək maket rejimində uydurma `work_mode_id` yaradardı.
         """
-        self._month_label.setText(label)
+        self.set_window_label(label)
         if stores and self._store_combo.count() == 0:
             self._store_combo.addItems(stores)
         self._mode_label.setText(f"İş Rejimi: {mode}")
+
+    def set_window_label(self, label: str) -> None:
+        """Toolbar-dakı «‹ [aralıq] ›» etiketi — CANLI yolun İŞLƏTDİYİ setter.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `set_month()` DEYİL (QA-FULL FAZA 3 tapıntısı)
+        ──────────────────────────────────────────────────────────────────────
+        Canlı yol (`screen_data.py`) `set_month()`-u HEÇ VAXT çağırmırdı —
+        yalnız maket çağırırdı — və nəticədə istehsalatda etiket HƏMİŞƏ BOŞ
+        qalırdı: istifadəçi oxlarla gəzir, amma hansı tarix aralığına baxdığını
+        GÖRMÜRDÜ.
+
+        Canlı yolu birbaşa `set_month()`-a bağlamaq DÜZGÜN OLMAZDI: onun
+        `mode` arqumenti `_mode_label`-a yazır, həmin nişanı isə canlı rejimdə
+        ARTIQ `set_work_mode_norm()` doldurur (`controllers/shift_matrix.py`) —
+        yəni `set_month()` seçilmiş rejimin gündəlik normasını SÜKUTLA
+        üstələyərdi. Ona görə etiket ayrıca, dar setterlə yazılır; `set_month()`
+        maket yolunda onu ÖZÜ çağırır, yəni iki yol eyni widget-i işlədir.
+        """
+        self._month_label.setText(label)
 
     # --------------------------- İş Rejimi seçicisi -------------------------- #
 
@@ -2960,6 +2993,10 @@ class ShiftSwapScreen(Screen):
         super().__init__(theme, padded=False, parent=parent)
         self._rows: list[Card] = []
         self._current: str | None = None
+        #: `set_requests()`-in son sətirləri, `id` ilə — QA-FULL FAZA 3
+        #: tapıntısı: `select()` bunsuz detal panelini doldura BİLMİRDİ,
+        #: çünki `set_detail()`-i heç kim çağırmırdı (bax `select` şərhi).
+        self._requests_by_id: dict[str, dict[str, str]] = {}
 
         container = QWidget()
         layout = QHBoxLayout(container)
@@ -3062,6 +3099,11 @@ class ShiftSwapScreen(Screen):
     def set_requests(self, requests: list[dict[str, str]]) -> None:
         clear_layout(self._list_layout)
         self._rows.clear()
+        # SAHƏLƏR CANLI (`controllers/screen_data.py::_shift_swaps`) VƏ MAKET
+        # (`preview_screens.py::_shift_swaps`) yolunda EYNİDİR (CLAUDE.md §6),
+        # ona görə `select()` bu keşdən detal panelini TAM doldura bilir —
+        # ayrıca sorğu APARMIR.
+        self._requests_by_id = {request["id"]: request for request in requests}
 
         for request in requests:
             card = ClickableCard(request["id"], padding=16, spacing=8)
@@ -3093,7 +3135,24 @@ class ShiftSwapScreen(Screen):
         self.show_content()
 
     def select(self, request_id: str) -> None:
+        """Kartı seçir VƏ detal panelini DƏRHAL doldurur (QA-FULL FAZA 3 düzəlişi).
+
+        ──────────────────────────────────────────────────────────────────────
+        ƏVVƏL YALNIZ `_current`-i qururdu — TAPINTI
+        ──────────────────────────────────────────────────────────────────────
+        `set_detail()`-i canlı rejimdə heç bir kontroller çağırmırdı
+        (`controllers/shift_swaps.py::attach()` `selected` siqnalına
+        ÜMUMİYYƏTLƏ abunə deyildi) — «Sorğu detalı» paneli menecerin hər
+        klikindən sonra HƏMİŞƏ boş qalırdı, halbuki «Təsdiqlə»/«Rədd Et»
+        funksional işləyirdi. Detal BURADA, EKRANIN ÖZÜNDƏ qurulur (ayrıca
+        kontroller keşi YOX): `set_requests()`-in qəbul etdiyi sətir onsuz da
+        detal üçün lazım olan HƏR ŞEYİ daşıyır, ikinci sorğu göndərmək
+        mənasız təkrar olardı.
+        """
         self._current = request_id
+        row = self._requests_by_id.get(request_id)
+        if row is not None:
+            self.set_detail(*_detail_for(row))
         self.selected.emit(request_id)
 
     def set_detail(self, title: str, rows: list[tuple[str, str]]) -> None:
@@ -3113,6 +3172,29 @@ class ShiftSwapScreen(Screen):
     @property
     def current_request(self) -> str | None:
         return self._current
+
+
+def _detail_for(row: dict[str, str]) -> tuple[str, list[tuple[str, str]]]:
+    """`set_requests()` sətri → `set_detail()`-in gözlədiyi (başlıq, sətirlər).
+
+    Açarlar `controllers/screen_data.py::_shift_swaps` (canlı) və
+    `preview_data.SWAP_REQUESTS` (maket) ilə EYNİDİR — `to_name`/`shift` canlı
+    yolda EYNİ dəyərdir (hədəf işçi sorğuda YOXDUR, bax `_shift_swaps`
+    şərhi), ona görə burada TƏKRARLANMIR.
+    """
+    from_name = row.get("from_name", "")
+    date_text = row.get("shift") or row.get("to_name", "")
+    title = f"{from_name} — {date_text}" if date_text else from_name
+    rows = [
+        ("Sorğunu göndərən", from_name),
+        ("İstədiyi tarix", date_text),
+        ("Mağaza", row.get("store", "")),
+        ("Vəziyyət", row.get("status", "")),
+    ]
+    note = row.get("note", "")
+    if note:
+        rows.append(("Səbəb", note))
+    return title, rows
 
 
 __all__ = [

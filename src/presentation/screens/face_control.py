@@ -519,6 +519,34 @@ class FaceEnrollmentScreen(Screen):
             return
         self.retake_requested.emit(employee_id)
 
+    def set_busy(self, busy: bool) -> None:
+        """Kamera/DB əməliyyatı gedərkən ÜÇ əməliyyat düyməsi BAĞLANIR.
+
+        ──────────────────────────────────────────────────────────────────────
+        QA-FULL FAZA 3 tapıntısı — ƏVVƏL BU METOD YOX İDİ
+        ──────────────────────────────────────────────────────────────────────
+        `[Çək]`/`[Yadda Saxla]`/`[Yenidən Çək]` əməliyyat gedərkən AKTİV
+        qalırdı: sürətli ikiqat klik iki paralel `enroll()`/`re_enroll()`
+        çağırışı yaradırdı (real kamerada iki ayrı kadr seriyası). Naxış
+        `ErpServersScreen.set_busy` ilə EYNİDİR — deaktivlik GÖRÜNƏN qatdır,
+        `controllers/face_control.py::FaceEnrollmentController._run`-dakı
+        `BackgroundTask.is_running` isə klaviatura qısayolunu da tutur.
+
+        `_apply_mode()`-un hesabladığı "kamera hazırdır + işçi seçilib" şərti
+        BURADA TƏKRARLANIR (`not busy and ready`), çünki `set_busy(False)`
+        işdən sonra düymələri düzgün vəziyyətə ÖZÜ qaytarmalıdır — uğursuz
+        cəhddə (`_fail`) `_apply_mode()` YENİDƏN ÇAĞIRILMIR.
+
+        MƏTN DƏYİŞMİR (digər `set_busy` naxışlarından FƏRQLİ): `[Çək]`
+        operator üçün TANIŞ etiket olaraq qalır və `Qt`-nin ÖZÜ deaktiv
+        düymədə `.click()`-i sükutla heç nə etmir (`QAbstractButton::click()`)
+        — yəni qapı görünüş DƏYİŞMƏDƏN belə işləyir.
+        """
+        ready = self._camera_ready and bool(self.selected_employee_id())
+        self._capture.setEnabled(not busy and ready)
+        self._save.setEnabled(not busy and ready)
+        self._retake.setEnabled(not busy and ready)
+
 
 # --------------------------------------------------------------------------- #
 # 14. İstisna idarəetməsi — YALNIZ Root/CEO

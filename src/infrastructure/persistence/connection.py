@@ -329,7 +329,23 @@ class Database:
     def open(self) -> None:
         self._pool.open(wait=True, timeout=self._timeout)
         if self._admin_pool is not None:
-            self._admin_pool.open(wait=True, timeout=self._timeout)
+            # ──────────────────────────────────────────────────────────────
+            # OWNER HOVUZU AÇILIŞI BLOKLAMIR (PERF-4)
+            # ──────────────────────────────────────────────────────────────
+            # `wait=True` bağlantı qurulana qədər gözləyir — uzaq bazada bu,
+            # ölçüldü, **~1.2 saniyədir** və məhz SPLASH müddətinə düşür.
+            # Halbuki owner bağlantısı adi iş axınında HEÇ İŞLƏNMİR: yalnız
+            # provisioning/miqrasiya (`system_scope()`) ona toxunur.
+            #
+            # `wait=False` hovuzu FON sapında qaldırır; `system_scope()` ilk
+            # dəfə çağırılanda `connection()` onsuz da hazır olmasını gözləyir,
+            # yəni davranış dəyişmir, YALNIZ gözləmə anı dəyişir.
+            #
+            # NƏYİ İTİRİRİK: yanlış `DATABASE_ADMIN_URL` artıq açılışda yox,
+            # İLK PROVISIONING əməliyyatında üzə çıxır. Bu, qəbul edilə biləndir
+            # — həmin əməliyyat onsuz da aydın xəta qaytarır, adi istifadəçi isə
+            # ona heç vaxt çatmır; əvəzində HƏR açılış bir saniyə qısalır.
+            self._admin_pool.open(wait=False)
             _security_log.warning(
                 "DB_ADMIN_POOL_OPENED",
                 extra={

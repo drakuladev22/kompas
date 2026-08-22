@@ -61,6 +61,7 @@ from src.domain.value_objects.identifiers import (
     TenantId,
 )
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 #: `field_reports.detail` CHECK-inin güzgüsü (migrations/037: `>= 5`).
 #: Bu, DÖŞƏMƏDİR, siyasət DEYİL — miqrasiya başlığı bunu açıq yazır:
@@ -105,7 +106,7 @@ class FieldReportChecklistItem:
         photo_ref: str | None = None,
         note: str | None = None,
     ) -> None:
-        cleaned_text = " ".join(item_text.split())
+        cleaned_text = normalise_decision_text(item_text)
         if len(cleaned_text) < SCHEMA_MIN_ITEM_TEXT_LENGTH:
             raise DomainRuleError(
                 f"Checklist bəndinin mətni minimum {SCHEMA_MIN_ITEM_TEXT_LENGTH} simvol olmalıdır",
@@ -237,7 +238,7 @@ class FieldReport(AggregateRoot):
         super().__init__()
         cleaned_type = report_type.strip().upper()
         cleaned_category = category.strip().upper()
-        cleaned_detail = " ".join(detail.split())
+        cleaned_detail = normalise_decision_text(detail)
         # Döşəmə HƏMİŞƏ tətbiq olunur: Root `system_limits`-də 0 yazsa belə
         # sxem `CHECK`-i sətri rədd edərdi və ekran anlaşılmaz DB xətası
         # göstərərdi (`google_drive`-dakı "konfiqurasiya qorumanı söndürə
@@ -405,7 +406,7 @@ class FieldReport(AggregateRoot):
                 user_message="Bu hesabat artıq bağlanıb.",
                 context={"report_id": str(self.id), "status": self.status.value},
             )
-        cleaned_note = " ".join(note.split())
+        cleaned_note = normalise_decision_text(note)
         threshold = max(SCHEMA_MIN_DETAIL_LENGTH, min_note_length)
         if len(cleaned_note) < threshold:
             raise DomainRuleError(

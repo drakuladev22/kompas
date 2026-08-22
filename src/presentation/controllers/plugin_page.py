@@ -77,6 +77,7 @@ from src.infrastructure.plugins.contracts import (
 from src.presentation.plugin_surface import ApprovedPlugin, collect_surface
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -186,7 +187,12 @@ def _as_text(value: object, limit: int) -> str:
     text = "".join(
         " " if character < " " or character == "\x7f" else character for character in str(value)
     )
-    text = " ".join(text.split())
+    # KÖHNƏ NÜSXƏ ƏVƏZLƏNDİ (`domain` sahibinin tapıntısı, `src/shared/
+    # text.py`): `" ".join(text.split())` yalnız real boşluqları sıxırdı,
+    # Unicode Cf (Format) simvollarını (sıfır-en boşluq və s.) YOX. Plugin
+    # cavabı GÜVƏNİLMƏZ mənbədir — cədvəldə GÖRÜNMƏZ simvollarla dolu sətir
+    # buraxmaq eyni riski daşıyır.
+    text = normalise_decision_text(text)
     if len(text) > limit:
         return text[: limit - 1] + _ELLIPSIS
     return text

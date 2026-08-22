@@ -710,6 +710,8 @@ def test_a_padded_time_string_is_still_accepted() -> None:
 
 class _RootScreen:
     def __init__(self) -> None:
+        self.module_message = ""
+        self.module_message_error = False
         self.limits: list[Any] = []
         #: «Fasilə Parametrləri» bölməsi (nahar.md) — AYRICA saxlanılır,
         #: çünki testlər ümumi siyahının həmin dörd açarı DAŞIMADIĞINI də
@@ -741,6 +743,19 @@ class _RootScreen:
     def set_telegram_message(self, text: str, *, error: bool = False) -> None:
         self.telegram_message = text
         self.telegram_message_error = error
+
+    def set_module_message(self, text: str, *, error: bool = False) -> None:
+        """Modul kartının İÇİNDƏKİ mesaj (QA-FULL Faza 3 düzəlişi).
+
+        Sahtə REAL ekranın imzasını güzgüləyir: əvvəl bir modul toggle-ının
+        rəddi `show_error()` ilə BÜTÜN paneli xəta ekranı ilə əvəz edirdi —
+        limitlər, fasilə parametrləri, Face Control, brendinq və registry də
+        yox olurdu, halbuki `reject_module_change()` yalnız həmin açarı geri
+        qaytarmışdı. İndi mətn kartın içində qalır, `ContentSwitcher`
+        toxunulmur.
+        """
+        self.module_message = text
+        self.module_message_error = error
 
     def set_limits(self, rows: list[Any]) -> None:
         self.limits = rows
@@ -1363,7 +1378,12 @@ def test_a_refused_toggle_flips_the_switch_back_so_the_screen_never_lies() -> No
     )
 
     assert screen.rejected == [FeatureModule.CAMERA_VERIFICATION.value]
-    assert screen.errors[0][0] == "Modul dəyişdirilmədi"
+    # MESAJ ARTIQ TAM-EKRAN XƏTA DEYİL (QA-FULL Faza 3): bir modulun rəddi
+    # bütün paneli (limitlər, fasilə parametrləri, Face Control, brendinq,
+    # registry) əvəz edirdi. İndi səbəb Modul kartının İÇİNDƏ qalır.
+    assert screen.errors == [], "tam-ekran xəta vəziyyəti ARTIQ İŞLƏDİLMİR"
+    assert screen.module_message_error is True
+    assert screen.module_message == _DeniedError.user_message
     assert session.commits == 0
 
 
@@ -1377,7 +1397,11 @@ def test_an_unexpected_toggle_failure_also_flips_the_switch_back() -> None:
     )
 
     assert screen.rejected == [FeatureModule.SHIFT_SWAP.value]
-    assert screen.errors[0][1] == "Dəyişiklik saxlanmadı. Yenidən cəhd edin."
+    # Gözlənilməz xəta da kart-içi mesajdır (bax yuxarıdakı testin şərhi):
+    # TEXNİKİ mətn sızmır, istifadəçi «yenidən cəhd edin» görür.
+    assert screen.errors == []
+    assert screen.module_message == "Dəyişiklik saxlanmadı. Yenidən cəhd edin."
+    assert screen.module_message_error is True
 
 
 def test_a_new_flag_defaults_to_the_narrowest_hardlock() -> None:

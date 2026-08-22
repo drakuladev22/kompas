@@ -140,11 +140,19 @@ class DailyRosterController:
         Təsdiqdən sonra sətirlər kilidlənir və uyğunsuzluq bandı dəyişir;
         qaralamadan sonra qeyd sütunu yenilənir. Ekranı yerində düzəltsəydik,
         iki oxu məntiqi yaranardı (CLAUDE.md bölmə 6).
+
+        `reraise=True` (QA-FULL Faza 3): `populate()` əvvəl HƏR istisnanı
+        özü udurdu (bölmə banneri) və aşağıdakı `except KompasOSError`
+        HEÇ VAXT işə düşmürdü — "Yenidən Cəhd Et" düyməsi istehsalatda
+        görünməzdi. Yalnız `KompasOSError` BURAYA yenidən atılır, digər
+        xətalar `populate()` daxilində köhnə kimi udulmağa davam edir.
         """
         from src.presentation.controllers.screen_data import ScreenDataBinder  # noqa: PLC0415
 
         try:
-            ScreenDataBinder(self._context, self._actor).populate("daily_roster", screen)
+            ScreenDataBinder(self._context, self._actor).populate(
+                "daily_roster", screen, reraise=True
+            )
         except KompasOSError as exc:
             _error_log.exception("DAILY_ROSTER_REFRESH_FAILED", extra={"error": str(exc)})
             screen.show_error(

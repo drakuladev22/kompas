@@ -36,6 +36,7 @@ from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.erp import MatchConfidence
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
@@ -350,7 +351,7 @@ class SalesReviewQueueUseCase:
 
 
 def _clean_reason(raw: str) -> str:
-    cleaned = " ".join(raw.split())
+    cleaned = normalise_decision_text(raw)
     if len(cleaned) < MIN_REASON_LENGTH:
         raise ReviewQueueError(
             f"Səbəb minimum {MIN_REASON_LENGTH} simvol olmalıdır",

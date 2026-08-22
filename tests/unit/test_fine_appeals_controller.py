@@ -131,7 +131,7 @@ class _Binder:
     def __init__(self, context: Any, actor: Any) -> None:
         pass
 
-    def populate(self, key: str, _screen: Any) -> None:
+    def populate(self, key: str, _screen: Any, **_kwargs: Any) -> None:
         if _Binder.failure is not None:
             raise _Binder.failure
         _Binder.populated.append(key)

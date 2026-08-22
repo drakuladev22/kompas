@@ -1308,6 +1308,21 @@ class KompasApplication:
         self._register_screens(shell)
 
         self._window.set_content(shell)
+        # ──────────────────────────────────────────────────────────────────
+        # ÖRTÜK MƏLUMATDAN ƏVVƏL ÇƏKİLİR (PERF-5)
+        # ──────────────────────────────────────────────────────────────────
+        # Bundan sonra gələn hər sətir BAZAYA gedir: altyazılar, dəstək
+        # nişanları və ilk ekranın doldurulması — uzaq bazada cəmi bir neçə
+        # saniyə. Qt isə yeni məzmunu YALNIZ hadisə dövrəsinə qayıdanda çəkir,
+        # yəni həmin saniyələr boyu ekranda HƏLƏ DƏ giriş forması qalırdı:
+        # istifadəçi şifrəni yazır, sahələr boşalır, ekran dəyişmir — «heç nə
+        # olmadı» təəssüratı məhz budur (bildirilən qüsur).
+        #
+        # `flush_ui()` örtüyü DƏRHAL göstərir; rəqəmlər bir neçə saniyə sonra
+        # yerinə düşür. Bu, gözləməni GİZLƏTMİR — onu görünən edir: istifadəçi
+        # girişin baş tutduğunu dərhal bilir. Eyni naxış `_authenticate`-də
+        # (UX-1) artıq işlədilir.
+        flush_ui()
         self._install_overlays(shell)
         self._refresh_context_subtitles(shell, now=now)
         self._refresh_support_badges(shell)

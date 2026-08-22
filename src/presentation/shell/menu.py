@@ -360,11 +360,31 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         title_az="İcazə Matrisi",
         # `can_manage_permissions` DEYİL — o, YALNIZ `Root`-a hardlock-dur
         # (bölmə 3) və yeni FLAG YARATMAQ üçündür, Permission Registry-də
-        # yaşayır. Matris ekranı isə mövcud flag-ləri istifadəçilərə paylayır;
-        # bölmə 3 açıq deyir ki, `Admin` onu `can_control_user_permissions`
-        # çərçivəsində GÖRÜR. Əvvəlki qapı ilə nə `Admin`, nə də `CEO` ekranı
-        # heç vaxt görə bilmirdi — səlahiyyətin həvalə edilməsi mümkünsüz idi.
-        required_flag="can_control_user_permissions",
+        # yaşayır.
+        #
+        # ──────────────────────────────────────────────────────────────────
+        # QAPI `can_control_user_permissions`-DAN `can_manage_positions`-A
+        # KEÇDİ — CANLI SINAQ TAPINTISI (QA-FULL FAZA 3)
+        # ──────────────────────────────────────────────────────────────────
+        # Bənd `can_control_user_permissions` ilə göstərilirdi, EKRANIN
+        # ARXASINDAKI use case isə (`app.py` onu `PositionManagementUseCase`-ə
+        # bağlayır) `can_manage_positions` tələb edir. İkisi FƏRQLİ
+        # əməliyyatdır: birincisi FƏRDİ işçiyə override verir (hardlock 3,
+        # həvalə oluna bilər), ikincisi ROL tərtibatıdır (hardlock 2, Root/CEO).
+        # Nəticə ölçüldü: yalnız menyu flag-i olan `Admin` bəndi GÖRÜRDÜ,
+        # ekran isə HƏR dəfə boş xəta ilə açılırdı — klik nəticəsiz qalırdı.
+        #
+        # «GÖRMƏK = SƏLAHİYYƏTİN OLMASI» (bölmə 3) bu halda menyu tərəfini
+        # düzəltməyi tələb edir: use case-in hardlock-u struktur zəmanətdir
+        # (§5) və onu ekranın xatirinə zəiflətmək OLMAZ. Yəni matris indi
+        # YALNIZ rolu həqiqətən dəyişə bilənlərə görünür.
+        #
+        # SPESİFİKASİYA GƏRGİNLİYİ QALIR VƏ QƏSDƏN QEYD OLUNUR: bölmə 3
+        # `Admin`-in matrisi `can_control_user_permissions` çərçivəsində
+        # görməsini nəzərdə tuturdu. Bu, FƏRDİ override matrisi deməkdir —
+        # ayrı ekran (`permission_guards.py` qatı). Onu yazmaq AYRI işdir;
+        # ölü menyu bəndi saxlamaq isə həmin işi əvəz etmir.
+        required_flag="can_manage_positions",
         order=120,
         icon="lock",
     ),

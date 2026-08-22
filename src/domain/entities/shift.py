@@ -53,6 +53,7 @@ from src.domain.value_objects.identifiers import (
     WorkModeId,
 )
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 #: `shift_swap_requests.reason` — DB `CHECK (char_length(trim(reason)) >= 5)`.
 MIN_SWAP_REASON_LENGTH: Final[int] = 5
@@ -202,7 +203,7 @@ class ShiftSwapRequest(AggregateRoot):
         emit_created_event: bool = True,
     ) -> None:
         super().__init__()
-        cleaned_reason = " ".join(reason.split())
+        cleaned_reason = normalise_decision_text(reason)
         if len(cleaned_reason) < MIN_SWAP_REASON_LENGTH:
             raise DomainRuleError(
                 f"Sorğu səbəbi minimum {MIN_SWAP_REASON_LENGTH} simvol olmalıdır",
@@ -247,7 +248,7 @@ class ShiftSwapRequest(AggregateRoot):
         toxunulmaz qalması həmin qaydanın struktur zəmanətidir.
         """
         self._require_pending("Qərar verilmiş sorğuya qeyd əlavə edilə bilməz")
-        cleaned = " ".join(note.split())
+        cleaned = normalise_decision_text(note)
         if not cleaned:
             raise DomainRuleError(
                 "Menecer qeydi boş ola bilməz",
@@ -269,7 +270,7 @@ class ShiftSwapRequest(AggregateRoot):
 
     def reject(self, *, approver_id: EmployeeId, decided_at: datetime, reason: str) -> None:
         """`[Rədd Et]` — səbəb MƏCBURİDİR (işçiyə bildirişdə göstərilir)."""
-        cleaned = " ".join(reason.split())
+        cleaned = normalise_decision_text(reason)
         if len(cleaned) < MIN_DECISION_REASON_LENGTH:
             raise DomainRuleError(
                 f"Rədd səbəbi minimum {MIN_DECISION_REASON_LENGTH} simvol olmalıdır",

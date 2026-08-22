@@ -127,6 +127,7 @@ from src.domain.value_objects.identifiers import new_face_exemption_id
 from src.infrastructure.security.hashing import PinPolicy, evaluate_pin_attempt
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -733,7 +734,8 @@ class FaceReEnrollmentUseCase:
         deyil.
         """
         self._enrollment.assert_may_enroll(actor, subject_id)
-        if not reason.strip():
+        cleaned_reason = normalise_decision_text(reason)
+        if not cleaned_reason:
             raise FaceControlError(
                 "Yenidən-qeydiyyatın səbəbi boş ola bilməz",
                 user_message="Yenidən qeydiyyat üçün səbəb yazılmalıdır.",
@@ -751,7 +753,7 @@ class FaceReEnrollmentUseCase:
         archived = self._profiles.archive(
             subject_id,
             archived_by=actor.id,
-            reason=reason.strip(),
+            reason=cleaned_reason,
             archived_at=archived_at,
         )
         result = self._enrollment.capture_and_store(
@@ -759,7 +761,7 @@ class FaceReEnrollmentUseCase:
             actor=actor,
             subject_id=subject_id,
             action="FACE_RE_ENROLLED",
-            reason=reason.strip(),
+            reason=cleaned_reason,
             archived=archived,
         )
         if not result.accepted:
@@ -2128,7 +2130,7 @@ class FaceControlExemptionUseCase:
 
     @staticmethod
     def _require_reason(reason: str) -> str:
-        cleaned = reason.strip()
+        cleaned = normalise_decision_text(reason)
         if len(cleaned) < MIN_EXEMPTION_REASON_LENGTH:
             raise FaceControlError(
                 f"İstisnanın səbəbi ən azı {MIN_EXEMPTION_REASON_LENGTH} simvol olmalıdır",
@@ -2472,7 +2474,7 @@ class FaceLockReleaseUseCase:
 
 def _require_non_empty_reason(reason: str) -> str:
     """Boş səbəb qadağandır — sənədləşməmiş açılış auditdə müdafiə olunmur."""
-    cleaned = " ".join(reason.split())
+    cleaned = normalise_decision_text(reason)
     if not cleaned:
         raise FaceControlError(
             "Üz kilidinin açılma səbəbi boş ola bilməz",

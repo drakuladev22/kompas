@@ -96,6 +96,8 @@ from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from src.application.use_cases.export_preflight import ExportPreflightReview
     from src.domain.entities.employee import Employee
     from src.presentation.composition import ApplicationContext, Session
@@ -158,6 +160,59 @@ class ReportExportController:
             allowed=self._actor.has_permission(EXPORT_CORRECTIONS_FLAG, now=_now())
         )
         self._load_role_options(screen)
+
+    def _start_task(
+        self,
+        screen: ReportExportScreen,
+        job: Callable[[], object],
+        *,
+        on_success: Callable[[Any], None],
+        on_failure: Callable[[BaseException], None],
+        name: str,
+    ) -> None:
+        """Fon işini buraxır — İKİQAT BURAXILMA QAPISI (QA-FULL FAZA 3 tapıntısı).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `run_job()` YOX, BİRBAŞA `BackgroundTask`
+        ──────────────────────────────────────────────────────────────────────
+        `_on_preflight`, `_on_export`, `_write_export` və `_on_correction`
+        ƏVVƏL `run_job(...)`-dan ƏVVƏL `self._task.is_running` YOXLAMIRDI —
+        `erp_servers.py::_on_test`-in `if tester.is_running: return` qapısı
+        burada YOX idi. Sadəcə eyni yoxlamanı ƏLAVƏ etmək DƏ kifayət
+        ETMƏZDİ: `run_job()` `BackgroundTask`-ı qurur, `task.run(job)`
+        çağırır VƏ YALNIZ SONRA obyekti qaytarır; `self._task = run_job(...)`
+        isə həmin qayıdışdan SONRA yazılır. `InlineExecutor` (testlər)
+        sinxron olduğu üçün `job()` məhz `run()` çağırışının İÇİNDƏ bitir —
+        yəni sürətli ikinci klik `self._task`-ı HƏLƏ köhnə/`None` gördüyü bir
+        anda gəlir və qapını yan keçir.
+
+        Həll `erp_servers.py::_build_tester` ilə EYNİDİR: tapşırıq ƏVVƏLCƏ
+        qurulur və `self._task`-a yazılır, YALNIZ SONRA `.run(job)` çağırılır
+        — `BackgroundTask.run()` `_active`-i (`is_running`-i) `executor.
+        submit()`-dən ƏVVƏL qurur, ona görə reentrant klik artıq DOĞRU
+        `self._task`-ı görür.
+
+        Qapı BURADA, MƏRKƏZİ yerdə saxlanılır (hər çağırış yerində təkrar
+        yazılmır): `_write_export` `_on_export`-un davamıdır (əvvəlki
+        tapşırıq artıq tamamlanıb, bax `_deliver`-in `_active = None`
+        sırası), ona görə eyni qapı ora da düz gəlir.
+        """
+        if self._task is not None and self._task.is_running:
+            return
+
+        from PySide6.QtCore import QObject  # noqa: PLC0415
+
+        from src.presentation.background_task import BackgroundTask  # noqa: PLC0415
+
+        # VALİDEYN YALNIZ HƏQİQİ `QObject` OLDUQDA — `run_job()`-dakı eyni
+        # qoruma: sahtə ekranla `QObject.__init__` `TypeError` atır və
+        # kontrollerin sahə-obyektli testləri sınardı.
+        parent = screen if isinstance(screen, QObject) else None
+        task = BackgroundTask(parent=parent, executor=self._executor, name=name)
+        task.succeeded.connect(on_success)
+        task.failed.connect(on_failure)
+        self._task = task
+        task.run(job)
 
     # ------------------------------ rol filtri (G) ---------------------------- #
 
@@ -227,22 +282,22 @@ class ReportExportController:
 
         Sətirlər iki dövr üçün oxunur (cari + əvvəlki müqayisə üçün); böyük
         şəbəkədə bu, saniyələrlə çəkir və GUI sapında pəncərəni dondururdu.
-        """
-        from src.presentation.background_task import run_job  # noqa: PLC0415
 
+        İKİQAT BURAXILMA QAPISI — bax `_start_task` şərhi: `_on_preflight`,
+        `_on_export` və `_on_correction` EYNİ `self._task`-ı paylaşır.
+        """
         inputs = self._capture(screen)
 
         def succeeded(prepared: Any) -> None:
             screen.set_range_message("")
             _render(screen, prepared.review)
 
-        self._task = run_job(
+        self._start_task(
+            screen,
             lambda: self._build_review(inputs, report_key),
             on_success=succeeded,
             on_failure=lambda error: self._review_failed(screen, error),
-            owner=screen,
             name="EXPORT_PREFLIGHT",
-            executor=self._executor,
         )
 
     def _resolve_range(self, session: Session, *, start_text: str, end_text: str) -> ReportRange:
@@ -355,9 +410,11 @@ class ReportExportController:
 
         Sıra qəsdən dəyişdirilmir: əvvəl qovluq soruşub sonra doğrulasaydıq,
         istifadəçi qovluq seçdikdən SONRA «hesabat qurula bilmədi» görərdi.
-        """
-        from src.presentation.background_task import run_job  # noqa: PLC0415
 
+        İKİQAT BURAXILMA QAPISI — bax `_start_task` şərhi: eyni `self._task`
+        üç yazı yolunda (bu metod, `_write_export`, `_on_correction`)
+        paylaşılır.
+        """
         inputs = self._capture(screen)
 
         def prepared_ready(prepared: Any) -> None:
@@ -368,13 +425,12 @@ class ReportExportController:
                 return
             self._write_export(screen, prepared, report_key=report_key, directory=directory)
 
-        self._task = run_job(
+        self._start_task(
+            screen,
             lambda: self._build_review(inputs, report_key),
             on_success=prepared_ready,
             on_failure=lambda error: self._review_failed(screen, error),
-            owner=screen,
             name="EXPORT_REVIEW",
-            executor=self._executor,
         )
 
     def _write_export(
@@ -386,8 +442,6 @@ class ReportExportController:
         directory: Path,
     ) -> None:
         """Faylı FON SAPINDA yazır və nəticəni GUI sapında göstərir."""
-        from src.presentation.background_task import run_job  # noqa: PLC0415
-
         role_code = self._capture(screen)["role"]
 
         def job() -> object:
@@ -418,14 +472,7 @@ class ReportExportController:
             _error_log.error("EXPORT_FILE_WRITE_FAILED", exc_info=error)
             screen.set_preflight_message(_GENERIC_ERROR, error=True)
 
-        self._task = run_job(
-            job,
-            on_success=succeeded,
-            on_failure=failed,
-            owner=screen,
-            name="EXPORT_WRITE",
-            executor=self._executor,
-        )
+        self._start_task(screen, job, on_success=succeeded, on_failure=failed, name="EXPORT_WRITE")
 
     def _write_bonus_penalty(
         self,
@@ -486,21 +533,21 @@ class ReportExportController:
         Bütün işçiləri göstərmək əvəzinə yalnız export-a düşənlər verilir: rol
         filtri aktivdirsə, siyahıdan kənar bir işçiyə düzəliş yazmaq həmin
         düzəlişi GÖRÜNMƏZ edərdi (fayla düşməzdi, ekranda da olmazdı).
-        """
-        from src.presentation.background_task import run_job  # noqa: PLC0415
 
+        İKİQAT BURAXILMA QAPISI — bax `_start_task` şərhi: eyni `self._task`
+        üç yazı yolunda paylaşılır.
+        """
         inputs = self._capture(screen)
         report_key = screen.active_report()
 
         # Doğrulama FON SAPINDADIR — dialoq isə nəticə gələndən sonra, GUI
         # sapında açılır (`QDialog.exec()` yalnız orada təhlükəsizdir).
-        self._task = run_job(
+        self._start_task(
+            screen,
             lambda: self._build_review(inputs, report_key),
             on_success=lambda prepared: self._open_correction_dialog(screen, prepared),
             on_failure=lambda error: self._review_failed(screen, error),
-            owner=screen,
             name="EXPORT_CORRECTION_REVIEW",
-            executor=self._executor,
         )
 
     def _open_correction_dialog(

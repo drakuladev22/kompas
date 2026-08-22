@@ -168,6 +168,12 @@ class ErpServersController:
 
         self._servers = {str(row["server_name"]): row for row in servers}
 
+        # KÖHNƏ YAZI-XƏTASI BANNERİ TƏMİZLƏNİR (QA-FULL FAZA 3): uğurlu oxuma
+        # siyahının HAZIRKI vəziyyətinin düzgün olduğunu sübut edir — əvvəlki
+        # uğursuz «Yadda Saxla» cəhdinin xəbərdarlığı daha ARTIQ doğru deyil
+        # (naxış `plugin_page.py::_show_content`).
+        _clear_section_errors(screen)
+
         # Açarlar ekranın FAKTİKİ oxuduqlarıdır: `name`, `type`, `address`,
         # `stores`, `latency`, `latency_meaning`, `status` — maket yolundakı
         # `preview_data.ERP_SERVERS` ilə EYNİ dəst (CLAUDE.md bölmə 6).
@@ -220,11 +226,17 @@ class ErpServersController:
 
         row = self._servers.get(server_name or "")
         if server_name is not None and row is None:
+            # `refresh(screen)` BURADAN ÇAĞIRILMIR (QA-FULL FAZA 3): o, eyni
+            # anda `set_servers(...)` → `show_content()` zənciri ilə
+            # `ContentSwitcher`-i sinxron "content" vəziyyətinə qaytarır və
+            # bu xəbərdarlığın ÜSTÜNDƏN yazır — istifadəçi banner-i HEÇ VAXT
+            # görmür (naxış `announcements.py::_on_withdraw`-dan götürülüb).
+            # Yenidən yükləmə `on_retry` ilə istifadəçinin öz qərarına buraxılır.
             screen.show_error(
                 title="Server tapılmadı",
                 message="Bu server artıq dəyişdirilib. Siyahı yenilənir.",
+                on_retry=lambda: self.refresh(screen),
             )
-            self.refresh(screen)
             return
 
         server_id = row["id"] if row is not None else None
@@ -283,10 +295,28 @@ class ErpServersController:
         yuxarı buraxsaydıq, bir zədəli sətir bütün redaktə axınını bağlayardı,
         halbuki istifadəçinin məhz həmin sətri düzəltməyə ehtiyacı var.
         """
+        # ÜNVAN CƏDVƏLDƏKİ EYNİ FUNKSİYA İLƏ QURULUR (QA-FULL FAZA 3): əvvəl
+        # burada birbaşa `row["host"]` yazılırdı, halbuki forma sahəsi
+        # (`_address`) HTTP üçün `"host:port"` gözləyir və `port` sütunu
+        # SÜKUTLA İTİRDİ. İstifadəçi forma sahəsinə toxunmadan «Yadda Saxla»
+        # etsə, `_draft_from → _host_and_port` portu YENİDƏN 1541 defoltuna
+        # düşürürdü və server başqa portda dinləyirdisə sinxronizasiya
+        # SƏSSİZCƏ qırılırdı. `display_address_for` eyni sətri cədvəldə
+        # (`_server_view`) qurur — iki yerdə ayrı format yazsaydıq, biri
+        # düzələndə digəri arxada qalardı.
+        from src.domain.value_objects.erp import ConnectorType, display_address_for  # noqa: PLC0415
+
+        connector_type = ConnectorType.parse(str(row["connector_type"] or ""))
+        # `.get(...)` İSTİFADƏ OLUNUR, `row["port"]` DEYİL: canlı sorğu
+        # (`_server_rows()`) sütunu HƏMİŞƏ seçir, lakin `port=0` (naməlum)
+        # `display_address_for`-un ÖZÜNDƏ artıq "portsuz göstər" mənasına
+        # gəlir (bax onun docstring-i) — sahə YOXDURSA da eyni nəticə düzgündür.
         return {
             "name": str(row["server_name"]),
             "connector_type": str(row["connector_type"] or ""),
-            "host": str(row["host"] or ""),
+            "host": display_address_for(
+                connector_type, str(row["host"] or ""), int(row.get("port") or 0)
+            ),
             "database": str(row["infobase"] or ""),
             "username": str(row["username"] or ""),
             "sync_interval": str(int(row["sync_interval_seconds"] or 0)),
@@ -369,12 +399,29 @@ class ErpServersController:
         wizard.set_test_result(ok=False, message="Bağlantı yoxlanıla bilmədi. Yenidən cəhd edin.")
 
     def _on_save(self, screen: ErpServersScreen, payload: Any, *, server_id: Any) -> None:
+        """Forma «Yadda Saxla» — uğursuzluq QALAN SERVER SİYAHISINI SİLMİR.
+
+        ──────────────────────────────────────────────────────────────────────
+        ƏVVƏL `show_error()` İDİ — BÜTÜN PANELİ YOX EDİRDİ (QA-FULL FAZA 3)
+        ──────────────────────────────────────────────────────────────────────
+        Səbəb TRANZİTDİR (bir sınaqdan keçməyən forma), lakin `show_error()`
+        `ContentSwitcher`-i TAM xəta vəziyyətinə keçirir — cədvəl, xəritələmə
+        VƏ son sinxronizasiya kartı BİRLİKDƏ gizlənirdi, halbuki onların heç
+        biri sınmayıb: yalnız YENİ formanın özü rədd edilib. Əvəzinə
+        `set_section_error(title)` işlədilir (naxış `plugin_page.py::
+        _show_failure` və `settings.py::refresh`) — məzmun yerində qalır,
+        xəbərdarlıq isə onun ÜSTÜNDƏ görünür. Texniki səbəb (`error.user_
+        message`) `error.log`-a tam yazılır; ekrana ÇIXMIR, çünki bu banner
+        BİR sətirlik sabit AZ cümlə qəbul edir (bax `Screen.set_section_error`
+        docstring-i) — onu domen mətni ilə əvəz etmək qrammatik cümləni
+        pozardı. Uğurlu YENİDƏN oxuma bu banneri `refresh()`-də TƏMİZLƏYİR.
+        """
         draft = _draft_from(payload)
         if draft is None:
-            screen.show_error(
-                title="Forma tamamlanmayıb",
-                message=_missing_fields_message(payload),
+            _error_log.warning(
+                "ERP_SERVER_FORM_INCOMPLETE", extra={"message": _missing_fields_message(payload)}
             )
+            _section_error(screen, "Forma tamamlanmayıb")
             return
 
         with _busy_cursor():
@@ -384,15 +431,13 @@ class ErpServersController:
                     session.commit()
             except KompasOSError as error:
                 # UĞURSUZ TEST DƏ BURAYA DÜŞÜR (`ConnectionNotVerifiedError`):
-                # sətir YAZILMIR və istifadəçi səbəbi görür.
-                screen.show_error(title="Server saxlanmadı", message=error.user_message)
+                # sətir YAZILMIR. Səbəb `error.log`-dadır (növbəti sətir).
+                _error_log.warning("ERP_SERVER_SAVE_REJECTED", extra={"reason": error.user_message})
+                _section_error(screen, "Server saxlanmadı")
                 return
             except Exception:
                 _error_log.exception("ERP_SERVER_SAVE_FAILED")
-                screen.show_error(
-                    title="Server saxlanmadı",
-                    message="Konfiqurasiya yazılmadı. Yenidən cəhd edin.",
-                )
+                _section_error(screen, "Server saxlanmadı")
                 return
 
         self.refresh(screen)
@@ -637,6 +682,28 @@ def _mapping_note(mapped: int, servers: int) -> str:
             "«Şübhəli Satışlar» növbəsinə düşəcək."
         )
     return f"{mapped} mağaza xəritələnib."
+
+
+def _section_error(screen: Any, label: str) -> None:
+    """`Screen.set_section_error` — YALNIZ metodu daşıyan ekranlarda.
+
+    NİYƏ `getattr`, NİYƏ BİRBAŞA ÇAĞIRIŞ DEYİL (naxış `screen_data.
+    report_section_error`): `screen: ErpServersScreen` alsa da, duck-typing
+    test saxtaları (məs. `tests/unit/test_erp_and_health_bindings.py`)
+    `Screen` bazasından TÖRƏMİR və bu metodu daşımır. Birbaşa çağırış
+    `AttributeError` atardı — xəbərdarlığı GÖRÜNƏN etmək cəhdi ikinci bir
+    xətaya çevrilərdi.
+    """
+    reporter = getattr(screen, "set_section_error", None)
+    if reporter is not None:
+        reporter(label)
+
+
+def _clear_section_errors(screen: Any) -> None:
+    """`Screen.clear_section_errors` — eyni `getattr` ehtiyatı (bax `_section_error`)."""
+    clearer = getattr(screen, "clear_section_errors", None)
+    if clearer is not None:
+        clearer()
 
 
 __all__ = ["ErpServersController"]

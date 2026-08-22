@@ -59,6 +59,7 @@ from src.domain.value_objects.identifiers import (
     WorkModeId,
 )
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 
 class OpenShiftStatus(str, Enum):
@@ -229,7 +230,7 @@ class OpenShiftPosting(AggregateRoot):
                 user_message="Bu elan artıq bağlanıb.",
                 context={"posting_id": str(self.id), "status": self.status.value},
             )
-        cleaned = " ".join(reason.split())
+        cleaned = normalise_decision_text(reason)
         if len(cleaned) < MIN_DECISION_REASON_LENGTH:
             raise DomainRuleError(
                 f"Ləğv səbəbi minimum {MIN_DECISION_REASON_LENGTH} simvol olmalıdır",

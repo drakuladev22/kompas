@@ -88,13 +88,17 @@ def test_missing_limit_falls_back_to_default() -> None:
 
 
 def test_stored_limit_is_used() -> None:
-    repo, _ = _build(PostgresSystemLimits, rows=[{"limit_value": "45"}])
+    repo, _ = _build(
+        PostgresSystemLimits, rows=[{"limit_key": "approval_wait", "limit_value": "45"}]
+    )
     assert repo.get_int(TENANT, "approval_wait", 10) == 45
 
 
 def test_non_numeric_limit_falls_back_instead_of_crashing() -> None:
     """Yararsız konfiqurasiya bütün axını dayandırmamalıdır."""
-    repo, _ = _build(PostgresSystemLimits, rows=[{"limit_value": "otuz"}])
+    repo, _ = _build(
+        PostgresSystemLimits, rows=[{"limit_key": "approval_wait", "limit_value": "otuz"}]
+    )
     assert repo.get_int(TENANT, "approval_wait", 10) == 10
 
 
@@ -121,20 +125,29 @@ def test_unknown_module_is_enabled_by_default() -> None:
 
 
 def test_disabled_module_is_reported_as_disabled() -> None:
-    repo, _ = _build(PostgresFeatureToggles, rows=[{"is_enabled": False}])
+    repo, _ = _build(
+        PostgresFeatureToggles,
+        rows=[{"module_key": "tasks", "is_enabled": False, "is_structural": False}],
+    )
     assert repo.is_enabled(TENANT, "tasks") is False
 
 
 def test_structural_module_cannot_be_disabled_without_confirmation() -> None:
     """Modal-ı yan keçən yol da eyni qaydaya tabedir."""
-    repo, _ = _build(PostgresFeatureToggles, rows=[{"is_structural": True}])
+    repo, _ = _build(
+        PostgresFeatureToggles,
+        rows=[{"module_key": "fines", "is_enabled": True, "is_structural": True}],
+    )
 
     with pytest.raises(ValueError, match="struktur-kritik"):
         repo.set_enabled(TENANT, "fines", enabled=False, changed_by=ACTOR)
 
 
 def test_structural_module_disables_with_confirmation() -> None:
-    repo, conn = _build(PostgresFeatureToggles, rows=[{"is_structural": True}])
+    repo, conn = _build(
+        PostgresFeatureToggles,
+        rows=[{"module_key": "fines", "is_enabled": True, "is_structural": True}],
+    )
 
     repo.set_enabled(TENANT, "fines", enabled=False, changed_by=ACTOR, confirmation="Razıyam")
 
@@ -145,7 +158,10 @@ def test_structural_module_disables_with_confirmation() -> None:
 
 def test_enabling_never_requires_confirmation() -> None:
     """Təsdiq YALNIZ söndürmə üçündür — açmaq zərərsizdir."""
-    repo, conn = _build(PostgresFeatureToggles, rows=[{"is_structural": True}])
+    repo, conn = _build(
+        PostgresFeatureToggles,
+        rows=[{"module_key": "fines", "is_enabled": True, "is_structural": True}],
+    )
     repo.set_enabled(TENANT, "fines", enabled=True, changed_by=ACTOR)
     assert conn.executed, "Açma əməliyyatı yerinə yetirilməlidir"
 
@@ -312,7 +328,9 @@ def test_leave_type_read_path_uses_the_root_ceiling() -> None:
     """Root tavanı 1200-dürsə, 900 dəqiqəlik sətir OXUNA bilməlidir."""
     conn = _RoutedConnection(
         {
-            "system_limits": [{"limit_value": "1200"}],
+            "system_limits": [
+                {"limit_key": "LEAVE_TYPE_MAX_DURATION_MINUTES", "limit_value": "1200"}
+            ],
             "leave_types": _leave_type_rows(900),
         }
     )
@@ -338,7 +356,9 @@ def test_leave_type_ceiling_is_read_once_per_query_not_per_row() -> None:
     """Onlarla sətirlik kataloq üçün limit sorğusu BİR dəfə getməlidir."""
     conn = _RoutedConnection(
         {
-            "system_limits": [{"limit_value": "1200"}],
+            "system_limits": [
+                {"limit_key": "LEAVE_TYPE_MAX_DURATION_MINUTES", "limit_value": "1200"}
+            ],
             "leave_types": _leave_type_rows(30, 45, 60, 900),
         }
     )

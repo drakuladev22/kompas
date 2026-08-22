@@ -144,19 +144,19 @@ Hər dəyişiklikdən sonra HAMISI keçməlidir:
 ```bash
 .venv/Scripts/python.exe -m ruff check src/ tests/ scripts/
 .venv/Scripts/python.exe -m ruff format src/ tests/ scripts/
-.venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (372 fayl)
-QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 5665 test, 50 skip
+.venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (376 fayl)
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 6193 test, 50 skip
 .venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast
 ```
 
-Dəstin FAKTİKİ müddəti bu maşında **~58 dəqiqədir** (ölçüldü: 3477 saniyə,
+Dəstin FAKTİKİ müddəti bu maşında **~50 dəqiqədir** (ölçüldü: 3007 saniyə,
 tək başına işləyəndə). Paralel ikinci pytest prosesi işə salınsa müddət
 İKİ-ÜÇ dəfə uzanır — dövrə-4-də üç proses eyni anda işlədi və dəst saatlarla
 çəkdi. Ona görə tam dəst TƏK işlədilir.
 
 **`QT_QPA_PLATFORM=offscreen` OPSİYONAL DEYİL.** Bu maşında real Windows
 platform plagini ilə e2e Qt testləri dəqiqədə ~4 test sürətinə düşür — tam
-dəst saatlarla çəkir və "asmış" kimi görünür. Yuxarıdakı ~58 dəqiqə məhz
+dəst saatlarla çəkir və "asmış" kimi görünür. Yuxarıdakı ~50 dəqiqə məhz
 offscreen ölçüsüdür: dəsti fon işi kimi başladıb gözləmək lazımdır, "asmış"
 saymaq yox. Yeganə fərq: `test_mono_role_resolves_to_a_fixed_pitch_font`
 atlanır (aşağıya bax).

@@ -25,9 +25,9 @@ QISA SƏBƏB YAZI YOLUNA ÜMUMİYYƏTLƏ GİRMİR
 ──────────────────────────────────────────────────────────────────────────────
 Domen qərar izahını MƏCBURİ edir (`FineAppeal._require_note`,
 `MIN_DECISION_NOTE_LENGTH`) və eyni normalizasiyanı işlədir
-(`" ".join(note.split())`) — kontroller həmin sabiti İDXAL edir, təkrar
-YAZMIR: rəqəmi burada təkrarlasaydıq, domendəki dəyər dəyişəndə ekran sükutla
-yalan danışardı.
+(`src/shared/text.py::normalise_decision_text` — TƏK mənbədən) — kontroller
+həmin sabiti İDXAL edir, təkrar YAZMIR: rəqəmi burada təkrarlasaydıq,
+domendəki dəyər dəyişəndə ekran sükutla yalan danışardı.
 
 Yoxlama NİYƏ kontrollerdə də var (`exceptions.py` əksini seçir): səbəb qutusu
 KARTIN İÇİNDƏDİR və siyahı hər yazıdan sonra yenidən qurulur. Use case-in
@@ -54,6 +54,7 @@ from src.domain.entities.appeal import MIN_DECISION_NOTE_LENGTH
 from src.domain.value_objects.identifiers import AppealId
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
@@ -112,7 +113,10 @@ class FineAppealInboxController:
         approve: bool,
         failure: str,
     ) -> None:
-        cleaned = " ".join(note.split())
+        # KÖHNƏ NÜSXƏ ƏVƏZLƏNDİ (`domain` sahibinin tapıntısı, `src/shared/
+        # text.py`): sadə `" ".join(note.split())` Unicode Cf (Format)
+        # simvollarını SIXMIR — bax `shift_swaps.py::_ask_reason` şərhi.
+        cleaned = normalise_decision_text(note)
         if len(cleaned) < MIN_DECISION_NOTE_LENGTH:
             _inform(screen, failure, SHORT_NOTE_MESSAGE)
             return
@@ -157,6 +161,22 @@ class FineAppealInboxController:
             _error_log.exception("FINE_APPEAL_DECISION_FAILED", extra={"error": str(exc)})
             _inform(screen, failure, getattr(exc, "user_message", "Yenidən cəhd edin."))
             return
+        except Exception:
+            # QA-FULL FAZA 6 (stress/xaos) tapıntısı: `session.commit()` anında
+            # bağlantı kəsilsə (`psycopg.OperationalError` — real şəbəkə
+            # taymautu/DNS/pooler xətası), bu ikinci qat OLMADAN istisna
+            # HEÇ YERDƏ tutulmurdu. Python səviyyəsində çökmür (Qt onu
+            # `sys.excepthook`-a keçirir, `app.py::install_global_exception_
+            # hook` tutur), LAKİN kartın kontekstual modalı ƏVƏZİNƏ ümumi
+            # bildiriş gəlirdi — üstəlik `notify_unhandled_error`-un
+            # `_crash_notified` qapısı sessiya ərzində YALNIZ BİR DƏFƏ
+            # göstərir, yəni EYNİ problem ikinci dəfə baş versə düymə
+            # sükutla "heç nə etmir". Naxış `open_shift.py::_on_claim`/
+            # `_submit`/`_on_cancel` və `fine_entry.py::_issue`-dəki ikinci
+            # qatla EYNİDİR.
+            _error_log.exception("FINE_APPEAL_DECISION_UNEXPECTED_FAILED")
+            _inform(screen, failure, "Yenidən cəhd edin.")
+            return
         self.refresh(screen)
 
     # -------------------------------- oxuma ---------------------------------- #
@@ -169,11 +189,20 @@ class FineAppealInboxController:
         həqiqətdən ayrıla bilərdi — məsələn `expire_stale` eyni anda başqa
         sətri bağlayıbsa. Yenidən oxuma tək həqiqət mənbəyini saxlayır
         (CLAUDE.md bölmə 6).
+
+        `reraise=True` (QA-FULL Faza 3): `populate()` əvvəl HƏR istisnanı
+        özü udurdu (bölmə banneri) və aşağıdakı `except KompasOSError`
+        HEÇ VAXT işə düşmürdü — "Yenidən Cəhd Et" düyməsi istehsalatda
+        görünməzdi. `KompasOSError` — gözlənilən, istifadəçi mesajı daşıyan
+        domən xətası — indi BURAYA yenidən atılır; digər (gözlənilməz)
+        xətalar isə `populate()` daxilində köhnə kimi udulmağa davam edir.
         """
         from src.presentation.controllers.screen_data import ScreenDataBinder  # noqa: PLC0415
 
         try:
-            ScreenDataBinder(self._context, self._actor).populate("fine_appeals", screen)
+            ScreenDataBinder(self._context, self._actor).populate(
+                "fine_appeals", screen, reraise=True
+            )
         except KompasOSError as exc:
             _error_log.exception("FINE_APPEAL_REFRESH_FAILED", extra={"error": str(exc)})
             screen.show_error(

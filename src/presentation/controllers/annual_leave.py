@@ -265,9 +265,16 @@ class AnnualLeaveInboxController:
                 session.commit()
         except KompasOSError as error:
             # Paralel təsdiq, çatmayan balans və "artıq qərar verilib" halları
-            # bura düşür — HR AÇIQ cavab alır və siyahı yenilənir.
-            screen.show_error(title="Sorğu təsdiqlənmədi", message=error.user_message)
-            self.refresh(screen)
+            # bura düşür — HR AÇIQ cavab alır. `refresh()` BURADAN ÇAĞIRILMIR:
+            # `set_requests()` → `show_content()` zənciri heç bir render arası
+            # olmadan bu banner-in ÜSTÜNDƏN yazır və HR səbəbi HEÇ VAXT görmür
+            # (QA-FULL FAZA 3, `announcements.py::_on_withdraw` ilə eyni qərar).
+            # Yenidən yükləmə `on_retry` ilə istifadəçinin öz qərarına buraxılır.
+            screen.show_error(
+                title="Sorğu təsdiqlənmədi",
+                message=error.user_message,
+                on_retry=lambda: self.refresh(screen),
+            )
             return
         except Exception:
             _error_log.exception("ANNUAL_LEAVE_APPROVE_FAILED", extra={"request_id": request_id})
@@ -304,8 +311,13 @@ class AnnualLeaveInboxController:
                 )
                 session.commit()
         except KompasOSError as error:
-            screen.show_error(title="Sorğu rədd edilmədi", message=error.user_message)
-            self.refresh(screen)
+            # `refresh()` BURADAN ÇAĞIRILMIR — `_on_approve` ilə eyni səbəb:
+            # `set_requests()` xəta banner-inin ÜSTÜNDƏN yazardı.
+            screen.show_error(
+                title="Sorğu rədd edilmədi",
+                message=error.user_message,
+                on_retry=lambda: self.refresh(screen),
+            )
             return
         except Exception:
             _error_log.exception("ANNUAL_LEAVE_REJECT_FAILED", extra={"request_id": request_id})

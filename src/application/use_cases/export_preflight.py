@@ -82,6 +82,7 @@ from src.domain.value_objects.export_corrections import (
 )
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -431,7 +432,7 @@ class ExportPreflightUseCase:
             )
 
         minimum = self._reason_min_length(tenant_id)
-        cleaned = reason.strip()
+        cleaned = normalise_decision_text(reason)
         if len(cleaned) < minimum:
             # SÜKUTLA rədd YOXDUR: mesaj həm faktiki, həm tələb olunan uzunluğu
             # göstərir ki, HR nə edəcəyini bilsin (`ReportRangeTooLongError`

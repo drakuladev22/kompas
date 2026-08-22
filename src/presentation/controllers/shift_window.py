@@ -68,6 +68,13 @@ class ShiftWindowController:
         PƏNCƏRƏ UZUNLUĞU OXUNA BİLMƏSƏ HEÇ NƏ EDİLMİR: sıfır addımla
         sürüşdürmək oxu "işləyir amma nəticəsizdir" halına salardı — bu isə
         ilkin nasazlıqla eyni təəssüratı yaradır.
+
+        `populate(..., reraise=True)` (QA-FULL Faza 3): əvvəl `populate()`
+        HƏR istisnanı özü udurdu (bölmə banneri) və aşağıdakı
+        `except KompasOSError` HEÇ VAXT işə düşmürdü — matris sınanda
+        toolbar sükutla köhnə ayı göstərməyə davam edirdi, heç bir mesaj
+        çıxmırdı. Yalnız `KompasOSError` BURAYA yenidən atılır, digər
+        xətalar `populate()` daxilində köhnə kimi udulmağa davam edir.
         """
         from src.presentation.controllers.screen_data import ScreenDataBinder  # noqa: PLC0415
 
@@ -84,7 +91,7 @@ class ShiftWindowController:
         self._offset_days += int(step) * window
         binder.set_shift_offset(self._offset_days)
         try:
-            binder.populate("shift_planning", screen)
+            binder.populate("shift_planning", screen, reraise=True)
         except KompasOSError as exc:
             _error_log.exception("SHIFT_WINDOW_FAILED", extra={"error": str(exc)})
             screen.show_error(

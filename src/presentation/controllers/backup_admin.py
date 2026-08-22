@@ -110,6 +110,11 @@ class BackupAdminController:
             return
 
         self._points = {_date_text(point): point for point in points}
+        # KÖHNƏ YAZI-XƏTASI BANNERİ TƏMİZLƏNİR (QA-FULL FAZA 3): uğurlu oxuma
+        # siyahının HAZIRKI vəziyyətinin düzgün olduğunu sübut edir — əvvəlki
+        # uğursuz nüsxə/bərpa cəhdinin xəbərdarlığı artıq doğru deyil (naxış
+        # `plugin_page.py::_show_content`).
+        _clear_section_errors(screen)
         screen.set_schedule_label(_schedule_label(points))
         # Açarlar ekranın FAKTİKİ oxuduqlarıdır: `date`, `size`, `kind`,
         # `status`, `ok` — maket yolundakı `preview_data.BACKUPS` ilə EYNİ.
@@ -153,7 +158,6 @@ class BackupAdminController:
             job,
             name="BACKUP_CREATE",
             title="Nüsxə yaradılmadı",
-            fallback="Ehtiyat nüsxə alınmadı. `pg_dump` mövcudluğunu yoxlayın.",
             log_key="BACKUP_CREATE_FAILED",
         )
 
@@ -214,7 +218,6 @@ class BackupAdminController:
             job,
             name="BACKUP_RESTORE",
             title="Bərpa tamamlanmadı",
-            fallback="Bərpa icra edilmədi. Jurnalı yoxlayın və dəstəklə əlaqə saxlayın.",
             log_key="BACKUP_RESTORE_FAILED",
         )
 
@@ -225,7 +228,6 @@ class BackupAdminController:
         *,
         name: str,
         title: str,
-        fallback: str,
         log_key: str,
     ) -> None:
         """Ortaq icra qabığı — iş fonda, nəticə GUI sapında.
@@ -233,15 +235,27 @@ class BackupAdminController:
         Uğurda siyahı YENİDƏN oxunur: nüsxə/bərpa `backup_records` sətrini
         dəyişir və köhnə cədvəl istifadəçini «heç nə olmadı» qənaətinə
         gətirərdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        UĞURSUZLUQDA `show_error()` İŞLƏDİLMİR (QA-FULL FAZA 3)
+        ──────────────────────────────────────────────────────────────────────
+        Bir `pg_dump`/`pg_restore` cəhdinin uğursuzluğu TRANZİTDİR — siyahı,
+        Saxlama kartı və Cədvəl kartı hələ də etibarlıdır. `show_error()`
+        HAMISINI xəta vəziyyəti ilə əvəz edirdi (naxış `plugin_page.py::
+        _show_failure`, `drive_connection.py` başlığındakı eyni səhv). Əvəzinə
+        `set_section_error(title)` — mövcud siyahı yerində qalır, xəbərdarlıq
+        onun ÜSTÜNDƏ görünür. Tam səbəb `error.log`-a yazılır; uğurlu YENİDƏN
+        oxuma banneri `refresh()`-də təmizləyir.
         """
         from src.presentation.background_task import run_job  # noqa: PLC0415
 
         def failed(error: BaseException) -> None:
             if isinstance(error, KompasOSError):
-                screen.show_error(title=title, message=error.user_message)
+                _error_log.warning(log_key, extra={"reason": error.user_message})
+                _section_error(screen, title)
                 return
             _error_log.error(log_key, exc_info=error)
-            screen.show_error(title=title, message=fallback)
+            _section_error(screen, title)
 
         self._task = run_job(
             job,
@@ -283,6 +297,28 @@ def _schedule_label(points: list[Any]) -> str:
     if not points:
         return "Hələ ehtiyat nüsxə alınmayıb."
     return f"Sonuncu nüsxə: {points[0].label_az}"
+
+
+def _section_error(screen: Any, label: str) -> None:
+    """`Screen.set_section_error` — YALNIZ metodu daşıyan ekranlarda.
+
+    NİYƏ `getattr`, NİYƏ BİRBAŞA ÇAĞIRIŞ DEYİL (naxış `screen_data.
+    report_section_error`): `screen: BackupScreen` alsa da, duck-typing
+    test saxtaları (məs. `tests/unit/test_infrastructure_controllers.py`)
+    `Screen` bazasından TÖRƏMİR və bu metodu daşımır. Birbaşa çağırış
+    `AttributeError` atardı — xəbərdarlığı GÖRÜNƏN etmək cəhdi ikinci bir
+    xətaya çevrilərdi.
+    """
+    reporter = getattr(screen, "set_section_error", None)
+    if reporter is not None:
+        reporter(label)
+
+
+def _clear_section_errors(screen: Any) -> None:
+    """`Screen.clear_section_errors` — eyni `getattr` ehtiyatı (bax `_section_error`)."""
+    clearer = getattr(screen, "clear_section_errors", None)
+    if clearer is not None:
+        clearer()
 
 
 __all__ = ["DATE_FORMAT", "STORAGE_BUDGET_GB", "BackupAdminController"]

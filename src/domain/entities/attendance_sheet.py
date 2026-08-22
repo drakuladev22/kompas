@@ -47,6 +47,7 @@ from src.domain.value_objects.identifiers import (
     TenantId,
 )
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 
 class AutoAttendanceStatus(str, Enum):
@@ -182,7 +183,7 @@ class DailyAttendanceSheet(AggregateRoot):
     def annotate(self, employee_id: EmployeeId, note: str) -> None:
         """Sətrə kontekst qeydi (məs. "PIN sistemi işləmirdi, şifahi təsdiq")."""
         self._require_open()
-        cleaned = " ".join(note.split())
+        cleaned = normalise_decision_text(note)
         for line in self.lines:
             if line.employee_id == employee_id:
                 line.manager_note = cleaned or None
@@ -196,7 +197,7 @@ class DailyAttendanceSheet(AggregateRoot):
     def set_manager_note(self, note: str) -> None:
         """Bütün tabelə aid ümumi qeyd."""
         self._require_open()
-        cleaned = " ".join(note.split())
+        cleaned = normalise_decision_text(note)
         self.manager_note = cleaned or None
 
     # ------------------------------- təsdiq ---------------------------------- #

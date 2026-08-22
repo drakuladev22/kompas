@@ -55,6 +55,7 @@ from src.domain.value_objects.identifiers import (
     TenantId,
 )
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 #: `exceptions.detail` — DB `CHECK (char_length(trim(detail)) >= 5)` güzgüsü.
 #: Bu, konfiqurasiya edilə bilən biznes həddi DEYİL, sxem məhdudiyyətidir:
@@ -99,7 +100,7 @@ class ExceptionRecord(AggregateRoot):
                 context={"source": source},
             )
 
-        cleaned_detail = " ".join(detail.split())
+        cleaned_detail = normalise_decision_text(detail)
         if len(cleaned_detail) < MIN_EXCEPTION_DETAIL_LENGTH:
             raise DomainRuleError(
                 f"İstisna izahı minimum {MIN_EXCEPTION_DETAIL_LENGTH} simvol olmalıdır",
@@ -244,7 +245,7 @@ class ExceptionRecord(AggregateRoot):
                 context={"status": self.status.value, "exception_id": str(self.id)},
             )
 
-        cleaned = " ".join(note.split()) if note else None
+        cleaned = normalise_decision_text(note) or None if note else None
         threshold = max(0, min_note_length)
         if note_required and (cleaned is None or len(cleaned) < threshold):
             raise DomainRuleError(

@@ -123,6 +123,11 @@ class AuditLogController:
         screen.filters_changed.connect(lambda values: self._on_filters(screen, values))
         screen.page_changed.connect(lambda page: self._on_page(screen, page))
         screen.export_requested.connect(lambda: self._on_export(screen))
+        # İLKİN OXUMA: digər üç kontroller (`erp_servers`, `backup_admin`,
+        # `exceptions`) `attach()`-in sonunda ilkin doldurma edir, bu isə
+        # unudulmuşdu — panel açılanda cədvəl istifadəçi bir filtri toxunana
+        # qədər BOŞ qalırdı (QA-FULL FAZA 3).
+        self._reload(screen)
 
     # ------------------------------- ixrac ----------------------------------- #
 
@@ -251,6 +256,20 @@ class AuditLogController:
     # ------------------------------- oxuma ----------------------------------- #
 
     def _reload(self, screen: AuditScreen) -> None:
+        """Süzgəc/səhifə dəyişəndə (yaxud ilkin açılışda) YENİDƏN oxuyur.
+
+        ──────────────────────────────────────────────────────────────────────
+        UĞURSUZLUQDA `show_error()` İŞLƏDİLMİR (QA-FULL FAZA 3)
+        ──────────────────────────────────────────────────────────────────────
+        Bir TRANZİT filtr sorğusu uğursuz olsa da, süzgəc paneli (axtarış,
+        modul, tarix) və ƏVVƏLKİ nəticə hələ etibarlıdır. `show_error()`
+        `ContentSwitcher`-i TAM xəta vəziyyətinə keçirib süzgəc sahələrini DƏ
+        gizlədirdi (naxış `drive_connection.py` başlığında sənədləşdirilmiş
+        eyni səhv) — istifadəçi bir hərf də yazmaqla bütün paneli itirirdi.
+        Əvəzinə `set_section_error(...)` — cədvəl və süzgəclər YERİNDƏ qalır,
+        xəbərdarlıq onların ÜSTÜNDƏ görünür. Uğurlu YENİDƏN oxuma banneri
+        aşağıda TƏMİZLƏYİR.
+        """
         try:
             with self._context.session(user_id=self._actor.id) as session:
                 page = self._search(session)
@@ -258,12 +277,12 @@ class AuditLogController:
         except KompasOSError as exc:
             # SÜKUT QADAĞANDIR: istifadəçi düyməni basıb və nəticə gözləyir.
             _error_log.exception("AUDIT_FILTER_FAILED", extra={"error": str(exc)})
-            screen.show_error(
-                title="Audit jurnalı oxuna bilmədi",
-                message=getattr(exc, "user_message", "Yenidən cəhd edin."),
-            )
+            _section_error(screen, "Audit jurnalı")
             return
 
+        # KÖHNƏ XƏTA BANNERİ TƏMİZLƏNİR: uğurlu oxuma cari nəticənin doğru
+        # olduğunu sübut edir (naxış `plugin_page.py::_show_content`).
+        _clear_section_errors(screen)
         rows = [entry_row(entry) for entry in page.entries]
         screen.set_entries(rows, result_text=f"{page.total} nəticədən {len(rows)}")
         limit = max(1, page.filters.limit)
@@ -311,6 +330,27 @@ class AuditLogController:
                 offset=(self._page - 1) * page_size if offset is None else offset,
             ),
         )
+
+
+def _section_error(screen: Any, label: str) -> None:
+    """`Screen.set_section_error` — YALNIZ metodu daşıyan ekranlarda.
+
+    NİYƏ `getattr`, NİYƏ BİRBAŞA ÇAĞIRIŞ DEYİL (naxış `screen_data.
+    report_section_error`): `screen: AuditScreen` alsa da, duck-typing
+    test saxtaları (məs. `tests/unit/test_dead_signal_wiring.py`) `Screen`
+    bazasından TÖRƏMİR və bu metodu daşımır. Birbaşa çağırış `AttributeError`
+    atardı — xəbərdarlığı GÖRÜNƏN etmək cəhdi ikinci bir xətaya çevrilərdi.
+    """
+    reporter = getattr(screen, "set_section_error", None)
+    if reporter is not None:
+        reporter(label)
+
+
+def _clear_section_errors(screen: Any) -> None:
+    """`Screen.clear_section_errors` — eyni `getattr` ehtiyatı (bax `_section_error`)."""
+    clearer = getattr(screen, "clear_section_errors", None)
+    if clearer is not None:
+        clearer()
 
 
 def _inform(screen: Any, title: str, message: str) -> None:

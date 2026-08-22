@@ -79,6 +79,7 @@ from src.domain.value_objects.identifiers import (
     TenantId,
 )
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 #: Rədd/ləğv qərarının izahı — `ShiftSwapRequest.MIN_DECISION_REASON_LENGTH`
 #: ilə EYNİ dəyər və eyni səbəb: "yox" cavabı işçiyə izah edilməlidir.
@@ -522,7 +523,7 @@ def _non_negative(value: Decimal) -> Decimal:
 
 
 def _require_reason(reason: str) -> str:
-    cleaned = " ".join(reason.split())
+    cleaned = normalise_decision_text(reason)
     if len(cleaned) < MIN_DECISION_REASON_LENGTH:
         raise DomainRuleError(
             f"Qərar səbəbi minimum {MIN_DECISION_REASON_LENGTH} simvol olmalıdır",

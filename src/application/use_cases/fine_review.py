@@ -38,6 +38,7 @@ from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.identifiers import new_fine_review_batch_id
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
@@ -219,7 +220,7 @@ class MonthlyFineReviewUseCase:
         for fine_id, fine in pending.items():
             decision = by_id.get(fine_id, FineDecision(fine_id=fine_id))
             if decision.decision is ReviewDecision.DISCARD:
-                reason = (decision.reason or "").strip()
+                reason = normalise_decision_text(decision.reason or "")
                 if len(reason) < MIN_DISCARD_REASON_LENGTH:
                     raise FineReviewError(
                         f"'Sil' qərarı üçün səbəb məcburidir "

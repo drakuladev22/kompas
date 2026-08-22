@@ -37,6 +37,7 @@ from src.domain.entities.base import AggregateRoot, DomainRuleError, InvalidStat
 from src.domain.events import AnnouncementBroadcastEvent
 from src.domain.value_objects.identifiers import AnnouncementId, EmployeeId, StoreId, TenantId
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 #: `announcements.title_az` CHECK-inin güzgüsü (migrations/020: `>= 3`).
 MIN_TITLE_LENGTH: Final = 3
@@ -82,7 +83,7 @@ class Announcement(AggregateRoot):
         emit_created_event: bool = True,
     ) -> None:
         super().__init__()
-        cleaned_title = title_az.strip()
+        cleaned_title = normalise_decision_text(title_az)
         if len(cleaned_title) < MIN_TITLE_LENGTH:
             raise DomainRuleError(
                 f"Elan başlığı minimum {MIN_TITLE_LENGTH} simvol olmalıdır",
@@ -91,7 +92,7 @@ class Announcement(AggregateRoot):
             )
         # Çoxsaylı boşluqlar bir boşluğa endirilir — `EmployeeDocument.deactivate`
         # ilə eyni normallaşdırma (yalnız boşluqla doldurulmuş mətn keçməsin).
-        cleaned_message = " ".join(message.split())
+        cleaned_message = normalise_decision_text(message)
         if len(cleaned_message) < MIN_MESSAGE_LENGTH:
             raise DomainRuleError(
                 f"Elan mətni minimum {MIN_MESSAGE_LENGTH} simvol olmalıdır",

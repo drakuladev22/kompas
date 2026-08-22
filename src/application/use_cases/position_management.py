@@ -280,20 +280,66 @@ class PositionManagementUseCase:
         bura BÜTÜN əməliyyat üçün bir dəfə işləyir (flag dəsti boş olsa belə,
         yəni "hamısını sil" halında da), entity isə hər sətir üçün — ekranı
         yan keçən kod birbaşa `revoke()` çağırsa qapı yenə bağlıdır.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ "HAMISINI GERİ AL, HAMISINI YENİDƏN VER" DEYİL (QA-FULL FAZA 3)
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəlki yazılış BÜTÜN mövcud flag-ləri əvvəlcə geri alır, sonra
+        göndərilən BÜTÜN dəsti yenidən verirdi — "vermək" yolu isə hər flag
+        üçün Self-Escalation Guard-dan (`actor.has_permission`) keçirdi.
+        `PermissionMatrixScreen.collected()` isə disabled/toxunulmamış xanaları
+        DA "checked" kimi göndərir (D3 qərarı: deaktiv xana matrisdən DÜŞMÜR,
+        əks halda rolun mövcud icazəsi sükutla silinərdi). Nəticə: rolda ARTIQ
+        olan, lakin admin-in ÖZÜNDƏ OLMAYAN bir flag varsa (onu vaxtilə başqa,
+        daha yüksək admin vermişdi), admin həmin xanaya HEÇ TOXUNMASA BELƏ
+        Self-Escalation Guard BÜTÜN yazını rədd edirdi — admin ÖZ tam icazəli
+        olduğu, TAMAM ƏLAQƏSİZ bir flag-i belə əlavə edə bilmirdi.
+
+        Düzəliş: `before` (rolun HAZIRKI dəsti) və `requested` (ekranın
+        göndərdiyi TAM dəst) arasındakı FƏRQ hesablanır.
+            * `to_remove` (əvvəl var idi, indi yoxdur) → `Position.revoke()`,
+              STRICT HIERARCHY + mütləq ROOT_ONLY yoxlanılır (dəyişmir),
+              Self-Escalation TƏTBİQ OLUNMUR — silmək səlahiyyəti ARTIRMIR
+              (aşağıdakı şərhə bax).
+            * `newly_added` (indi əlavə olunur) → Self-Escalation Guard
+              TƏTBİQ OLUNUR: aktor ÖZÜNDƏ OLMAYAN flag-i əlavə EDƏ BİLMƏZ.
+            * Toxunulmayan qalan flag-lər (həm `before`-də, həm `requested`-də)
+              YENİDƏN GERİ ALINMIR — Self-Escalation onlara tətbiq olunmur,
+              çünki heç bir yeni səlahiyyət verilmir. Onlar YENƏ DƏ
+              `_apply_flags`-ə göndərilir (hardlock/anti-fraud/ROOT_ONLY
+              re-validasiyası qalır, bax `test_root_touching_a_root_only_
+              flag_leaves_a_security_warning`) — YALNIZ mülkiyyət yoxlaması
+              güzəştə düşür.
+
+        SİLMƏ NİYƏ SELF-ESCALATION-A TABE DEYİL: Self-Escalation Guard
+        səlahiyyət ARTIMININ qarşısını alır ("özündə olmayanı VER"). Flag
+        SİLMƏK səlahiyyəti azaldır, artırmır — aktor özündə olmayan bir
+        flag-i rolda SAXLAMAQ deyil, MƏHZ ÇIXARMAQ istəyirsə, bu, hədəf rolu
+        aktorun ÖZ pilləsindən zəiflədir, güclətmir. Buna görə `revoke()`
+        Self-Escalation ownership yoxlaması APARMIR (əvvəldən belə idi) —
+        YALNIZ Strict Hierarchy + mütləq ROOT_ONLY tətbiq olunur, ikisi də
+        DƏYİŞMİR.
         """
         self._require_permission(actor)
         position = self._require_position(position_id)
         # (a) STRICT HIERARCHY GUARD — hədəf rol aktordan CİDDİ ŞƏKİLDƏ aşağı
         #     olmalıdır (SEC-006: bərabər pillə də bloklanır, yalnız Root azaddır).
         position.assert_may_be_edited_by(actor.position)
-        before = sorted(position.granted_flags)
+        before = set(position.granted_flags)
+        requested = set(flag_codes)
 
-        for code in before:
+        for code in sorted(before - requested):
             # (b) MÜTLƏQ ROOT_ONLY yoxlaması `revoke()`-un içindədir və
             #     iyerarxiya nəticəsindən ASILI DEYİL. Kataloq tərifi ona görə
             #     ötürülür ki, `hardlock` səviyyəsi yalnız orada yaşayır.
             position.revoke(self._require_flag(code), actor_position=actor.position)
-        granted = self._apply_flags(position, flag_codes, actor=actor)
+
+        self._apply_flags(
+            position,
+            tuple(sorted(requested)),
+            actor=actor,
+            newly_added=requested - before,
+        )
         self._positions.save(position)
 
         self._audit.record(
@@ -302,8 +348,8 @@ class PositionManagementUseCase:
             action="POSITION_FLAGS_UPDATED",
             entity_type="positions",
             entity_id=position.id,
-            before_state={"flags": before},
-            after_state={"flags": sorted(granted)},
+            before_state={"flags": sorted(before)},
+            after_state={"flags": sorted(position.granted_flags)},
         )
         return position
 
@@ -366,7 +412,12 @@ class PositionManagementUseCase:
     # ------------------------------- köməkçi --------------------------------- #
 
     def _apply_flags(
-        self, position: Position, flag_codes: tuple[str, ...], *, actor: Employee
+        self,
+        position: Position,
+        flag_codes: tuple[str, ...],
+        *,
+        actor: Employee,
+        newly_added: set[str] | None = None,
     ) -> set[str]:
         """Flag-ləri rola verir; qadağan olunan hər cəhd istisna atır.
 
@@ -374,6 +425,15 @@ class PositionManagementUseCase:
         flag-ləri rola verə bilər. Bu, `permission_guards.py`-dakı fərdi
         override qaydasının rol tərəfindəki qarşılığıdır — onsuz CEO özündə
         olmayan bir flag-i custom rola qoyub həmin rolu özünə təyin edə bilərdi.
+
+        `newly_added` (QA-FULL Faza 3 düzəlişi): mülkiyyət yoxlaması YALNIZ bu
+        dəstdəki kodlara tətbiq olunur. `None` — `create_role` çağırış
+        nöqtəsindəki DEFOLT — "bütün `flag_codes` yenidir" deməkdir, çünki
+        təzə rolda ƏVVƏLKİ flag yoxdur, hamısı həqiqətən YENİ verilir.
+        `set_role_flags` isə `requested - before` ötürür: rolda ARTIQ olan,
+        admin-in TOXUNMADIĞI flag (D3: disabled xana da "checked" göndərilir)
+        bu yoxlamadan keçmir — əks halda tam əlaqəsiz, icazəli bir dəyişiklik
+        belə rədd edilirdi (bax `set_role_flags` başlığı).
 
         STRICT HIERARCHY GUARD burada da çağırılır, çünki bu metod İKİ yoldan
         gəlir: `set_role_flags` (orada onsuz da yoxlanılıb) və `create_role`.
@@ -386,10 +446,11 @@ class PositionManagementUseCase:
         now = self._clock.now()
         applied: set[str] = set()
         position.assert_may_be_edited_by(actor.position)
+        escalation_checked = flag_codes if newly_added is None else newly_added
 
         for code in flag_codes:
             flag = self._require_flag(code)
-            if not actor.has_permission(code, now=now):
+            if code in escalation_checked and not actor.has_permission(code, now=now):
                 _security_log.warning(
                     "POSITION_SELF_ESCALATION_BLOCKED",
                     extra={"actor_id": str(actor.id), "flag": code},

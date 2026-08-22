@@ -377,10 +377,15 @@ def test_audit_filter_change_triggers_a_new_query(qtbot, theme) -> None:  # type
 
     screen.filters_changed.emit({"search": "cərimə", "module": "", "critical_only": False})
 
-    assert len(use_case.calls) == 1
-    assert use_case.calls[0].search == "cərimə"
+    # İKİ ÇAĞIRIŞ GÖZLƏNİLİR (QA-FULL Faza 3 düzəlişi): birincisi `attach()`-ın
+    # İLKİN oxusudur — əvvəl o YOX idi və Audit Jurnalı AÇILANDA cədvəl boş
+    # qalırdı, istifadəçi filtrə toxunana qədər. İkincisi bu testin ölçdüyü
+    # filtr dəyişikliyidir.
+    assert len(use_case.calls) == 2
+    assert use_case.calls[-1].search == "cərimə"  # SONUNCU çağırış — ilkin oxu birincidir
     # Baxış faktı da audit-lənir — commit unudulsa həmin iz itərdi.
-    assert session.committed == 1
+    # İKİ: hər oxu ÖZ sessiyasını açıb commit edir, ilkin oxu da daxil.
+    assert session.committed == 2
 
 
 @requires_qt
@@ -391,7 +396,8 @@ def test_audit_page_change_keeps_the_active_filter(qtbot, theme) -> None:  # typ
     screen.filters_changed.emit({"search": "cərimə", "module": "", "critical_only": False})
     screen.page_changed.emit(3)
 
-    assert len(use_case.calls) == 2
+    # ÜÇ: `attach()`-ın ilkin oxusu + filtr + səhifə (bax yuxarıdakı şərh).
+    assert len(use_case.calls) == 3
     last = use_case.calls[-1]
     assert last.search == "cərimə"  # süzgəc səhifə ilə birlikdə ATILMIR
     assert last.offset == 2 * last.limit

@@ -382,6 +382,23 @@ class RootControlController:
         enabled: bool,
         confirmation: str,
     ) -> None:
+        """Modul aç/söndür — RƏDD BÜTÜN PANELİ ƏVƏZ ETMİR (QA-FULL FAZA 3).
+
+        ──────────────────────────────────────────────────────────────────────
+        ƏVVƏL `show_error()` İDİ — TAPINTI
+        ──────────────────────────────────────────────────────────────────────
+        `show_error()` `ContentSwitcher`-i xəta vəziyyətinə keçirir və bir
+        modulun rəddi (məs. qısa təsdiq mətni) limitləri, fasilə
+        parametrlərini, Face Control-u, brendinqi və registri də GİZLƏDİRDİ,
+        halbuki `reject_module_change()` artıq YALNIZ həmin açarı geri
+        qaytarıb — qalan ekran sağlamdır. `screen.set_module_message(...)`
+        `set_telegram_message` ilə EYNİ naxışdır: mətn Modul kartının İÇİNDƏ
+        qalır, `ContentSwitcher` toxunulmur — istifadəçi HƏM domendən gələn
+        dəqiq səbəbi görür, HƏM DƏ panelin qalan hissəsini itirmir.
+        """
+        # Köhnə rədd mətni HƏR CƏHDDƏ təmizlənir: əks halda əvvəlki
+        # xəbərdarlıq yeni cəhdin (uğurlu ola biləcək) nəticəsini maskalayardı.
+        screen.set_module_message("")
         try:
             with self._context.session(user_id=self._actor.id) as session:
                 session.root_control.set_module_enabled(
@@ -395,14 +412,11 @@ class RootControlController:
         except KompasOSError as error:
             # Ekran YALAN göstərməməlidir: rədd edilibsə açar geri qayıdır.
             screen.reject_module_change(module_key)
-            screen.show_error(title="Modul dəyişdirilmədi", message=error.user_message)
+            screen.set_module_message(error.user_message, error=True)
         except Exception:
             _error_log.exception("ROOT_CONTROL_TOGGLE_FAILED", extra={"module": module_key})
             screen.reject_module_change(module_key)
-            screen.show_error(
-                title="Modul dəyişdirilmədi",
-                message="Dəyişiklik saxlanmadı. Yenidən cəhd edin.",
-            )
+            screen.set_module_message("Dəyişiklik saxlanmadı. Yenidən cəhd edin.", error=True)
 
     def _on_branding_changed(self, screen: RootControlScreen, payload: object) -> None:
         """Şirkət kimliyi (TENANT-1 Faza 2) — use case YAZIR, kontroller körpüdür.

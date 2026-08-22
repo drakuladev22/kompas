@@ -23,9 +23,10 @@ pozuntusu kimi görünür.
 RƏDD SƏBƏBİ SESSİYA AÇILMADAN YOXLANILIR
 ──────────────────────────────────────────────────────────────────────────────
 Hədd domendədir (`ShiftSwapRequest.reject` → `MIN_DECISION_REASON_LENGTH`) və
-BURADA TƏKRARLANMIR — idxal edilir. Normalizasiya da eynidir
-(`" ".join(reason.split())`): ekran daha sərt saysaydı, istifadəçi domenin
-qəbul etdiyi mətnə görə rədd cavabı alardı.
+BURADA TƏKRARLANMIR — idxal edilir. Normalizasiya da EYNİDİR
+(`src/shared/text.py::normalise_decision_text` — domendəki `ShiftSwapRequest.
+reject` ilə TƏK mənbədən): ekran daha sərt saysaydı, istifadəçi domenin qəbul
+etdiyi mətnə görə rədd cavabı alardı.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from src.domain.entities.shift import MIN_DECISION_REASON_LENGTH
 from src.domain.value_objects.identifiers import ShiftSwapRequestId
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
@@ -130,7 +132,13 @@ class ShiftSwapController:
         )
         if not accepted:
             return None
-        cleaned = " ".join(text.split())
+        # KÖHNƏ NÜSXƏ ƏVƏZLƏNDİ (`domain` sahibinin tapıntısı, `src/shared/
+        # text.py`): sadə `" ".join(text.split())` Unicode Cf (Format)
+        # simvollarını (sıfır-en boşluq və s.) SIXMIR — 10 ədəd görünməz
+        # simvol `MIN_DECISION_REASON_LENGTH` şərtini keçirib boş mətni
+        # "səbəb" kimi qəbul etdirirdi. `normalise_decision_text` əvvəlcə
+        # onları ATIR, sonra sıxır.
+        cleaned = normalise_decision_text(text)
         if len(cleaned) < MIN_DECISION_REASON_LENGTH:
             _inform(screen, "Rədd yazılmadı", SHORT_REASON)
             return None
@@ -148,6 +156,18 @@ class ShiftSwapController:
             # Modal, `show_error` DEYİL: bir qərarın uğursuzluğu qalan
             # sorğuları etibarsız etmir və menecer onları görməyə davam etməlidir.
             _inform(screen, failure, getattr(exc, "user_message", "Yenidən cəhd edin."))
+            return
+        except Exception:
+            # QA-FULL FAZA 6 (stress/xaos) tapıntısı: `session.commit()` anında
+            # bağlantı kəsilsə (`psycopg.OperationalError`, `KompasOSError`
+            # DEYİL), bu ikinci qat OLMADAN istisna HEÇ YERDƏ tutulmurdu —
+            # kartın kontekstual modalı əvəzinə ümumi bildiriş gəlirdi (bir
+            # dəfə; `notify_unhandled_error`-un `_crash_notified` qapısı
+            # sessiya ərzində YALNIZ BİR DƏFƏ göstərir). Naxış
+            # `open_shift.py::_on_claim`/`_submit`/`_on_cancel` və
+            # `fine_entry.py::_issue`-dəki ikinci qatla EYNİDİR.
+            _error_log.exception("SHIFT_SWAP_DECISION_UNEXPECTED_FAILED")
+            _inform(screen, failure, "Yenidən cəhd edin.")
             return
         self.refresh(screen)
 

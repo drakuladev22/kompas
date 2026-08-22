@@ -155,13 +155,27 @@ class DriveConnectionController:
         # ƏLAVƏ ETMƏK variantı rədd edildi: o, flag-i qanuni şəkildə almış
         # rolların REAL imkanını bağlayardı (`can_manage_drive_connection`
         # qəsdən delegasiya edilə biləndir — bax `migrations/002` başlığı).
+        # ÖLÜ-SON DÜZƏLİŞİ (QA-FULL FAZA 3): bu ekranın altı `show_error()`
+        # çağırışı `ContentSwitcher`-i TAM xəta vəziyyətinə keçirirdi — status
+        # kartı, «Google Hesabı Qoş» düyməsi və tarixçə GÖRÜNMƏZ olurdu.
+        # `AdminShell` ekranı BİR DƏFƏ qurub saxlayır (`REFRESH_ON_REVISIT`
+        # yalnız `dashboard`), yəni bölmədən çıxıb qayıtmaq da düzəltmirdi —
+        # sessiya sonuna qədər ölü qalırdı. Bu altı hal isə TRANZİTDİR (bir
+        # kliklik/bir taymaut nəticəsidir, bölmənin ÖZÜNÜN oxunmaması DEYİL),
+        # ona görə `screen.set_connect_message(...)` işlədilir: mətn status
+        # kartının İÇİNDƏ qalır, `ContentSwitcher` toxunulmur (bax ekranın
+        # `set_connect_message` şərhi). Boş Google konfiqurasiyası İLK
+        # QURAŞDIRMADA REAL haldır — bu ölü-son adi istifadəçidə baş verirdi.
+        #
+        # Köhnə mesaj HƏR CƏHDDƏ təmizlənir: əks halda əvvəlki xəbərdarlıq
+        # yeni cəhdin nəticəsini maskalayardı.
+        screen.set_connect_message("")
         if not self._permitted():
-            screen.show_error(
-                title="Səlahiyyət yoxdur",
-                message=(
-                    "Drive bağlantısını idarə etmək üçün «Drive bağlantısını idarə et» "
-                    "icazəsi lazımdır. Administratorunuzla əlaqə saxlayın."
-                ),
+            screen.set_connect_message(
+                "Səlahiyyət yoxdur: Drive bağlantısını idarə etmək üçün «Drive "
+                "bağlantısını idarə et» icazəsi lazımdır. Administratorunuzla "
+                "əlaqə saxlayın.",
+                error=True,
             )
             return
         if self._flow is not None:
@@ -169,12 +183,11 @@ class DriveConnectionController:
 
         oauth = self._oauth_client()
         if oauth is None:
-            screen.show_error(
-                title="Google konfiqurasiyası yoxdur",
-                message=(
-                    "KOMPASOS_GOOGLE_CLIENT_ID və KOMPASOS_GOOGLE_CLIENT_SECRET "
-                    "təyin edilməyib. Quraşdırma sənədinə baxın."
-                ),
+            screen.set_connect_message(
+                "Google konfiqurasiyası yoxdur: KOMPASOS_GOOGLE_CLIENT_ID və "
+                "KOMPASOS_GOOGLE_CLIENT_SECRET təyin edilməyib. Quraşdırma "
+                "sənədinə baxın.",
+                error=True,
             )
             return
 
@@ -186,9 +199,10 @@ class DriveConnectionController:
         except Exception:
             flow.close()
             _error_log.exception("DRIVE_OAUTH_START_FAILED")
-            screen.show_error(
-                title="Razılıq başlamadı",
-                message="Lokal port açıla bilmədi. Antivirus/firewall ayarlarını yoxlayın.",
+            screen.set_connect_message(
+                "Razılıq başlamadı: Lokal port açıla bilmədi. Antivirus/firewall "
+                "ayarlarını yoxlayın.",
+                error=True,
             )
             return
 
@@ -212,9 +226,9 @@ class DriveConnectionController:
         self._elapsed_ms += POLL_INTERVAL_MS
         if self._elapsed_ms > self._flow_timeout_seconds() * 1000:
             self._finish(screen)
-            screen.show_error(
-                title="Razılıq vaxtı bitdi",
-                message="Google səhifəsində icazə verilmədi. Yenidən cəhd edin.",
+            screen.set_connect_message(
+                "Razılıq vaxtı bitdi: Google səhifəsində icazə verilmədi. Yenidən cəhd edin.",
+                error=True,
             )
             return
 
@@ -222,14 +236,14 @@ class DriveConnectionController:
             code = self._flow.poll()
         except StorageError as error:
             self._finish(screen)
-            screen.show_error(title="Razılıq alınmadı", message=error.user_message)
+            screen.set_connect_message(f"Razılıq alınmadı: {error.user_message}", error=True)
             return
         except Exception:
             self._finish(screen)
             _error_log.exception("DRIVE_OAUTH_POLL_FAILED")
-            screen.show_error(
-                title="Razılıq alınmadı",
-                message="Gözlənilməz xəta baş verdi. Yenidən cəhd edin.",
+            screen.set_connect_message(
+                "Razılıq alınmadı: Gözlənilməz xəta baş verdi. Yenidən cəhd edin.",
+                error=True,
             )
             return
 

@@ -50,6 +50,24 @@ def test_the_threshold_falls_back_when_the_environment_value_is_broken() -> None
     assert stall_threshold_ms({STALL_ENV_KEY: " 250 "}) == 250
 
 
+#: Hər iki hadisə-dövrəsi testinin TƏHLÜKƏSİZLİK dayanacağı.
+#:
+#: NİYƏ VAR: bu testlər əvvəl `qt_app.exec()` (TƏTBİQ səviyyəli dövrə) işlədirdi
+#: və dayanmaq üçün `qt_app.quit()`-ə güvənirdi. Tam dəstdə — yüzlərlə Qt
+#: widget-i yaradan e2e faylından SONRA — həmin `exec()` ARTIQ QAYITMIRDI və
+#: bütün dəst taymauta düşürdü (test TƏK BAŞINA hər dəfə keçirdi). Səbəb
+#: tətbiq obyektinin əvvəlki testlərdən qalan vəziyyətidir: `quit()` yalnız
+#: İŞLƏYƏN dövrəyə təsir edir və tətbiq səviyyəsində onun nə vaxt effekt
+#: verəcəyi əvvəlki testlərdən asılı olur.
+#:
+#: İndi hər test ÖZ `QEventLoop`-unu qurur — o, tətbiqin vəziyyətindən asılı
+#: deyil — və üstəlik bu sabitlə İKİNCİ, şərtsiz dayanacaq alır. Beləliklə
+#: test SINSA belə (məs. taymer heç vaxt işə düşməsə) DƏSTİ ASMIR: dövrə
+#: dayanır, iddia sınır və səbəb GÖRÜNÜR. Ölçülən müddətlərdən (700 ms blok,
+#: 600 ms sakit dövrə) xeyli böyükdür ki, yüklü maşında yalançı sınıq olmasın.
+_SAFETY_STOP_MS = 5000
+
+
 @requires_qt
 def test_a_late_timer_is_measured_as_a_stall(qt_app: Any) -> None:
     """Saat SÜNİDİR — ölçü məntiqinin özü yoxlanılır, sürət yox.
@@ -86,7 +104,7 @@ def test_a_real_blocking_call_is_detected(qt_app: Any) -> None:
     Hədd 150 ms-dir və blok 700 ms — aralıq QƏSDƏN genişdir ki, yüklü
     maşında test qeyri-sabit olmasın.
     """
-    from PySide6.QtCore import QTimer
+    from PySide6.QtCore import QEventLoop, QTimer
 
     from src.presentation.stall_monitor import StallMonitor
 
@@ -95,10 +113,32 @@ def test_a_real_blocking_call_is_detected(qt_app: Any) -> None:
     monitor.stalled.connect(seen.append)
     monitor.start()
 
-    # Bloku hadisə dövrəsinin İÇİNDƏN çağırırıq — real donmanın forması budur.
-    QTimer.singleShot(0, lambda: time.sleep(0.7))
-    QTimer.singleShot(900, qt_app.quit)
-    qt_app.exec()
+    # ──────────────────────────────────────────────────────────────────────
+    # ÇIXIŞ TAYMERİ DÖVRƏNİN İÇİNDƏN QURULUR — ƏBƏDİ ASILMANIN QARŞISI
+    # ──────────────────────────────────────────────────────────────────────
+    # Əvvəl hər iki taymer `exec()`-dən ƏVVƏL qurulurdu: `QTimer.singleShot(
+    # 900, qt_app.quit)`. `QApplication.quit()` isə hadisə dövrəsi HƏLƏ
+    # BAŞLAMAMIŞSA SÜKUTLA heç nə etmir (Qt sənədi) — yəni taymerin qurulması
+    # ilə `exec()`-ə girmək arasındakı fasilə 900 ms-i keçsə, çıxış siqnalı
+    # İTİR və `exec()` ƏBƏDİ asılır. Dəst böyüdükcə (yüzlərlə Qt widget-i
+    # yaradan e2e faylı prosesi yavaşladır) bu fasilə həqiqətən böyüdü:
+    # test TƏK BAŞINA keçir, tam dəstdə isə taymauta düşürdü.
+    #
+    # İndi çıxış BLOKUN ÖZÜNDƏN sonra, YƏNİ DÖVRƏNİN İÇİNDƏN planlaşdırılır —
+    # o anda dövrə mütləq işləyir, ona görə `quit()` heç vaxt itmir.
+    loop = QEventLoop()
+
+    def _block() -> None:
+        time.sleep(0.7)  # real donmanın forması: dövrənin İÇİNDƏN bloklamaq
+        # DAYANMA DƏRHAL DEYİL: monitor blokun uzunluğunu ancaq NÖVBƏTİ tikində
+        # ölçür (o, `QTimer`-dir və dövrə işləməlidir). Dərhal `quit()` etsək,
+        # blok BAŞ VERİR, lakin heç kim onu qeydə almır — test mexanizmi deyil,
+        # öz tələsikliyini ölçərdi.
+        QTimer.singleShot(200, loop.quit)
+
+    QTimer.singleShot(0, _block)
+    QTimer.singleShot(_SAFETY_STOP_MS, loop.quit)  # təhlükəsizlik: bax sabit
+    loop.exec()
     monitor.stop()
 
     assert seen, "700 ms-lik real blok aşkarlanmadı — mexanizm işləmir"
@@ -113,7 +153,7 @@ def test_a_responsive_event_loop_reports_nothing(qt_app: Any) -> None:
     yazısı mənasını itirərdi — «hər zaman var» olan xəbərdarlıq yoxdur
     deməkdir.
     """
-    from PySide6.QtCore import QTimer
+    from PySide6.QtCore import QEventLoop, QTimer
 
     from src.presentation.stall_monitor import StallMonitor
 
@@ -122,8 +162,10 @@ def test_a_responsive_event_loop_reports_nothing(qt_app: Any) -> None:
     monitor.stalled.connect(seen.append)
     monitor.start()
 
-    QTimer.singleShot(600, qt_app.quit)
-    qt_app.exec()
+    loop = QEventLoop()
+    QTimer.singleShot(600, loop.quit)
+    QTimer.singleShot(_SAFETY_STOP_MS, loop.quit)  # təhlükəsizlik: bax sabit
+    loop.exec()
     monitor.stop()
 
     assert seen == [], f"bloksuz dövrədə donma bildirildi: {seen}"

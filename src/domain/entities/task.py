@@ -60,6 +60,7 @@ from src.domain.events import (
 )
 from src.domain.value_objects.identifiers import EmployeeId, StoreId, TaskId, TenantId
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 MIN_TITLE_LENGTH: Final[int] = 3
 MAX_TITLE_LENGTH: Final[int] = 200
@@ -124,7 +125,7 @@ class Task(AggregateRoot):
         require_aware(deadline, field="deadline")
         require_aware(created_at, field="created_at")
 
-        cleaned_title = " ".join(title.split())
+        cleaned_title = normalise_decision_text(title)
         if len(cleaned_title) < MIN_TITLE_LENGTH:
             raise DomainRuleError(
                 f"Tapşırıq başlığı minimum {MIN_TITLE_LENGTH} simvol olmalıdır",
@@ -249,7 +250,7 @@ class Task(AggregateRoot):
         require_aware(reviewed_at, field="reviewed_at")
         self._require_awaiting_review()
 
-        cleaned = reason.strip()
+        cleaned = normalise_decision_text(reason)
         if len(cleaned) < MIN_REJECTION_REASON_LENGTH:
             raise DomainRuleError(
                 f"Rədd səbəbi minimum {MIN_REJECTION_REASON_LENGTH} simvol olmalıdır",

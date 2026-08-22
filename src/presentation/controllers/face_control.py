@@ -111,7 +111,7 @@ def enrollment_state(enrolled_at: datetime | None, *, now: datetime, reminder_mo
 
 
 def run_enrollment_job(
-    _app: object,
+    owner: object,
     job: Callable[[], object],
     *,
     on_success: Callable[[Any], None],
@@ -135,10 +135,24 @@ def run_enrollment_job(
     `executor` verilməzsə Qt sap hovuzu işlədilir. Testlər `InlineExecutor`
     ötürür: onlar İCRA YERİNİ deyil, MƏNTİQİ ölçür və hadisə dövrəsi
     gözləməsi qeyri-sabit test yaradardı (bax `background_task` başlığı).
+
+    ──────────────────────────────────────────────────────────────────────────
+    `owner` NİYƏ `BackgroundTask`-A ÖTÜRÜLÜR (QA-FULL FAZA 3 tapıntısı)
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl arqument `_app` adlanırdı VƏ heç yerə ötürülmürdü —
+    `FaceEnrollmentController._run()` onu daim `None` ilə çağırırdı. Nəticə:
+    kamera əməliyyatı gedərkən operator ekranı bağlasa, `background_task.py`
+    modul başlığındakı "valideyn öləndə gec gələn nəticə avtomatik atılır"
+    zəmanəti İŞLƏMİRDİ — gec gələn siqnal silinmiş ekrana toxunmağa çalışardı.
+    `run_job()` (`devices.py::DevicePendingController.refresh` ilə eyni
+    naxış) `owner`-i məhz bunun üçün alır; burada da EYNİ qayda tətbiq olunur.
     """
+    from PySide6.QtCore import QObject  # noqa: PLC0415
+
     from src.presentation.background_task import BackgroundTask  # noqa: PLC0415
 
-    task = BackgroundTask(name="FACE_ENROLLMENT", executor=executor)
+    parent = owner if isinstance(owner, QObject) else None
+    task = BackgroundTask(parent=parent, name="FACE_ENROLLMENT", executor=executor)
     task.succeeded.connect(on_success)
     task.failed.connect(on_failure)
     task.run(job)
@@ -253,7 +267,28 @@ class FaceEnrollmentController:
         SESSİYA FON SAPINDA AÇILIR: `BackgroundTask` sənədinin tələbi budur —
         DB bağlantısı sapa bağlıdır və GUI sapında açılan sessiyanı fon
         sapından işlətmək bağlantını korlayardı.
+
+        ──────────────────────────────────────────────────────────────────────
+        İKİQAT BURAXILMA QAPISI (QA-FULL FAZA 3 tapıntısı)
+        ──────────────────────────────────────────────────────────────────────
+        `erp_servers.py::_on_test`-in `if tester.is_running: return` qapısı
+        BURADA YOX idi və `FaceEnrollmentScreen`-də `set_busy()` metodu da
+        yox idi (`ErpServersScreen.set_busy` ilə müqayisə et) — sürətli
+        ikiqat klik iki paralel `enroll()`/`re_enroll()` çağırışı yaradırdı
+        (real kamerada iki ayrı kadr seriyası, iki DB yazı cəhdi). Qapı İKİ
+        QATLIDIR: `set_busy(True)` görünən qatdır (düymə deaktiv olur),
+        `is_running` isə klaviatura qısayolunun görünən qatı yan keçə
+        biləcəyi halı tutur.
+
+        `_set_busy` ilə çağırılır, `screen.set_busy` ilə YOX: `test_face_
+        control_screen.py`-in yüngül `_EnrollmentScreen` sahtəsi bu metodu
+        DAŞIMIR (`screen_data.py::report_section_error`-dəki `getattr`
+        naxışı ilə eyni səbəb) — köhnə testi yenidən yazmadan yeni qapı
+        ƏLAVƏ olunur.
         """
+        if self._task is not None and self._task.is_running:
+            return
+        _set_busy(screen, busy=True)
 
         def job() -> object:
             with self._context.session(user_id=self._actor.id) as session:
@@ -269,11 +304,13 @@ class FaceEnrollmentController:
                 return result
 
         def succeeded(result: Any) -> None:
+            _set_busy(screen, busy=False)
             self.refresh(screen)
             screen.set_result(_result_row(result))
             screen.set_frames([_frame_row(frame) for frame in result.frames])
 
         def failed(error: BaseException) -> None:
+            _set_busy(screen, busy=False)
             if isinstance(error, KompasOSError):
                 self._fail(screen, error.user_message)
                 return
@@ -281,7 +318,7 @@ class FaceEnrollmentController:
             self._fail(screen, "Əməliyyat tamamlanmadı. Yenidən cəhd edin.")
 
         self._task = run_enrollment_job(
-            None, job, on_success=succeeded, on_failure=failed, executor=self._executor
+            screen, job, on_success=succeeded, on_failure=failed, executor=self._executor
         )
 
     @staticmethod
@@ -396,8 +433,16 @@ class FaceExemptionController:
                 )
                 session.commit()
         except KompasOSError as error:
-            screen.show_error(title="İstisna verilmədi", message=error.user_message)
-            self.refresh(screen)
+            # `refresh()` BURADAN ÇAĞIRILMIR (QA-FULL FAZA 3 tapıntısı):
+            # uğurlu `refresh()` → `set_exemptions()` → `show_content()`
+            # heç bir render arası olmadan bu banner-in ÜSTÜNDƏN yazır və
+            # operator səbəbi HEÇ VAXT görmür (`annual_leave.py::_on_approve`
+            # ilə eyni qərar). Yenidən yükləmə `on_retry` ilə buraxılır.
+            screen.show_error(
+                title="İstisna verilmədi",
+                message=error.user_message,
+                on_retry=lambda: self.refresh(screen),
+            )
             return
         except Exception:
             _error_log.exception("FACE_EXEMPTION_GRANT_FAILED")
@@ -433,8 +478,12 @@ class FaceExemptionController:
                 )
                 session.commit()
         except KompasOSError as error:
-            screen.show_error(title="İstisna ləğv edilmədi", message=error.user_message)
-            self.refresh(screen)
+            # `_on_grant` ilə eyni qərar — bax onun şərhi.
+            screen.show_error(
+                title="İstisna ləğv edilmədi",
+                message=error.user_message,
+                on_retry=lambda: self.refresh(screen),
+            )
             return
         except Exception:
             _error_log.exception("FACE_EXEMPTION_REVOKE_FAILED")
@@ -460,6 +509,18 @@ class FaceExemptionController:
 # --------------------------------------------------------------------------- #
 # Köməkçilər
 # --------------------------------------------------------------------------- #
+
+
+def _set_busy(screen: FaceEnrollmentScreen, *, busy: bool) -> None:
+    """`screen.set_busy(...)`-i OPSİONAL çağırır — imzanı daşımayan sahtə sınmır.
+
+    `getattr` naxışı `screen_data.py::report_section_error`-lə EYNİDİR: yeni
+    setter köhnə test sahtələrinin (`test_face_control_screen.py::
+    _EnrollmentScreen`) HAMISINI yenidən yazmağı tələb etmir.
+    """
+    setter = getattr(screen, "set_busy", None)
+    if setter is not None:
+        setter(busy)
 
 
 def _now() -> datetime:

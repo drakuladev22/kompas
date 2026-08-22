@@ -69,6 +69,7 @@ from src.application.use_cases.sync_conflicts import (
 )
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
@@ -339,7 +340,11 @@ def _format_value(value: Any) -> str:
     """
     if value is None:
         return "(boş)"
-    text = " ".join(str(value).split())
+    # KÖHNƏ NÜSXƏ ƏVƏZLƏNDİ (`domain` sahibinin tapıntısı, `src/shared/
+    # text.py`): `" ".join(...)` Unicode Cf (Format) simvollarını SIXMIR —
+    # konflikt sətri EYNİ mağazadan/1C-dən gələn sərbəst dəyərdir, plugin
+    # cavabı ilə eyni risk (bax `plugin_page.py::_as_text` şərhi).
+    text = normalise_decision_text(str(value))
     if len(text) <= MAX_VALUE_CHARS:
         return text
     return f"{text[:MAX_VALUE_CHARS]}…"

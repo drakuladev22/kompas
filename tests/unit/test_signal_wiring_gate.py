@@ -63,7 +63,11 @@ LOCAL_ONLY: Final[dict[str, str]] = {
     "group_c.ShiftSwapScreen.selected": (
         "seçim `_current`-ə yazılır və `approved`/`rejected` onu işlədir"
     ),
-    "group_c.ShiftPlanningScreen.template_selected": "şablon ekranda tətbiq olunur",
+    # `group_c.ShiftPlanningScreen.template_selected` BURADAN ÇIXARILDI:
+    # siqnalın ÖZÜ silindi (QA-FULL Faza 3). Bu sətrin əsaslandırması —
+    # «şablon ekranda tətbiq olunur» — YANLIŞ idi: heç bir yerdə tətbiq
+    # olunmurdu, dörd düymə klikdə heç nə etmirdi. Bu qapının məhz belə
+    # yanlış əsaslandırmalarla yan keçilə biləcəyinin sənədləşdirilmiş nümunəsi.
     "group_e.SupportChatWidget.closed": "`close_panel` paneli özü gizlədir",
     "group_f.TaskCard.approved": "`TasksScreen` onu öz siqnalına relay edir",
     "group_f.TaskCard.rejected": "`TasksScreen` onu öz siqnalına relay edir",

@@ -132,6 +132,27 @@ def test_accessible_names_survive_the_icon_migration(qt_app) -> None:  # type: i
 
 
 @requires_qt
+def _set_last_input(qt_app: object, *, keyboard: bool) -> None:
+    """Sonuncu girişin növünü AÇIQ təyin edir — sızan vəziyyəti kəsir.
+
+    `input_modality_tracker()` TƏTBİQ ÖMÜRLÜ tək nüsxədir (`focus_ring.py`):
+    hansı testdə klaviatura və ya siçan hadisəsi göndərilirsə, izləyicinin
+    vəziyyəti SONRAKI testlərə də keçir. Aşağıdakı iki qapı məhz həmin
+    vəziyyətdən asılıdır — biri «heç nəyə toxunulmayıb» (siçan), digəri
+    «istifadəçi Tab basıb» (klaviatura) fərziyyəsi ilə işləyir.
+
+    Qüsur REALDIR VƏ ÖLÇÜLDÜ: hər iki test TƏK BAŞINA keçirdi, tam dəstdə isə
+    — yüzlərlə real klik göndərən e2e faylından SONRA — sınırdı. Fərziyyəni
+    testin ÖZÜ qurmasa, qapı öz sırasından asılı olur və qoruduğu zəmanətdən
+    yox.
+    """
+    from src.presentation.widgets.focus_ring import input_modality_tracker
+
+    tracker = input_modality_tracker()
+    if tracker is not None:
+        tracker.keyboard = keyboard
+
+
 def test_opening_the_window_does_not_draw_a_focus_ring(qt_app) -> None:  # type: ignore[no-untyped-def]
     """Tətbiq açılanda «kiçilt» düyməsinin ətrafında halqa OLMAMALIDIR.
 
@@ -147,6 +168,7 @@ def test_opening_the_window_does_not_draw_a_focus_ring(qt_app) -> None:  # type:
     from PySide6.QtWidgets import QVBoxLayout
 
     _themed(qt_app, ThemeMode.DARK)
+    _set_last_input(qt_app, keyboard=False)  # açılış: istifadəçi hələ heç nəyə toxunmayıb
     window = QWidget()
     layout = QVBoxLayout(window)
     bar = TitleBar()
@@ -174,6 +196,10 @@ def test_opening_the_window_does_not_draw_a_focus_ring(qt_app) -> None:  # type:
     # Klaviatura yolu POZULMUR: `Tab` səbəbi ilə halqa QAYIDIR.
     focused.clearFocus()
     qt_app.processEvents()
+    # İKİNCİ FAZA: indi istifadəçi HƏQİQƏTƏN klaviaturadadır. Fokus səbəbi tək
+    # başına kifayət etmir (FOCUS-1: söndürülən widget də `TabFocusReason`
+    # yaradır) — izləyici də klaviatura deməlidir.
+    _set_last_input(qt_app, keyboard=True)
     focused.setFocus(Qt.FocusReason.TabFocusReason)
     qt_app.processEvents()
     assert focused.property("keyfocus") == "true"
@@ -251,6 +277,7 @@ def test_activating_the_window_keeps_the_keyboard_ring(qt_app) -> None:  # type:
     from PySide6.QtGui import QFocusEvent
 
     _themed(qt_app, ThemeMode.DARK)
+    _set_last_input(qt_app, keyboard=True)  # ssenari: istifadəçi `Tab` basıb
     button = WindowButton("minimize")
     button.show()
     qt_app.processEvents()

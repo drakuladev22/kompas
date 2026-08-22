@@ -70,6 +70,7 @@ from src.domain.value_objects.identifiers import (
 )
 from src.domain.value_objects.money import Money
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 DEFAULT_APPEAL_WINDOW_HOURS = 72
 MIN_REVERSAL_REASON_LENGTH = 10
@@ -305,7 +306,7 @@ class Fine(AggregateRoot):
                 f"Yalnız icmal gözləyən cərimə bu yolla ləğv edilə bilər, "
                 f"cari status: {self.status.value}"
             )
-        cleaned = reason.strip()
+        cleaned = normalise_decision_text(reason)
         if len(cleaned) < MIN_REVERSAL_REASON_LENGTH:
             raise DomainRuleError(
                 f"Ləğv səbəbi minimum {MIN_REVERSAL_REASON_LENGTH} simvol olmalıdır"
@@ -388,7 +389,7 @@ class Fine(AggregateRoot):
             raise DomainRuleError(
                 f"Yalnız nəşr olunmuş cərimə ləğv edilə bilər, cari status: {self.status.value}"
             )
-        cleaned = reason.strip()
+        cleaned = normalise_decision_text(reason)
         if len(cleaned) < MIN_REVERSAL_REASON_LENGTH:
             raise DomainRuleError(
                 f"Ləğv səbəbi minimum {MIN_REVERSAL_REASON_LENGTH} simvol olmalıdır"

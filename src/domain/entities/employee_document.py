@@ -36,6 +36,7 @@ from src.domain.entities.base import (
 from src.domain.events import EmployeeDocumentRecordedEvent
 from src.domain.value_objects.identifiers import EmployeeDocumentId, EmployeeId, TenantId
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 #: `employee_documents.doc_type` CHECK-inin güzgüsü (migrations/020:
 #: `char_length(trim(doc_type)) >= 2`). Sxem sərhədi — dəyişmək miqrasiya tələb edir.
@@ -180,7 +181,7 @@ class EmployeeDocument(AggregateRoot):
                 user_message="Bu sənəd artıq deaktiv edilib.",
                 context={"document_id": str(self.id)},
             )
-        cleaned_reason = " ".join(reason.split())
+        cleaned_reason = normalise_decision_text(reason)
         threshold = max(0, min_reason_length)
         if len(cleaned_reason) < threshold:
             raise DomainRuleError(

@@ -590,6 +590,13 @@ def test_the_catalog_read_carries_the_break_marker_into_the_domain_object() -> N
             # əvvəlcə ROOT tavanını (`system_limits`) oxuyur — ona görə sətir
             # hər iki sorğunun sütununu daşımalıdır. Tavan bu testin sualı
             # deyil (onun öz testi `test_config_repositories.py`-dadır).
+            #
+            # `limit_key` DƏ LAZIMDIR: `PostgresSystemLimits` artıq tək-açar
+            # sorğusu atmır — bütün limitləri BİR toplu sorğuda oxuyub keşləyir
+            # (QA-FULL Faza 5, açılışda eyni sorğu 10 dəfə gedirdi). Toplu
+            # sorğu `SELECT limit_key, limit_value ...`-dır, yəni sahtə sətir
+            # açar sütununu da daşımalıdır.
+            "limit_key": "LEAVE_TYPE_MAX_DURATION_MINUTES",
             "limit_value": "720",
         }
     ]

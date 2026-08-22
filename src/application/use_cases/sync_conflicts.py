@@ -110,6 +110,7 @@ from src.application.root_limits import fallback_int, limit_int
 from src.domain.policies import SystemLimitKey
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -342,7 +343,7 @@ class SyncConflictUseCase:
             ConflictTargetWriteError: hədəf sətir yazıla bilmədisə.
         """
         self._require(actor)
-        cleaned = " ".join(note.split())
+        cleaned = normalise_decision_text(note)
         if len(cleaned) < MIN_NOTE_LENGTH:
             raise ConflictResolutionError(
                 f"Həll qeydi minimum {MIN_NOTE_LENGTH} simvol olmalıdır",

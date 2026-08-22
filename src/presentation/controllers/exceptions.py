@@ -30,7 +30,7 @@ istisnası olduğu kimi (`error.user_message`) ekrana çatdırılır.
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.domain.value_objects.identifiers import EmployeeId, ExceptionId
 from src.shared.exceptions import KompasOSError
@@ -92,6 +92,11 @@ class ExceptionsController:
             )
             return
 
+        # KÖHNƏ YAZI-XƏTASI BANNERİ TƏMİZLƏNİR (QA-FULL FAZA 3): uğurlu oxuma
+        # siyahının HAZIRKI vəziyyətinin düzgün olduğunu sübut edir — əvvəlki
+        # uğursuz «Rədd Et»/«Nəzərdən Keçirildi» cəhdinin xəbərdarlığı artıq
+        # doğru deyil (naxış `plugin_page.py::_show_content`).
+        _clear_section_errors(screen)
         screen.set_exceptions(rows)
 
     # ------------------------------ yazı yolu -------------------------------- #
@@ -164,13 +169,27 @@ class ExceptionsController:
                     )
                 session.commit()
         except KompasOSError as error:
-            screen.show_error(title=failure_title, message=error.user_message)
+            # `show_error()` BURADA İŞLƏDİLMİR (QA-FULL FAZA 3): qeyd domendə
+            # RƏDD OLUNUB (məs. qısa səbəb), lakin QALAN AÇIQ istisnalar hələ
+            # etibarlıdır. `show_error()` bütün siyahını xəta vəziyyəti ilə
+            # əvəz edirdi — bu SƏTRİN rəddi ilə ƏLAQƏSİ olmayan digər açıq
+            # istisnalar da görünməz olurdu (naxış `plugin_page.py::
+            # _show_failure`, `drive_connection.py` başlığındakı eyni səhv).
+            # SƏBƏB İSTİFADƏÇİYƏ ÇATIR: `set_section_error()` İŞLƏMİR, çünki o,
+            # «{bölmə} yüklənə bilmədi» cümləsini qurur — YAZI rəddi üçün həm
+            # yanlış cümlədir, həm də domenin dəqiq izahını («Rədd səbəbini
+            # ətraflı yazın») ATIR. `_inform()` isə siyahını BOŞALTMADAN həmin
+            # izahı göstərir (eyni naxış `fine_appeals.py`, `profile.py`).
+            # SIRA VACİBDİR: əvvəl `refresh()` (siyahı dəyişməz qalır), sonra
+            # izah — istifadəçi qərarını hansı sətrə verdiyini görür.
+            _error_log.warning("EXCEPTION_DECISION_REJECTED", extra={"reason": error.user_message})
+            self.refresh(screen)
+            _inform(screen, failure_title, error.user_message)
             return
         except Exception:
             _error_log.exception("EXCEPTION_DECISION_FAILED", extra={"exception_id": exception_id})
-            screen.show_error(
-                title=failure_title, message="Dəyişiklik yazılmadı. Yenidən cəhd edin."
-            )
+            self.refresh(screen)
+            _inform(screen, failure_title, "Əməliyyat yazılmadı. Yenidən cəhd edin.")
             return
 
         # Yazıdan SONRA siyahı yenidən oxunur — bağlanmış istisna artıq
@@ -182,6 +201,47 @@ class ExceptionsController:
 # --------------------------------------------------------------------------- #
 # Köməkçilər
 # --------------------------------------------------------------------------- #
+
+
+def _inform(screen: Any, title: str, message: str) -> None:
+    """İzah pəncərəsi — siyahını BOŞALTMADAN (naxış `fine_appeals.py::_inform`).
+
+    `show_error()` bütün ekranı xəta vəziyyəti ilə əvəz edir; bir sətrin rəddi
+    isə QALAN açıq istisnaları etibarsız etmir.
+    """
+    from PySide6.QtWidgets import QMessageBox, QWidget  # noqa: PLC0415
+
+    # VALİDEYN YALNIZ HƏQİQİ WIDGET OLDUQDA (naxış `background_task.run_job`):
+    # kontroller testləri ekran əvəzinə yüngül sahtə obyekt ötürür və
+    # `QMessageBox(parent)` belə valideynlə `TypeError` atır — yəni səbəbi
+    # GÖSTƏRMƏK cəhdi ikinci bir xətaya çevrilərdi.
+    box = QMessageBox(screen if isinstance(screen, QWidget) else None)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle(title)
+    box.setText(message)
+    box.exec()
+
+
+def _section_error(screen: Any, label: str) -> None:
+    """`Screen.set_section_error` — YALNIZ metodu daşıyan ekranlarda.
+
+    NİYƏ `getattr`, NİYƏ BİRBAŞA ÇAĞIRIŞ DEYİL (naxış `screen_data.
+    report_section_error`): `_decide()` `screen: ExceptionsScreen` alsa da,
+    duck-typing test saxtaları (məs. `tests/unit/test_exception_screen.py::
+    _Screen`) `Screen` bazasından TÖRƏMİR və bu metodu daşımır. Birbaşa
+    çağırış `AttributeError` atardı — xəbərdarlığı GÖRÜNƏN etmək cəhdi
+    ikinci bir xətaya çevrilərdi.
+    """
+    reporter = getattr(screen, "set_section_error", None)
+    if reporter is not None:
+        reporter(label)
+
+
+def _clear_section_errors(screen: Any) -> None:
+    """`Screen.clear_section_errors` — eyni `getattr` ehtiyatı (bax `_section_error`)."""
+    clearer = getattr(screen, "clear_section_errors", None)
+    if clearer is not None:
+        clearer()
 
 
 def _to_row(session: Session, view: ExceptionView) -> dict[str, str]:

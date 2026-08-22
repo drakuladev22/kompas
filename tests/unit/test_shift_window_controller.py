@@ -77,7 +77,7 @@ class _Binder:
     def set_shift_offset(self, day_offset: int) -> None:
         _Binder.offsets.append(day_offset)
 
-    def populate(self, key: str, screen: Any) -> None:
+    def populate(self, key: str, screen: Any, **_kwargs: Any) -> None:
         if _Binder.populate_error is not None:
             raise _Binder.populate_error
         _Binder.populated.append(key)

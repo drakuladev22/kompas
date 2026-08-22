@@ -53,11 +53,14 @@ from src.shared.logger import get_logger
 if TYPE_CHECKING:
     from datetime import date
 
+    from psycopg import Connection
+
     from src.domain.value_objects.identifiers import (
         EmployeeId,
         LeaveTypeId,
         StoreId,
     )
+    from src.infrastructure.persistence.connection import TenantContext
 
 _log = get_logger(__name__)
 
@@ -71,7 +74,27 @@ STRUCTURAL_CONFIRMATION_REQUIRED: Final = "STRUKTUR-KRİTİK"
 
 
 class PostgresSystemLimits(_BaseRepository):
-    """ROOT İdarə Mərkəzi limitləri (`system_limits` cədvəli)."""
+    """ROOT İdarə Mərkəzi limitləri (`system_limits` cədvəli).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NÜSXƏ-SƏVİYYƏLİ KEŞ (QA-FULL Faza 5, ölçülüb)
+    ──────────────────────────────────────────────────────────────────────────
+    `show_admin()` açılışında EYNİ `SELECT ... WHERE limit_key = %s` sorğusu
+    **10 DƏFƏ** (~2.1 s, hər biri ~206 ms uzaq gediş-gəliş) və TOPLU
+    `all_for()` sorğusu AYRICA **2 DƏFƏ** işə düşürdü — halbuki `system_limits`
+    cədvəli bir tranzaksiya ərzində DƏYİŞMİR (yazı yalnız `set_value()`
+    vasitəsilə, o da aşağıda keşi ÖZÜ yeniləyir).
+
+    Keş `self._cache`-də saxlanılır və YALNIZ bu repo NÜSXƏSİNİN (yəni bir
+    `UnitOfWork`/tranzaksiyanın) ömrü qədər yaşayır — `_build_repositories()`
+    hər `with ... as uow` üçün TƏZƏ nüsxə qurur (`connection.py`). QLOBAL/
+    PROSES-ÖMÜRLÜ keş QƏSDƏN İŞLƏDİLMİR: Root limiti dəyişəndə növbəti
+    sessiya köhnə dəyəri görməməlidir.
+    """
+
+    def __init__(self, conn: Connection[dict[str, Any]], context: TenantContext) -> None:
+        super().__init__(conn, context)
+        self._cache: dict[TenantId, dict[str, str]] = {}
 
     def get_int(self, tenant_id: TenantId, key: str, default: int) -> int:
         """Tam ədəd limit.
@@ -97,11 +120,22 @@ class PostgresSystemLimits(_BaseRepository):
         return default if raw is None else raw
 
     def all_for(self, tenant_id: TenantId) -> dict[str, str]:
-        rows = self._fetch_all(
-            "SELECT limit_key, limit_value FROM system_limits WHERE tenant_id = %s",
-            (tenant_id,),
-        )
-        return {row["limit_key"]: row["limit_value"] for row in rows}
+        """Tenant-ın bütün limitləri — `_raw()` da BUNUN üzərindən keçir.
+
+        Nəticə keşlənir (bax sinif başlığı) və çağırana KOPYA qaytarılır:
+        çağıran dict-i yerində dəyişsə (məs. `dict(...) | {...}` əvəzinə
+        `d["x"] = ...`), bu, keşi korlamamalıdır — kopyanın qiyməti (onlarla
+        açar) sorğunun ~206 ms-lik uzaq gediş-gəlişindən qat-qat ucuzdur.
+        """
+        cached = self._cache.get(tenant_id)
+        if cached is None:
+            rows = self._fetch_all(
+                "SELECT limit_key, limit_value FROM system_limits WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            cached = {row["limit_key"]: row["limit_value"] for row in rows}
+            self._cache[tenant_id] = cached
+        return dict(cached)
 
     def describe(self, tenant_id: TenantId) -> list[dict[str, Any]]:
         """ROOT ekranı üçün tam təsvir — min/max və izah daxil.
@@ -132,6 +166,10 @@ class PostgresSystemLimits(_BaseRepository):
 
         `changed_by` MƏCBURİDİR: ROOT əməliyyatları audit jurnalına düşməlidir
         (bölmə 3) və "kim dəyişdi" sualı sonradan cavablandırıla bilməlidir.
+
+        Keş BURADA MÜTLƏQ yenilənir: `all_for()`/`_raw()` artıq keşdən oxuyur,
+        yazsan-yenilməsə eyni tranzaksiyada dəyəri dəyişib DƏRHAL geri oxuyan
+        ROOT ekranı (`root_control.py`) köhnə dəyəri görərdi.
         """
         self._execute(
             """
@@ -144,13 +182,26 @@ class PostgresSystemLimits(_BaseRepository):
             """,
             (tenant_id, key, value, changed_by),
         )
+        cached = self._cache.get(tenant_id)
+        if cached is not None:
+            cached[key] = value
 
     def _raw(self, tenant_id: TenantId, key: str) -> str | None:
-        row = self._fetch_one(
-            "SELECT limit_value FROM system_limits WHERE tenant_id = %s AND limit_key = %s",
-            (tenant_id, key),
-        )
-        return row["limit_value"] if row else None
+        """Tək açar — `all_for()`-un keşindən oxuyur, AYRI sorğu ATMIR.
+
+        Əvvəl HƏR açar üçün ayrıca `SELECT ... WHERE limit_key = %s` gedirdi
+        (`show_admin()` açılışında 10 dəfə, ~2.1 s) — `all_for()` isə onsuz da
+        bütün açarları BİR sorğuda gətirirdi. İndi `_raw()` da HƏMİN keşi
+        işlədir: ilk çağırış bir tam oxu edir, sonrakılar yaddaşdan cavablanır.
+
+        `all_for()`-un qaytardığı KOPYADAN yox, `self._cache`-dən BİLAVASİTƏ
+        oxuyuruq — hər tək-açar çağırışında lazımsız dict kopyası yaranmasın.
+        """
+        cached = self._cache.get(tenant_id)
+        if cached is None:
+            self.all_for(tenant_id)  # keşi doldurur (nəticəni özü ATIR)
+            cached = self._cache[tenant_id]
+        return cached.get(key)
 
 
 # --------------------------------------------------------------------------- #
@@ -164,7 +215,38 @@ class PostgresFeatureToggles(_BaseRepository):
     RETROAKTİV TƏSİRSİZLİK: bu repo yalnız CARİ vəziyyəti verir. Söndürülmüş
     modulun MÖVCUD qeydləri toxunulmaz qalır — həmin qayda use case
     səviyyəsindədir, burada deyil.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NÜSXƏ-SƏVİYYƏLİ KEŞ (QA-FULL Faza 5, ölçülüb) — `PostgresSystemLimits`-lə
+    EYNİ NAXIŞ
+    ──────────────────────────────────────────────────────────────────────────
+    `show_admin()` açılışında `is_enabled()` FƏRQLİ modul açarları üçün **4
+    DƏFƏ** ayrıca sorğu atırdı (~0.8 s), halbuki cədvəldə cəmi bir neçə on
+    sətir var və hamısı BİR sorğuda gəlir. Keş `self._cache`-də saxlanılır və
+    YALNIZ bu repo nüsxəsinin (bir `UnitOfWork`) ömrü qədər yaşayır — səbəb
+    `PostgresSystemLimits` başlığı ilə EYNİDİR.
     """
+
+    def __init__(self, conn: Connection[dict[str, Any]], context: TenantContext) -> None:
+        super().__init__(conn, context)
+        # Dəyər: (is_enabled, is_structural) — ikisi də EYNİ sətirdən gəlir,
+        # ayrı keş saxlamaq iki ayrı sorğu deməkdir.
+        self._cache: dict[TenantId, dict[str, tuple[bool, bool]]] = {}
+
+    def _all_cached(self, tenant_id: TenantId) -> dict[str, tuple[bool, bool]]:
+        cached = self._cache.get(tenant_id)
+        if cached is None:
+            rows = self._fetch_all(
+                "SELECT module_key, is_enabled, is_structural "
+                "FROM feature_toggles WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            cached = {
+                row["module_key"]: (bool(row["is_enabled"]), bool(row["is_structural"]))
+                for row in rows
+            }
+            self._cache[tenant_id] = cached
+        return cached
 
     def is_enabled(self, tenant_id: TenantId, module_key: str) -> bool:
         """Modul aktivdirmi.
@@ -173,19 +255,14 @@ class PostgresFeatureToggles(_BaseRepository):
         tenant üçün sətir yaratmaq unudula bilər və o zaman modul səssizcə
         yox olardı. Söndürmək AÇIQ əməliyyat olmalıdır.
         """
-        row = self._fetch_one(
-            "SELECT is_enabled FROM feature_toggles WHERE tenant_id = %s AND module_key = %s",
-            (tenant_id, module_key),
-        )
-        return True if row is None else bool(row["is_enabled"])
+        entry = self._all_cached(tenant_id).get(module_key)
+        return True if entry is None else entry[0]
 
     def enabled_modules(self, tenant_id: TenantId) -> frozenset[str]:
         """Aktiv modulların açarları — naviqasiya süzgəci üçün."""
-        rows = self._fetch_all(
-            "SELECT module_key FROM feature_toggles WHERE tenant_id = %s AND is_enabled",
-            (tenant_id,),
+        return frozenset(
+            key for key, (enabled, _structural) in self._all_cached(tenant_id).items() if enabled
         )
-        return frozenset(row["module_key"] for row in rows)
 
     def describe(self, tenant_id: TenantId) -> list[dict[str, Any]]:
         """ROOT ekranı üçün — struktur-kritik bayrağı ilə birlikdə."""
@@ -235,13 +312,21 @@ class PostgresFeatureToggles(_BaseRepository):
             """,
             (tenant_id, module_key, enabled, changed_by, confirmation),
         )
+        cached = self._cache.get(tenant_id)
+        if cached is not None and module_key in cached:
+            # Sətir ARTIQ var idi — `is_structural` sütununa bu sorğu
+            # TOXUNMUR, ona görə köhnə bayrağı SAXLAYIB yalnız `is_enabled`-i
+            # yeniləmək kifayətdir.
+            cached[module_key] = (enabled, cached[module_key][1])
+        elif cached is not None:
+            # Sətir bu tranzaksiyada İLK DƏFƏ yarandı — `is_structural`-ın
+            # DEFAULT dəyərini burada TƏXMİN ETMİRİK, bütün tenant keşini
+            # silib növbəti oxunu bazaya yönləndiririk (bax sinif başlığı).
+            del self._cache[tenant_id]
 
     def is_structural(self, tenant_id: TenantId, module_key: str) -> bool:
-        row = self._fetch_one(
-            "SELECT is_structural FROM feature_toggles WHERE tenant_id = %s AND module_key = %s",
-            (tenant_id, module_key),
-        )
-        return bool(row["is_structural"]) if row else False
+        entry = self._all_cached(tenant_id).get(module_key)
+        return entry[1] if entry is not None else False
 
 
 # --------------------------------------------------------------------------- #

@@ -50,6 +50,7 @@ from src.domain.value_objects.identifiers import (
 )
 from src.domain.value_objects.money import Money
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 #: Etiraz/rədd səbəbi üçün minimum uzunluq — cərimə modeli ilə eyni.
 MIN_REASON_LENGTH: Final[int] = 10
@@ -171,7 +172,7 @@ class PointsEntry(AggregateRoot):
                 context={"closes_at": self.dispute_window_closes_at.isoformat()},
             )
 
-        cleaned = reason.strip()
+        cleaned = normalise_decision_text(reason)
         if len(cleaned) < MIN_REASON_LENGTH:
             raise DomainRuleError(
                 f"Etiraz səbəbi minimum {MIN_REASON_LENGTH} simvol olmalıdır",
@@ -248,7 +249,7 @@ class PointsEntry(AggregateRoot):
 
     @staticmethod
     def _clean_reason(reason: str) -> str:
-        cleaned = reason.strip()
+        cleaned = normalise_decision_text(reason)
         if len(cleaned) < MIN_REASON_LENGTH:
             raise DomainRuleError(
                 f"Qərar səbəbi minimum {MIN_REASON_LENGTH} simvol olmalıdır",
@@ -313,7 +314,7 @@ class RewardRedemption(AggregateRoot):
         """Rədd — bloklanmış xallar işçiyə QAYTARILIR."""
         require_aware(decided_at, field="decided_at")
         self._require_pending()
-        cleaned = reason.strip()
+        cleaned = normalise_decision_text(reason)
         if len(cleaned) < MIN_REASON_LENGTH:
             raise DomainRuleError(
                 f"Rədd səbəbi minimum {MIN_REASON_LENGTH} simvol olmalıdır",

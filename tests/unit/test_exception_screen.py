@@ -294,13 +294,24 @@ def test_dismiss_refreshes_the_list_after_writing() -> None:
     assert screen.rows == []
 
 
-def test_failed_dismiss_is_explained_not_swallowed() -> None:
+def test_failed_dismiss_is_explained_not_swallowed(monkeypatch: Any) -> None:
     """Domen qaydası (qeyd qısadır) sükutla udulmur, istifadəçiyə göstərilir."""
     view = _view()
     use_case = _ExceptionsUseCase([view], dismiss_error=_DeniedError("qeyd qısadır"))
     session = _Session(use_case)
     controller = ExceptionsController(_Context(session), _actor())  # type: ignore[arg-type]
     screen = _Screen()
+
+    # MODAL KƏSİLİR: `_inform()` `QMessageBox.exec()` çağırır və başsız
+    # mühitdə o, sonsuza qədər gözləyərdi (dəst bir dəfə məhz belə asıldı).
+    from PySide6.QtWidgets import QMessageBox
+
+    shown: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "exec",
+        lambda box: shown.append(box.text()) or 0,  # type: ignore[arg-type]
+    )
 
     controller._decide(
         screen,  # type: ignore[arg-type]
@@ -311,7 +322,11 @@ def test_failed_dismiss_is_explained_not_swallowed() -> None:
     )
 
     assert session.commits == 0
-    assert screen.errors == [("Rədd əməliyyatı yazılmadı", "Rədd səbəbini ətraflı yazın.")]
+    # SƏBƏB ARTIQ TAM-EKRAN XƏTA DEYİL (QA-FULL Faza 3): bir sətrin rəddi
+    # QALAN açıq istisnaları etibarsız etmir, ona görə siyahı yerində qalır və
+    # izah modal pəncərədə göstərilir (naxış `fine_appeals.py::_inform`).
+    assert screen.errors == []
+    assert shown == ["Rədd səbəbini ətraflı yazın."]
 
 
 def test_reviewed_does_not_require_a_note() -> None:

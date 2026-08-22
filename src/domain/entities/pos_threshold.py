@@ -38,6 +38,7 @@ from src.domain.entities.base import (
 )
 from src.domain.value_objects.identifiers import EmployeeId, PosThresholdId, TenantId
 from src.domain.value_objects.scheduling import require_aware
+from src.shared.text import normalise_decision_text
 
 #: `pos_permission_thresholds.max_discount_pct` CHECK-inin güzgüsü (sxem
 #: sərhədi — migrations/018). ROOT-dan DƏYİŞMİR; dəyişmək miqrasiya tələb edir.
@@ -138,7 +139,7 @@ class POSPermissionThreshold(AggregateRoot):
         self.max_discount_pct = max_discount_pct
         self.can_void = can_void
         self.can_refund = can_refund
-        self.note = " ".join(note.split()) if note else None
+        self.note = (normalise_decision_text(note) or None) if note else None
         self.updated_by = updated_by
         self.updated_at = require_aware(now, field="now")
         self.is_active = True
