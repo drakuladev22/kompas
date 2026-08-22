@@ -46,6 +46,28 @@ bərabərliyi AÇIQ yoxlayır və dayanır.
     # Nə ediləcəyini görmək (heç nə yazılmır):
     ... --dry-run
 
+    # ÖZ maşınında sınamaq üçün — konfiqurasiya işlək yerlərə DƏ yazılır:
+    ... --dev
+
+──────────────────────────────────────────────────────────────────────────────
+İKİ REJİM: `--dev` VƏ BAYRAQSIZ (PROD) — KONFİQURASİYA HARAYA DÜŞÜR
+──────────────────────────────────────────────────────────────────────────────
+Skript HƏR İKİ rejimdə `--out` qovluğuna arxiv nüsxəsini yazır. Fərq
+ƏLAVƏDƏDİR:
+
+* **Bayraqsız (defolt, real müştəri):** yalnız arxiv. Fayllar oradan
+  müştərinin maşınına ƏL İLƏ (AnyDesk) köçürülür — bu, FƏRQLİ fiziki maşın
+  olduğu üçün avtomatlaşdırıla BİLMƏZ və parol da orada, «Bağlantı Ayarları»
+  ekranında daxil edilir (şifrələmə MAŞINA bağlıdır, bax `_write_config`).
+* **`--dev` (təchizatçının öz maşını):** arxivə ƏLAVƏ olaraq konfiqurasiya
+  tətbiqin FAKTİKİ oxuduğu yerlərə də yazılır və parol YERİNDƏ şifrələnir —
+  yəni skript bitən kimi `python main.py` heç bir əlavə addım olmadan açılır
+  (bax `_deploy_dev_config`).
+
+Hər iki rejim SONDA öz-özünü yoxlayır (addım 6, `_self_check`): yazılan
+konfiqurasiya GERİ OXUNUR və bazaya test-bağlantısı qurulur — «yazıldı»
+ilə «işləyir» eyni şey deyil.
+
 ──────────────────────────────────────────────────────────────────────────────
 YARIMÇIQ ÇÖKMƏDƏN SONRA DAVAM ETMƏ (D4) — `--tenant-id` / `--license-key`
 ──────────────────────────────────────────────────────────────────────────────
@@ -58,14 +80,28 @@ DAVAM ETMİRDİ, YENİ (üçüncü, dördüncü, …) yetim kirayəçi yaradırd
 `--tenant-id`/`--license-key` verilsə, `uuid4()`/`token_urlsafe()` ƏVƏZİNƏ
 ONLAR işlənir — beləcə eyni kimliklə təkrar çağırış yuxarıdakı idempotentlik
 sayəsində TƏBİİ ŞƏKİLDƏ "davam edir" (artıq tamamlanmış addımlar sükutla
-keçilir, yarımçıq qalan YERİNDƏN başlayır). Alternativ («`--verify` rejimi» —
-iki bazanı çarpaz skan edib yetim sətirləri aşkarlamaq) RƏDD EDİLDİ: hər
-müştərinin AYRI Supabase DSN-i var (yuxarı bax, "İKİ BAZA") və vendor bazası
-tək başına HEÇ BİR tenant DSN-i saxlamır (DB-3 qərarı) — yəni "hamısını skan
-et" mümkün deyil, YALNIZ operator ƏLİNDƏ olan tək müştərinin iki DSN-ini
-YENİDƏN verməklə YOXLAMAQ olar. Bu isə artıq `--tenant-id` ilə TƏKRAR işə
-salmağın ÖZÜdür — ayrıca rejim yalnız YENİ, sınanmamış səth əlavə edərdi,
-mövcud axını fəaliyyətə gətirmədən.
+keçilir, yarımçıq qalan YERİNDƏN başlayır).
+
+──────────────────────────────────────────────────────────────────────────────
+`--verify <tenant_id>` — NƏ EDİR, NƏ ETMİR
+──────────────────────────────────────────────────────────────────────────────
+Bu rejim ƏVVƏL RƏDD EDİLMİŞDİ və rədd səbəbi HƏLƏ DƏ QÜVVƏDƏDİR: vendor
+bazası tək başına HEÇ BİR tenant DSN-i saxlamır (DB-3), yəni "bütün
+müştəriləri skan et" MÜMKÜN DEYİL və belə bir söz verən rejim yalançı
+tamlıq hissi yaradardı.
+
+Buradakı `--verify` həmin şeyi ETMİR: o, skan DEYİL, TƏK bir müştərinin
+YOXLANIŞIDIR və operatorun ƏLİNDƏ olan İKİ DSN-i (`--tenant-dsn`,
+`--vendor-dsn`) YENİDƏN tələb edir. Fərqi `--tenant-id` ilə təkrar
+çağırışdan isə budur: təkrar çağırış YAZIR (idempotent olsa da), `--verify`
+isə HEÇ NƏ YAZMIR — yəni "canlı müştəridə vəziyyət necədir?" sualına
+quraşdırmaya TOXUNMADAN cavab verir. Dəstək zəngi zamanı lazım olan məhz
+budur: yazma icazəsi olmayan halda da işləyir və nəticəsi bir checklist-dir.
+
+Yoxlanan beş halqa (`_verify`): miqrasiya reyestri (061) → əsas cədvəllər →
+seed məlumatı (`system_limits`/`feature_toggles`/rol şablonları) → vendor
+sətri → yerli konfiqurasiya faylı. Hər biri AYRI sətir kimi çap olunur:
+"hamısı OK" ilə "biri çatmır" arasındakı fərq gözlə görünməlidir.
 
 Addım 4-dən (vendor sətri, `license_key` artıq ORADA plaintext saxlanılır —
 bax `_create_vendor_row` başlığı) SONRAKI hər `DAYANDI` TAM `license_key`-i
@@ -86,6 +122,12 @@ from pathlib import Path
 from typing import Final
 
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
+# `--dev` və öz-özünü yoxlama `src.`-dən konfiqurasiya YOLLARINI oxuyur (yolu
+# burada TƏKRAR hesablamamaq üçün — bax `_deploy_dev_config`). Skript
+# repozitoriya kökündən KƏNARDAN da çağırıla bilər (`python scripts/…`), ona
+# görə kök `sys.path`-a AÇIQ əlavə olunur — `apply_migrations.py:55` ilə eyni
+# sətir, eyni səbəb.
+sys.path.insert(0, str(_REPO_ROOT))
 _APPLY_MIGRATIONS: Final[Path] = _REPO_ROOT / "scripts" / "apply_migrations.py"
 
 #: Lisenziya açarının uzunluğu (bayt). `secrets.token_urlsafe(32)` ~43 simvol
@@ -101,6 +143,13 @@ INITIAL_STATUS: Final[str] = "ODENIS_GOZLENILIR"
 #: D4: bu addımdan (vendor sətri COMMIT olunur) sonrakı `DAYANDI` bərpa
 #: göstərişi çap edir — bax `_resume_hint`.
 VENDOR_ROW_STEP: Final[int] = 4
+
+#: Addımların ÜMUMİ sayı — `[n/TOTAL]` sətrində görünür. Öz-özünü yoxlama
+#: (addım 6) AYRICA addımdır, `_write_config`-in içində GİZLƏNMİR: operator
+#: «yazıldı» ilə «yazılan geri OXUNDU və bağlantı QURULDU» arasındakı fərqi
+#: ekranda GÖRMƏLİDİR — birincinin uğuru ikincisini ZƏMANƏT ETMİR (məs. fayl
+#: yazılır, lakin şifrələmə açarı olmadığı üçün geri oxuna bilmir).
+TOTAL_STEPS: Final[int] = 6
 
 
 class OnboardingError(RuntimeError):
@@ -129,9 +178,17 @@ def _ensure_utf8_stdio() -> None:
                 stream.reconfigure(encoding="utf-8", errors="replace")
 
 
-def main(argv: list[str] | None = None) -> int:
-    _ensure_utf8_stdio()
-    args = _parse_args(argv)
+def _reject_invalid_arguments(args: argparse.Namespace) -> int | None:
+    """YAZI axınının giriş şərtləri. Qaytarır: proses kodu, ya da `None` (təmiz).
+
+    `main()`-dən AYRILDI, çünki `--verify` gələndən sonra o funksiya həm
+    yoxlama, həm yazı axınını daşıyırdı və hər iki axının şərtləri bir-birinə
+    qarışmışdı. Burada YALNIZ yazı axını danışılır — `--verify` bu funksiyaya
+    ÇATMIR (`main()` onu daha əvvəl bitirir).
+    """
+    if not args.company:
+        sys.stderr.write("XƏTA: `--company` MƏCBURİDİR (yalnız `--verify` onsuz işləyir).\n")
+        return 2
 
     if args.tenant_dsn == args.vendor_dsn:
         sys.stderr.write(
@@ -165,35 +222,43 @@ def main(argv: list[str] | None = None) -> int:
             "kirayəçi yaradın.\n"
         )
         return 2
+    return None
 
-    if args.tenant_id:
-        try:
-            tenant_id = uuid.UUID(args.tenant_id)
-        except ValueError:
-            sys.stderr.write(f"XƏTA: `--tenant-id` keçərli UUID deyil: {args.tenant_id!r}\n")
-            return 2
-        resumed = True
-    else:
-        tenant_id = uuid.uuid4()
-        resumed = False
-    # Yuxarıdakı cüt-yoxlama sayəsində burada YA hər ikisi doludur (bərpa),
-    # YA da hər ikisi boşdur (yeni) — `or` budağı artıq yalnız SƏNƏDLƏŞDİRMƏ
-    # xarakterlidir, sükutla qarışıq hal yarada BİLMƏZ.
-    license_key = args.license_key or secrets.token_urlsafe(LICENSE_KEY_BYTES)
 
-    sys.stdout.write(f"{'Davam edilən' if resumed else 'Yeni'} kirayəçi: {args.company}\n")
-    sys.stdout.write(f"  tenant_id   : {tenant_id}\n")
-    sys.stdout.write(f"  license_key : {license_key[:8]}… ({len(license_key)} simvol)\n")
-    sys.stdout.write(f"  supabase_ref: {args.supabase_ref or '(verilməyib)'}\n\n")
+def _verify_mode(args: argparse.Namespace) -> int | None:
+    """`--verify` verilibsə yoxlamanı icra edir; verilməyibsə `None` qaytarır."""
+    if not args.verify:
+        return None
+    try:
+        verify_id = uuid.UUID(args.verify)
+    except ValueError:
+        sys.stderr.write(f"XƏTA: `--verify` keçərli UUID deyil: {args.verify!r}\n")
+        return 2
+    return _verify(args, verify_id)
 
-    if args.dry_run:
-        sys.stdout.write("--dry-run: heç nə yazılmadı.\n")
-        _describe_steps(args)
-        return 0
 
-    # Addım 4 (vendor sətri) bitəndən SONRA baş verən uğursuzluqda `DAYANDI`
-    # mesajına bərpa göstərişi əlavə olunur — bax `_resume_hint` və fayl
-    # başlığındakı "D4" bölməsi.
+def _resolve_identity(args: argparse.Namespace) -> tuple[uuid.UUID, bool] | None:
+    """`(tenant_id, davam-edilirmi)` — səhv UUID-də `None` (səbəb çap olunub).
+
+    Bax fayl başlığındakı "D4": `--tenant-id` verilibsə YENİSİ yaranmır, yəni
+    təkrar çağırış yarımçıq quraşdırmanı DAVAM ETDİRİR.
+    """
+    if not args.tenant_id:
+        return uuid.uuid4(), False
+    try:
+        return uuid.UUID(args.tenant_id), True
+    except ValueError:
+        sys.stderr.write(f"XƏTA: `--tenant-id` keçərli UUID deyil: {args.tenant_id!r}\n")
+        return None
+
+
+def _run_steps(args: argparse.Namespace, tenant_id: uuid.UUID, license_key: str) -> int:
+    """Altı addımı SIRA ilə icra edir. Qaytarır: 0 (hamısı OK) və ya 1.
+
+    Addım 4 (vendor sətri) bitəndən SONRA baş verən uğursuzluqda `DAYANDI`
+    mesajına bərpa göstərişi əlavə olunur — bax `_resume_hint` və fayl
+    başlığındakı "D4" bölməsi.
+    """
     last_ok = 0
     try:
         _step(1, "Tenant bazasına miqrasiyalar", lambda: _apply_migrations(args.tenant_dsn))
@@ -217,15 +282,65 @@ def main(argv: list[str] | None = None) -> int:
         )
         last_ok = 4
         _step(5, "Konfiqurasiya faylları", lambda: _write_config(args, tenant_id, license_key))
+        last_ok = 5
+        _step(6, "Öz-özünü yoxlama", lambda: _self_check(args, tenant_id))
     except OnboardingError as exc:
         sys.stderr.write(f"\nDAYANDI: {exc}\n")
         if last_ok >= VENDOR_ROW_STEP:
             sys.stderr.write(_resume_hint(tenant_id, license_key))
         return 1
+    return 0
 
-    sys.stdout.write("\nBİTDİ. Növbəti addımlar:\n")
-    sys.stdout.write(f"  1. «{args.out}» qovluğundakı faylları müştəri maşınına köçürün.\n")
-    sys.stdout.write("  2. Tətbiqi açın — İlk Quraşdırma Sihirbazı Root hesabını yaradacaq.\n")
+
+def main(argv: list[str] | None = None) -> int:
+    _ensure_utf8_stdio()
+    args = _parse_args(argv)
+
+    # `--verify` YAZI axınından TAMAMİLƏ ayrıdır: nə şirkət adı, nə əlaqə
+    # ünvanı, nə də bərpa bayraqları ona aiddir — ona görə budaq BURADA,
+    # bütün yazı-yönümlü yoxlamalardan ƏVVƏL bitir.
+    verified = _verify_mode(args)
+    if verified is not None:
+        return verified
+
+    invalid = _reject_invalid_arguments(args)
+    if invalid is not None:
+        return invalid
+
+    identity = _resolve_identity(args)
+    if identity is None:
+        return 2
+    tenant_id, resumed = identity
+    # `_reject_invalid_arguments`-dakı cüt-yoxlama sayəsində burada YA hər
+    # ikisi doludur (bərpa), YA da hər ikisi boşdur (yeni) — `or` budağı artıq
+    # yalnız SƏNƏDLƏŞDİRMƏ xarakterlidir, sükutla qarışıq hal yarada BİLMƏZ.
+    license_key = args.license_key or secrets.token_urlsafe(LICENSE_KEY_BYTES)
+
+    sys.stdout.write(f"{'Davam edilən' if resumed else 'Yeni'} kirayəçi: {args.company}\n")
+    sys.stdout.write(f"  tenant_id   : {tenant_id}\n")
+    sys.stdout.write(f"  license_key : {license_key[:8]}… ({len(license_key)} simvol)\n")
+    sys.stdout.write(f"  supabase_ref: {args.supabase_ref or '(verilməyib)'}\n\n")
+
+    if args.dry_run:
+        sys.stdout.write("--dry-run: heç nə yazılmadı.\n")
+        _describe_steps(args)
+        return 0
+
+    failed = _run_steps(args, tenant_id, license_key)
+    if failed:
+        return failed
+
+    # Yekun mətn REJİMƏ görə fərqlidir: dev-də köçürüləcək heç nə YOXDUR
+    # (addım 5 onsuz da yerinə yazdı), prod-da isə əsas iş MƏHZ köçürməkdir.
+    sys.stdout.write("\nBİTDİ. ")
+    if args.dev:
+        sys.stdout.write("Konfiqurasiya bu maşında hazırdır:\n")
+        sys.stdout.write("  1. `python main.py` — əlavə addım LAZIM DEYİL.\n")
+        sys.stdout.write(f"  2. Arxiv nüsxəsi «{args.out}» qovluğundadır.\n")
+    else:
+        sys.stdout.write("Növbəti addımlar:\n")
+        sys.stdout.write(f"  1. «{args.out}» qovluğundakı faylları müştəri maşınına köçürün.\n")
+        sys.stdout.write("  2. Tətbiqi açın — İlk Quraşdırma Sihirbazı Root hesabını yaradacaq.\n")
     sys.stdout.write("  3. Ödəniş alındıqdan sonra Vendor Konsolundan statusu AKTIV edin.\n")
     return 0
 
@@ -236,9 +351,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _step(number: int, title: str, action: object) -> None:
-    sys.stdout.write(f"[{number}/5] {title} …\n")
+    sys.stdout.write(f"[{number}/{TOTAL_STEPS}] {title} …\n")
     action()  # type: ignore[operator]
-    sys.stdout.write(f"[{number}/5] {title} — OK\n")
+    sys.stdout.write(f"[{number}/{TOTAL_STEPS}] {title} — OK\n")
 
 
 def _resume_hint(tenant_id: uuid.UUID, license_key: str) -> str:
@@ -457,6 +572,343 @@ def _write_config(args: argparse.Namespace, tenant_id: uuid.UUID, license_key: s
     )
     sys.stdout.write(_indent(f"{out}/installation.json\n{out}/connection.template.json\n"))
 
+    if args.dev:
+        _deploy_dev_config(args, tenant_id)
+
+
+def _deploy_dev_config(args: argparse.Namespace, tenant_id: uuid.UUID) -> None:
+    r"""`--dev`: konfiqurasiyanı BU maşının FAKTİKİ oxu yerlərinə yazır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    HANSI PROBLEMİ HƏLL EDİR
+    ──────────────────────────────────────────────────────────────────────────
+    Arxiv qovluğu (`--out`) MÜŞTƏRİ üçündür — `python main.py` ora HEÇ VAXT
+    baxmır. Bayraqsız çağırışdan sonra öz maşınında proqramı açan operator
+    «işə düşə bilmədi» ekranı görür və səbəbi axtarır: fayllar YARANIB, sadəcə
+    tətbiqin AXTARDIĞI yerdə deyil. `--dev` həmin əl-ilə-köçürmə addımını
+    aradan qaldırır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    HARA YAZILIR — YER KODDAN OXUNUR, BURADA TƏKRARLANMIR
+    ──────────────────────────────────────────────────────────────────────────
+    İki fayl, iki AYRI mənbə (ikisi də `src/`-dədir və bu skript onları
+    ÇAĞIRIR, yolu ÖZÜ hesablamır — əks halda yol qaydası iki yerdə yaşayardı
+    və biri dəyişəndə digəri sükutla köhnələrdi):
+
+        * `installation.json` → `src.shared.installation.installation_file()`
+          (`%PROGRAMDATA%\KompasOS\`, `KOMPASOS_INSTALLATION_PATH` ilə əvəzlənir);
+        * `connection.json`   → `connection_file.save_settings()` (YAZI həmişə
+          `%PROGRAMDATA%\KompasOS\`-a gedir; OXU `.exe` yanından başlayır, lakin
+          dev rejimində orada — repozitoriya kökündə — belə bir fayl yoxdur).
+
+    ──────────────────────────────────────────────────────────────────────────
+    PAROL BURADA ŞİFRƏLƏNİR — `connection.template.json`-DAN FƏRQİ MƏHZ BUDUR
+    ──────────────────────────────────────────────────────────────────────────
+    Şablon faylı parolu BOŞ saxlayır, çünki DPAPI ilə MAŞIN əhatəsində
+    şifrələnən dəyər BAŞQA maşında açıla bilmir (bax `_write_config`). `--dev`
+    halında isə hədəf maşın BU maşındır — yəni məhdudiyyət ARADAN QALXIR və
+    parol `--tenant-dsn`-dən götürülüb yerində şifrələnə bilər. Nəticə: skript
+    bitən kimi `python main.py` heç bir əlavə addım olmadan açılır.
+    """
+    from src.infrastructure.config.connection_file import (
+        ConnectionSettings,
+        save_settings,
+    )
+    from src.shared.installation import installation_file
+
+    identity_path = installation_file()
+    identity_path.parent.mkdir(parents=True, exist_ok=True)
+    identity_path.write_text(
+        json.dumps({"tenant_id": str(tenant_id), "is_licensed": True}, indent=2, ensure_ascii=False)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        connection_path = save_settings(ConnectionSettings.from_dsn(args.tenant_dsn))
+    except Exception as exc:
+        # `save_settings` şifrələmə açarı olmayan mühitdə (`KOMPASOS_FERNET_KEY`
+        # yoxdur VƏ DPAPI əlçatmazdır) qalxır. Bu, YARIMÇIQ vəziyyətdir:
+        # `installation.json` artıq yazılıb, `connection.json` yox — ona görə
+        # sükutla keçilmir, addım DAYANIR (fayl başlığı, "atomik davranış").
+        raise OnboardingError(
+            f"`--dev`: `connection.json` yazıla bilmədi — {exc}. "
+            f"`{identity_path}` YAZILIB, bağlantı faylı YOX: ya "
+            "`KOMPASOS_FERNET_KEY` təyin edin, ya da faylı «Bağlantı Ayarları» "
+            "ekranından qurun."
+        ) from exc
+
+    sys.stdout.write(_indent(f"{identity_path}\n{connection_path}\n"))
+
+
+def _self_check(args: argparse.Namespace, tenant_id: uuid.UUID) -> None:
+    r"""Yazılanı GERİ OXUYUR və bazaya test-bağlantısı qurur (hər iki rejimdə).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AYRICA ADDIM — «YAZILDI» «İŞLƏYİR» DEMƏK DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Beş addımın hamısı uğurla bitə, konfiqurasiya isə yenə də açıla bilməz:
+    parol şifrələnib, lakin açar bu maşında yoxdursa deşifrələmə qalxır; JSON
+    yazılıb, lakin sahə adı köhnədirsə oxucu `None` qaytarır. Bunların hamısı
+    ilk `python main.py` çağırışında «işə düşə bilmədi» ekranı kimi görünür —
+    yəni səhv SKRİPTİN sonunda deyil, SAATLAR sonra, başqa kontekstdə üzə
+    çıxır. Ona görə skript öz nəticəsini ÖZÜ oxuyur: deşifrələmə həqiqətən
+    işləyirmi, `tenant_id` yazdığımız dəyərdirmi, DSN canlı bazaya çatırmı.
+
+    ──────────────────────────────────────────────────────────────────────────
+    İKİ REJİM, İKİ MƏNBƏ — LAKİN EYNİ SUAL
+    ──────────────────────────────────────────────────────────────────────────
+    `--dev`: FAKTİKİ yerlərdəki fayllar oxunur (`load_settings()` parolu
+    deşifrələyir) — yəni yoxlanan şey tətbiqin AÇACAĞI faylın ÖZÜdür.
+
+    Bayraqsız (prod): həmin fayllar bu maşında YOXDUR və olmamalıdır da —
+    arxivdəki `installation.json` oxunur, parol isə şablonda BOŞDUR (səbəb
+    `_write_config`-dədir), ona görə bağlantı `--tenant-dsn` ilə yoxlanılır.
+    Bu, «müştəri maşınında da işləyəcək» ZƏMANƏTİ DEYİL (orada parol əl ilə
+    daxil ediləcək) — burada yoxlanan DSN-in ÖZÜNÜN doğruluğudur: səhv host
+    və ya səhv istifadəçi adı ilə yaradılmış paket müştəriyə getməsin.
+    """
+    import psycopg
+
+    if args.dev:
+        from src.infrastructure.config.connection_file import load_settings
+        from src.shared.installation import installation_file
+
+        identity_path = installation_file()
+        settings = load_settings()
+        if settings is None:
+            raise OnboardingError(
+                f"`connection.json` geri oxuna bilmədi (axtarılan yer: {identity_path.parent}). "
+                "Fayl yazıldı, lakin oxucu onu tanımadı — konfiqurasiya İŞLƏMİR."
+            )
+        dsn = settings.dsn()
+    else:
+        identity_path = Path(args.out) / "installation.json"
+        dsn = args.tenant_dsn
+
+    try:
+        stored = json.loads(identity_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise OnboardingError(f"`{identity_path}` oxuna bilmədi: {exc}") from exc
+
+    if stored.get("tenant_id") != str(tenant_id):
+        raise OnboardingError(
+            f"`{identity_path}` içindəki tenant_id ({stored.get('tenant_id')}) bu "
+            f"quraşdırmanınkı ({tenant_id}) DEYİL — köhnə fayl üzərinə yazılmayıb."
+        )
+
+    try:
+        with psycopg.connect(dsn, connect_timeout=30) as conn, conn.cursor() as cur:
+            cur.execute("SET search_path TO kompasos, public")
+            # Sadəcə «bağlantı qurulur» kifayət deyil: addım 3 həmin sətri
+            # YAZIB, yəni onu geri oxumaq bütün zənciri (DSN → RLS → seed)
+            # bir sorğuda təsdiqləyir.
+            cur.execute(
+                "SELECT tenant_name FROM license_tenants WHERE tenant_id = %s", (str(tenant_id),)
+            )
+            row = cur.fetchone()
+    except psycopg.Error as exc:
+        raise OnboardingError(f"konfiqurasiyadakı DSN ilə bazaya qoşulmaq alınmadı: {exc}") from exc
+
+    if row is None:
+        raise OnboardingError(
+            f"bazada `license_tenants` sətri TAPILMADI (tenant_id={tenant_id}) — "
+            "addım 3 uğurlu görünsə də sətir yerində deyil."
+        )
+    sys.stdout.write(_indent(f"kirayəçi «{row[0]}» oxundu, konfiqurasiya işləkdir\n"))
+
+
+#: `--verify`-in "əsas cədvəllər" halqası. TAM SİYAHI DEYİL və olmamalıdır:
+#: sxemdə 100-dən çox cədvəl var, hamısını burada saxlamaq siyahını sxemin
+#: İKİNCİ, əl ilə yenilənən nüsxəsinə çevirərdi (DB-1-in dərsi). Bunlar
+#: SEÇİLMİŞ göstəricilərdir — hər biri AYRI miqrasiya dalğasından gəlir, yəni
+#: biri yoxdursa zəncirin harada kəsildiyi dərhal görünür.
+_CORE_TABLES: Final[tuple[str, ...]] = (
+    "license_tenants",  # 001 — kimlik
+    "positions",  # 001 — rol iyerarxiyası
+    "employees",  # 001 — işçi
+    "fines",  # 002 — cərimə axını
+    "system_limits",  # 022 — Root parametrləri
+    "feature_toggles",  # 022 — modul açarları
+    "audit_logs",  # 001 — audit
+    "schema_migrations",  # 061 — reyestrin ÖZÜ
+)
+
+#: Seed halqasının minimum gözləntisi. Dəqiq say YOX (o, hər miqrasiya ilə
+#: dəyişir və testi hər dəfə yeniləmək lazım gələrdi) — sıfırdan böyük olması
+#: yoxlanılır: `seed_tenant_defaults()` çağırılmayıbsa HƏR ÜÇÜ sıfırdır.
+_SEEDED_TABLES: Final[tuple[str, ...]] = ("system_limits", "feature_toggles", "positions")
+
+
+def _verify(args: argparse.Namespace, tenant_id: uuid.UUID) -> int:
+    """Mövcud kirayəçini YOXLAYIR — heç nə yazmır. Qaytarır: proses kodu.
+
+    Beş halqanın hər biri AYRI sətir kimi çap olunur (`OK` / `ÇATMIR`), sonda
+    yekun verilir. Bir halqanın uğursuzluğu qalanlarını DAYANDIRMIR: dəstək
+    zəngində "hansı biri sınıb" sualının cavabı TAM mənzərə tələb edir —
+    birinci xətada dayanmaq operatoru ikinci dəfə çağırmağa məcbur edərdi.
+    """
+    import psycopg
+
+    failures: list[str] = []
+
+    def _line(ok: bool, title: str, detail: str) -> None:
+        sys.stdout.write(f"  [{'OK    ' if ok else 'ÇATMIR'}] {title}: {detail}\n")
+        if not ok:
+            failures.append(title)
+
+    sys.stdout.write(f"Kirayəçi yoxlaması: {tenant_id}\n")
+
+    try:
+        with psycopg.connect(args.tenant_dsn, connect_timeout=30) as conn, conn.cursor() as cur:
+            cur.execute("SET search_path TO kompasos, public")
+
+            # 1. MİQRASİYA REYESTRİ (061) — DB-5-in tapdığı qüsurun qapısı:
+            # tətbiq olunmayan miqrasiya "cədvəl yoxdur" kimi AYLARLA gizlənir.
+            expected = {
+                path.name
+                for path in sorted(
+                    (_REPO_ROOT / "database" / "migrations").glob("[0-9][0-9][0-9]_*.sql")
+                )
+            }
+            cur.execute("SELECT to_regclass('kompasos.schema_migrations')")
+            row = cur.fetchone()
+            if row is None or row[0] is None:
+                _line(False, "Miqrasiya reyestri", "cədvəl YOXDUR (061 tətbiq olunmayıb)")
+            else:
+                cur.execute("SELECT filename FROM schema_migrations")
+                applied = {name for (name,) in cur.fetchall()}
+                missing = sorted(expected - applied)
+                _line(
+                    not missing,
+                    "Miqrasiya reyestri",
+                    f"{len(applied)}/{len(expected)} tətbiq olunub"
+                    + (f", çatmayan: {', '.join(missing[:5])}" if missing else ""),
+                )
+
+            # 2. ƏSAS CƏDVƏLLƏR — `to_regclass` NULL qaytarırsa cədvəl yoxdur.
+            absent = []
+            for table in _CORE_TABLES:
+                cur.execute("SELECT to_regclass(%s)", (f"kompasos.{table}",))
+                found = cur.fetchone()
+                if found is None or found[0] is None:
+                    absent.append(table)
+            _line(
+                not absent,
+                "Əsas cədvəllər",
+                f"{len(_CORE_TABLES) - len(absent)}/{len(_CORE_TABLES)} mövcuddur"
+                + (f", yoxdur: {', '.join(absent)}" if absent else ""),
+            )
+
+            # 3. SEED — `seed_tenant_defaults()` çağırılıbmı. Sətirlər HƏMİŞƏ
+            # kirayəçiyə görə süzülür: qlobal şablon sətirləri (`tenant_id IS
+            # NULL`, məs. rol şablonları) SAYILSAYDI, seed edilməmiş kirayəçi
+            # də "dolu" görünərdi.
+            counts: dict[str, int] = {}
+            for table in _SEEDED_TABLES:
+                cur.execute(
+                    f"SELECT count(*) FROM {table} WHERE tenant_id = %s",  # noqa: S608 — ad SABİT siyahıdandır
+                    (str(tenant_id),),
+                )
+                counted = cur.fetchone()
+                counts[table] = int(counted[0]) if counted else 0
+            empty = sorted(name for name, value in counts.items() if value == 0)
+            _line(
+                not empty,
+                "Seed məlumatı",
+                ", ".join(f"{name}={value}" for name, value in counts.items())
+                + (f" — BOŞ: {', '.join(empty)}" if empty else ""),
+            )
+
+            # 4. KİRAYƏÇİ SƏTRİ — addım 3-ün nəticəsi.
+            cur.execute(
+                "SELECT tenant_name, status FROM license_tenants WHERE tenant_id = %s",
+                (str(tenant_id),),
+            )
+            tenant_row = cur.fetchone()
+            _line(
+                tenant_row is not None,
+                "Kirayəçi sətri",
+                f"«{tenant_row[0]}», status {tenant_row[1]}" if tenant_row else "TAPILMADI",
+            )
+    except psycopg.Error as exc:
+        _line(False, "Tenant bazası", f"qoşulmaq alınmadı — {exc}")
+
+    # 5. VENDOR SƏTRİ — AYRI bazadır, ona görə AYRI bağlantı: birincinin
+    # uğursuzluğu ikincinin yoxlanmasını əngəlləməməlidir (ikisi müstəqil
+    # şəkildə sına bilər və hansının sındığı MƏHZ bu ayrılıqla görünür).
+    try:
+        with psycopg.connect(args.vendor_dsn, connect_timeout=30) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT company_name, status FROM tenants WHERE tenant_id = %s", (str(tenant_id),)
+            )
+            vendor_row = cur.fetchone()
+            _line(
+                vendor_row is not None,
+                "Vendor sətri",
+                f"«{vendor_row[0]}», status {vendor_row[1]}" if vendor_row else "TAPILMADI",
+            )
+    except psycopg.Error as exc:
+        _line(False, "Vendor bazası", f"qoşulmaq alınmadı — {exc}")
+
+    # 6. YERLİ KONFİQURASİYA — YALNIZ `--dev` maşınında mənalıdır. Bayraqsız
+    # halda bu maşında fayl OLMAMALIDIR, ona görə yoxluğu XƏTA sayılmır.
+    _verify_local_config(tenant_id, dev=args.dev, failures=failures)
+
+    if failures:
+        sys.stdout.write(f"\nNƏTİCƏ: {len(failures)} halqa ÇATMIR — {', '.join(failures)}\n")
+        return 1
+    sys.stdout.write("\nNƏTİCƏ: bütün halqalar yerindədir.\n")
+    return 0
+
+
+def _verify_local_config(tenant_id: uuid.UUID, *, dev: bool, failures: list[str]) -> None:
+    """`--verify`-in altıncı sətri: bu maşındakı konfiqurasiya faylı.
+
+    `--dev` VERİLMƏYİBSƏ bu halqa ÜMUMİYYƏTLƏ yoxlanmır — fayl mövcud olsa
+    DA. Səbəb ölçülmüş haldır: təchizatçının maşınında ÖZ inkişaf
+    kirayəçisinin `installation.json`-u onsuz da durur, yəni MÜŞTƏRİ
+    kirayəçisini yoxlayan hər prod çağırışı «fayl BAŞQA kirayəçinindir» deyə
+    YALANÇI-QIRMIZI verərdi. Operator qırmızı sətri saymağı öyrənən kimi
+    yoxlamanın MƏNASI ölür — ona görə sətir «aid deyil» kimi çap olunur və
+    `failures`-a DÜŞMÜR.
+    """
+    from src.infrastructure.config.connection_file import load_settings
+    from src.shared.installation import installation_file
+
+    if not dev:
+        sys.stdout.write("  [—     ] Yerli konfiqurasiya: aid deyil (`--dev` verilməyib)\n")
+        return
+
+    path = installation_file()
+    if not path.exists():
+        sys.stdout.write(f"  [ÇATMIR] Yerli konfiqurasiya: {path} YOXDUR\n")
+        failures.append("Yerli konfiqurasiya")
+        return
+
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        sys.stdout.write(f"  [ÇATMIR] Yerli konfiqurasiya: {path} oxunmur — {exc}\n")
+        failures.append("Yerli konfiqurasiya")
+        return
+
+    if stored.get("tenant_id") != str(tenant_id):
+        sys.stdout.write(
+            f"  [ÇATMIR] Yerli konfiqurasiya: fayl BAŞQA kirayəçinindir "
+            f"({stored.get('tenant_id')})\n"
+        )
+        failures.append("Yerli konfiqurasiya")
+        return
+
+    settings = load_settings()
+    if settings is None:
+        sys.stdout.write("  [ÇATMIR] Yerli konfiqurasiya: `connection.json` oxunmur\n")
+        failures.append("Yerli konfiqurasiya")
+        return
+
+    sys.stdout.write(f"  [OK    ] Yerli konfiqurasiya: {settings.host}/{settings.database}\n")
+
 
 # --------------------------------------------------------------------------- #
 # Köməkçilər
@@ -468,7 +920,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         description="Yeni KompasOS müştərisi qurur (TENANT-1 Faza 4)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--company", required=True, help="şirkət adı, məs. «Embawood»")
+    # `--verify` rejimində şirkət adı LAZIM DEYİL (heç nə yazılmır, ad isə
+    # yalnız YAZI addımlarında işlənir) — ona görə `required=True` DEYİL və
+    # məcburiliyi `main()` rejimə görə yoxlayır.
+    parser.add_argument("--company", default="", help="şirkət adı, məs. «Embawood»")
     parser.add_argument("--tenant-dsn", required=True, help="MÜŞTƏRİNİN öz Supabase DSN-i")
     parser.add_argument("--vendor-dsn", required=True, help="MƏRKƏZİ vendor bazasının DSN-i")
     parser.add_argument("--supabase-ref", default="", help="müştəri layihəsinin ref-i")
@@ -480,6 +935,20 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("--out", default="./onboarding", help="konfiqurasiya qovluğu")
     parser.add_argument("--dry-run", action="store_true", help="heç nə yazma, addımları göstər")
+    # `--dev`: bax `_deploy_dev_config`. Defolt YOXDUR (prod) — bayraq
+    # BU maşına yazır, yəni səhvən müştəri quraşdırmasında verilsə
+    # təchizatçının öz `%PROGRAMDATA%`-sını müştərinin bazasına bağlayardı.
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="konfiqurasiyanı BU maşının işlək yerlərinə də yaz (öz inkişaf mühiti)",
+    )
+    parser.add_argument(
+        "--verify",
+        default="",
+        metavar="TENANT_ID",
+        help="mövcud kirayəçini YOXLA (heç nə yazılmır) — bax `_verify`",
+    )
     # D4: yarımçıq çökmədən sonra DAVAM ETMƏ — bax fayl başlığı. Verilməzsə
     # köhnə davranış (təsadüfi `uuid4()`/`token_urlsafe()`) DƏYİŞMİR.
     parser.add_argument(
@@ -502,6 +971,15 @@ def _describe_steps(args: argparse.Namespace) -> None:
     sys.stdout.write("  3. `license_tenants` sətri → seed trigger-ləri işə düşür\n")
     sys.stdout.write("  4. Vendor `tenants` sətri (status: ODENIS_GOZLENILIR)\n")
     sys.stdout.write(f"  5. Konfiqurasiya faylları → {args.out}\n")
+    if args.dev:
+        from src.infrastructure.config.connection_file import (
+            connection_file_path,
+        )
+        from src.shared.installation import installation_file
+
+        sys.stdout.write(f"     + `--dev`: {installation_file()}\n")
+        sys.stdout.write(f"     + `--dev`: {connection_file_path()} (parol şifrələnmiş)\n")
+    sys.stdout.write("  6. Öz-özünü yoxlama: konfiqurasiya geri oxunur, bazaya qoşulur\n")
 
 
 def _parse_dsn(dsn: str) -> tuple[str, int, str, str]:

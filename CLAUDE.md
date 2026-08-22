@@ -145,7 +145,7 @@ Hər dəyişiklikdən sonra HAMISI keçməlidir:
 .venv/Scripts/python.exe -m ruff check src/ tests/ scripts/
 .venv/Scripts/python.exe -m ruff format src/ tests/ scripts/
 .venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (376 fayl)
-QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 6193 test, 50 skip
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 6404 test, 50 skip
 .venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast
 ```
 
@@ -488,7 +488,7 @@ qalmır, qərara çevrilir.
 | Cihaz qeydiyyatı (filial tanıma) | `src/application/use_cases/device_registry.py`, `migrations/063` + `067` (gözləyən aparat izi) |
 | Cihaz kimliyi faylı + aparat izi | `src/infrastructure/config/device_identity.py` |
 | Tenant brendinqi (ad/loqo/rəng) | `src/application/use_cases/tenant_branding.py`, `migrations/064` |
-| Yeni müştəri quraşdırması | `scripts/onboard_new_tenant.py` (`.exe`-yə DÜŞMÜR) |
+| Yeni müştəri quraşdırması (`--dev` / `--verify`) | `scripts/onboard_new_tenant.py` (`.exe`-yə DÜŞMÜR), `docs/onboarding.md` |
 | **Təchizatçının `Root` hesabı** (SEC-030) | `scripts/create_root_account.py` (`.exe`-yə DÜŞMÜR; şifrə gizli soruşulur) |
 | Developer Panelinin açılışı | `scripts/dev_panel.py` (`.env` yükləyir; `.exe`-yə DÜŞMÜR) |
 | Hardlock/anti-fraud qaydaları | `src/domain/value_objects/authorization.py` |
