@@ -54,7 +54,11 @@
       "Bash(git fetch *)",
       "Bash(git checkout *)",
       "Bash(git merge *)",
-      "Bash(git branch *)"
+      "Bash(git branch *)",
+      "Bash(.venv/Scripts/python.exe -m PyInstaller --noconfirm --clean src/KompasOS.spec)",
+      "Bash(echo \"kod: $?\")",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "PowerShell($id = [Security.Principal.WindowsIdentity]::GetCurrent\\(\\); $p = New-Object Security.Principal.WindowsPrincipal\\($id\\); \"admin: \" + $p.IsInRole\\([Security.Principal.WindowsBuiltInRole]::Administrator\\); \"istifadeci: \" + $id.Name)"
     ]
   },
   "hooks": {
