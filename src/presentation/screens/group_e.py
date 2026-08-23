@@ -265,7 +265,7 @@ class SupportChatWidget(QWidget):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(18, 20, 18, 20)
         layout.setSpacing(12)
-        layout.addWidget(title_label("Kimə yazırsınız?", size=14))
+        layout.addWidget(title_label("Kimə yazırsınız?", size=15))
         for channel in (SupportChannel.INTERNAL, SupportChannel.TECHNICAL):
             layout.addWidget(self._channel_card(channel))
         layout.addStretch(1)
@@ -577,7 +577,7 @@ class LicenseInactiveScreen(QWidget):
         outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Lisenziya bloklaması — maketdə mərkəzi `620px` kart, `14px` künc.
-        card = Card(padding=40, spacing=20, surface="modal", shadow=True)
+        card = Card(padding=40, spacing=metrics.CARD_CONTENT_SPACING, surface="modal", shadow=True)
         card.setFixedWidth(620)
         card.body().setAlignment(Qt.AlignmentFlag.AlignHCenter)
 

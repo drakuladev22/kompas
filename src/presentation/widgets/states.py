@@ -152,7 +152,9 @@ class EmptyState(QWidget):
         outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         inner = QVBoxLayout()
-        inner.setSpacing(20)
+        # Boş vəziyyət blokunun daxili ritmi: ikon → başlıq → izah. 20
+        # səkkiz-piksellik şəbəkədən kənarda idi (`appl.md` qayda 2).
+        inner.setSpacing(24)
         inner.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
         icon_box = StateIconBox(icon_name, theme, tone=tone)

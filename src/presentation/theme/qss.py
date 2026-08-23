@@ -1019,9 +1019,15 @@ QPushButton[variant="window"][action="close"][hover="true"][keyfocus="true"] {
     border: {{--focus-ring-width}} solid {{--color-bg-primary}};
 }
 
-QPushButton[variant="nav"]:focus,
-QPushButton[variant="nav"][active="true"]:focus {
+QPushButton[variant="nav"]:focus {
     border: {{--focus-ring-width}} solid {{--color-focus-ring}};
+}
+
+/* AKTİV HƏB TÜND SƏTHDİR — halqa da ona görə seçilir (bax `tokens.py`,
+   `--color-focus-ring-on-dark`). İşıqlı temada ümumi halqa dərin amberdir və
+   həmin həbin üzərində 2.39:1 verirdi: fokus faktiki olaraq görünmürdü. */
+QPushButton[variant="nav"][active="true"]:focus {
+    border: {{--focus-ring-width}} solid {{--color-focus-ring-on-dark}};
 }
 
 QPushButton[variant="icon"]:focus,

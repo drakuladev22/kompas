@@ -207,7 +207,7 @@ class DashboardScreen(Screen):
         middle_layout.setSpacing(metrics.CARD_SPACING)
         self.responsive_row(middle_layout)
 
-        chart_card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        chart_card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         chart_head = QWidget()
         chart_head_layout = QHBoxLayout(chart_head)
         chart_head_layout.setContentsMargins(0, 0, 0, 0)
@@ -242,7 +242,7 @@ class DashboardScreen(Screen):
         self._leaders = RankList("Xal liderləri")
         bottom_layout.addWidget(self._leaders, 1)
 
-        self._health = Card(padding=metrics.CARD_PADDING, spacing=12)
+        self._health = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._health.add(title_label("Server sağlamlığı", size=15))
         self._health_rows = QVBoxLayout()
         self._health_rows.setSpacing(12)
@@ -458,7 +458,7 @@ class DashboardScreen(Screen):
             layout.removeWidget(widget)
 
     def _build_ranking_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
@@ -488,7 +488,7 @@ class DashboardScreen(Screen):
         return card
 
     def _build_store_vs_network_card(self, theme: ThemeManager) -> tuple[Card, QLabel, BarChart]:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Mağaza — Şəbəkə Ortalaması", size=15))
         subtitle = muted_label("")
         card.add(subtitle)
@@ -500,7 +500,7 @@ class DashboardScreen(Screen):
         return card, subtitle, chart
 
     def _build_trend_card(self, theme: ThemeManager) -> tuple[Card, QLabel, BarChart]:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         title = title_label("Zaman-üzrə Trend", size=15)
         card.add(title)
         chart = BarChart(theme)
@@ -509,7 +509,7 @@ class DashboardScreen(Screen):
         return card, title, chart
 
     def _build_outlier_card(self) -> tuple[Card, QLabel, QVBoxLayout]:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Kritik-Kənar (Outlier) Kartı", size=15))
         summary = body_label("", size=13)
         summary.setWordWrap(True)
@@ -523,7 +523,7 @@ class DashboardScreen(Screen):
         return card, summary, rows_layout
 
     def _build_break_overuse_card(self) -> tuple[Card, QVBoxLayout]:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Gündəlik fasilə həddini aşanlar", size=15))
         card.add(
             muted_label(
@@ -962,7 +962,7 @@ class PermissionMatrixScreen(Screen):
         return panel
 
     def _build_override_card(self) -> Card:
-        card = Card(padding=16, spacing=12)
+        card = Card(padding=16, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Fərdi İstisna", size=15))
         card.add(muted_label("Bir istifadəçiyə rolundan kənar icazə vermək"))
         self._override_search = QLineEdit()
@@ -1005,7 +1005,7 @@ class PermissionMatrixScreen(Screen):
         total_count = 0
 
         for group_name, items in groups:
-            card = Card(padding=metrics.CARD_PADDING, spacing=12)
+            card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
             card.add(title_label(group_name, size=15))
 
             grid = QGridLayout()
@@ -1133,7 +1133,7 @@ class RoleCreateDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
         card.add(title_label("Yeni Vəzifə", size=19))
 
@@ -1609,7 +1609,7 @@ class NewUserDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
         card.add(title_label("Yeni İşçi", size=19))
 
@@ -1840,7 +1840,7 @@ class PosThresholdDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
         card.add(title_label("POS Səlahiyyəti", size=19))
         card.add(muted_label(employee_name))
@@ -1974,7 +1974,7 @@ class ResetPinDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
         card.add(title_label("PIN Sıfırla", size=19))
         card.add(muted_label(employee_name))
@@ -2056,7 +2056,7 @@ class ResetPasswordDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
         card.add(title_label("Şifrəni Yenilə", size=19))
         card.add(muted_label(employee_name))
@@ -2143,7 +2143,7 @@ class ChangeRoleDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
         card.add(title_label("Rolu Dəyiş", size=19))
         card.add(muted_label(f"{employee_name} — hazırkı rol: {current_role}"))
@@ -2252,7 +2252,7 @@ class EmployeeDocumentDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
         card.add(title_label("Sənədlər", size=19))
         card.add(muted_label(employee_name))
@@ -2585,7 +2585,7 @@ class ShiftPlanningScreen(Screen):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(metrics.CARD_SPACING)
 
-        legend = Card(padding=16, spacing=12)
+        legend = Card(padding=16, spacing=metrics.CARD_CONTENT_SPACING)
         legend.add(title_label("Növbə kodları", size=15))
         for code, description, token in self.LEGEND:
             row = QWidget()
@@ -2626,7 +2626,7 @@ class ShiftPlanningScreen(Screen):
         # məhz bu siyahıya istinadla sınayır — sabit iş rejimlərinin ADLARIDIR,
         # düymələrin deyil.
 
-        self._summary = Card(padding=16, spacing=12)
+        self._summary = Card(padding=16, spacing=metrics.CARD_CONTENT_SPACING)
         self._summary.add(title_label("Ayın xülasəsi", size=15))
         self._summary_rows = QVBoxLayout()
         self._summary_rows.setSpacing(8)
@@ -2646,8 +2646,8 @@ class ShiftPlanningScreen(Screen):
         İkisini eyni kartda göstərmək təxmini fakt kimi oxutdurardı; #13-ün
         açıq tələbi isə istifadəçinin onu proqnoz sanmamasıdır.
         """
-        self._staffing_card = Card(padding=16, spacing=12)
-        self._staffing_card.add(title_label("Tarixi nümunə (məsləhət)", size=14))
+        self._staffing_card = Card(padding=16, spacing=metrics.CARD_CONTENT_SPACING)
+        self._staffing_card.add(title_label("Tarixi nümunə (məsləhət)", size=15))
         self._staffing_rows = QVBoxLayout()
         self._staffing_rows.setSpacing(8)
         holder = QWidget()
@@ -2922,7 +2922,7 @@ class DailyRosterScreen(Screen):
         )
         self.add(self._table)
 
-        note_card = Card(padding=16, spacing=12)
+        note_card = Card(padding=16, spacing=metrics.CARD_CONTENT_SPACING)
         self._note = QPlainTextEdit()
         self._note.setPlaceholderText("Rəhbər qeydi əlavə et…")
         self._note.setFixedHeight(80)

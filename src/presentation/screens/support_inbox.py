@@ -213,7 +213,7 @@ class SupportInboxScreen(Screen):
 
     def _build_filter_card(self) -> Card:
         """Status zolağı + kombinə süzgəclər + aktiv «chip»-lər."""
-        card = Card(padding=16, spacing=12)
+        card = Card(padding=16, spacing=metrics.CARD_CONTENT_SPACING)
 
         status_row = QWidget()
         status_layout = QHBoxLayout(status_row)

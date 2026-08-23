@@ -243,12 +243,40 @@ LIGHT_THEME: Final[dict[str, str]] = {
     "--color-border-strong": "#6E6E73",
     "--color-border-subtle": "#DCDCE0",
     "--color-focus-ring": "#9A5F00",
+    # ──────────────────────────────────────────────────────────────────────
+    # TÜND SƏTHDƏKİ FOKUS HALQASI AYRICA TOKENDİR
+    # ──────────────────────────────────────────────────────────────────────
+    # `--color-focus-ring` AÇIQ səthlər üçün kalibrlənib (dərin amber
+    # `#9A5F00`, ağ fonda 4.83:1). Aktiv naviqasiya həbi isə hər iki temada
+    # TÜNDDÜR — dərin amber onun üzərində cəmi 2.39:1 verir, yəni fokusun
+    # harada olduğu görünmür. Bu, `--color-accent` / `--color-brand-amber`
+    # ayrımının EYNİSİDİR (bax modul başlığı): rəng fona görə kalibrlənir,
+    # bir dəyər hər yerə yaramır.
+    #
+    # Dəyər hər iki palitrada brend amberidir: tünd səthdə o, 6.16:1 verir.
+    "--color-focus-ring-on-dark": BRAND_AMBER,
     "--color-overlay": "#0B1D3A99",
     # --- PIN ekranı (AAA) ---
     "--color-pin-bg": "#FFFFFF",
     "--color-pin-text": BRAND_NAVY,
     # --- örtük (shell) quruluşu — bax "DİZAYN MAKETİ" qeydi aşağıda ---
-    "--color-titlebar-bg": BRAND_NAVY,
+    #
+    # ──────────────────────────────────────────────────────────────────────
+    # ÖRTÜK NEYTRALDIR, BRENDİN RƏNGİNDƏ DEYİL (`appl.md` qayda 3)
+    # ──────────────────────────────────────────────────────────────────────
+    # Başlıq zolağı və aktiv naviqasiya həbi İŞIQLI rejimdə `BRAND_NAVY` idi,
+    # yəni ekranın İKİ ən sabit elementi brendin rəngində «yanırdı». Qayda 3
+    # struktur elementlərinin neytral qalmasını tələb edir: rəng YALNIZ məna
+    # daşımalıdır (vurğu, semantik nişan, əsas hərəkət düyməsi).
+    #
+    # ZOLAQ HƏLƏ DƏ TÜNDDÜR və bu, qəsdlidir: loqo işarəsi hər iki temada
+    # TÜND fon üçün boyanır (`brand_assets.py`) — açıq zolaqda işarə görünməz
+    # qalardı. Dəyişən yalnız TONdur: brend Navy-si → neytral qrafit.
+    #
+    # Navy İTMİR: əsas mətn, əsas hərəkət düyməsi (`--color-action-bg`),
+    # qrafik sütunu və loqo həmin rəngdədir — yəni brend MƏZMUNDA qalır,
+    # ÇƏRÇİVƏDƏN çıxır.
+    "--color-titlebar-bg": "#1D1F24",
     "--color-titlebar-text": "#DCE4F0",
     "--color-titlebar-control": "#A9B6CB",
     # ──────────────────────────────────────────────────────────────────────
@@ -265,12 +293,12 @@ LIGHT_THEME: Final[dict[str, str]] = {
     # sol paneldəki AKTİV maddənin dolu fonudur — orada Navy qəsdən seçilib
     # (maket) və başlıq zolağına görə dəyişdirilməsi iki ayrı rolu bir-birinə
     # bağlayardı. Ona görə başlıq zolağının öz hover səthi var.
-    "--color-titlebar-control-hover": "#1E3862",
+    "--color-titlebar-control-hover": "#2B2F36",
     "--color-sidebar-bg": "#FFFFFF",
     "--color-sidebar-border": "#E5E5EA",
     "--color-nav-item-text": "#33405C",
     "--color-nav-item-icon": "#7B8AA3",
-    "--color-nav-active-bg": BRAND_NAVY,
+    "--color-nav-active-bg": "#2E3440",
     "--color-nav-active-text": "#FFFFFF",
     # --- əsas hərəkət düyməsi (maketdə: işıqlıda Navy, tünddə Amber) ---
     "--color-action-bg": BRAND_NAVY,
@@ -358,6 +386,10 @@ DARK_THEME: Final[dict[str, str]] = {
     "--color-border-strong": "#8A919E",
     "--color-border-subtle": "#2B303B",
     "--color-focus-ring": BRAND_AMBER,
+    #: Tünd temada halqa onsuz da amberdir — token yenə də AYRICA verilir,
+    #: çünki hər iki palitra EYNİ açar dəstini daşımalıdır (aşağıdakı
+    #: `_assert_themes_are_parallel`).
+    "--color-focus-ring-on-dark": BRAND_AMBER,
     "--color-overlay": "#000000AA",
     # --- PIN ekranı (AAA) ---
     "--color-pin-bg": "#0C0F14",

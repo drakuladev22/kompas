@@ -231,7 +231,7 @@ class CatalogEntryDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
         card.add(title_label(title, size=19))
 
@@ -649,7 +649,7 @@ class ReportExportScreen(Screen):
         edilmiş düzəlişlər → təsdiq. Ayrı kartlar bu ardıcıllığı vizual olaraq
         pozardı.
         """
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Export-öncəsi Doğrulama", size=19))
         card.add(
             muted_label(
@@ -1081,7 +1081,7 @@ class ExportCorrectionDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
         card.add(title_label("Export Düzəlişi", size=19))
         card.add(

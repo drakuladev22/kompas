@@ -211,7 +211,7 @@ class FaceEnrollmentScreen(Screen):
         return toolbar
 
     def _build_subject_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Üz Qeydiyyatı", size=15))
         card.add(
             muted_label(
@@ -261,7 +261,7 @@ class FaceEnrollmentScreen(Screen):
 
     def _build_preview_card(self) -> Card:
         """«Canlı önizləmə» — ŞƏKİL YOX, VƏZİYYƏT (bax modul başlığı)."""
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Kamera", size=15))
 
         self._camera_state = body_label("Kamera vəziyyəti oxunmayıb.", size=13)
@@ -304,7 +304,7 @@ class FaceEnrollmentScreen(Screen):
 
     def _build_frames_card(self) -> Card:
         """Kadr-kadr nəticə — «uğursuz» əvəzinə SƏBƏB (bənd 1)."""
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Kadrların nəticəsi", size=15))
         card.add(
             muted_label(
@@ -630,7 +630,7 @@ class FaceExemptionScreen(Screen):
         return card
 
     def _build_form(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Yeni istisna", size=15))
 
         employee_box = QWidget()
@@ -1066,7 +1066,7 @@ class FaceSetupRequiredScreen(Screen):
         # DƏRHAL sonra görür. Öz ölçüsünü seçsəydik, iki ardıcıl ekran arasında
         # kartın gövdəsi «tullanardı» və dizayn səpələnməsi bir dəyər artardı
         # (`scripts/check_symmetry.py` tavanı).
-        card = Card(padding=40, spacing=20)
+        card = Card(padding=40, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Üz qeydiyyatı tələb olunur", size=22))
         self._subject = body_label("", size=15)
         card.add(self._subject)

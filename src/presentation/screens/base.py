@@ -552,7 +552,7 @@ def _section_error_banner() -> tuple[QWidget, QLabel]:
         stretch,
     )
 
-    card = Card(padding=16, spacing=12)
+    card = Card(padding=16, spacing=metrics.CARD_CONTENT_SPACING)
     line = QWidget()
     layout = QHBoxLayout(line)
     layout.setContentsMargins(0, 0, 0, 0)

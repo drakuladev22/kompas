@@ -168,6 +168,20 @@ CONTENT_PADDING_H: Final = 24
 CONTENT_BOTTOM_SAFE_AREA: Final = 96
 #: Kartlar arası (maketdə `gap: 18px`) — şəbəkədə 16.
 CARD_SPACING: Final = 16
+#: Kartın İÇİNDƏKİ elementlər arasındakı aralıq.
+#:
+#: `appl.md` FAZA 3 — ƏVVƏL BU DƏYƏR HƏR ÇAĞIRIŞ YERİNDƏ AYRICA YAZILIRDI:
+#: 12 (67 yer), 16 (32 yer), 20 (5 yer). Üç dəyər eyni ROLU daşıyırdı, yəni
+#: kart-kartdan fərqlənirdi və ekranlar arasında keçəndə məzmun «tərpənirdi»
+#: (`scripts/check_symmetry.py` bunu ölçür).
+#:
+#: 16 seçilib, 12 YOX: başlıq altındakı ayırıcı xətlər silinəndən sonra
+#: (qayda 9) sərhədi məhz BOŞLUQ çəkir və 12-də başlıqla məzmun bir-birinə
+#: yapışırdı. Sıx siyahı sətirləri üçün `Card(spacing=8)` QALIR — o, ayrı
+#: roldur (bir-birinin ardınca gələn eyni tipli sətirlər), ona görə tokenə
+#: çevrilmir.
+CARD_CONTENT_SPACING: Final = 16
+
 #: Kart daxili boşluq.
 #:
 #: DESIGN.MD REDİZAYNI: 18 → 20. Referansların hamısında (`dashboard.jpg`,

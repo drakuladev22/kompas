@@ -79,7 +79,10 @@ class PerformanceReviewScreen(Screen):
         columns = QWidget()
         columns_layout = QHBoxLayout(columns)
         columns_layout.setContentsMargins(0, 0, 0, 0)
-        columns_layout.setSpacing(20)
+        # Yan-yana duran KARTLAR arasındakı aralıq — `CARD_SPACING` ilə
+        # eyni olmalıdır, əks halda eyni rol iki fərqli dəyər daşıyır
+        # (`scripts/check_symmetry.py`).
+        columns_layout.setSpacing(metrics.CARD_SPACING)
         # Dar pəncərədə forma və tarixçə alt-alta düşür (bax
         # `screens/base.py::responsive_row`).
         self.responsive_row(columns_layout)
@@ -91,7 +94,7 @@ class PerformanceReviewScreen(Screen):
     # ------------------------------- forma kartı ------------------------------ #
 
     def _build_form_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Yeni Qiymətləndirmə", size=19))
 
         self._employee = FormField("İşçi", widget=QComboBox())
@@ -134,7 +137,7 @@ class PerformanceReviewScreen(Screen):
         return card
 
     def _build_history_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(section_label("Keçmiş Dövrlər"))
 
         self._history_rows = QVBoxLayout()

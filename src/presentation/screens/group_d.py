@@ -93,7 +93,7 @@ def _metric_card(
     tone: str,
 ) -> Card:
     """Diaqnostika kartı — rəng-kodlaşdırılmış status nöqtəsi ilə."""
-    card = Card(padding=metrics.CARD_PADDING, spacing=12)
+    card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
 
     head = QWidget()
     head_layout = QHBoxLayout(head)
@@ -253,7 +253,7 @@ class ErpServersScreen(Screen):
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(metrics.CARD_SPACING)
 
-        self._mapping = Card(padding=metrics.CARD_PADDING, spacing=12)
+        self._mapping = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._mapping.add(title_label("Mağaza — Server xəritələmə", size=15))
         self._mapping_rows = QVBoxLayout()
         self._mapping_rows.setSpacing(8)
@@ -264,7 +264,7 @@ class ErpServersScreen(Screen):
         self._mapping.add(self._mapping_note)
         bottom_layout.addWidget(self._mapping, 1)
 
-        self._sync = Card(padding=metrics.CARD_PADDING, spacing=12)
+        self._sync = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._sync.add(title_label("Son sinxronizasiya", size=15))
         self._sync_rows = QVBoxLayout()
         self._sync_rows.setSpacing(8)
@@ -599,7 +599,7 @@ class ServerConnectionWizard(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
 
         self._heading = title_label("Yeni 1C Serveri", size=19)
@@ -1202,7 +1202,7 @@ class BackupScreen(Screen):
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(metrics.CARD_SPACING)
 
-        self._storage = Card(padding=metrics.CARD_PADDING, spacing=12)
+        self._storage = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._storage.add(title_label("Saxlama", size=15))
         self._storage_value = title_label("—", size=19)
         self._storage.add(self._storage_value)
@@ -1212,7 +1212,7 @@ class BackupScreen(Screen):
         self._storage.add(self._storage_caption)
         bottom_layout.addWidget(self._storage, 1)
 
-        schedule = Card(padding=metrics.CARD_PADDING, spacing=12)
+        schedule = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         schedule.add(title_label("Cədvəl", size=15))
 
         auto_row = QWidget()
@@ -1308,7 +1308,7 @@ class RestoreConfirmDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
 
         card.add(title_label("Bu nöqtəyə bərpa edilsin?", size=19))
@@ -1408,7 +1408,7 @@ class HealthScreen(Screen):
         self._metrics_layout.setSpacing(metrics.CARD_SPACING)
         self.add(self._metrics_host)
 
-        self._latency = Card(padding=metrics.CARD_PADDING, spacing=12)
+        self._latency = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._latency.add(title_label("1C sinxron gecikməsi — server üzrə", size=15))
         self._latency_rows = QVBoxLayout()
         self._latency_rows.setSpacing(8)
@@ -1417,7 +1417,7 @@ class HealthScreen(Screen):
         self._latency.add(latency_holder)
         self.add(self._latency)
 
-        self._alerts = Card(padding=metrics.CARD_PADDING, spacing=12)
+        self._alerts = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._alerts.add(title_label("Aktiv xəbərdarlıqlar", size=15))
         self._alerts_rows = QVBoxLayout()
         self._alerts_rows.setSpacing(12)
@@ -1565,7 +1565,7 @@ class AuditScreen(Screen):
         toolbar_layout.addWidget(export)
         self.add(toolbar)
 
-        filters = Card(padding=16, spacing=12)
+        filters = Card(padding=16, spacing=metrics.CARD_CONTENT_SPACING)
         filters_row = QWidget()
         filters_layout = QHBoxLayout(filters_row)
         filters_layout.setContentsMargins(0, 0, 0, 0)
@@ -1772,7 +1772,7 @@ class SettingsScreen(Screen):
         self.body().addStretch(1)
 
     def _build_appearance(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Görünüş", size=15))
 
         options = QWidget()
@@ -1824,7 +1824,7 @@ class SettingsScreen(Screen):
         self.theme_selected.emit(key)
 
     def _build_notifications(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Bildirişlər", size=15))
 
         for index, (key, title, description) in enumerate(self._NOTIFICATIONS):
@@ -1870,7 +1870,7 @@ class SettingsScreen(Screen):
             toggle.blockSignals(False)
 
     def _build_security(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Təhlükəsizlik", size=15))
 
         password_row = QWidget()
@@ -2024,7 +2024,7 @@ class DriveConnectionScreen(Screen):
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(theme, parent=parent)
 
-        self._status_card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        self._status_card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._status_card.add(title_label("Aktiv hesab", size=15))
 
         status_row = QWidget()
@@ -2091,7 +2091,7 @@ class DriveConnectionScreen(Screen):
         self.add(self._status_card)
 
         # Razılıq gedərkən görünən kart — ünvan + gözləmə mətni.
-        self._pending = Card(padding=metrics.CARD_PADDING, spacing=12)
+        self._pending = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._pending.add(title_label("Brauzerdə razılıq gözlənilir", size=15))
         self._pending.add(
             muted_label(
@@ -2106,7 +2106,7 @@ class DriveConnectionScreen(Screen):
         self._pending.setVisible(False)
         self.add(self._pending)
 
-        self._history = Card(padding=metrics.CARD_PADDING, spacing=12)
+        self._history = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._history.add(title_label("Bağlantı tarixçəsi", size=15))
         self._history_rows = QVBoxLayout()
         self._history_rows.setSpacing(8)
@@ -2332,7 +2332,7 @@ class RootControlScreen(Screen):
         banner.add(banner_row)
         self.add(banner)
 
-        self._limits = Card(padding=metrics.CARD_PADDING, spacing=12)
+        self._limits = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._limits.add(title_label("Dinamik limitlər", size=15))
         self._limits_rows = QVBoxLayout()
         self._limits_rows.setSpacing(12)
@@ -2346,7 +2346,7 @@ class RootControlScreen(Screen):
         self.add(self._build_branding_card())
         self.add(self._build_telegram_card())
 
-        self._modules = Card(padding=metrics.CARD_PADDING, spacing=12)
+        self._modules = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._modules.add(title_label("Modul açarları", size=15))
         self._modules_rows = QVBoxLayout()
         self._modules_rows.setSpacing(12)
@@ -2391,7 +2391,7 @@ class RootControlScreen(Screen):
         müxtəlif dəyər yazıb «Tətbiq Et» basmaq mümkün olardı və hansının
         qazandığı düymələrin sırasından asılı qalardı.
         """
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Fasilə Parametrləri", size=15))
         card.add(
             muted_label(
@@ -2454,7 +2454,7 @@ class RootControlScreen(Screen):
         tətbiq addımından sonra göstərilsəydi, Root botun FAKTİKİ vəziyyətini
         ekranda görməzdi.
         """
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Telegram Bildirişləri", size=15))
         card.add(
             muted_label(
@@ -2601,7 +2601,7 @@ class RootControlScreen(Screen):
         (`FaceStoreScope.is_global`) — yəni İŞLƏYİR. İzah olmasaydı, boş sahə
         «söndürülüb» kimi oxunardı və Root pilot yayımını tərsinə anlayardı.
         """
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Face Control", size=15))
         card.add(
             muted_label(
@@ -2663,7 +2663,7 @@ class RootControlScreen(Screen):
         istifadəçi onu saxlaya bilər, lakin nəticəni bilməlidir. Mətn use
         case-dən gəlir; ekran onu YAZMIR, yalnız göstərir.
         """
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Şirkət kimliyi", size=15))
         card.add(
             muted_label(
@@ -2869,7 +2869,7 @@ class RootControlScreen(Screen):
             )
 
     def _build_registry(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("İcazə registri", size=15))
 
         self._registry_rows = QVBoxLayout()

@@ -313,7 +313,7 @@ class MonthlyFineReviewScreen(Screen):
         return toolbar
 
     def _build_footer(self) -> QWidget:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Nəşr", size=15))
         card.add(muted_label(IRREVERSIBLE_NOTE, size=12))
 
@@ -430,7 +430,7 @@ class MonthlyFineReviewScreen(Screen):
         return self._groups_layout
 
     def _build_group(self, group: FineReviewGroup) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
@@ -621,7 +621,7 @@ class PublishConfirmDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
 
         card.add(title_label("Cərimələr bütün filiallara göndərilsin?", size=19))

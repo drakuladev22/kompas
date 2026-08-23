@@ -377,7 +377,7 @@ class MigrationConfirmDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
 
         card.add(title_label("Baza keçidi başlasın?", size=19))
@@ -1152,7 +1152,7 @@ class PluginPageScreen(Screen):
     ) -> None:
         super().__init__(theme, parent=parent)
 
-        source = Card(padding=16, spacing=12)
+        source = Card(padding=16, spacing=metrics.CARD_CONTENT_SPACING)
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)

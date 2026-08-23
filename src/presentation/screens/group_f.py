@@ -86,7 +86,7 @@ class TaskCard(Card):
         super().__init__(padding=16, spacing=8, parent=parent)
         task_id = task.get("id", "")
 
-        self.add(title_label(task.get("title", ""), size=14))
+        self.add(title_label(task.get("title", ""), size=15))
 
         description = task.get("description", "")
         if description:
@@ -191,7 +191,7 @@ class NewTaskDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
         card.add(title_label("Yeni Tapşırıq", size=19))
         card.add(
@@ -445,7 +445,7 @@ class SalesPointsScreen(Screen):
         self._balance.add(self._balance_delta)
         summary_layout.addWidget(self._balance, 1)
 
-        self._next_reward = Card(padding=metrics.CARD_PADDING, spacing=12)
+        self._next_reward = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._next_reward.add(muted_label("Növbəti mükafat"))
         self._next_reward_value = title_label("—", size=22)
         self._next_reward.add(self._next_reward_value)
@@ -572,7 +572,7 @@ class SalesPointsScreen(Screen):
 
         for reward in rewards:
             cost = int(reward["cost"])
-            card = Card(padding=metrics.CARD_PADDING, spacing=12)
+            card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
 
             thumbnail = plain_label()
             thumbnail.setFixedHeight(72)
@@ -671,7 +671,7 @@ class FineAppealScreen(Screen):
         self.body().addStretch(1)
 
     def _build_form(self, reasons: list[str]) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._form_card = card
 
         head = QWidget()
@@ -746,7 +746,7 @@ class FineAppealScreen(Screen):
             text_layout = QVBoxLayout(text_box)
             text_layout.setContentsMargins(0, 0, 0, 0)
             text_layout.setSpacing(4)
-            text_layout.addWidget(title_label(fine.get("type", ""), size=14))
+            text_layout.addWidget(title_label(fine.get("type", ""), size=15))
             text_layout.addWidget(muted_label(fine.get("meta", "")))
             layout.addWidget(text_box)
             layout.addWidget(stretch())
@@ -832,7 +832,7 @@ class FineAppealInboxScreen(Screen):
             return
 
         for appeal in appeals:
-            card = Card(padding=metrics.CARD_PADDING, spacing=12)
+            card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
 
             head = QWidget()
             head_layout = QHBoxLayout(head)

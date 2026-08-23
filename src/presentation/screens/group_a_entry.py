@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 
 from src.presentation.theme.manager import set_surface_color
 from src.presentation.theme.tokens import ThemeMode
-from src.presentation.widgets import brand_assets, icons
+from src.presentation.widgets import brand_assets, icons, metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.forms import FormField
 from src.presentation.widgets.layout_utils import clear_layout
@@ -304,7 +304,7 @@ class AdminLoginScreen(QWidget):
         outer = QVBoxLayout(self)
         outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        card = Card(padding=40, spacing=20, shadow=True)
+        card = Card(padding=40, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         card.setFixedWidth(LOGIN_CARD_WIDTH)
         card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Maximum)
 
@@ -1235,7 +1235,7 @@ class FatalStartupScreen(QWidget):
         outer = QVBoxLayout(self)
         outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        card = Card(padding=40, spacing=20, surface="modal", shadow=True)
+        card = Card(padding=40, spacing=metrics.CARD_CONTENT_SPACING, surface="modal", shadow=True)
         card.setFixedWidth(560)
         card.body().setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
@@ -1364,7 +1364,7 @@ class ConnectionSettingsScreen(QWidget):
         # Doldurma və aralıq qonşu giriş ekranları ilə EYNİDİR (`AdminLoginScreen`,
         # `FatalStartupScreen`): istifadəçi bu üç ekran arasında keçir və ad-hoc
         # 36px kartın hər keçiddə bir neçə piksel «tərpənməsi» kimi görünərdi.
-        card = Card(padding=40, spacing=16, surface="modal", shadow=True)
+        card = Card(padding=40, spacing=metrics.CARD_CONTENT_SPACING, surface="modal", shadow=True)
         card.setFixedWidth(self.CARD_WIDTH)
 
         heading = plain_label("Bağlantı Ayarları")

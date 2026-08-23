@@ -222,7 +222,7 @@ class FieldReportScreen(Screen):
     # ------------------------------- quruluş --------------------------------- #
 
     def _build_form_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
 
         self._form_title = title_label("Sahə hesabatı", size=19)
         card.add(self._form_title)
@@ -266,7 +266,7 @@ class FieldReportScreen(Screen):
         return card
 
     def _build_checklist_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Checklist", size=15))
         card.add(
             muted_label(
@@ -330,7 +330,7 @@ class FieldReportScreen(Screen):
         return card
 
     def _build_actions_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
 
         row = QWidget()
         layout = QHBoxLayout(row)
@@ -619,7 +619,7 @@ class FieldReportScreen(Screen):
             return
 
         entry = self._items[self._step]
-        panel = Card(surface="panel", padding=16, spacing=12)
+        panel = Card(surface="panel", padding=16, spacing=metrics.CARD_CONTENT_SPACING)
         panel.add(body_label(f"{self._step + 1}. {entry.item_text}", size=15))
 
         chips = QWidget()

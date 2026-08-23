@@ -585,7 +585,7 @@ class EmployeeHomeScreen(QWidget):
     # ---------------------------- status kartı -------------------------------- #
 
     def _build_status_card(self) -> QWidget:
-        card = Card(padding=metrics.CARD_PADDING + 4, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING + 4, spacing=metrics.CARD_CONTENT_SPACING)
 
         card.add(section_label("Cari vəziyyət"))
 
@@ -652,7 +652,7 @@ class EmployeeHomeScreen(QWidget):
         olunmayıb) kart ümumiyyətlə görünmür — ekran bugünkü halında qalır.
         Boş açılan siyahı «sistem xarabdır» kimi oxunardı.
         """
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(section_label("Fasilə növü"))
 
         row = QWidget()
@@ -756,7 +756,7 @@ class EmployeeHomeScreen(QWidget):
         return container
 
     def _build_tasks_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
@@ -788,7 +788,7 @@ class EmployeeHomeScreen(QWidget):
             self._tasks_body.addWidget(body_label(task, size=13))
 
     def _build_points_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Xal Balansım", size=metrics.FONT_CARD_TITLE))
 
         self._points_value = title_label("0", size=32)
@@ -818,7 +818,7 @@ class EmployeeHomeScreen(QWidget):
         )
 
     def _build_fines_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Cərimələrim", size=metrics.FONT_CARD_TITLE))
 
         self._fines_summary = title_label("—", size=19)
@@ -862,7 +862,7 @@ class EmployeeHomeScreen(QWidget):
     # --------------------------- açıq növbələr (#16) -------------------------- #
 
     def _build_open_shifts_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
@@ -949,7 +949,7 @@ class EmployeeHomeScreen(QWidget):
         balance_for`). Öz haqqını görmək üçün flag istəmək işçini öz
         məlumatından kəsərdi (`menu.py` başlığındakı self-service qaydası).
         """
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
@@ -1100,7 +1100,7 @@ class EmployeeHomeScreen(QWidget):
         struktur ikizidir, lakin BURADA heç bir `[...]_requested` siqnalı
         yoxdur, çünki işçinin bu kartda edə biləcəyi HEÇ BİR əməliyyat yoxdur).
         """
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)

@@ -112,7 +112,7 @@ class RecoveryConsoleScreen(Screen):
         # girişdən ƏVVƏL açılan kartdır və istifadəçi onlar arasında keçir —
         # fərqli doldurma kartın «tərpənməsi» kimi görünərdi
         # (`test_design_symmetry.py` səpələnməni ölçür).
-        card = Card(padding=40, spacing=16, surface="modal", shadow=True)
+        card = Card(padding=40, spacing=metrics.CARD_CONTENT_SPACING, surface="modal", shadow=True)
         card.setFixedWidth(CARD_WIDTH)
 
         heading = plain_label("Bərpa Konsolu")

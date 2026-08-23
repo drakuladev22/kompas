@@ -351,7 +351,7 @@ class OperatorQueueScreen(Screen):
         # Aralıq SIFIR DEYİL (`appl.md` FAZA 3, qayda 9): başlıq ilə izahı
         # əvvəl `Divider()` ayırırdı, indi BOŞLUQ ayırır — xətt bir sətir
         # məlumat vermir, boşluq isə eyni sərhədi səssiz çəkir.
-        reminder = Card(padding=16, spacing=12)
+        reminder = Card(padding=16, spacing=metrics.CARD_CONTENT_SPACING)
         reminder_line = QWidget()
         reminder_layout = QHBoxLayout(reminder_line)
         reminder_layout.setContentsMargins(0, 0, 0, 0)
@@ -613,7 +613,7 @@ class ManualTimeOverrideDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=20)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
 
         # ------------------------------ başlıq ------------------------------ #
@@ -939,7 +939,7 @@ class FineEntryScreen(Screen):
     # -------------------------------- forma ---------------------------------- #
 
     def _build_form(self, fine_types: list[str], stores: list[str], employees: list[str]) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)

@@ -122,7 +122,14 @@ REQUIRED_PAIRS: list[tuple[str, str, float, str]] = [
     ("--color-focus-ring", "--color-sidebar-bg", AA_LARGE_TEXT, "Fokus halqası (sol panel)"),
     ("--color-focus-ring", "--color-content-bg", AA_LARGE_TEXT, "Fokus halqası (kontent)"),
     ("--color-focus-ring", "--color-neutral-bg", AA_LARGE_TEXT, "Fokus halqası (neytral)"),
-    ("--color-focus-ring", "--color-nav-active-bg", AA_LARGE_TEXT, "Fokus halqası (aktiv nav)"),
+    # Aktiv həb TÜND səthdir, halqa da ona görə kalibrlənib (`appl.md` qayda 3
+    # örtüyü neytrallaşdırandan sonra işıqlı temada da tünddür).
+    (
+        "--color-focus-ring-on-dark",
+        "--color-nav-active-bg",
+        AA_LARGE_TEXT,
+        "Fokus halqası (aktiv nav)",
+    ),
     ("--color-focus-ring", "--color-pin-bg", AA_LARGE_TEXT, "Fokus halqası (PIN)"),
     # --- hover / pressed halları da MƏTN daşıyır ---
     ("--color-text-on-accent", "--color-accent-hover", AA_NORMAL_TEXT, "Vurğu düyməsi (hover)"),

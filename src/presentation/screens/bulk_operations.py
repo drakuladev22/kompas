@@ -160,7 +160,7 @@ class BulkOperationsScreen(Screen):
     # ------------------------------- CSV idxalı -------------------------------- #
 
     def _build_import_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("CSV İşçi İdxalı", size=19))
         card.add(
             muted_label(
@@ -321,7 +321,7 @@ class BulkOperationsScreen(Screen):
     # ----------------------------- mağaza şablonu ------------------------------ #
 
     def _build_template_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
 
         header = QWidget()
         header_layout = QHBoxLayout(header)
@@ -437,7 +437,7 @@ class StoreTemplateCaptureDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
         card.add(title_label("Mağaza Şablonu Çıxar", size=19))
         card.add(
@@ -523,7 +523,7 @@ class StoreTemplateApplyDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
         card.add(title_label(f"«{template_name}» şablonunu tətbiq et", size=19))
 
@@ -625,7 +625,7 @@ class BulkImportResultDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
         card.add(title_label("İdxal Nəticəsi", size=19))
         card.add(

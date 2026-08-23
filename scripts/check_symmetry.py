@@ -61,10 +61,12 @@ SAMPLE_PLACES: Final = 3
 #:
 #: Hər redizayn addımından sonra bu iki rəqəm azaldılmalıdır. Artırmaq
 #: qadağandır: artım o deməkdir ki, dizayn bir addım da səpələnib.
-#: `appl.md` FAZA 3: 66 → 63. Kart doldurması 84 yerdə `20`/`24` ədədindən
-#: `metrics.CARD_PADDING` adına keçdi, yəni üç ad-hoc dəyər siyahıdan çıxdı.
-MAX_DISTINCT: Final = 63
-MAX_OFF_GRID: Final = 1
+#: `appl.md` FAZA 3: 66 → 58, şəbəkədən kənar 1 → 0. Üç addım:
+#: kart doldurması 84 yerdə `metrics.CARD_PADDING` adına, kart daxili aralığı
+#: 104 yerdə `metrics.CARD_CONTENT_SPACING` adına keçdi, başlıq ölçüsündəki
+#: şkaladan kənar `14px` (5 yer) 15-ə düzəldildi.
+MAX_DISTINCT: Final = 58
+MAX_OFF_GRID: Final = 0
 
 #: Rol → həmin rolu daşıyan çağırışlar. Ad `metrics.py`-dakı sabitlə uyğun
 #: gəlirsə, dəyər ADLIDIR və səpələnmə sayılmır.

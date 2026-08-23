@@ -200,7 +200,8 @@ class SyncConflictScreen(Screen):
         columns = QWidget()
         columns_layout = QHBoxLayout(columns)
         columns_layout.setContentsMargins(0, 0, 0, 0)
-        columns_layout.setSpacing(20)
+        # Kartlar arası aralıq — bax `performance_review.py`-dakı eyni sətir.
+        columns_layout.setSpacing(metrics.CARD_SPACING)
         # Dar pəncərədə siyahı və müqayisə alt-alta düşür (bax
         # `screens/base.py::responsive_row`).
         self.responsive_row(columns_layout)
@@ -225,7 +226,7 @@ class SyncConflictScreen(Screen):
     # ------------------------------- siyahı ----------------------------------- #
 
     def _build_list_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Həll gözləyən konfliktlər", size=15))
         card.add(
             muted_label(
@@ -313,7 +314,7 @@ class SyncConflictScreen(Screen):
     # ------------------------------ müqayisə ---------------------------------- #
 
     def _build_comparison_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._detail_title = title_label("Konflikt seçilməyib", size=15)
         card.add(self._detail_title)
         self._detail_meta = mono_label("", muted=True)
@@ -437,7 +438,7 @@ class SyncConflictScreen(Screen):
     # -------------------------------- qərar ----------------------------------- #
 
     def _build_decision_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(section_label("Qərar"))
         card.add(
             muted_label(
