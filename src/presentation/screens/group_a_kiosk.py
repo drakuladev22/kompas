@@ -34,7 +34,6 @@ from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
     Chip,
-    Divider,
     body_label,
     mono_label,
     muted_label,
@@ -653,7 +652,7 @@ class EmployeeHomeScreen(QWidget):
         olunmayıb) kart ümumiyyətlə görünmür — ekran bugünkü halında qalır.
         Boş açılan siyahı «sistem xarabdır» kimi oxunardı.
         """
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         card.add(section_label("Fasilə növü"))
 
         row = QWidget()
@@ -757,7 +756,7 @@ class EmployeeHomeScreen(QWidget):
         return container
 
     def _build_tasks_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
@@ -767,7 +766,6 @@ class EmployeeHomeScreen(QWidget):
         self._tasks_count = Chip("0", "info")
         head_layout.addWidget(self._tasks_count)
         card.add(head)
-        card.add(Divider())
 
         self._tasks_body = QVBoxLayout()
         self._tasks_body.setSpacing(8)
@@ -790,9 +788,8 @@ class EmployeeHomeScreen(QWidget):
             self._tasks_body.addWidget(body_label(task, size=13))
 
     def _build_points_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         card.add(title_label("Xal Balansım", size=metrics.FONT_CARD_TITLE))
-        card.add(Divider())
 
         self._points_value = title_label("0", size=32)
         card.add(self._points_value)
@@ -821,9 +818,8 @@ class EmployeeHomeScreen(QWidget):
         )
 
     def _build_fines_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         card.add(title_label("Cərimələrim", size=metrics.FONT_CARD_TITLE))
-        card.add(Divider())
 
         self._fines_summary = title_label("—", size=19)
         card.add(self._fines_summary)
@@ -866,7 +862,7 @@ class EmployeeHomeScreen(QWidget):
     # --------------------------- açıq növbələr (#16) -------------------------- #
 
     def _build_open_shifts_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
@@ -876,7 +872,6 @@ class EmployeeHomeScreen(QWidget):
         self._open_shift_count = Chip("0", "info")
         head_layout.addWidget(self._open_shift_count)
         card.add(head)
-        card.add(Divider())
 
         self._open_shift_body = QVBoxLayout()
         self._open_shift_body.setSpacing(12)
@@ -884,7 +879,11 @@ class EmployeeHomeScreen(QWidget):
         holder.setLayout(self._open_shift_body)
         card.add(holder)
 
-        self._open_shift_hint = body_label(
+        # BOŞ VƏZİYYƏT MƏTNİ SOLĞUNDUR — `appl.md` FAZA 3, qayda 1.
+        # Əvvəl `body_label` idi, yəni kart BAŞLIĞI ilə EYNİ rəngdə: gözə
+        # «məlumat var» kimi görünürdü, halbuki bu, məlumatın YOXLUĞUdur.
+        # İyerarxiya ölçü ilə deyil, ÇƏKİ və rənglə qurulur.
+        self._open_shift_hint = muted_label(
             "Hazırda sizin üçün açıq növbə yoxdur.",
             size=13,
         )
@@ -950,7 +949,7 @@ class EmployeeHomeScreen(QWidget):
         balance_for`). Öz haqqını görmək üçün flag istəmək işçini öz
         məlumatından kəsərdi (`menu.py` başlığındakı self-service qaydası).
         """
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
@@ -960,7 +959,6 @@ class EmployeeHomeScreen(QWidget):
         self._annual_leave_year = mono_label("", muted=True, size=12)
         head_layout.addWidget(self._annual_leave_year)
         card.add(head)
-        card.add(Divider())
 
         # "14/21" — `available_days`/`total_days`; mətn EKRANDA qurulur, use
         # case yalnız rəqəmləri verir (bax `AnnualLeaveBalanceView` başlığı).
@@ -1102,7 +1100,7 @@ class EmployeeHomeScreen(QWidget):
         struktur ikizidir, lakin BURADA heç bir `[...]_requested` siqnalı
         yoxdur, çünki işçinin bu kartda edə biləcəyi HEÇ BİR əməliyyat yoxdur).
         """
-        card = Card(padding=metrics.CARD_PADDING, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
@@ -1112,7 +1110,6 @@ class EmployeeHomeScreen(QWidget):
         self._announcement_count = Chip("0", "info")
         head_layout.addWidget(self._announcement_count)
         card.add(head)
-        card.add(Divider())
 
         self._announcement_body = QVBoxLayout()
         self._announcement_body.setSpacing(12)
@@ -1120,7 +1117,8 @@ class EmployeeHomeScreen(QWidget):
         holder.setLayout(self._announcement_body)
         card.add(holder)
 
-        self._announcement_hint = body_label("Hazırda aktiv elan yoxdur.", size=13)
+        # Boş vəziyyət mətni solğundur — yuxarıdakı ilə EYNİ səbəb.
+        self._announcement_hint = muted_label("Hazırda aktiv elan yoxdur.", size=13)
         card.add(self._announcement_hint)
 
         card.body().addStretch(1)

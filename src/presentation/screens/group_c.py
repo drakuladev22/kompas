@@ -207,7 +207,7 @@ class DashboardScreen(Screen):
         middle_layout.setSpacing(metrics.CARD_SPACING)
         self.responsive_row(middle_layout)
 
-        chart_card = Card(padding=20, spacing=16)
+        chart_card = Card(padding=metrics.CARD_PADDING, spacing=16)
         chart_head = QWidget()
         chart_head_layout = QHBoxLayout(chart_head)
         chart_head_layout.setContentsMargins(0, 0, 0, 0)
@@ -242,7 +242,7 @@ class DashboardScreen(Screen):
         self._leaders = RankList("Xal liderləri")
         bottom_layout.addWidget(self._leaders, 1)
 
-        self._health = Card(padding=20, spacing=12)
+        self._health = Card(padding=metrics.CARD_PADDING, spacing=12)
         self._health.add(title_label("Server sağlamlığı", size=15))
         self._health_rows = QVBoxLayout()
         self._health_rows.setSpacing(12)
@@ -458,7 +458,7 @@ class DashboardScreen(Screen):
             layout.removeWidget(widget)
 
     def _build_ranking_card(self) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
@@ -488,7 +488,7 @@ class DashboardScreen(Screen):
         return card
 
     def _build_store_vs_network_card(self, theme: ThemeManager) -> tuple[Card, QLabel, BarChart]:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(title_label("Mağaza — Şəbəkə Ortalaması", size=15))
         subtitle = muted_label("")
         card.add(subtitle)
@@ -500,7 +500,7 @@ class DashboardScreen(Screen):
         return card, subtitle, chart
 
     def _build_trend_card(self, theme: ThemeManager) -> tuple[Card, QLabel, BarChart]:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         title = title_label("Zaman-üzrə Trend", size=15)
         card.add(title)
         chart = BarChart(theme)
@@ -509,7 +509,7 @@ class DashboardScreen(Screen):
         return card, title, chart
 
     def _build_outlier_card(self) -> tuple[Card, QLabel, QVBoxLayout]:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(title_label("Kritik-Kənar (Outlier) Kartı", size=15))
         summary = body_label("", size=13)
         summary.setWordWrap(True)
@@ -523,7 +523,7 @@ class DashboardScreen(Screen):
         return card, summary, rows_layout
 
     def _build_break_overuse_card(self) -> tuple[Card, QVBoxLayout]:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(title_label("Gündəlik fasilə həddini aşanlar", size=15))
         card.add(
             muted_label(
@@ -1005,9 +1005,8 @@ class PermissionMatrixScreen(Screen):
         total_count = 0
 
         for group_name, items in groups:
-            card = Card(padding=20, spacing=12)
+            card = Card(padding=metrics.CARD_PADDING, spacing=12)
             card.add(title_label(group_name, size=15))
-            card.add(Divider())
 
             grid = QGridLayout()
             grid.setHorizontalSpacing(24)
@@ -1134,10 +1133,9 @@ class RoleCreateDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Yeni Vəzifə", size=19))
-        card.add(Divider())
 
         self._name = FormField(
             "Vəzifə adı",
@@ -1611,10 +1609,9 @@ class NewUserDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Yeni İşçi", size=19))
-        card.add(Divider())
 
         self._first_name = FormField("Ad")
         card.add(self._first_name)
@@ -1843,7 +1840,7 @@ class PosThresholdDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label("POS Səlahiyyəti", size=19))
         card.add(muted_label(employee_name))
@@ -1977,7 +1974,7 @@ class ResetPinDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label("PIN Sıfırla", size=19))
         card.add(muted_label(employee_name))
@@ -2059,7 +2056,7 @@ class ResetPasswordDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Şifrəni Yenilə", size=19))
         card.add(muted_label(employee_name))
@@ -2146,7 +2143,7 @@ class ChangeRoleDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Rolu Dəyiş", size=19))
         card.add(muted_label(f"{employee_name} — hazırkı rol: {current_role}"))
@@ -2255,7 +2252,7 @@ class EmployeeDocumentDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Sənədlər", size=19))
         card.add(muted_label(employee_name))

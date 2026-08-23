@@ -236,7 +236,6 @@ class InfrastructureScreen(Screen):
         phases_card = Card()
         phases_body = phases_card.body()
         phases_body.addWidget(title_label("Keçid addımları", size=15))
-        phases_body.addWidget(Divider())
         for phase in ALL_PHASES:
             widget = PhaseRow(phase, theme)
             self._phase_rows[phase] = widget
@@ -378,7 +377,7 @@ class MigrationConfirmDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
 
         card.add(title_label("Baza keçidi başlasın?", size=19))

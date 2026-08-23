@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.presentation.screens.base import Screen
+from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.data_table import Column, DataTable
 from src.presentation.widgets.forms import field_label
@@ -228,7 +229,7 @@ class AnnualLeaveRequestDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label("İllik Məzuniyyət Sorğusu", size=19))
         card.add(

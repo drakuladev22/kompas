@@ -238,7 +238,6 @@ class SupportChatWidget(QWidget):
         header_layout.addWidget(close)
 
         panel.add(header)
-        panel.add(Divider())
 
         # ------------------------------ mesajlar ---------------------------- #
         self._scroll = QScrollArea()

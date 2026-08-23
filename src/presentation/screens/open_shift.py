@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.forms import field_label
 from src.presentation.widgets.layout_utils import clear_layout
@@ -71,7 +72,7 @@ class OpenShiftMarketCard(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         layout.addWidget(card)
 
         head = QWidget()
@@ -169,7 +170,7 @@ class OpenShiftPostDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Açıq Növbə Elan Et", size=19))
         card.add(

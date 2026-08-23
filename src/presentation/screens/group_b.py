@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.presentation.screens.base import Screen
+from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.data_table import Column, DataTable
 from src.presentation.widgets.forms import FormField, field_label
@@ -51,7 +52,6 @@ from src.presentation.widgets.primitives import (
     Card,
     Chip,
     ChipTone,
-    Divider,
     FilterChip,
     body_label,
     is_activation_key,
@@ -348,7 +348,10 @@ class OperatorQueueScreen(Screen):
         self.add(self._filter_bar)
 
         # --- iVMS xatırladıcısı — bax modul başlığı --- #
-        reminder = Card(padding=16, spacing=0)
+        # Aralıq SIFIR DEYİL (`appl.md` FAZA 3, qayda 9): başlıq ilə izahı
+        # əvvəl `Divider()` ayırırdı, indi BOŞLUQ ayırır — xətt bir sətir
+        # məlumat vermir, boşluq isə eyni sərhədi səssiz çəkir.
+        reminder = Card(padding=16, spacing=12)
         reminder_line = QWidget()
         reminder_layout = QHBoxLayout(reminder_line)
         reminder_layout.setContentsMargins(0, 0, 0, 0)
@@ -379,7 +382,6 @@ class OperatorQueueScreen(Screen):
         # Üz təsdiqi STEP B/C təsdiqini NƏ ƏVƏZ EDİR, NƏ DƏ AVTOMATLAŞDIRIR.
         # Mətn olmasaydı, sərhəd yalnız sənəddə qalar və operator onu heç vaxt
         # oxumazdı.
-        reminder.add(Divider())
         reminder.add(
             body_label(
                 "Üz təsdiqi «kioskda duran şəxs KİMDİR» sualına cavab verir. Siz isə "
@@ -611,7 +613,7 @@ class ManualTimeOverrideDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=20)
+        card = Card(padding=metrics.CARD_PADDING, spacing=20)
         layout.addWidget(card)
 
         # ------------------------------ başlıq ------------------------------ #
@@ -634,7 +636,6 @@ class ManualTimeOverrideDialog(QDialog):
         close.clicked.connect(self.reject)
         head_layout.addWidget(close)
         card.add(head)
-        card.add(Divider())
 
         # ------------------------------ vaxtlar ----------------------------- #
         times = QWidget()
@@ -938,7 +939,7 @@ class FineEntryScreen(Screen):
     # -------------------------------- forma ---------------------------------- #
 
     def _build_form(self, fine_types: list[str], stores: list[str], employees: list[str]) -> Card:
-        card = Card(padding=20, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
@@ -946,7 +947,6 @@ class FineEntryScreen(Screen):
         head_layout.addWidget(title_label("Yeni Cərimə", size=15))
         head_layout.addWidget(stretch())
         card.add(head)
-        card.add(Divider())
 
         grid = QWidget()
         grid_layout = QHBoxLayout(grid)

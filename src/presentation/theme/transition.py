@@ -93,7 +93,14 @@ def animate_theme_change(
     animation.setDuration(duration_ms)
     animation.setStartValue(1.0)
     animation.setEndValue(0.0)
-    animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+    # YUMŞALMA ƏYRİSİ — SİMMETRİK DEYİL, SÖNƏNDİR (`appl.md` FAZA 3, qayda 8)
+    # ─────────────────────────────────────────────────────────────────────────
+    # `InOutCubic` həm başlanğıcda, həm sonda yavaşdır: hərəkət «mexaniki»
+    # oxunur, çünki real obyektlər belə hərəkət etmir. Apple-in bütün sistem
+    # keçidləri SÖNƏN (`ease-out`) əyrisindədir — sürətlə başlayıb yavaş
+    # dayanır, yəni istifadəçinin əməli DƏRHAL cavab alır, dayanma isə
+    # yumşaq olur. Müddət (200-300 ms aralığı) DƏYİŞMİR.
+    animation.setEasingCurve(QEasingCurve.Type.OutCubic)
     animation.finished.connect(overlay.deleteLater)
     animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 

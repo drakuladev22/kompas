@@ -116,7 +116,7 @@ class HelpDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=24, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         layout.addWidget(card)
 
         card.add(title_label(title, size=19))

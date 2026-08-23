@@ -136,7 +136,17 @@ class SplashScreen(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.setSpacing(32)
+        # BƏRABƏR ARALIQ YOX — QRUPLAŞDIRILMIŞ RİTM (`appl.md` FAZA 3, qayda 2)
+        # ─────────────────────────────────────────────────────────────────────
+        # Əvvəl hər element arasında EYNİ 32px vardı. Bərabər aralıq gözə beş
+        # ayrı, əlaqəsiz sətir kimi görünür; halbuki burada İKİ qrup var:
+        # KİMLİK (lockup + alt yazı) və VƏZİYYƏT (göstərici + mətn + versiya).
+        # Apple tipoqrafiyasının əsas vasitəsi məhz budur — yaxınlıq qrupu
+        # bildirir, boşluq isə qrupları ayırır.
+        #
+        # Aralıqlar aşağıda AÇIQ `addSpacing` ilə verilir, ona görə layout-un
+        # öz aralığı sıfırlanır: ikisi toplansaydı ritm 8-lik şəbəkədən çıxardı.
+        layout.setSpacing(0)
 
         # ------------------------------------------------------------------
         # LOCKUP — TEMAYA GÖRƏ HAZIR ŞƏKİL, ÇƏKİLƏN LOQO DEYİL (logo.md)
@@ -164,6 +174,11 @@ class SplashScreen(QWidget):
             layout.addWidget(self._fallback_logo, alignment=Qt.AlignmentFlag.AlignHCenter)
 
             wordmark = plain_label("KompasOS")
+            # SÖZ NİŞANI SOLĞUN DEYİL, ƏSAS MƏTNDİR: `#SplashScreen QLabel`
+            # qaydası bütün etiketləri solğunlaşdırır (bax `qss.py`), söz
+            # nişanı isə ekranın BAŞLIĞIdır. Obyekt adı məhz həmin istisnanı
+            # QSS-də ünvanlamaq üçündür — rəng burada HARDCODE edilmir.
+            wordmark.setObjectName("SplashWordmark")
             wordmark_font = wordmark.font()
             wordmark_font.setPixelSize(34)
             wordmark_font.setWeight(QFont.Weight.DemiBold)
@@ -174,21 +189,31 @@ class SplashScreen(QWidget):
         else:
             layout.addWidget(self._lockup, alignment=Qt.AlignmentFlag.AlignHCenter)
 
+        # Alt yazı lockup-ın BİR HİSSƏSİ kimi oxunmalıdır — ona görə yaxın.
+        layout.addSpacing(8)
         tagline = muted_label("Mağaza İdarəetmə Platforması", size=15)
         tagline.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(tagline)
+
+        # KİMLİK ↔ VƏZİYYƏT sərhədi — ekrandakı ƏN BÖYÜK boşluq.
+        layout.addSpacing(48)
 
         # Maketdə bu, sağa doğru sürüşən dar zolaqdır (`@keyframes kload`).
         # Qt-də eyni effekt "qeyri-müəyyən" (`range 0,0`) progress bar-dır.
         self._progress = QProgressBar()
         self._progress.setRange(0, 0)
         self._progress.setTextVisible(False)
-        self._progress.setFixedSize(220, 4)
+        self._progress.setFixedSize(224, 4)
         layout.addWidget(self._progress, alignment=Qt.AlignmentFlag.AlignHCenter)
 
+        # Göstərici ilə onun İZAHI bir qrupdur.
+        layout.addSpacing(16)
         self._status = muted_label("Modullar yüklənir…")
         self._status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._status)
+
+        # Versiya nə kimlik, nə vəziyyətdir — ayrıca, aşağıda dayanır.
+        layout.addSpacing(40)
 
         # Maketdə splash-dakı versiya mono-dur (`v2.4.0`).
         version_label = mono_label(f"v{version}", muted=True)

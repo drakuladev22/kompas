@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from PySide6.QtCore import Qt
 
 from src.presentation.theme.tokens import ThemeMode
 from tests.conftest import requires_qt
@@ -172,13 +173,25 @@ def test_screen_builds_in_both_themes_without_error(qt_app, module: str, name: s
 #: `scripts/check_contrast.py` ölçür.
 MIN_VISIBLE_RATIO = 1.6
 
-#: Rəngin «mövcud» sayılması üçün minimum NÜMUNƏ SAYI.
+#: «Mürəkkəb» (ink) sayılması üçün minimum PİKSEL SAYI.
 #:
 #: Faiz payı İŞLƏMİR və bu, ölçmənin ən vacib detalıdır: etiket 1006px enində
 #: olur, mətn isə onun cəmi 0.3%-ni tutur. Pay həddi qoysaydıq, mətn pikselləri
-#: «səs-küy» sayılıb atılardı və HƏR etiket «görünmür» kimi bayraqlanardı —
-#: yəni qapı yalan xəbər verərdi. Mütləq say widget-in enindən asılı deyil.
-MIN_COLOR_SAMPLES = 5
+#: «səs-küy» sayılıb atılardı və HƏR etiket «görünmür» kimi bayraqlanardı.
+#:
+#: NİYƏ «BİR RƏNGDƏN N PİKSEL» DEYİL, «CƏMİ N PİKSEL» — ÖLÇÜLMÜŞ SƏBƏB:
+#: `appl.md` FAZA 1-dən sonra Inter tətbiqlə birlikdə gəlir (`theme/fonts.py`)
+#: və testlər ARTIQ həqiqi qliflərlə render olunur. Əvvəl `offscreen` mühitində
+#: şrift yox idi, Qt hər hərfi «tofu» düzbucaqlısı çəkirdi — qalın, TƏK rəngli
+#: blok. Həqiqi qlifdə isə 11px-lik «2» rəqəminin bütün mürəkkəbi ~20 pikseldir
+#: və antialiasing onu 15-dən çox fərqli çalara yayır: ÖLÇÜLDÜ — ən sıx çalar
+#: cəmi 3 piksel. Yəni «bir rəngdən 5 piksel» şərti həqiqi mətni «yoxdur»
+#: sayırdı.
+#:
+#: İndi şərt çalarlar ÜZRƏ TOPLANIR: fondan kifayət qədər fərqlənən pikselin
+#: ÜMUMİ sayı bu həddi keçirsə, element görünür. Ağ-üstündə-ağ mətndə belə
+#: piksel ÜMUMİYYƏTLƏ olmur, yəni qapı öz işini itirmir.
+MIN_INK_PIXELS = 6
 
 
 def _relative_luminance(rgb: tuple[int, int, int]) -> float:
@@ -195,7 +208,13 @@ def _contrast(first: tuple[int, int, int], second: tuple[int, int, int]) -> floa
 
 
 def _visible_contrast(image: Any) -> float:
-    """Şəkildəki ƏN kontrastlı iki əhəmiyyətli rəngin nisbəti."""
+    """Fondan ayrılan ƏN kontrastlı «mürəkkəb» nisbəti (bax `MIN_INK_PIXELS`).
+
+    Qaytarılan dəyər belə oxunur: «ən azı `MIN_INK_PIXELS` piksel fondan bu
+    nisbətdə (və ya daha çox) fərqlənir». Tək bir piksel nəticəni təyin edə
+    bilmir — antialiasing kənarında təsadüfi tünd nöqtə həmişə tapılar —
+    lakin nisbət bir rəngin təkrarlanmasından da ASILI DEYİL.
+    """
     from collections import Counter
 
     counter: Counter[tuple[int, int, int]] = Counter()
@@ -208,14 +227,56 @@ def _visible_contrast(image: Any) -> float:
             colour = image.pixelColor(x, y)
             counter[(colour.red(), colour.green(), colour.blue())] += 1
 
-    total = sum(counter.values())
-    if total == 0:
+    if not counter:
         return 0.0
-    significant = [rgb for rgb, count in counter.items() if count >= MIN_COLOR_SAMPLES]
-    if len(significant) < 2:
-        return 1.0
     background = counter.most_common(1)[0][0]
-    return max(_contrast(background, rgb) for rgb in significant)
+
+    # Çalarlar KONTRASTA görə sıralanır və piksel sayı TOPLANIR: hədd
+    # keçiləndə həmin nisbət nəticədir (bax docstring).
+    ranked = sorted(
+        ((_contrast(background, rgb), count) for rgb, count in counter.items()),
+        key=lambda pair: pair[0],
+        reverse=True,
+    )
+    accumulated = 0
+    for ratio, count in ranked:
+        accumulated += count
+        if accumulated >= MIN_INK_PIXELS:
+            return ratio
+    return 1.0
+
+
+@requires_qt
+@pytest.mark.parametrize(
+    ("text_colour", "should_be_visible"),
+    [("#FFFFFF", False), ("#4A5568", True)],
+    ids=["ağ-üstündə-ağ", "tünd-üstündə-açıq"],
+)
+def test_the_ink_metric_itself_separates_visible_from_invisible(  # type: ignore[no-untyped-def]
+    qt_app, text_colour: str, should_be_visible: bool
+) -> None:
+    """Ölçünün ÖZÜ yoxlanılır — qapı yalnız düzgün ölçdüyü qədər dəyərlidir.
+
+    `MIN_INK_PIXELS` həddi antialiasing-ə görə yumşaldılıb (bax onun izahı);
+    yumşaldılma qapını KORLAMAMALIDIR. Burada eyni kiçik mətn iki dəfə
+    çəkilir — biri fonla eyni rəngdə, digəri oxunaqlı — və nəticə ayrılmalıdır.
+    Bu test olmasaydı, hədd bir gün «hər şey görünür» deyən dəyərə sürüşə
+    bilərdi və heç kim fərq etməzdi.
+    """
+    from PySide6.QtWidgets import QLabel
+
+    _ = qt_app
+    label = QLabel("2")
+    label.setFixedSize(22, 22)
+    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    label.setStyleSheet(f"background-color: #FFFFFF; color: {text_colour}; font-size: 11px;")
+    label.show()
+    qt_app.processEvents()
+
+    ratio = _visible_contrast(label.grab().toImage())
+    label.close()
+
+    assert (ratio >= MIN_VISIBLE_RATIO) is should_be_visible, f"ölçülən nisbət: {ratio:.2f}:1"
 
 
 def _text_widgets(root: Any) -> list[Any]:

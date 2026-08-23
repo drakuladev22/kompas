@@ -52,7 +52,24 @@ if TYPE_CHECKING:
 #: Sütunun yuxarı künc radiusu (maketdə `border-radius: 6px 6px 0 0`).
 _BAR_RADIUS: Final = 6
 #: Sütunlar arası boşluq.
-_BAR_GAP: Final = 14
+_BAR_GAP: Final = 16
+
+#: Bir sütunun MAKSİMUM eni.
+#:
+#: NİYƏ TAVAN LAZIM OLDU — ÖLÇÜLMÜŞ GÖRÜNÜŞ: en bütün sahəni sütunlar arasında
+#: bölürdü, yəni İKİ nöqtəli qrafikdə (məs. «Mağaza — Şəbəkə Ortalaması») hər
+#: sütun ~600px enində olurdu. Nəticə diaqram deyil, ekranı yarıya bölən iki
+#: dolu düzbucaqlı idi: göz onları məlumat kimi deyil, FON kimi oxuyurdu.
+#:
+#: `appl.md` qayda 3/9 (neytral-dominant, minimalizm) məhz bunu qadağan edir —
+#: ən iri rəngli sahə ekranın ƏN VACİB elementi olmalıdır, halbuki burada o,
+#: sadəcə iki ədədin müqayisəsi idi. Tavan qoyulandan sonra qalan yer BOŞLUQ
+#: olur və sütunlar mərkəzləşir (aşağıda), yəni az nöqtəli qrafik «yarımçıq»
+#: deyil, «sakit» görünür.
+#:
+#: 72 seçilib, çünki iki rəqəmli dəyər etiketi (`_LABEL_HEIGHT` altında)
+#: sığmalıdır və 8-lik şəbəkənin misli olmalıdır.
+_BAR_MAX_WIDTH: Final = 72
 #: Etiket sətrinin hündürlüyü.
 _LABEL_HEIGHT: Final = 18
 #: Zolaqlı ölçənin hündürlüyü (maketdə `height: 10px`).
@@ -105,7 +122,11 @@ class BarChart(QWidget):
 
         count = len(self._data)
         total_gap = _BAR_GAP * (count - 1)
-        bar_width = max(6.0, (self.width() - total_gap) / count)
+        bar_width = max(6.0, min(_BAR_MAX_WIDTH, (self.width() - total_gap) / count))
+        # Tavana dəyəndə artıq qalan en BOŞLUQdur: qrup mərkəzləşir, əks halda
+        # sütunlar sol kənara yığılar və kart «yarımçıq doldurulmuş» görünərdi.
+        cluster = bar_width * count + total_gap
+        origin = max(0.0, (self.width() - cluster) / 2)
         plot_height = max(1, self.height() - _LABEL_HEIGHT - 6)
 
         highest = max(range(count), key=lambda i: self._data[i].value)
@@ -113,7 +134,7 @@ class BarChart(QWidget):
         rects: list[tuple[QRectF, BarDatum, bool]] = []
         for index, datum in enumerate(self._data):
             height = plot_height * (datum.value / peak)
-            x = index * (bar_width + _BAR_GAP)
+            x = origin + index * (bar_width + _BAR_GAP)
             y = plot_height - height
             rects.append(
                 (
@@ -151,11 +172,25 @@ class BarChart(QWidget):
             painter.fillPath(path, peak_color if is_peak else base_color)
 
             painter.setPen(label_color)
-            painter.drawText(
-                QRectF(rect.left(), self.height() - _LABEL_HEIGHT, rect.width(), _LABEL_HEIGHT),
-                Qt.AlignmentFlag.AlignCenter,
-                datum.label,
+            # ETİKET SÜTUNDAN GENİŞ SAHƏYƏ YAZILIR — sütun eni tavana dəyəndə
+            # (`_BAR_MAX_WIDTH`) mətn ondan uzun olur. Sahə sütunun MƏRKƏZİNƏ
+            # görə qurulur və aralığın yarısını hər iki tərəfdən götürür: bu,
+            # qonşu etiketlə TOQQUŞMAYAN ən geniş sahədir.
+            #
+            # Sığmayan ad `…` ilə qısaldılır, KƏSİLMİR: kəsilmiş söz («şəbəkə
+            # ortalama») oxucuya tam ad kimi görünür və səhv oxunur, üç nöqtə
+            # isə davamının olduğunu deyir. Tam ad tooltip-də qalır
+            # (`mouseMoveEvent`).
+            label_rect = QRectF(
+                rect.center().x() - (rect.width() + _BAR_GAP) / 2,
+                self.height() - _LABEL_HEIGHT,
+                rect.width() + _BAR_GAP,
+                _LABEL_HEIGHT,
             )
+            elided = painter.fontMetrics().elidedText(
+                datum.label, Qt.TextElideMode.ElideRight, int(label_rect.width())
+            )
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, elided)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt adlandırması
         """Sütunun üstündə dəyəri tooltip kimi göstərir.

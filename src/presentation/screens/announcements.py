@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.presentation.screens.base import Screen
+from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.data_table import Column, DataTable
 from src.presentation.widgets.forms import FormField, field_label
@@ -39,7 +40,6 @@ from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
     Chip,
-    Divider,
     muted_label,
     stretch,
     title_label,
@@ -189,10 +189,9 @@ class AnnouncementComposeDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Yeni Elan", size=19))
-        card.add(Divider())
 
         self._title = FormField("Başlıq")
         card.add(self._title)

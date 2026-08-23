@@ -77,6 +77,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.presentation.screens.base import Screen
+from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import secondary_button
 from src.presentation.widgets.forms import field_label
 from src.presentation.widgets.help_hint import HelpButton
@@ -224,7 +225,7 @@ class SyncConflictScreen(Screen):
     # ------------------------------- siyahı ----------------------------------- #
 
     def _build_list_card(self) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(title_label("Həll gözləyən konfliktlər", size=15))
         card.add(
             muted_label(
@@ -312,7 +313,7 @@ class SyncConflictScreen(Screen):
     # ------------------------------ müqayisə ---------------------------------- #
 
     def _build_comparison_card(self) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         self._detail_title = title_label("Konflikt seçilməyib", size=15)
         card.add(self._detail_title)
         self._detail_meta = mono_label("", muted=True)
@@ -436,7 +437,7 @@ class SyncConflictScreen(Screen):
     # -------------------------------- qərar ----------------------------------- #
 
     def _build_decision_card(self) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(section_label("Qərar"))
         card.add(
             muted_label(

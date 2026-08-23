@@ -191,7 +191,7 @@ class NewTaskDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Yeni Tapşırıq", size=19))
         card.add(
@@ -437,7 +437,7 @@ class SalesPointsScreen(Screen):
         summary_layout.setContentsMargins(0, 0, 0, 0)
         summary_layout.setSpacing(metrics.CARD_SPACING)
 
-        self._balance = Card(padding=20, spacing=8)
+        self._balance = Card(padding=metrics.CARD_PADDING, spacing=8)
         self._balance.add(muted_label("Cari balans"))
         self._balance_value = title_label("0", size=32)
         self._balance.add(self._balance_value)
@@ -445,7 +445,7 @@ class SalesPointsScreen(Screen):
         self._balance.add(self._balance_delta)
         summary_layout.addWidget(self._balance, 1)
 
-        self._next_reward = Card(padding=20, spacing=12)
+        self._next_reward = Card(padding=metrics.CARD_PADDING, spacing=12)
         self._next_reward.add(muted_label("Növbəti mükafat"))
         self._next_reward_value = title_label("—", size=22)
         self._next_reward.add(self._next_reward_value)
@@ -453,7 +453,7 @@ class SalesPointsScreen(Screen):
         self._next_reward.add(self._reward_meter)
         summary_layout.addWidget(self._next_reward, 1)
 
-        self._rank = Card(padding=20, spacing=8)
+        self._rank = Card(padding=metrics.CARD_PADDING, spacing=8)
         self._rank.add(muted_label("Filial reytinqi"))
         self._rank_value = title_label("—", size=22)
         self._rank.add(self._rank_value)
@@ -572,7 +572,7 @@ class SalesPointsScreen(Screen):
 
         for reward in rewards:
             cost = int(reward["cost"])
-            card = Card(padding=20, spacing=12)
+            card = Card(padding=metrics.CARD_PADDING, spacing=12)
 
             thumbnail = plain_label()
             thumbnail.setFixedHeight(72)
@@ -643,13 +643,13 @@ class FineAppealScreen(Screen):
         summary_layout.setContentsMargins(0, 0, 0, 0)
         summary_layout.setSpacing(metrics.CARD_SPACING)
 
-        self._month_total = Card(padding=20, spacing=8)
+        self._month_total = Card(padding=metrics.CARD_PADDING, spacing=8)
         self._month_total.add(muted_label("Bu ay"))
         self._month_total_value = title_label("—", size=26)
         self._month_total.add(self._month_total_value)
         summary_layout.addWidget(self._month_total, 1)
 
-        self._open_appeals = Card(padding=20, spacing=8)
+        self._open_appeals = Card(padding=metrics.CARD_PADDING, spacing=8)
         self._open_appeals.add(muted_label("Açıq etiraz"))
         self._open_appeals_value = title_label("0", size=26)
         self._open_appeals.add(self._open_appeals_value)
@@ -671,7 +671,7 @@ class FineAppealScreen(Screen):
         self.body().addStretch(1)
 
     def _build_form(self, reasons: list[str]) -> Card:
-        card = Card(padding=20, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         self._form_card = card
 
         head = QWidget()
@@ -683,7 +683,6 @@ class FineAppealScreen(Screen):
         head_layout.addWidget(self._form_subject)
         head_layout.addWidget(stretch())
         card.add(head)
-        card.add(Divider())
 
         self._reason = QComboBox()
         self._reason.setProperty("variant", "form")
@@ -833,7 +832,7 @@ class FineAppealInboxScreen(Screen):
             return
 
         for appeal in appeals:
-            card = Card(padding=20, spacing=12)
+            card = Card(padding=metrics.CARD_PADDING, spacing=12)
 
             head = QWidget()
             head_layout = QHBoxLayout(head)

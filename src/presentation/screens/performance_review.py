@@ -36,13 +36,13 @@ from PySide6.QtWidgets import (
 )
 
 from src.presentation.screens.base import Screen
+from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button
 from src.presentation.widgets.forms import FormField, field_label
 from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
     Chip,
-    Divider,
     body_label,
     muted_label,
     section_label,
@@ -91,9 +91,8 @@ class PerformanceReviewScreen(Screen):
     # ------------------------------- forma kartı ------------------------------ #
 
     def _build_form_card(self) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(title_label("Yeni Qiymətləndirmə", size=19))
-        card.add(Divider())
 
         self._employee = FormField("İşçi", widget=QComboBox())
         employee_combo = self._employee.input_widget()
@@ -135,9 +134,8 @@ class PerformanceReviewScreen(Screen):
         return card
 
     def _build_history_card(self) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(section_label("Keçmiş Dövrlər"))
-        card.add(Divider())
 
         self._history_rows = QVBoxLayout()
         self._history_rows.setSpacing(16)

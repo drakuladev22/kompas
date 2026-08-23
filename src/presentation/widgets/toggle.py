@@ -64,7 +64,8 @@ class ToggleSwitch(QAbstractButton):
         self._offset = 1.0 if checked else 0.0
         self._animation = QPropertyAnimation(self, b"offset", self)
         self._animation.setDuration(ANIMATION_MS)
-        self._animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        # Sönən əyri — `theme/transition.py`-dakı EYNİ qərar (qayda 8).
+        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.toggled.connect(self._animate)
 
     # `offset` — 0.0 (sönülü) … 1.0 (yanılı). Animasiya bu xassəni sürüşdürür.

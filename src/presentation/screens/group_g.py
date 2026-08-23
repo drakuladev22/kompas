@@ -207,7 +207,6 @@ class NotificationPanel(Card):
         mark_all.clicked.connect(self.mark_all_read_requested)
         header_layout.addWidget(mark_all)
         self.add(header)
-        self.add(Divider())
 
         # ------------------------------ süzgəc ------------------------------ #
         filters = QWidget()
@@ -426,7 +425,7 @@ class ProfileScreen(Screen):
     def _build_identity(
         self, full_name: str, role_name: str, store_name: str, member_since: str
     ) -> Card:
-        card = Card(padding=20, spacing=0)
+        card = Card(padding=metrics.CARD_PADDING, spacing=0)
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -457,11 +456,10 @@ class ProfileScreen(Screen):
         return card
 
     def _build_personal(self, full_name: str) -> Card:
-        card = Card(padding=20, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         # Maketdə kart bölmə başlığı 15px başlıq DEYİL — 12px böyük hərfli
         # mono etiketdir (`letter-spacing: 0.1em`, solğun rəng).
         card.add(section_label("Şəxsi məlumat"))
-        card.add(Divider())
 
         self._full_name = FormField("Ad, Soyad")
         self._full_name.set_text(full_name)
@@ -484,9 +482,8 @@ class ProfileScreen(Screen):
         return card
 
     def _build_role_card(self) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(title_label("Rol və səlahiyyət", size=15))
-        card.add(Divider())
         self._role_rows = QVBoxLayout()
         self._role_rows.setSpacing(12)
         holder = QWidget()
@@ -495,9 +492,8 @@ class ProfileScreen(Screen):
         return card
 
     def _build_sessions_card(self) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(section_label("Son giriş tarixçəsi"))
-        card.add(Divider())
         self._session_rows = QVBoxLayout()
         self._session_rows.setSpacing(12)
         holder = QWidget()
@@ -506,9 +502,8 @@ class ProfileScreen(Screen):
         return card
 
     def _build_security_card(self) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(title_label("Təhlükəsizlik", size=15))
-        card.add(Divider())
 
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
@@ -547,9 +542,8 @@ class ProfileScreen(Screen):
         Yeniləmə isə NƏZARƏTLİ prosesdir və AYRI ekrandadır («Üz Qeydiyyatı»,
         `can_manage_employees`): işçi öz üzünü özü yeniləyə bilməz (bənd 1).
         """
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(section_label("Üz qeydiyyatı"))
-        card.add(Divider())
 
         row = QWidget()
         layout = QHBoxLayout(row)
@@ -623,9 +617,8 @@ class ProfileScreen(Screen):
         bax `screens/performance_review.py`). Cavab/etiraz sahəsi YOXDUR —
         performans qiyməti dəstək çatı deyil, birtərəfli qeyddir.
         """
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(section_label("Performans Tarixçəm"))
-        card.add(Divider())
 
         self._performance_rows = QVBoxLayout()
         self._performance_rows.setSpacing(16)

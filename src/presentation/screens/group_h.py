@@ -231,10 +231,9 @@ class CatalogEntryDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label(title, size=19))
-        card.add(Divider())
 
         self._name = FormField("Ad")
         self._name.set_text(name)
@@ -650,7 +649,7 @@ class ReportExportScreen(Screen):
         edilmiş düzəlişlər → təsdiq. Ayrı kartlar bu ardıcıllığı vizual olaraq
         pozardı.
         """
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(title_label("Export-öncəsi Doğrulama", size=19))
         card.add(
             muted_label(
@@ -1082,7 +1081,7 @@ class ExportCorrectionDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Export Düzəlişi", size=19))
         card.add(
@@ -1339,10 +1338,12 @@ class HelpTopicCard(Card):
         *,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(parent=parent)
+        # Doldurma/aralıq TOKENDƏN — `Card`-ın defoltu 12-dir və başlığın
+        # altındakı ayırıcı xətt silinəndən sonra (`appl.md` qayda 9) sərhədi
+        # məhz BOŞLUQ çəkir: 12 həmin işi görmür, addımlar başlığa yapışırdı.
+        super().__init__(padding=metrics.CARD_PADDING, spacing=16, parent=parent)
         body = self.body()
         body.addWidget(title_label(title, size=15))
-        body.addWidget(Divider())
 
         for index, step in enumerate(steps, start=1):
             row = QWidget()

@@ -81,6 +81,7 @@ from PySide6.QtWidgets import (
 
 from src.domain.value_objects.field_reports import FieldReportStatus
 from src.presentation.screens.base import Screen
+from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.data_table import Column, DataTable
 from src.presentation.widgets.forms import FormField, field_label
@@ -221,7 +222,7 @@ class FieldReportScreen(Screen):
     # ------------------------------- quruluş --------------------------------- #
 
     def _build_form_card(self) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
 
         self._form_title = title_label("Sahə hesabatı", size=19)
         card.add(self._form_title)
@@ -265,7 +266,7 @@ class FieldReportScreen(Screen):
         return card
 
     def _build_checklist_card(self) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(title_label("Checklist", size=15))
         card.add(
             muted_label(
@@ -329,7 +330,7 @@ class FieldReportScreen(Screen):
         return card
 
     def _build_actions_card(self) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
 
         row = QWidget()
         layout = QHBoxLayout(row)

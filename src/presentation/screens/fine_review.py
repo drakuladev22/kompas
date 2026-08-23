@@ -79,6 +79,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.presentation.screens.base import Screen
+from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.data_table import Column, DataTable
 from src.presentation.widgets.forms import field_label
@@ -312,7 +313,7 @@ class MonthlyFineReviewScreen(Screen):
         return toolbar
 
     def _build_footer(self) -> QWidget:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(title_label("Nəşr", size=15))
         card.add(muted_label(IRREVERSIBLE_NOTE, size=12))
 
@@ -429,7 +430,7 @@ class MonthlyFineReviewScreen(Screen):
         return self._groups_layout
 
     def _build_group(self, group: FineReviewGroup) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
@@ -454,7 +455,6 @@ class MonthlyFineReviewScreen(Screen):
         toggle = secondary_button(_EXPAND_TEXT)
         head_layout.addWidget(toggle)
         card.add(head)
-        card.add(Divider())
 
         table = DataTable(_COLUMNS, self.theme)
         for row in group.rows:
@@ -621,7 +621,7 @@ class PublishConfirmDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=24, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         layout.addWidget(card)
 
         card.add(title_label("Cərimələr bütün filiallara göndərilsin?", size=19))

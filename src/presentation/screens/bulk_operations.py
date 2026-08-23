@@ -83,6 +83,7 @@ from PySide6.QtWidgets import QComboBox, QDialog, QHBoxLayout, QVBoxLayout, QWid
 
 from src.presentation.screens.base import Screen
 from src.presentation.theme.manager import refresh_widget_style
+from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.data_table import Column, DataTable
 from src.presentation.widgets.forms import FormField, field_label
@@ -159,7 +160,7 @@ class BulkOperationsScreen(Screen):
     # ------------------------------- CSV idxalı -------------------------------- #
 
     def _build_import_card(self) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
         card.add(title_label("CSV İşçi İdxalı", size=19))
         card.add(
             muted_label(
@@ -320,7 +321,7 @@ class BulkOperationsScreen(Screen):
     # ----------------------------- mağaza şablonu ------------------------------ #
 
     def _build_template_card(self) -> Card:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=metrics.CARD_PADDING, spacing=12)
 
         header = QWidget()
         header_layout = QHBoxLayout(header)
@@ -436,7 +437,7 @@ class StoreTemplateCaptureDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label("Mağaza Şablonu Çıxar", size=19))
         card.add(
@@ -522,10 +523,9 @@ class StoreTemplateApplyDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label(f"«{template_name}» şablonunu tətbiq et", size=19))
-        card.add(Divider())
 
         card.add(field_label("Şablonda İSTİNAD kimi saxlanılan rollar"))
         summary_label = muted_label(snapshot_summary or "—")
@@ -625,7 +625,7 @@ class BulkImportResultDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=24, spacing=16)
+        card = Card(padding=metrics.CARD_PADDING, spacing=16)
         layout.addWidget(card)
         card.add(title_label("İdxal Nəticəsi", size=19))
         card.add(
