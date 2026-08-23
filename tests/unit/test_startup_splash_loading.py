@@ -68,7 +68,11 @@ def test_a_startup_error_keeps_its_message_and_kind(qt_app) -> None:  # type: ig
     def factory() -> object:
         raise StartupError(
             "Baza bağlantısı konfiqurasiya edilməyib",
-            user_message="Bağlantı Ayarları ekranından server məlumatlarını daxil edin.",
+            # NÜMUNƏ mətndir — test onun DƏYİŞMƏDƏN ötürüldüyünü ölçür.
+            # Köhnə nümunə «Bağlantı Ayarları ekranından…» idi; həmin ekran
+            # artıq bu yoldan açılmır, ona görə nümunə də istehsalatdakı
+            # mətnlə eyni istiqamətə baxır (yanlış sənədləşmə qalmasın).
+            user_message="Quraşdırma tamamlanmayıb — texniki dəstəklə əlaqə saxlayın.",
             kind=StartupFailureKind.CREDENTIALS_MISSING,
         )
 
@@ -77,7 +81,7 @@ def test_a_startup_error_keeps_its_message_and_kind(qt_app) -> None:  # type: ig
     )
 
     assert context is None
-    assert "Bağlantı Ayarları" in message
+    assert "texniki dəstək" in message
     assert kind is StartupFailureKind.CREDENTIALS_MISSING
     # TEXNİKİ səbəb İSTİFADƏÇİ mesajından FƏRQLİDİR: birincisi `Ctrl+Shift+K`
     # konsolunda texnikə, ikincisi fatal ekranda mağaza işçisinə gedir.

@@ -1253,7 +1253,20 @@ class FatalStartupScreen(QWidget):
         detail.setStyleSheet(f"color: {theme.color('--color-text-secondary')};")
         # İstinad tema keçidi üçün saxlanılır (bax `apply_theme`).
         self._detail = detail
-        card.body().addWidget(detail, alignment=Qt.AlignmentFlag.AlignHCenter)
+        # ──────────────────────────────────────────────────────────────────
+        # `alignment=` VERİLMİR — MƏTN KƏSİLİRDİ
+        # ──────────────────────────────────────────────────────────────────
+        # `addWidget(..., alignment=...)` layout-a elementi ÖZ `sizeHint()`-i
+        # ilə yerləşdirməyi deyir; sarılan `QLabel`-in həqiqi hündürlüyü isə
+        # `heightForWidth()`-dədir və o, YALNIZ ölçü layout tərəfindən
+        # hesablananda soruşulur. Nəticə ölçüldü: üç sətirlik mesajın SONUNCU
+        # sətri («…daxil edin.») ekranda ÜMUMİYYƏTLƏ görünmürdü — istifadəçi
+        # yarımçıq cümlə oxuyurdu.
+        #
+        # Mərkəzləşdirmə İTMİR: mətn `AlignCenter` ilə etiketin ÖZ içində
+        # mərkəzdədir, etiket isə kartın eninə uyğunlaşır (`setMaximumWidth`
+        # onu 440-da saxlayır).
+        card.body().addWidget(detail)
 
         self._retry_button: QPushButton | None = None
         if retry:

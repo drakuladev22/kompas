@@ -162,9 +162,16 @@ def build_dsn_from_env() -> str:
     if not dsn:
         raise ConfigurationError(
             "Baza bağlantısı konfiqurasiya edilməyib",
+            # MƏTN «Bağlantı Ayarları» EKRANINI GÖSTƏRMİR — həmin ekran fatal
+            # başlanğıc yolundan ARTIQ AÇILMIR (`presentation/app.py`:
+            # «Yenidən Cəhd Et» yalnız yeni cəhddir). Köhnə mətn istifadəçini
+            # onun ÇATA BİLMƏDİYİ bir ekrana yönəldirdi — yəni göstəriş
+            # icra edilə bilməyən addım idi. Texnikin yolu `Ctrl+Shift+K`
+            # Bərpa Konsoludur və o, mağaza işçisinə deyilmir (gizli qalır,
+            # bax `controllers/recovery_console` başlığı).
             user_message=(
-                "Baza bağlantısı konfiqurasiya edilməyib. «Bağlantı Ayarları» "
-                "ekranından server məlumatlarını daxil edin."
+                "Baza bağlantısı konfiqurasiya edilməyib. Quraşdırma "
+                "tamamlanmayıb — texniki dəstəklə əlaqə saxlayın."
             ),
             context={"hint": "Session Pooler DSN-i istifadə edin, birbaşa host YOX"},
         )

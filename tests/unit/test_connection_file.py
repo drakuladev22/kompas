@@ -158,10 +158,19 @@ def test_the_file_is_used_when_the_environment_is_empty(
 def test_neither_source_produces_an_actionable_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Mesaj istifadəçini EKRANA yönləndirməlidir, mühit dəyişəninə yox.
+    """Mesaj İCRA EDİLƏ BİLƏN addım göstərməlidir, mühit dəyişəni deyil.
 
     «`DATABASE_URL` təyin edin» göstərişi mağaza işçisi üçün mənasızdır — o,
     nə mühit dəyişəninin nə olduğunu bilir, nə də onu təyin edə bilər.
+
+    ƏVVƏL BURADA «Bağlantı Ayarları» EKRANI ADLANIRDI. Həmin ekran fatal
+    başlanğıc yolundan ARTIQ AÇILMIR (`presentation/app.py` — «Yenidən Cəhd
+    Et» yalnız yeni cəhddir, forma mağaza işçisinin qarşısına çıxmır), yəni
+    köhnə mətn istifadəçini ÇATA BİLMƏDİYİ bir yerə göndərirdi: testin
+    tələbi («icra edilə bilən») formal olaraq ödənsə də, əməli olaraq
+    POZULURDU. İndi mətn dəstəyə yönəldir — mağaza işçisinin HƏQİQƏTƏN
+    edə biləcəyi yeganə addım budur. Texnikin yolu isə `Ctrl+Shift+K`
+    Bərpa Konsoludur və o, qəsdən burada adlanmır (gizli qalır).
     """
     from src.infrastructure.persistence.connection import ConfigurationError, build_dsn_from_env
 
@@ -170,7 +179,11 @@ def test_neither_source_produces_an_actionable_message(
 
     with pytest.raises(ConfigurationError) as error:
         build_dsn_from_env()
-    assert "Bağlantı Ayarları" in error.value.user_message
+    message = error.value.user_message
+    assert "texniki dəstək" in message
+    assert "DATABASE_URL" not in message
+    # ÇATILA BİLMƏYƏN ekranın adı mesajda OLMAMALIDIR (bax docstring).
+    assert "Bağlantı Ayarları" not in message
 
 
 def test_the_default_path_is_machine_wide(monkeypatch: pytest.MonkeyPatch) -> None:

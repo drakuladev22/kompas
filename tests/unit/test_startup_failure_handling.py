@@ -63,15 +63,24 @@ def test_a_missing_configuration_asks_for_settings() -> None:
     assert failure.kind.is_configuration_problem
 
 
-def test_a_freshly_installed_machine_reaches_the_settings_screen(
+def test_a_freshly_installed_machine_says_setup_is_incomplete(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """SETUP-1 Faza 4: Setup ilə quraşdırılmış, config-siz maşın.
 
     Bu, müştərinin GÖRDÜYÜ İLK vəziyyətdir: `.exe` `Program Files`-dadır,
     `ProgramData` boşdur, `DATABASE_URL` yoxdur (tətbiq `.env` oxumur).
-    Tələb: proqram ÇÖKMƏMƏLİ, aydın şəkildə «Bağlantı Ayarları» ekranına
-    yönləndirməlidir — və oradan yazılan fayl `ProgramData`-ya düşməlidir.
+    Tələb: proqram ÇÖKMƏMƏLİ və mesaj İCRA EDİLƏ BİLƏN olmalıdır.
+
+    MƏTN DƏYİŞDİ VƏ SƏBƏBİ BUDUR: köhnə mesaj «Bağlantı Ayarları ekranından
+    server məlumatlarını daxil edin» deyirdi, halbuki həmin ekran fatal
+    başlanğıc yolundan ARTIQ AÇILMIR (`presentation/app.py` — «Yenidən Cəhd
+    Et» yalnız yeni cəhddir). Yəni göstəriş istifadəçinin ÇATA BİLMƏDİYİ bir
+    yerə göndərirdi. İndi mətn dəstəyə yönəldir; texnikin yolu isə
+    `Ctrl+Shift+K` Bərpa Konsoludur və o, mağaza işçisinə deyilmir.
+
+    Yazılan faylın `ProgramData`-ya düşməsi yoxlaması DƏYİŞMƏDİ — o,
+    mesajdan asılı deyil.
     """
     from src.infrastructure.config.connection_file import (
         CONNECTION_FILE_ENV,
@@ -101,7 +110,10 @@ def test_a_freshly_installed_machine_reaches_the_settings_screen(
         build_dsn_from_env()
 
     assert classify_connection_failure(raised.value).kind.is_configuration_problem
-    assert "Bağlantı Ayarları" in raised.value.user_message
+    # Mesaj İCRA EDİLƏ BİLƏN addım göstərməlidir və ÇATILA BİLMƏYƏN ekranı
+    # ADLANDIRMAMALIDIR (bax docstring).
+    assert "texniki dəstək" in raised.value.user_message
+    assert "Bağlantı Ayarları" not in raised.value.user_message
 
     written = save_settings(
         ConnectionSettings(
