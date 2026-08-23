@@ -130,6 +130,31 @@ class RecoveryConsoleScreen(Screen):
             )
         )
 
+        # ---------------------- NASAZLIĞIN SƏBƏBİ (yalnız xətada) ------------ #
+        #
+        # NİYƏ AYRICA ETİKET, `_status` DEYİL — `_status` KONSOLUN ÖZ
+        # əməliyyatlarının nəticəsini daşıyır («Bağlantı uğurludur», «Parol boş
+        # qalarsa dəyişmir»). Başlanğıc nasazlığının səbəbi isə konsol
+        # AÇILMAMIŞDAN ƏVVƏLKİ faktdır: onu `_status`-a yazsaydıq ilk
+        # «Bağlantını Test Et» basılışı səbəbi SİLƏRDİ və texnik nə üçün bura
+        # düşdüyünü bir daha görə bilməzdi.
+        #
+        # NİYƏ GİZLİ BAŞLAYIR — konsol İŞLƏK maşında da açılır (`Root` +
+        # `can_switch_db`): orada nasazlıq YOXDUR və boş qırmızı zolaq «nəsə
+        # xarabdır» kimi oxunardı. Ona görə etiket YALNIZ səbəb VERİLDİKDƏ
+        # görünür (`set_failure_reason`).
+        self._failure = muted_label("")
+        self._failure.setProperty("variant", "danger-text")
+        self._failure.setWordWrap(True)
+        # Səbəb mətnində SQLSTATE var — texnik onu dəstək zəngində oxuyur və
+        # kopyalayır, yəni seçilə bilməlidir (diaqnostika blokundakı EYNİ qərar).
+        self._failure.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self._failure.setVisible(False)
+        card.add(self._failure)
+
         # ------------------------------ sahələr ------------------------------ #
         card.add(section_label("Bağlantı"))
         self._host = FormField(
@@ -284,6 +309,15 @@ class RecoveryConsoleScreen(Screen):
     def set_diagnostics(self, rows: list[tuple[str, str]]) -> None:
         """Diaqnostika sətirləri — `(etiket, dəyər)` cütləri."""
         self._diagnostics.setText("\n".join(f"{label}: {value}" for label, value in rows))
+
+    def set_failure_reason(self, message: str) -> None:
+        """Başlanğıc nasazlığının SƏBƏBİ — BOŞ mətn etiketi gizlədir.
+
+        Boş sətir «səbəb yoxdur» deməkdir: işlək maşında açılan konsol xəta
+        zolağı GÖSTƏRMƏMƏLİDİR (bax konstruktordakı izah).
+        """
+        self._failure.setText(message)
+        self._failure.setVisible(bool(message))
 
     def set_status(self, message: str) -> None:
         """Neytral vəziyyət mətni."""

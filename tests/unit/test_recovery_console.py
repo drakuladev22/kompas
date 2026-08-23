@@ -277,6 +277,7 @@ class _RecoveryScreen:
     def __init__(self) -> None:
         self.errors: list[str] = []
         self.statuses: list[str] = []
+        self.failure_reasons: list[str] = []
         self.busy_calls: list[bool] = []
         self.confirmations: list[bool] = []
         self.service_role_cleared = False
@@ -285,6 +286,9 @@ class _RecoveryScreen:
 
     def set_error(self, message: str) -> None:
         self.errors.append(message)
+
+    def set_failure_reason(self, message: str) -> None:
+        self.failure_reasons.append(message)
 
     def set_status(self, message: str) -> None:
         self.statuses.append(message)
@@ -1070,6 +1074,7 @@ def test_adopting_a_recovered_context_clears_the_old_failure_kind(  # type: igno
 
     application = _application(qt_app)
     application._startup_failure_kind = StartupFailureKind.DATABASE_UNREACHABLE
+    application._startup_failure_reason = "Baza bağlantısı qurula bilmədi"
     monkeypatch.setattr(app_module, "_build_auth_controller", lambda _context: None)
     monkeypatch.setattr(application, "set_auth_controller", lambda _controller: None)
     monkeypatch.setattr(application, "start", lambda: None)
@@ -1080,3 +1085,123 @@ def test_adopting_a_recovered_context_clears_the_old_failure_kind(  # type: igno
     application.adopt_context(context)  # type: ignore[arg-type]
 
     assert application._startup_failure_kind is None
+    # SƏBƏB DƏ TƏMİZLƏNİR — baza artıq İŞLƏKDİR və konsolda qırmızı zolaq
+    # qalsaydı, texnik həll olunmuş nasazlığı axtarardı.
+    assert application._startup_failure_reason == ""
+
+
+# --------------------------------------------------------------------------- #
+# Başlanğıc nasazlığının SƏBƏBİ — YALNIZ xəta olanda görünür
+# --------------------------------------------------------------------------- #
+#
+# İSTİFADƏÇİ TƏLƏBİ: «Yenidən Cəhd Et» artıq ayarlar ekranını AÇMIR
+# (`app.py::_on_startup_failed`), yəni nasazlığın texniki səbəbini
+# görən YEGANƏ yer `Ctrl+Shift+K` konsoludur. Lakin konsol İŞLƏK maşında da
+# açılır (`Root` + `can_switch_db`) — orada xəta zolağı OLMAMALIDIR.
+
+
+def test_the_console_shows_the_startup_reason_when_one_was_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nasazlıq səbəbi ekrana ÇATIR — texnik nə düzəldəcəyini bilməlidir."""
+    from src.presentation.controllers.recovery_console import RecoveryConsoleController
+
+    _stub_stored_settings(monkeypatch)
+    screen = _RecoveryScreen()
+
+    RecoveryConsoleController(
+        authenticated=True,
+        failure_reason="Baza bağlantı məlumatları qəbul edilmədi (SQLSTATE 28P01)",
+    ).refresh(screen)  # type: ignore[attr-defined]
+
+    assert screen.failure_reasons == ["Baza bağlantı məlumatları qəbul edilmədi (SQLSTATE 28P01)"]
+
+
+def test_the_console_shows_no_reason_on_a_healthy_machine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Səbəb verilməyibsə ekrana BOŞ sətir gedir — zolaq gizli qalır.
+
+    Bu, «ancaq error verəndə səbəbini göstər» tələbinin İKİNCİ yarısıdır:
+    işlək maşında açılan konsol qırmızı zolaq göstərsəydi, texnik olmayan
+    nasazlıq axtarardı.
+    """
+    from src.presentation.controllers.recovery_console import RecoveryConsoleController
+
+    _stub_stored_settings(monkeypatch)
+    screen = _RecoveryScreen()
+
+    RecoveryConsoleController(authenticated=True).refresh(screen)  # type: ignore[attr-defined]
+
+    assert screen.failure_reasons == [""]
+
+
+def test_the_reason_survives_a_settings_read_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`load_settings()` çökdükdə də səbəb qoyulur — `return` ondan SONRADIR.
+
+    Bu sıra qəsdlidir: konfiqurasiya faylı oxunmayan maşın MƏHZ səbəbi ən çox
+    ehtiyac duyulan haldır və `refresh()` orada erkən qayıdır.
+    """
+    from src.infrastructure.config import connection_file
+    from src.presentation.controllers.recovery_console import RecoveryConsoleController
+
+    def _boom() -> None:
+        raise _SqlStateError("28P01", "parol rədd edildi")
+
+    monkeypatch.setattr(connection_file, "load_settings", _boom)
+    screen = _RecoveryScreen()
+
+    RecoveryConsoleController(authenticated=False, failure_reason="səbəb").refresh(  # type: ignore[attr-defined]
+        screen
+    )
+
+    assert screen.failure_reasons == ["səbəb"]
+    assert screen.errors, "oxunma xətası ayrıca göstərilməlidir"
+
+
+@requires_qt
+def test_the_screen_hides_the_reason_label_when_the_text_is_empty(qt_app) -> None:  # type: ignore[no-untyped-def]
+    """Ekran qatı: boş mətn = GÖRÜNMƏZ etiket (boş qırmızı zolaq olmasın)."""
+    from src.presentation.screens.recovery_console import RecoveryConsoleScreen
+    from src.presentation.theme.manager import ThemeManager
+    from src.presentation.theme.tokens import ThemeMode
+
+    _ = qt_app
+    screen = RecoveryConsoleScreen(ThemeManager(preference=ThemeMode.LIGHT))
+
+    assert not screen._failure.isVisible()
+
+    screen.set_failure_reason("SQLSTATE 3D000 — belə baza yoxdur")
+    screen.show()
+    assert screen._failure.isVisible()
+    assert screen._failure.text() == "SQLSTATE 3D000 — belə baza yoxdur"
+
+    screen.set_failure_reason("")
+    assert not screen._failure.isVisible()
+    screen.close()
+
+
+@requires_qt
+def test_opening_the_console_passes_the_stored_startup_reason(  # type: ignore[no-untyped-def]
+    qt_app, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Örtük SAXLADIĞI səbəbi kontrollerə ÖTÜRÜR — zəncirin son halqası."""
+    from src.presentation.controllers import recovery_console as controller_module
+
+    application = _application(qt_app)
+    application._startup_failure_reason = "Baza bağlantısı qurula bilmədi (SQLSTATE 08006)"
+    seen: dict[str, Any] = {}
+
+    class _Spy:
+        def __init__(self, **kwargs: Any) -> None:
+            seen.update(kwargs)
+
+        def attach(self, screen: Any) -> None:
+            seen["attached"] = screen
+
+    monkeypatch.setattr(controller_module, "RecoveryConsoleController", _Spy)
+
+    application.show_recovery_console(authenticated=False)
+
+    assert seen["failure_reason"] == "Baza bağlantısı qurula bilmədi (SQLSTATE 08006)"
+    assert seen["authenticated"] is False

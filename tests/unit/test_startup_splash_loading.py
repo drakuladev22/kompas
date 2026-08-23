@@ -48,12 +48,15 @@ def test_the_context_is_not_built_on_the_gui_thread(qt_app) -> None:  # type: ig
         seen["thread"] = QThread.currentThread()
         return "kontekst"
 
-    context, message, kind = _load_context_behind_splash(qt_app, _application(qt_app), factory)
+    context, message, kind, reason = _load_context_behind_splash(
+        qt_app, _application(qt_app), factory
+    )
 
     assert seen["thread"] is not gui_thread, "kontekst GUI sapında quruldu — pəncərə donar"
     assert context == "kontekst"
     assert message == ""
     assert kind is None
+    assert reason == "", "uğurlu açılışda texniki səbəb OLMAMALIDIR — konsol xəta zolağı göstərməz"
 
 
 @requires_qt
@@ -69,11 +72,16 @@ def test_a_startup_error_keeps_its_message_and_kind(qt_app) -> None:  # type: ig
             kind=StartupFailureKind.CREDENTIALS_MISSING,
         )
 
-    context, message, kind = _load_context_behind_splash(qt_app, _application(qt_app), factory)
+    context, message, kind, reason = _load_context_behind_splash(
+        qt_app, _application(qt_app), factory
+    )
 
     assert context is None
     assert "Bağlantı Ayarları" in message
     assert kind is StartupFailureKind.CREDENTIALS_MISSING
+    # TEXNİKİ səbəb İSTİFADƏÇİ mesajından FƏRQLİDİR: birincisi `Ctrl+Shift+K`
+    # konsolunda texnikə, ikincisi fatal ekranda mağaza işçisinə gedir.
+    assert reason == "Başlanğıc nasazlığı: Baza bağlantısı konfiqurasiya edilməyib"
 
 
 @requires_qt
@@ -84,8 +92,11 @@ def test_an_unexpected_failure_still_produces_a_screen(qt_app) -> None:  # type:
     def factory() -> object:
         raise RuntimeError("gözlənilməz")
 
-    context, message, kind = _load_context_behind_splash(qt_app, _application(qt_app), factory)
+    context, message, kind, reason = _load_context_behind_splash(
+        qt_app, _application(qt_app), factory
+    )
 
     assert context is None
     assert message, "istifadəçiyə göstəriləcək mətn boşdur"
     assert kind is None
+    assert "gözlənilməz" in reason, "texnikə istisnanın öz mətni çatmalıdır"

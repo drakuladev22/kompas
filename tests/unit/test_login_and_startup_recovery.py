@@ -128,7 +128,7 @@ def test_a_non_employee_result_is_reported_not_crashed() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 2 — Konfiqurasiya nasazlığı AYARLAR ekranına gedir, ölü-sona yox
+# 2 — «Yenidən Cəhd Et» HEÇ BİR NÖVDƏ ayarlar ekranını açmır
 # --------------------------------------------------------------------------- #
 
 
@@ -159,11 +159,13 @@ def _application_with_recorders() -> tuple[Any, list[Any], list[Any]]:
     return application, settings_calls, fatal_calls
 
 
-def test_missing_credentials_open_the_connection_settings_screen() -> None:
+def test_missing_credentials_keep_the_fatal_screen_not_the_settings_form() -> None:
     """TƏMİZ QURAŞDIRMA HALI: `connection.json` yoxdur.
 
-    Bu, hər YENİ müştərinin ilk təcrübəsidir — pozulacaq işlək konfiqurasiya
-    olmadığı üçün ayarlar ekranı təhlükəsizdir və YEGANƏ irəli yoldur.
+    «Yenidən Cəhd Et» basıldıqda ekran DƏYİŞMƏMƏLİDİR — düymənin adı yeni
+    cəhd vəd edir, server/parol forması yox. Texnikin yolu `Ctrl+Shift+K` →
+    Bərpa Konsoludur və o, bu növdə (`CREDENTIALS_MISSING`) bypass şərtindən
+    keçir (`controllers/recovery_console.may_open`).
     """
     from src.presentation.composition import StartupError, StartupFailureKind
 
@@ -178,12 +180,12 @@ def test_missing_credentials_open_the_connection_settings_screen() -> None:
 
     application._attempt_startup(_rebuild)
 
-    assert settings_calls == ["Server məlumatlarını daxil edin."]
-    assert fatal_calls == []
+    assert settings_calls == []
+    assert fatal_calls == [StartupFailureKind.CREDENTIALS_MISSING]
 
 
-def test_invalid_credentials_also_open_the_settings_screen() -> None:
-    """Saxlanmış parol səhvdirsə də pozulacaq İŞLƏK konfiqurasiya yoxdur."""
+def test_invalid_credentials_also_keep_the_fatal_screen() -> None:
+    """Saxlanmış parol səhvdirsə də təkrar cəhd ayarlar formasını AÇMIR."""
     from src.presentation.composition import StartupError, StartupFailureKind
 
     application, settings_calls, fatal_calls = _application_with_recorders()
@@ -197,15 +199,15 @@ def test_invalid_credentials_also_open_the_settings_screen() -> None:
 
     application._attempt_startup(_rebuild)
 
-    assert settings_calls == ["Parol səhvdir."]
-    assert fatal_calls == []
+    assert settings_calls == []
+    assert fatal_calls == [StartupFailureKind.CREDENTIALS_INVALID]
 
 
 def test_a_network_failure_still_shows_the_fatal_screen() -> None:
-    """RECOVERY-1 qərarı QORUNUR: şəbəkə nasazlığında ayarlar AÇILMIR.
+    """Şəbəkə nasazlığı — davranış dəyişməyib, ekran fatal ekrandır.
 
-    Səbəb dəyişməyib — orada konfiqurasiya DÜZGÜNDÜR və istifadəçini onu
-    «düzəltməyə» sövq etmək işlək quraşdırmanı pozardı.
+    Bu test artıq üç növün ÜÇÜ üçün də eyni cavabı yoxlayan dəstin bir
+    hissəsidir: təkrar cəhd ekranı DƏYİŞMİR.
     """
     from src.presentation.composition import StartupError, StartupFailureKind
 
@@ -222,6 +224,50 @@ def test_a_network_failure_still_shows_the_fatal_screen() -> None:
 
     assert settings_calls == []
     assert fatal_calls == [StartupFailureKind.DATABASE_UNREACHABLE]
+
+
+def test_the_retry_records_the_technical_reason_for_the_recovery_console() -> None:
+    """Ekran DƏYİŞMİR, LAKİN səbəb SAXLANILIR — `Ctrl+Shift+K` onu göstərir.
+
+    «Yenidən Cəhd Et» ayarlar formasını açmadığına görə texnikin səbəbi
+    görəcəyi yeganə yer konsoldur; təkrar cəhdin ƏN SON nəticəsi orada
+    görünməlidir (köhnə mətn artıq düzəldilmiş problemə yönəldərdi).
+    """
+    from src.presentation.composition import StartupError, StartupFailureKind
+
+    application, _settings_calls, _fatal_calls = _application_with_recorders()
+    application._startup_failure_kind = StartupFailureKind.CREDENTIALS_MISSING
+
+    def _rebuild() -> Any:
+        raise StartupError(
+            "Baza bağlantı məlumatları qəbul edilmədi",
+            user_message="Parol səhvdir.",
+            context={"sqlstate": "28P01"},
+            kind=StartupFailureKind.CREDENTIALS_INVALID,
+        )
+
+    application._attempt_startup(_rebuild)
+
+    assert application._startup_failure_reason == (
+        "Başlanğıc nasazlığı: Baza bağlantı məlumatları qəbul edilmədi (SQLSTATE 28P01)"
+    )
+    # NÖV TOXUNULMUR: qapı (`may_open`) açılışda hesablanan növə söykənir —
+    # təkrar cəhd onu dəyişsəydi, təmiz quraşdırmada (`CREDENTIALS_MISSING`)
+    # açıq olan konsol İLK uğursuz cəhddən sonra bağlanardı.
+    assert application._startup_failure_kind is StartupFailureKind.CREDENTIALS_MISSING
+
+
+def test_an_unexpected_retry_crash_still_leaves_a_reason() -> None:
+    """`StartupError` olmayan istisna da texnikə mətn buraxır."""
+    application, _settings_calls, fatal_calls = _application_with_recorders()
+
+    def _rebuild() -> Any:
+        raise RuntimeError("hovuz açılmadı")
+
+    application._attempt_startup(_rebuild)
+
+    assert fatal_calls, "gözlənilməz istisna fatal ekranı göstərməlidir"
+    assert "hovuz açılmadı" in application._startup_failure_reason
 
 
 def test_a_successful_rebuild_adopts_the_context() -> None:

@@ -569,6 +569,13 @@ class StartupFailureKind(str, Enum):
 
         Şəbəkə nasazlığında ayarları açmaq istifadəçini düzgün olan dəyərləri
         «düzəltməyə» sövq edərdi — yəni işləyən konfiqurasiyanı pozardı.
+
+        DİQQƏT — bu xassə HAZIRDA heç bir ekran seçimini idarə ETMİR:
+        «Yenidən Cəhd Et» artıq HEÇ VAXT ayarlar ekranını açmır (səbəb
+        `app.py::_on_startup_failed` içindədir). Xassə TƏSNİFATIN
+        özü kimi qalır — nasazlığın konfiqurasiyadan, yoxsa mühitdən gəldiyini
+        ayırır və jurnal/test bu ayrımı işlədir. Ona ekran bağlamazdan əvvəl
+        həmin şərhi oxuyun.
         """
         return self in {
             StartupFailureKind.CREDENTIALS_MISSING,

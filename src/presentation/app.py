@@ -35,6 +35,7 @@ from src.presentation.shell.kiosk import KioskWindow
 from src.presentation.shell.menu import build_default_registry
 from src.presentation.shell.window import FramelessWindow
 from src.presentation.stall_monitor import StallMonitor
+from src.presentation.theme.fonts import register_bundled_fonts
 from src.presentation.theme.manager import ThemeManager
 from src.presentation.theme.tokens import ThemeMode
 from src.presentation.theme.transition import animate_theme_change
@@ -51,7 +52,11 @@ if TYPE_CHECKING:
     from src.domain.value_objects.credentials import Username
     from src.domain.value_objects.identifiers import EmployeeId, LeaveTypeId, SessionId, TenantId
     from src.infrastructure.persistence.mappers import Credentials
-    from src.presentation.composition import ApplicationContext, StartupFailureKind
+    from src.presentation.composition import (
+        ApplicationContext,
+        StartupError,
+        StartupFailureKind,
+    )
     from src.presentation.controllers.auth import AuthController
     from src.presentation.controllers.devices import DevicePendingController
     from src.presentation.controllers.fine_entry import FineEntryController
@@ -291,12 +296,23 @@ class KompasApplication:
         #: kontrollerlərindəki ilə eynidir.
         self._executor = executor
         _apply_window_icon(app)
+        # ŞRİFT İKONDAN ƏVVƏL DEYİL, LAKİN ÜSLUBDAN ƏVVƏL qeydiyyatdan
+        # keçir: `ThemeManager.apply()` QSS-i qurur və orada `--font-family`
+        # ilk ad kimi `Inter` yazılıb. Ailə həmin andan ƏVVƏL
+        # `QFontDatabase`-də olmasa, Qt sükutla ehtiyat şriftə düşərdi və
+        # nəticə YALNIZ vizual fərq kimi görünərdi (bax `theme/fonts.py`).
+        register_bundled_fonts()
         #: Canlı obyekt qrafı (Faza 5/6). `None` -> önizləmə/dizayn rejimi.
         self._context = context
         #: Başlanğıc uğursuzluğunun NÖVÜ (SEC-2) — `_context is None` olanda
         #: SƏBƏBİ ayırır (`recovery_console.may_open`-un bypass qərarı buna
         #: söykənir). Kontekst uğurla qurulubsa `None` qalır.
         self._startup_failure_kind: StartupFailureKind | None = None
+        #: Həmin nasazlığın TEXNİKİ səbəbi — `Ctrl+Shift+K` konsolunda
+        #: göstərilir. NÖVDƏN AYRI saxlanılır, çünki ikisi FƏRQLİ suallara
+        #: cavab verir: növ «qapı açılsınmı» (`may_open`), səbəb isə «texnik
+        #: nəyi düzəltsin» (SQLSTATE, host adı). BOŞ sətir = nasazlıq yoxdur.
+        self._startup_failure_reason: str = ""
         #: Fon açılış cəhdi — istinad SAXLANILIR, yoxsa Python onu
         #: nəticə gəlmədən toplayar və splash əbədi qalar.
         self._startup_task: Any = None
@@ -489,6 +505,7 @@ class KompasApplication:
         context: ApplicationContext | None,
         *,
         startup_failure_kind: StartupFailureKind | None = None,
+        startup_failure_reason: str = "",
     ) -> None:
         """Kontekst SONRADAN qoşulur (splash arxasında qurulanda).
 
@@ -502,9 +519,15 @@ class KompasApplication:
         Uğurlu qoşulmada (`context is not None`) çağıran `None` ötürür və
         köhnə uğursuzluq izi TƏMİZLƏNİR — əks halda «Yenidən Cəhd Et»dən
         sonrakı UĞURLU giriş belə köhnə növün kölgəsində qalardı.
+
+        `startup_failure_reason` EYNİ İZİN texniki tərəfidir və eyni qaydaya
+        tabedir: uğurlu qoşulmada boş sətir gəlir və konsoldakı xəta zolağı
+        SÖNÜR — köhnə səbəbi işlək maşında göstərmək texniki yanlış izə
+        salardı.
         """
         self._context = context
         self._startup_failure_kind = startup_failure_kind
+        self._startup_failure_reason = startup_failure_reason
 
     def _after_splash(self) -> None:
         """Splash bitdi — lisenziya qapısı, sonra quraşdırma və ya giriş."""
@@ -1152,7 +1175,13 @@ class KompasApplication:
         )
 
         screen = RecoveryConsoleScreen(self._theme)
-        controller = RecoveryConsoleController(authenticated=authenticated)
+        # SƏBƏB EKRANA BURADAN GƏLİR — `may_open` qapısı ARTIQ keçilib.
+        # Boşdursa (işlək maşında Root konsolu açıb) ekran heç bir xəta
+        # zolağı göstərmir, bax `RecoveryConsoleScreen.set_failure_reason`.
+        controller = RecoveryConsoleController(
+            authenticated=authenticated,
+            failure_reason=self._startup_failure_reason,
+        )
         controller.attach(screen)
         # Kontrollerə istinad `lambda`-nın bağlamasında yaşayır (CLAUDE.md §6).
         screen.closed.connect(lambda: self._leave_recovery_console(controller))
@@ -3575,12 +3604,16 @@ class KompasApplication:
         özü «düzəldib» poza bilirdi). Texnikin yolu indi `Ctrl+Shift+K` →
         Bərpa Konsoludur və o, EYNİ `save_settings()` funksiyasını çağırır.
 
-        Metod və ekran İNDİ YENİDƏN BAĞLIDIR, lakin DAR şərtlə: yalnız
-        `StartupFailureKind.is_configuration_problem` doğru olduqda
-        (`CREDENTIALS_MISSING`, `CREDENTIALS_INVALID`) — yəni pozulacaq işlək
-        konfiqurasiyanın OLMADIĞI hallarda. Şəbəkə nasazlığı bura DÜŞMÜR:
-        orada ayarları açmaq istifadəçini düzgün dəyərləri «düzəltməyə» sövq
-        edərdi.
+        Bir müddət metod təkrar-cəhd yolundan (`_on_startup_failed`)
+        `is_configuration_problem` şərti ilə çağırıldı — həmin bağlantı GERİ
+        ALINDI: «Yenidən Cəhd Et» düyməsi öz adının vəd etmədiyi ekranı
+        açırdı və forma mağaza işçisinin qarşısına çıxırdı (səbəb tam şəkildə
+        `_on_startup_failed` içindədir).
+
+        Metod SİLİNMİR, çünki ekranın özü sihirbaz/quraşdırma yolundan və
+        testlərdən istifadə olunur; həmçinin gələcəkdə DAR bir çağırış yeri
+        (məs. yalnız texnikə görünən axın) lazım olsa naxış hazırdır. Yeni
+        çağırış əlavə edən əvvəlcə yuxarıdakı iki səbəbi oxumalıdır.
 
         `failure_message` ekranın başında göstərilir ki, istifadəçi NİYƏ
         burada olduğunu bilsin — boş ekran «proqram niyə ayarları soruşur?»
@@ -3687,6 +3720,10 @@ class KompasApplication:
             # Başqa istisna gəlirsə bu, gözlənilməz nasazlıqdır və SÜKUTLA
             # udulmamalıdır — əks halda splash əbədi qalar.
             _log.error("STARTUP_RETRY_CRASHED", extra={"error": str(error)})
+            # SƏBƏB SAXLANILIR, NÖV YOX — bax aşağıdakı blok. Burada növ
+            # `StartupError` deyil, yəni təsnifat mümkün olmayıb; texnikə
+            # verilə bilən yeganə fakt istisnanın ÖZ mətnidir.
+            self._startup_failure_reason = f"{_FAILURE_REASON_PREFIX}gözlənilməz istisna — {error}"
             self.show_startup_failure(
                 message="Tətbiq işə düşə bilmədi. Dəstəklə əlaqə saxlayın.",
                 kind=self._startup_failure_kind_missing(),
@@ -3696,25 +3733,38 @@ class KompasApplication:
 
         _log.warning("STARTUP_RETRY_FAILED", extra=error.to_dict())
         # ──────────────────────────────────────────────────────────────────
-        # KONFİQURASİYA PROBLEMİ AYARLAR EKRANINA GEDİR, ÖLÜ-SONA YOX
+        # «YENİDƏN CƏHD ET» HEÇ VAXT AYARLAR EKRANINI AÇMIR
         # ──────────────────────────────────────────────────────────────────
-        # `StartupFailureKind.is_configuration_problem` məhz bu sualın cavabı
-        # üçün yazılmışdı — «Bağlantı Ayarları ekranı KÖMƏK EDƏRMİ» — lakin
-        # HEÇ YERDƏN çağırılmırdı (yalnız testlərdə). Nəticə TƏMİZ
-        # QURAŞDIRMADA görünürdü: `connection.json` yoxdur →
-        # `CREDENTIALS_MISSING` → fatal ekran açılır və mesajı «Bağlantı
-        # Ayarları ekranından server məlumatlarını daxil edin» deyir, HALBUKİ
-        # həmin ekranı açmağın YOLU YOXDUR. Yəni hər YENİ müştəri
-        # quraşdırmadan dərhal sonra kilidlənirdi.
+        # Əvvəl `StartupFailureKind.is_configuration_problem` doğru olduqda
+        # (`CREDENTIALS_MISSING`, `CREDENTIALS_INVALID`) təkrar cəhd
+        # «Bağlantı Ayarları» ekranını açırdı. İki səbəbdən geri alındı:
         #
-        # RECOVERY-1 həmin düyməni QƏSDƏN çıxarmışdı və səbəbi keçərlidir:
-        # mağaza işçisi İŞLƏK konfiqurasiyanı «düzəldib» poza bilir. Lakin bu
-        # iki hal (`CREDENTIALS_MISSING`, `CREDENTIALS_INVALID`) məhz işlək
-        # konfiqurasiyanın OLMADIĞI hallardır — pozulacaq bir şey yoxdur.
-        # `is_configuration_problem` elə bu sərhədi çəkir.
-        if error.kind.is_configuration_problem:
-            self.show_connection_settings(rebuild, failure_message=error.user_message)
-            return
+        # 1. DÜYMƏ ÖZ ADININ İŞİNİ GÖRMÜRDÜ — istifadəçi «Yenidən Cəhd Et»
+        #    basır, ekran isə server/parol formasına DƏYİŞİRDİ. Gözlənilən
+        #    nəticə «yenidən yoxla», alınan nəticə «indi bunu sən doldur».
+        # 2. FORMA SƏHV ADAMIN QARŞISINA ÇIXIRDI — bu ekranı görən mağaza
+        #    işçisidir; RECOVERY-1 məhz ona görə fatal ekrandan «Bağlantı
+        #    Ayarları» düyməsini çıxarmışdı ki, işlək konfiqurasiya
+        #    «düzəldilib» pozulmasın. Təkrar cəhdə bağlamaq həmin qərarı
+        #    düymə olmadan geri qaytarırdı.
+        #
+        # İNDİ: təkrar cəhd YALNIZ yeni cəhddir — uğursuzluqda eyni fatal
+        # ekran YENİLƏNMİŞ mesaj və növlə qayıdır (parol düzəldiləndən sonra
+        # mesajın «şəbəkə xətası»na dəyişməsi istifadəçiyə irəlilədiyini
+        # göstərir).
+        #
+        # TEXNİKİN YOLU BAĞLANMIR: `Ctrl+Shift+K` → Bərpa Konsolu EYNİ
+        # `save_settings()` funksiyasını çağırır. Qapı
+        # `controllers/recovery_console.may_open`-dadır və `_startup_failure_
+        # kind`-a baxır — BU metod həmin sahəyə TOXUNMUR, ona görə açılışda
+        # hesablanan növ qüvvədə qalır və `CREDENTIALS_MISSING` (təmiz
+        # quraşdırma) bypass şərtindən keçməyə davam edir.
+        # SƏBƏB YENİLƏNİR, NÖV İSƏ TOXUNULMUR (yuxarıdakı bənd): növ qapını
+        # (`may_open`) idarə edir və açılışda hesablanan dəyər qüvvədə
+        # qalmalıdır; səbəb isə YALNIZ mətndir və texnik ƏN SON cəhdin
+        # nəticəsini görməlidir — köhnə mətn onu artıq düzəldilmiş problemi
+        # axtarmağa yönəldərdi.
+        self._startup_failure_reason = _describe_startup_failure(error)
         self.show_startup_failure(message=error.user_message, kind=error.kind, rebuild=rebuild)
 
     def adopt_context(self, context: ApplicationContext) -> None:
@@ -3730,6 +3780,7 @@ class KompasApplication:
         # `DATABASE_UNREACHABLE`) görər və baza artıq İŞLƏK olsa belə
         # `may_open`-in bypass şərti səhvən keçərdi.
         self._startup_failure_kind = None
+        self._startup_failure_reason = ""
         self.set_auth_controller(_build_auth_controller(context))
         _log.info("STARTUP_RECOVERED", extra={"tenant_id": str(context.tenant_id)})
         self.start()
@@ -4310,11 +4361,41 @@ def _kiosk_photo_notice(parent: QWidget) -> None:
     box.exec()
 
 
+#: Konsoldakı səbəb zolağının ön sözü — bax `_describe_startup_failure`.
+_FAILURE_REASON_PREFIX: Final = "Başlanğıc nasazlığı: "
+
+
+def _describe_startup_failure(error: StartupError) -> str:
+    """Başlanğıc nasazlığının TEXNİK mətni — `Ctrl+Shift+K` konsolu üçün.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `user_message` KİFAYƏT ETMİR
+    ──────────────────────────────────────────────────────────────────────────
+    `user_message` MAĞAZA İŞÇİSİ üçün yazılıb («İnternet bağlantısını
+    yoxlayın») və fatal ekranda ARTIQ göstərilir. Konsola düşən adam isə
+    texnikdir: onun növbəti addımı SQLSTATE-dən asılıdır — `28P01` parolu,
+    `3D000` baza adını, `42P01` isə sxemin ümumiyyətlə qurulmadığını
+    göstərir. Eyni ayırıcı `controllers/recovery_console.describe_failure`-də
+    də işlədilir; burada təkrarlanmır, çünki orada ELƏ İSTİSNA var, burada
+    isə YALNIZ `StartupError` — `classify_connection_failure` orijinal
+    istisnadan yalnız `sqlstate`-i saxlayır (`context`).
+
+    Mətn jurnal üçün deyil (jurnala `to_dict()` düşür) — EKRAN üçündür, ona
+    görə bir sətirdə oxunan formada qurulur.
+    """
+    sqlstate = str(error.context.get("sqlstate", "") or "")
+    detail = f"{error.message} (SQLSTATE {sqlstate})" if sqlstate else error.message
+    # ÖN SÖZ QALIR: zolaq konsolun ORTASINDA deyil, BAŞINDA durur və texnik
+    # onu «bu ekranın öz xətası» kimi oxuya bilərdi. `Başlanğıc nasazlığı:`
+    # mətnin HANSI ana aid olduğunu deyir — konsol açılmamışdan ƏVVƏLKİ.
+    return f"{_FAILURE_REASON_PREFIX}{detail}"
+
+
 def _load_context_behind_splash(
     app: QApplication,
     application: KompasApplication,
     factory: Callable[[], ApplicationContext],
-) -> tuple[ApplicationContext | None, str, StartupFailureKind | None]:
+) -> tuple[ApplicationContext | None, str, StartupFailureKind | None, str]:
     """Kontekst qurulur — SPLASH GÖRÜNƏRKƏN və GUI sapından KƏNARDA.
 
     ──────────────────────────────────────────────────────────────────────────
@@ -4342,7 +4423,10 @@ def _load_context_behind_splash(
     kompozisiya kökünü oxunmaz edərdi.
 
     Returns:
-        `(kontekst, istifadəçi mesajı, nasazlıq növü)`. Uğurda mesaj boşdur.
+        `(kontekst, istifadəçi mesajı, nasazlıq növü, texniki səbəb)`. Uğurda
+        hər iki mesaj boşdur. Dördüncü element İSTİFADƏÇİ mesajından AYRIDIR
+        və yalnız `Ctrl+Shift+K` konsoluna gedir — səbəbi bax
+        `_describe_startup_failure`.
     """
     from PySide6.QtCore import QEventLoop  # noqa: PLC0415
 
@@ -4372,11 +4456,11 @@ def _load_context_behind_splash(
 
     error = outcome.get("error")
     if error is None:
-        return cast("ApplicationContext", outcome.get("context")), "", None
+        return cast("ApplicationContext", outcome.get("context")), "", None, ""
 
     if isinstance(error, StartupError):
         _log.critical("GUI_STARTUP_ERROR", extra=error.to_dict())
-        return None, error.user_message, error.kind
+        return None, error.user_message, error.kind, _describe_startup_failure(error)
 
     # GÖZLƏNİLMƏYƏN istisna da BOŞ pəncərəyə çevrilməməlidir: istifadəçi
     # ekranda səbəb və əlaqə ünvanı görməlidir (bölmə 8). Növ `None` qalır —
@@ -4384,7 +4468,18 @@ def _load_context_behind_splash(
     # naməlumdur.
     unexpected = error if isinstance(error, BaseException) else None
     _log.critical("GUI_STARTUP_UNEXPECTED", exc_info=unexpected)
-    return None, "KompasOS işə düşə bilmədi. Administratorunuzla əlaqə saxlayın.", None
+    # SƏBƏB BURADA DA VERİLİR — növ `None` olduğu üçün konsol adətən
+    # AÇILMIR (fail-closed, bax `recovery_console.may_open`), lakin
+    # KONFİQURASİYA EDİLMƏMİŞ maşında qapı `configured=False` ilə açılır və
+    # texnik orada boş ekran yox, istisnanın mətnini görməlidir.
+    return (
+        None,
+        "KompasOS işə düşə bilmədi. Administratorunuzla əlaqə saxlayın.",
+        None,
+        f"{_FAILURE_REASON_PREFIX}gözlənilməz istisna — {unexpected}"
+        if unexpected is not None
+        else "",
+    )
 
 
 def run(
@@ -4443,10 +4538,14 @@ def run(
     # baza ümumiyyətlə lazım deyil, `startup_error` isə artıq verilibsə
     # yenidən cəhd etmək səhv olardı.
     if context is None and not preview and not startup_error and rebuild_context is not None:
-        context, startup_error, startup_failure_kind = _load_context_behind_splash(
+        context, startup_error, startup_failure_kind, failure_reason = _load_context_behind_splash(
             app, application, rebuild_context
         )
-        application.set_context(context, startup_failure_kind=startup_failure_kind)
+        application.set_context(
+            context,
+            startup_failure_kind=startup_failure_kind,
+            startup_failure_reason=failure_reason,
+        )
 
     application.set_rebuild_context(rebuild_context)
     device_gate = _device_gate(application, context) if context is not None else None

@@ -387,9 +387,20 @@ class RecoveryConsoleController:
     """
 
     def __init__(
-        self, *, on_saved: Callable[[], None] | None = None, authenticated: bool = True
+        self,
+        *,
+        on_saved: Callable[[], None] | None = None,
+        authenticated: bool = True,
+        failure_reason: str = "",
     ) -> None:
         self._on_saved = on_saved
+        #: Tətbiqin QALXA BİLMƏMƏ səbəbi — texniki mətn (SQLSTATE daxil),
+        #: `app.py` onu başlanğıcda hesablayır. BOŞ = nasazlıq yoxdur, yəni
+        #: konsol işlək maşında açılıb və ekranda xəta zolağı GÖSTƏRİLMİR.
+        #: Defolt boşdur: səbəbi ötürməyi unudan çağırış yeri «xəta yoxdur»
+        #: deməlidir — uydurulmuş səbəb göstərməkdənsə heç nə göstərmək
+        #: doğrudur.
+        self._failure_reason = failure_reason
         #: SEC-2 genişlənməsi — `False` = konsol `may_open`-un bypass şərti
         #: ilə (actor=None) açılıb. Defolt `True` seçilib ki, konsolu birbaşa
         #: quran gələcək test/çağırış «unudulduqda» sükutla ƏN SƏRT rejimə
@@ -451,6 +462,11 @@ class RecoveryConsoleController:
         """
         from src.infrastructure.config.connection_file import load_settings  # noqa: PLC0415
 
+        # SƏBƏB DİAQNOSTİKADAN ƏVVƏL — texnik konsola məhz onun üçün düşür.
+        # `refresh()` hər çağırışda təkrar qoyulur, çünki aşağıdakı `return`
+        # yolları (`load_settings` xətası) ekranı yarımçıq qoyur və səbəb
+        # zolağı ORADA DA qalmalıdır.
+        screen.set_failure_reason(self._failure_reason)
         screen.set_diagnostics(diagnostics())
         try:
             settings = load_settings()
