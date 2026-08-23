@@ -460,7 +460,11 @@ def test_deactivating_the_last_approver_warns_but_does_not_block() -> None:
         reason="İşdən çıxdı",
     )
 
-    assert updated.is_active is False, "Xəbərdarlıq əməliyyatı BLOKLAMAMALIDIR"
+    # HR-4 — İMZA DƏYİŞDİ: metod `Employee` YOX, `OffboardingReview`
+    # qaytarır (işdən çıxma anında AÇIQ qalan bağlantıların siyahısı ilə).
+    # İşçinin ÖZÜ `review.employee`-dədir, yəni məlumat İTMİR — səbəb
+    # `user_management.py::OffboardingReview` başlığındadır.
+    assert updated.employee.is_active is False, "Xəbərdarlıq əməliyyatı BLOKLAMAMALIDIR"
     assert "EMPLOYEE_DEACTIVATED" in ctx.audit.actions()
 
 

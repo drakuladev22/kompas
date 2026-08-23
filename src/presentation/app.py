@@ -134,6 +134,22 @@ FALLBACK_UPLOAD_POLL_INTERVAL_MS: Final = (
 #: SQL ilə düşən dəyər üçün son müdafiə xətti buradadır.
 MIN_UPLOAD_POLL_INTERVAL_SECONDS: Final = 10
 
+#: Kioskda «təsdiq gözlənilir» vəziyyətinin yoxlanma tezliyi (30 saniyə).
+#:
+#: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
+#: (`REALTIME_POLL_INTERVAL_SECONDS`). YENİ AÇAR YARADILMADI: bu, məhz həmin
+#: açarın tərifidir — «serverdə DƏYİŞMİŞ sətri hansı ritmlə soruşaq»
+#: (`realtime/channel.py` fallback polling-i eyni açardan oxuyur). Ayrıca
+#: kiosk açarı Root ekranında iki qoşa dəyər yaradardı və biri digərini
+#: sükutla üstələyərdi.
+FALLBACK_KIOSK_STATUS_POLL_MS: Final = (
+    int(DEFAULT_LIMITS[SystemLimitKey.REALTIME_POLL_INTERVAL_SECONDS]) * 1000
+)
+
+#: Kiosk statusu dövrəsinin ALT HƏDDİ — `limits.py`-dəki `REALTIME_POLL_
+#: INTERVAL_SECONDS` diapazonunun (5…3600) alt sərhədi ilə EYNİ ədəd.
+MIN_KIOSK_STATUS_POLL_SECONDS: Final = 5
+
 #: Planlaşdırılmış işlərin yoxlanma tezliyi (15 dəqiqə).
 #:
 #: FALLBACK-dır — HƏQİQİ MƏNBƏ `system_limits`
@@ -369,6 +385,10 @@ class KompasApplication:
         self._kiosk_setup_error: str | None = None
         #: Ekranları canlı məlumatla dolduran körpü — login-dən sonra qurulur.
         self._binder: ScreenDataBinder | None = None
+        #: DRILL-DOWN izi (DEEP-GAP UX-8) — reytinqdən Gündəlik Tabelə keçid
+        #: edilibsə, ekranın ƏVVƏLKİ kontekst mətni burada saxlanılır.
+        #: `None` = drill-down yoxdur, yəni ekran öz normal vəziyyətindədir.
+        self._roster_drill_subtitle: str | None = None
         #: Cərimə formasının yazı yolu — dropdown-ları da bu verir.
         self._fine_entry: FineEntryController | None = None
         #: «Şübhəli Satışlar» növbəsi — işçi açılan siyahısını O verir, ona
@@ -1374,7 +1394,28 @@ class KompasApplication:
 
     def _on_screen_revisited(self, key: str) -> None:
         """Artıq qurulmuş ekrana qayıdış — sayğacları təzələyir."""
-        if key not in self.REFRESH_ON_REVISIT or self._binder is None or self._shell is None:
+        if self._binder is None or self._shell is None:
+            return
+        # DRILL-DOWN-DAN ÇIXIŞ (DEEP-GAP UX-8): sol paneldən «Gündəlik Tabel»
+        # açılanda ekran İSTİFADƏÇİNİN ÖZ mağazasına qayıdır. Bu, `REFRESH_ON_
+        # REVISIT` siyahısına ƏLAVƏ EDİLMİR: ekran hər qayıdışda deyil, YALNIZ
+        # başqa mağazaya keçilmiş halda yenidən oxunur — yəni siyahının «hər
+        # klikə onlarla sorğu bağlama» səbəbi pozulmur.
+        # LOKAL İDXAL (CLAUDE.md — açılış sürəti): `screen_data` bütün
+        # oxu yollarını gətirir və `app.py` onu QƏSDƏN modul səviyyəsində
+        # idxal etmir — panel açılışı ondan əvvəl başlayır.
+        from src.presentation.controllers.screen_data import (  # noqa: PLC0415
+            DAILY_ROSTER_SCREEN_KEY,
+        )
+
+        if key == DAILY_ROSTER_SCREEN_KEY and self._roster_drill_subtitle is not None:
+            roster = self._shell.screen_for(key)
+            if roster is not None:
+                self._binder.populate(key, roster)
+                self._shell.set_screen_subtitle(key, self._roster_drill_subtitle)
+                self._roster_drill_subtitle = None
+            return
+        if key not in self.REFRESH_ON_REVISIT:
             return
         screen = self._shell.screen_for(key)
         if screen is None:  # pragma: no cover - siqnal yalnız qurulmuş ekran üçün yayılır
@@ -2119,6 +2160,60 @@ class KompasApplication:
         if not isinstance(screen, OperatorQueueScreen):  # pragma: no cover - tip qoruyucusu
             return
         CameraQueueController(self._context, self._current_employee).attach(screen)
+        self._start_queue_auto_refresh(screen)
+
+    def _start_queue_auto_refresh(self, screen: QWidget) -> None:
+        """Təsdiq növbəsini fonda təzələyir (DEEP-GAP OP-5).
+
+        ──────────────────────────────────────────────────────────────────────
+        QÜSUR NƏ İDİ
+        ──────────────────────────────────────────────────────────────────────
+        Ekranın alt-başlığı bir vaxtlar «Canlı · 2 san əvvəl yeniləndi» yazırdı,
+        halbuki heç bir taymer yox idi: siyahı YALNIZ operator özü təsdiq/rədd
+        edəndə yenilənirdi. Mətn sonradan dürüstləşdirildi («Sorğu emalından
+        sonra yenilənir»), LAKİN dürüst mətn boşluğu ÖRTDÜ, aradan qaldırmadı:
+        operator ekrana baxıb «yeni sorğu yoxdur» qərarı verirdi, növbədə isə
+        dəqiqələrlə gözləyən sorğu ola bilərdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        SEÇİM VARSA YENİLƏNMƏ GÖZLƏYİR
+        ──────────────────────────────────────────────────────────────────────
+        `set_entries()` sətirləri SIFIRDAN qurur, yəni toplu rədd üçün
+        işarələnmiş qutular (DEEP-GAP OP-7) itərdi — operator altı sətri
+        seçib səbəb yazarkən taymer onun işini silərdi. Ona görə seçim varkən
+        dövrə SAKİT KEÇİR: operator əməliyyatı bitirən kimi (`clear_selection`
+        + `_refresh`) növbəti tıqqıltı onsuz da yeni siyahını gətirir.
+
+        Ritm kiosk statusu ilə EYNİ açardan gəlir
+        (`REALTIME_POLL_INTERVAL_SECONDS`) — bax `_kiosk_status_poll_
+        interval_ms` başlığı: ikisi də «serverdə dəyişmiş sətri hansı ritmlə
+        soruşaq» sualının cavabıdır.
+
+        Taymerin sahibi EKRANDIR: örtük ekranı `rebuild_screen` ilə atanda
+        (xəta yolu) taymer də onunla ölür.
+        """
+        if self._binder is None:
+            return
+
+        timer = QTimer(screen)
+        timer.setInterval(self._kiosk_status_poll_interval_ms())
+
+        def tick() -> None:
+            if self._binder is None:  # pragma: no cover - invariant
+                return
+            selected = getattr(screen, "selected_request_ids", None)
+            if callable(selected) and selected():
+                return
+            try:
+                self._binder.populate("live_queue", screen)
+            except Exception:
+                # Ötəri şəbəkə xətası dövrəni DAYANDIRMIR və ekranda
+                # xəbərdarlıq da göstərmir: operator heç nə basmayıb, bu, onun
+                # görmədiyi fon işidir (kiosk pollerindəki eyni qərar).
+                _log.warning("QUEUE_AUTO_REFRESH_FAILED", exc_info=True)
+
+        timer.timeout.connect(tick)
+        timer.start()
 
     def _may_override_return_time(self) -> bool:
         """`can_override_return_time` — "Vaxtı Düzəlt" düyməsinin GÖRÜNMƏSİ üçün.
@@ -2903,6 +2998,7 @@ class KompasApplication:
         if self._shell is None or self._binder is None:
             return
         from src.presentation.controllers.screen_data import (  # noqa: PLC0415
+            DAILY_ROSTER_SCREEN_KEY,
             perform_ranking_drill_down,
         )
 
@@ -2914,6 +3010,51 @@ class KompasApplication:
         )
         if not succeeded:
             _log.warning("BENCHMARK_DRILL_DOWN_FAILED", extra={"value": store_id_text})
+            return
+
+        # ──────────────────────────────────────────────────────────────────
+        # İSTİFADƏÇİ HARA DÜŞDÜYÜNÜ GÖRÜR (DEEP-GAP UX-8)
+        # ──────────────────────────────────────────────────────────────────
+        # Keçid SÜKUTLA baş verirdi: menecer reytinq sətrinə klikləyir və
+        # özünü BAŞQA mağazanın tabelində tapır — başlıqda isə yalnız
+        # «Gündəlik Tabel» yazırdı. Nəticədə iki səhv birlikdə gəlirdi:
+        # (1) hansı mağazaya baxdığını bilmirdi, (2) sol paneldən qayıdanda
+        # ekran HƏMİN başqa mağazanın məlumatı ilə dolu qalırdı, çünki
+        # ekranlar açara görə keşlənir (`REFRESH_ON_REVISIT` yalnız
+        # `dashboard`-ı əhatə edir).
+        #
+        # YENİ EKRAN VƏ YA NAVİQASİYA YIĞINI YARADILMIR: başlığın altındakı
+        # MÖVCUD kontekst sətri kliklənən mağazanın adını daşıyır, sol
+        # paneldən qayıdış isə `_on_screen_revisited`-də sıfırlanır.
+        if self._roster_drill_subtitle is None:
+            self._roster_drill_subtitle = self._shell.screen_subtitle(DAILY_ROSTER_SCREEN_KEY)
+        self._shell.set_screen_subtitle(
+            DAILY_ROSTER_SCREEN_KEY,
+            f"{self._drill_store_name(store_id_text)} · İdarə Panelindən",
+        )
+
+    def _drill_store_name(self, store_id_text: str) -> str:
+        """Drill-down başlığı üçün mağaza adı — tapılmasa NEYTRAL mətn.
+
+        Ad tapılmayanda ID GÖSTƏRİLMİR: 36 simvollu UUID başlıqda heç nə izah
+        etmir və istifadəçiyə «sistem xarabdır» hissi verir. «Seçilmiş mağaza»
+        isə doğrudur və keçidin BAŞ VERDİYİNİ yenə bildirir.
+        """
+        if self._context is None:
+            return "Seçilmiş mağaza"
+        from uuid import UUID  # noqa: PLC0415
+
+        from src.domain.value_objects.identifiers import StoreId  # noqa: PLC0415
+        from src.presentation.controllers.camera_queue import _store_name  # noqa: PLC0415
+
+        # BROAD `except Exception` — `_store_name` XAM SQL işlədir; səbəb
+        # `_kiosk_store_name`-dəki ilə eynidir.
+        try:
+            with self._context.session() as session:
+                return _store_name(session, StoreId(UUID(store_id_text)))
+        except Exception:
+            _log.warning("DRILL_DOWN_STORE_NAME_UNAVAILABLE", exc_info=True)
+            return "Seçilmiş mağaza"
 
     def _attach_sales_review(self, screen: QWidget) -> None:
         """«Şübhəli Satışlar» növbəsini `SalesReviewQueueUseCase`-ə bağlayır."""
@@ -3347,12 +3488,19 @@ class KompasApplication:
             "face_enrollment": lambda: FaceEnrollmentScreen(theme),
             "face_exemptions": lambda: FaceExemptionScreen(theme),
             "settings": lambda: group_d.SettingsScreen(theme),
+            # MAKET DƏYƏRLƏRİ İLƏ AÇILMIR (DEEP-GAP UX-6): rol «Admin»,
+            # mağaza «Baş ofis», tarix «2024-cü ildən» sabit yazılırdı və
+            # `ProfileController.refresh()` üzərinə yazana qədər HƏR
+            # istifadəçi bir an üçün ADMIN rolunu görürdü — satıcı da daxil.
+            # Boş başlamaq layihənin öz qaydasıdır (bax aşağıdakı alt-başlıq
+            # izahı): doldurula bilməyən dəyər yerinə boşluq göstərilir,
+            # yalan yox. Ad isə örtükdən gəlir, yəni artıq HƏQİQİDİR.
             "profile": lambda: group_g.ProfileScreen(
                 theme,
                 full_name=shell.header().user_name() or "İstifadəçi",
-                role_name="Admin",
-                store_name="Baş ofis",
-                member_since="2024-cü ildən",
+                role_name="",
+                store_name="",
+                member_since="",
             ),
         }
 
@@ -3372,7 +3520,14 @@ class KompasApplication:
         #: yanlış rəqəm göstərməkdənsə boşluq dürüstdür.
         subtitles = {
             "dashboard": "",
-            "live_queue": "Canlı · 2 san əvvəl yeniləndi",
+            # «Canlı · 2 san əvvəl yeniləndi» YAZILMIR — o mətn YALAN İDİ
+            # (heç bir taymer yox idi). ƏVVƏLCƏ mətn dürüstləşdirildi
+            # («Sorğu emalından sonra yenilənir»), SONRA isə boşluğun ÖZÜ
+            # bağlandı: `_start_queue_auto_refresh` (DEEP-GAP OP-5) siyahını
+            # fonda təzələyir. Mətn indi MEXANİZMİ deyir — «2 san əvvəl» kimi
+            # SAYĞAC yenə yazılmır, çünki onu doğru saxlamaq üçün ikinci bir
+            # taymer və hər tıqqıltıda yenidən çəkilən başlıq lazım olardı.
+            "live_queue": "Avtomatik yenilənir · seçim varkən gözləyir",
             "daily_roster": "",
             "fines": "",
             "fine_review": "Ayın əvvəli · göndərmə geri qaytarıla bilmir",
@@ -3866,9 +4021,30 @@ class KompasApplication:
             store_name="",
         )
 
+        #: Son BİLİNƏN status — `KioskOutcome.status` uğursuzluqda `None` gəlir
+        #: (əməliyyat baş tutmayıb, deməli status da dəyişməyib).
+        last_status: list[WorkerStatus] = []
+
         def refresh(status_outcome: KioskOutcome) -> None:
+            # ──────────────────────────────────────────────────────────────
+            # NƏTİCƏ MƏTNİ EKRANA ÇIXIR — KİOSK ARTIQ SUSMUR (DEEP-GAP UX-1)
+            # ──────────────────────────────────────────────────────────────
+            # `KioskOutcome.message` bütün izahları daşıyır («İcazə sorğunuz
+            # qeydə alındı», `TimeDriftError`, `ModuleDisabledError`,
+            # `OperationNotPermittedError` mətnləri — bax `controllers/
+            # kiosk.py`), LAKİN o, YALNIZ PIN klaviaturasında göstərilirdi.
+            # İşçi Ana Ekranında heç yerdə render olunmurdu: `refresh()` yalnız
+            # statusu yazırdı. Nəticə ölçüldü — işçi [İşə Başladım] basır,
+            # əməliyyat domen xətası ilə düşür, EKRAN DƏYİŞMİR; işçi eyni
+            # düyməni təkrar-təkrar basır.
+            #
+            # Yeni widget ƏLAVƏ EDİLMİR: `set_status(..., hint=...)` mövcud
+            # API-dir və statusun altındakı izah sətrini yazır. Mətn boşdursa
+            # status öz standart izahına qayıdır (`status.hint_az`).
             if status_outcome.status is not None:
-                home.set_status(status_outcome.status)
+                last_status.append(status_outcome.status)
+            if last_status:
+                home.set_status(last_status[-1], hint=status_outcome.message)
             # Fasilə sayğacı HƏR əməliyyatdan sonra yenilənir (nahar.md):
             # STEP1 onu artırır, STEP2/STEP3 isə göstəricini dəyişmir — lakin
             # ayrı-ayrı yollar yazsaydıq, biri unudulanda ekran köhnə rəqəmi
@@ -4029,8 +4205,93 @@ class KompasApplication:
 
             EmployeeAnnualLeaveController(self._context, employee).attach(home)
 
+        # ──────────────────────────────────────────────────────────────────
+        # «GÖZLƏNİLİR» VƏZİYYƏTİ ÖZÜ YENİLƏNİR (DEEP-GAP UX-2)
+        # ──────────────────────────────────────────────────────────────────
+        self._start_kiosk_status_poll(home, controller, employee, last_status)
+
         refresh(outcome)
         return home
+
+    def _start_kiosk_status_poll(
+        self,
+        home: EmployeeHomeScreen,
+        controller: KioskController,
+        employee: Employee,
+        last_status: list[WorkerStatus],
+    ) -> None:
+        """«Təsdiq gözlənilir» vəziyyətini fonda yoxlayır (DEEP-GAP UX-2).
+
+        ──────────────────────────────────────────────────────────────────────
+        QÜSUR NƏ İDİ
+        ──────────────────────────────────────────────────────────────────────
+        İşçi [İşə Başladım] basır, status 🟡 `PENDING_CHECK_IN` olur, düymə
+        söndürülür. Operator 30 saniyə sonra təsdiqləyir — LAKİN kiosk ekranı
+        DƏYİŞMİR: `refresh()` yalnız İŞÇİNİN öz əməliyyatından sonra çağırılır,
+        operatorun qərarı isə BAŞQA maşında verilir. İşçinin yeganə yolu
+        çıxıb yenidən PIN + üz qapısından keçmək idi — gündə onlarla dəfə.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ TAYMER, NİYƏ REALTIME KANALI DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        `infrastructure/realtime/channel.py` mövcuddur, lakin o, ADMİN
+        panelinin abunə qatıdır və işə düşməsi üçün kanal/abunə qurulması
+        lazımdır. Kiosk isə TƏK bir sətri soruşur (`attendance` + açıq icazə)
+        və bunu yalnız 🟡 vəziyyətdə edir — yəni gün ərzində bir neçə dəfə,
+        hər dəfə bir neçə saniyə. Abunə qatını bura gətirmək qazancdan çox
+        mürəkkəblik əlavə edərdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        SORĞU YALNIZ 🟡 VƏZİYYƏTDƏ GEDİR
+        ──────────────────────────────────────────────────────────────────────
+        `is_actionable` `True`-dursa (Mağazada / Xaricdə / Günə Başlamayıb)
+        heç bir sorğu göndərilmir: həmin vəziyyətlərdə növbəti dəyişikliyi
+        İŞÇİNİN ÖZÜ edir və `refresh()` onsuz da çağırılır. Beləliklə taymer
+        boş dayanan kioskda bazaya TOXUNMUR — 40 terminal × gündə 8 saat
+        davamlı sorğu demək olardı.
+
+        Taymerin sahibi `home`-dur: ekran öləndə (işçi çıxış edir) taymer də
+        onunla birlikdə ölür — ayrıca `stop()` çağırışı unudula bilərdi.
+        """
+        timer = QTimer(home)
+        timer.setInterval(self._kiosk_status_poll_interval_ms())
+
+        def tick() -> None:
+            if not last_status or last_status[-1].is_actionable:
+                return
+            try:
+                status = controller.status_for(employee.id)
+            except Exception:
+                # Ötəri şəbəkə xətası dövrəni DAYANDIRMIR: növbəti tıqqıltı
+                # yenidən cəhd edir. Ekranda xəbərdarlıq da GÖSTƏRİLMİR —
+                # işçi heç nə basmayıb, bu, onun görmədiyi fon işidir.
+                _log.warning("KIOSK_STATUS_POLL_FAILED", exc_info=True)
+                return
+            if status is last_status[-1]:
+                return
+            last_status.append(status)
+            home.set_status(status)
+            _log.info("KIOSK_STATUS_POLL_CHANGED", extra={"status": status.name})
+
+        timer.timeout.connect(tick)
+        timer.start()
+
+    def _kiosk_status_poll_interval_ms(self) -> int:
+        """Dövrənin ritmi — ROOT-dan, oxuna bilmirsə fallback.
+
+        Əsaslandırma `_upload_poll_interval_ms`-dəki ilə EYNİDİR: cavabsız
+        qalan sual «yoxlansınmı» deyil, «hansı ritmlə» idi.
+        """
+        if self._context is None:
+            return FALLBACK_KIOSK_STATUS_POLL_MS
+        try:
+            seconds = self._context.infrastructure_limits().int_of(
+                SystemLimitKey.REALTIME_POLL_INTERVAL_SECONDS
+            )
+        except Exception:
+            _log.exception("KIOSK_STATUS_POLL_INTERVAL_READ_FAILED")
+            return FALLBACK_KIOSK_STATUS_POLL_MS
+        return max(MIN_KIOSK_STATUS_POLL_SECONDS, seconds) * 1000
 
     def _kiosk_store_name(self) -> str:
         """PIN ekranının başlıq sətri — HARDCODED sabit YOX (DEEP-GAP U5).

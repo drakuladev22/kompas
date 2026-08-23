@@ -305,14 +305,56 @@ QPlainTextEdit:focus {
 }
 
 /* ===================== GİRİŞ SAHƏLƏRİ ===================== */
+/* SAHƏ DOLDURULMUŞ SƏTHDİR, AĞ QUTU DEYİL.
+   ─────────────────────────────────────────────────────────────────────────
+   Əvvəl sahə ağ fonda (`--color-bg-primary`) 3:1 kontrastlı sərhədlə
+   çəkilirdi. Kontrast tələbi ödənirdi, LAKİN nəticə sərt idi: parlaq ağ
+   daxili sahə ilə tünd çərçivə arasındakı fərq gözə «cizgi» kimi dəyirdi və
+   kartın ÖZÜ də ağ olduğu üçün sahə səthdən yalnız həmin cizgi ilə ayrılırdı.
+
+   İndi sahənin İÇİ bir pillə çökür (`--color-bg-surface`): sərhəd eyni
+   tokendə qalır (yəni 1.4.11 zəmanəti POZULMUR), lakin daxili işıqlıq
+   azaldığı üçün çərçivə «kəsici xətt» kimi deyil, səthin kənarı kimi
+   oxunur. Fokusda sahə AĞA qalxır — yəni aktiv sahə səthdən qabağa çıxır
+   (macOS/iOS forma naxışı).
+
+   Doldurma 8 → 10/12: mətn kursoru ilə çərçivə arasındakı məsafə əvvəl
+   sıxdı; 12px üfüqi doldurma `variant="form"` sahələri ilə də eyni sıraya
+   düşür (14 → 12, hər ikisi 4px şəbəkəsində). */
 QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QDateEdit, QTimeEdit {
-    background-color: {{--color-bg-primary}};
+    background-color: {{--color-bg-surface}};
     color: {{--color-text-primary}};
     border: {{--border-width}} solid {{--color-border}};
     border-radius: {{--radius-control}};
-    padding: {{--space-sm}};
+    padding: 10px 12px;
     selection-background-color: {{--color-accent}};
     selection-color: {{--color-text-on-accent}};
+}
+
+/* Hover — sərhəd BİR PİLLƏ güclənir. `--color-border-strong` məhz bunun
+   üçün qalır: token silinmədi, rolu dəyişdi (əvvəl başlıqdakı ikon
+   düyməsinin çərçivəsi idi, indi sahənin hover kənarı). Hər iki halda
+   ölçülən şey eynidir — 3:1 kontrastlı idarəetmə kənarı. */
+QLineEdit:hover, QPlainTextEdit:hover, QTextEdit:hover,
+QComboBox:hover, QSpinBox:hover, QDateEdit:hover, QTimeEdit:hover {
+    border-color: {{--color-border-strong}};
+}
+
+/* Fokus — sahə səthdən QALXIR: fon ağa (yüksəldilmiş səthə) keçir və
+   halqa vurğu rəngindədir. İki siqnal birlikdə işləyir, yəni rəngi
+   ayırd edə bilməyən istifadəçi üçün də fokus görünür. */
+QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus,
+QComboBox:focus, QSpinBox:focus, QDateEdit:focus, QTimeEdit:focus {
+    background-color: {{--color-bg-elevated}};
+}
+
+/* Deaktiv sahə — çökük səth, solğun mətn: «yazıla bilməz» rəngdən ƏVVƏL
+   FORMADAN oxunur. */
+QLineEdit:disabled, QPlainTextEdit:disabled, QTextEdit:disabled,
+QComboBox:disabled, QSpinBox:disabled, QDateEdit:disabled, QTimeEdit:disabled {
+    background-color: {{--color-bg-sunken}};
+    color: {{--color-text-disabled}};
+    border-color: {{--color-border-subtle}};
 }
 
 QLineEdit[state="error"], QPlainTextEdit[state="error"] {
@@ -590,10 +632,25 @@ QLabel#PageSubtitle {
    harada başlayıb bitdiyini göstərən YEGANƏ vizual əlamətdir və WCAG 1.4.11
    ona 3:1 tələb qoyur. Kart sərhədi bu rolda 1.30:1 (işıqlı) / 1.42:1 (tünd)
    verirdi — kart üçün kifayət, müstəqil idarəetmə elementi üçün yox. */
+/* SƏRHƏD RESTİNQ HALINDA YOXDUR — AFFORDANS İKONUN ÖZÜDÜR.
+   ─────────────────────────────────────────────────────────────────────────
+   Əvvəl düymə 1px `--color-border-strong` çərçivə daşıyırdı və səbəb WCAG
+   1.4.11 idi: «düymənin VARLIĞINI göstərən yeganə şey sərhəddir». Bu
+   arqument İKONUN RƏNGİNİ nəzərə almırdı — başlıqdakı zəng/kömək ikonları
+   `--color-nav-item-text` ilə çəkilir, yəni MƏTN səviyyəsində kontrastdadır
+   (işıqlıda 9.4:1, tünddə 11.7:1). Qliflə ifadə olunan idarəetmə elementi
+   1.4.11-in tələbini onsuz da ödəyir; çərçivə isə başlıqda dörd ayrı qutu
+   yaradırdı və `appl.md` qayda 5 (sərt xətləri azalt) ilə birbaşa ziddiyyət
+   təşkil edirdi.
+
+   `transparent` SƏRHƏD SAXLANILIR, `border: none` YOX: sərhədi tamamilə
+   silsək, hover/fokus halında 1px əlavə olunanda düymə YERİNDƏN TƏRPƏNİR
+   (Qt sərhədi qutu ölçüsünə daxil edir). Şəffaf sərhəd həndəsəni sabit
+   saxlayır. */
 QPushButton[variant="icon"] {
     background-color: transparent;
-    border: {{--border-width}} solid {{--color-border-strong}};
-    border-radius: {{--radius-md}};
+    border: {{--border-width}} solid transparent;
+    border-radius: {{--radius-pill}};
     min-height: 34px;
     max-height: 34px;
     min-width: 34px;
@@ -601,11 +658,15 @@ QPushButton[variant="icon"] {
     padding: 0;
 }
 
+/* Hover və basılma — DOLĞU səth, çərçivə yox (macOS alət zolağı naxışı). */
 QPushButton[variant="icon"]:hover { background-color: {{--color-neutral-bg}}; }
+
+QPushButton[variant="icon"]:pressed { background-color: {{--color-bg-sunken}}; }
 
 QPushButton[variant="icon"][active="true"] {
     background-color: {{--color-action-bg}};
     border-color: {{--color-action-bg}};
+    border-radius: {{--radius-pill}};
 }
 
 /* ===================== KONTENT SAHƏSİ ===================== */
@@ -724,17 +785,28 @@ QLabel[chip="neutral"] {
 /* ===================== FORM SAHƏLƏRİ ===================== */
 /* Maket: `height: 46px; border: 1px solid #C9D2E0; border-radius: 9px;
    padding: 0 14px; font-size: 14.5px`. */
+/* Forma sahəsi — yuxarıdakı ilə EYNİ dil: doldurulmuş səth, eyni sərhəd,
+   eyni künc. Fərq yalnız hündürlük (`forms.FIELD_HEIGHT = 46`) və şrift
+   ölçüsündədir, ona görə burada YALNIZ onlar təkrarlanır. */
 QLineEdit[variant="form"],
 QComboBox[variant="form"],
 QSpinBox[variant="form"],
 QDateEdit[variant="form"],
 QTimeEdit[variant="form"] {
-    background-color: {{--color-card-bg}};
+    background-color: {{--color-bg-surface}};
     color: {{--color-text-primary}};
     border: {{--border-width}} solid {{--color-border}};
     border-radius: {{--radius-control}};
-    padding: 0 14px;
+    padding: 0 12px;
     font-size: {{--font-size-md}};
+}
+
+QLineEdit[variant="form"]:hover,
+QComboBox[variant="form"]:hover,
+QSpinBox[variant="form"]:hover,
+QDateEdit[variant="form"]:hover,
+QTimeEdit[variant="form"]:hover {
+    border-color: {{--color-border-strong}};
 }
 
 QLineEdit[variant="form"]:focus,
@@ -742,6 +814,7 @@ QComboBox[variant="form"]:focus,
 QSpinBox[variant="form"]:focus,
 QDateEdit[variant="form"]:focus,
 QTimeEdit[variant="form"]:focus {
+    background-color: {{--color-bg-elevated}};
     border: {{--focus-ring-width}} solid {{--color-focus-ring}};
 }
 

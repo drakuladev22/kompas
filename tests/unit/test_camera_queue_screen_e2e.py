@@ -177,6 +177,9 @@ class _MorningCheckIn:
     def __init__(self) -> None:
         self.verifications: list[dict[str, Any]] = []
         self.rejections: list[dict[str, Any]] = []
+        #: DEEP-GAP OP-7 — hər `reject_batch()` çağırışının XAM arqumentləri
+        #: (testlər «BİR çağırış, N sətir» iddiasını buradan yoxlayır).
+        self.batches: list[dict[str, Any]] = []
         self.verify_error: KompasOSError | None = None
         self.reject_error: KompasOSError | None = None
 
@@ -189,6 +192,32 @@ class _MorningCheckIn:
         if self.reject_error is not None:
             raise self.reject_error
         self.rejections.append(kwargs)
+
+    def reject_batch(self, **kwargs: Any) -> Any:
+        """DEEP-GAP OP-7 — TOPLU rədd: BİR qərar, N sətir, N audit yazısı.
+
+        Sahtə use case-in DAVRANIŞINI təqlid edir (hər işçi üçün bir
+        `rejections` sətri), çünki kontrollerin testi məhz «hər sətrə ayrıca
+        yazılırmı?» sualını ölçür. Səbəbin uzunluq yoxlaması domendədir və
+        burada TƏKRARLANMIR.
+        """
+        from types import SimpleNamespace
+
+        if self.reject_error is not None:
+            raise self.reject_error
+        employee_ids = list(kwargs.get("employee_ids", []))
+        for employee_id in employee_ids:
+            self.rejections.append(
+                {
+                    "tenant_id": kwargs.get("tenant_id"),
+                    "operator_id": kwargs.get("operator_id"),
+                    "employee_id": employee_id,
+                    "work_date": kwargs.get("work_date"),
+                    "reason": kwargs.get("reason"),
+                }
+            )
+        self.batches.append(kwargs)
+        return SimpleNamespace(rejected=employee_ids, failed={}, rejected_count=len(employee_ids))
 
 
 class _Limits:
@@ -765,3 +794,179 @@ def test_verify_return_failure_shows_the_domain_message_and_does_not_commit(
         "Növbə silinməməli idi — qalan sətirlər hələ etibarlıdır (DEEP-GAP U8)"
     )
     assert shown == ["Kamera operatoru cüt-nəzarətli təsdiqi daşıya bilməz."]
+
+
+# --------------------------------------------------------------------------- #
+# 5. DEEP-GAP OP-7 — TOPLU RƏDD: BİR SƏBƏB, N SƏTİR, N AUDİT YAZISI
+# --------------------------------------------------------------------------- #
+#
+# Səhər növbəsində 14 sorğudan 5-6-sı eyni səbəbdən səhv olur (işçi kartını
+# iki dəfə basıb). Operator hər biri üçün ayrıca modal açıb ən azı 10 simvol
+# yazırdı — nəticədə səbəb sahəsi «ttttttttt» kimi doldurulurdu, yəni
+# MƏCBURİLİK qaydası öz məqsədini itirirdi. Aşağıdakı testlər həm yeni yolun
+# İŞLƏDİYİNİ, həm də köhnə qaydanın (səbəb məcburi, minimum uzunluq)
+# POZULMADIĞINI kilidləyir.
+
+
+SECOND_ATTENDANCE_ID = uuid.uuid4()
+
+
+def _check_in_entry_2() -> Any:
+    from src.presentation.screens.group_b import QueueEntry
+
+    return QueueEntry(
+        request_id=str(SECOND_ATTENDANCE_ID),
+        employee_name="Rəşad Məmmədli",
+        store_name="Mərkəz",
+        position_name="Satıcı",
+        kind="Giriş Təsdiqi",
+        timestamp_text="08:07",
+        waiting_text="8 dəq",
+    )
+
+
+def _silence_binder(monkeypatch: Any) -> None:
+    from src.presentation.controllers import screen_data as screen_data_module
+
+    monkeypatch.setattr(
+        screen_data_module,
+        "ScreenDataBinder",
+        type(
+            "_Binder", (), {"__init__": lambda self, *a: None, "populate": lambda self, k, s: None}
+        ),
+    )
+
+
+@requires_qt
+def test_a_return_row_offers_no_bulk_checkbox(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """Qayıdış sətrində «rədd» anlayışı YOXDUR — qutu da qurulmur.
+
+    Seçilə bilən, lakin heç vaxt işləməyən element «görmək = səlahiyyət»
+    qaydasının eyni ailəsindəndir.
+    """
+    from PySide6.QtWidgets import QCheckBox
+
+    screen = _build_screen(theme, qtbot)
+    screen.set_entries([_return_entry()])
+
+    assert screen.findChildren(QCheckBox) == []
+
+
+@requires_qt
+def test_the_bulk_bar_appears_only_after_a_row_is_selected(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """Boş panel «nə etməliyəm?» sualı doğurardı — o, seçimlə birlikdə gəlir."""
+    from PySide6.QtWidgets import QCheckBox
+
+    screen = _build_screen(theme, qtbot)
+    screen.set_entries([_check_in_entry(), _check_in_entry_2()])
+
+    assert screen._bulk_bar.isVisible() is False
+    boxes = screen.findChildren(QCheckBox)
+    assert len(boxes) == 2, "hər giriş sətri seçilə bilməlidir"
+
+    boxes[0].setChecked(True)
+
+    assert screen.selected_request_ids() == [str(ATTENDANCE_ID)]
+    assert screen._bulk_button.text() == "Seçilmiş 1 sorğunu rədd et"
+
+
+@requires_qt
+def test_bulk_reject_asks_for_one_reason_and_writes_it_to_every_row(
+    qtbot, theme, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """BİR dialoq, İKİ rədd — səbəb hər sətrə AYRICA yazılır."""
+    from PySide6.QtWidgets import QCheckBox, QInputDialog, QMessageBox
+
+    _silence_binder(monkeypatch)
+    prompts: list[Any] = []
+
+    def _multiline(*args: Any, **kwargs: Any) -> tuple[str, bool]:
+        prompts.append(args)
+        return ("Kart iki dəfə basılıb, təkrar sorğudur", True)
+
+    monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(_multiline))
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: None)
+
+    context = _Context(
+        attendance={
+            ATTENDANCE_ID: _AttendanceRecord(),
+            SECOND_ATTENDANCE_ID: _AttendanceRecord(record_id=SECOND_ATTENDANCE_ID),
+        }
+    )
+    screen = _build_screen(theme, qtbot)
+    screen.set_entries([_check_in_entry(), _check_in_entry_2()])
+    from src.presentation.controllers.camera_queue import CameraQueueController
+
+    CameraQueueController(context, _Actor()).attach(screen)  # type: ignore[arg-type]
+
+    for box in screen.findChildren(QCheckBox):
+        box.setChecked(True)
+    _click(screen, "Seçilmiş 2 sorğunu rədd et")
+
+    assert len(prompts) == 1, "səbəb BİR dəfə soruşulmalıdır"
+    assert len(context.morning_check_in.rejections) == 2
+    reasons = {row["reason"] for row in context.morning_check_in.rejections}
+    assert reasons == {"Kart iki dəfə basılıb, təkrar sorğudur"}
+    # BİR SESSİYA, BİR `reject_batch()` ÇAĞIRIŞI: toplu məntiq kontrollerdə
+    # DEYİL, use case-dədir (`publish_batch` naxışı) — qismən uğur, təkrar
+    # işçinin bir dəfə emalı və BİR toplu bildiriş orada həll olunub.
+    # Kontrollerdə dövrə yazsaydıq, eyni qaydanın ikinci nüsxəsi yaranardı.
+    assert len(context.morning_check_in.batches) == 1
+    assert sum(1 for session in context.sessions if session.committed) == 1
+
+
+@requires_qt
+def test_cancelling_the_reason_dialog_rejects_nothing(
+    qtbot, theme, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """Səbəb MƏCBURİDİR — ləğv edilən dialoq heç bir sətri rədd etmir."""
+    from PySide6.QtWidgets import QCheckBox, QInputDialog
+
+    _silence_binder(monkeypatch)
+    monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(lambda *a, **k: ("", False)))
+
+    context = _Context(attendance={ATTENDANCE_ID: _AttendanceRecord()})
+    screen = _build_screen(theme, qtbot)
+    screen.set_entries([_check_in_entry()])
+    from src.presentation.controllers.camera_queue import CameraQueueController
+
+    CameraQueueController(context, _Actor()).attach(screen)  # type: ignore[arg-type]
+
+    screen.findChildren(QCheckBox)[0].setChecked(True)
+    _click(screen, "Seçilmiş 1 sorğunu rədd et")
+
+    assert context.morning_check_in.rejections == []
+
+
+@requires_qt
+def test_a_row_that_vanished_is_reported_without_stopping_the_others(
+    qtbot, theme, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """Artıq emal olunmuş sətir QALANLARI dayandırmır — nəticə AÇIQ deyilir.
+
+    Hamısı bir tranzaksiyada olsaydı, bir sətrin xətası digərini də geri
+    qaytarardı və operator heç birinin niyə yazılmadığını bilməzdi.
+    """
+    from PySide6.QtWidgets import QCheckBox, QInputDialog, QMessageBox
+
+    _silence_binder(monkeypatch)
+    monkeypatch.setattr(
+        QInputDialog, "getMultiLineText", staticmethod(lambda *a, **k: ("Təkrar sorğudur", True))
+    )
+    notices: list[str] = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: notices.append(self.windowTitle()))
+
+    # İKİNCİ sətrin qeydi bazada YOXDUR (başqa operator artıq emal edib).
+    context = _Context(attendance={ATTENDANCE_ID: _AttendanceRecord()})
+    screen = _build_screen(theme, qtbot)
+    screen.set_entries([_check_in_entry(), _check_in_entry_2()])
+    from src.presentation.controllers.camera_queue import CameraQueueController
+
+    CameraQueueController(context, _Actor()).attach(screen)  # type: ignore[arg-type]
+
+    for box in screen.findChildren(QCheckBox):
+        box.setChecked(True)
+    _click(screen, "Seçilmiş 2 sorğunu rədd et")
+
+    assert len(context.morning_check_in.rejections) == 1, "mövcud sətir yazılmalı idi"
+    assert notices == ["Toplu rədd qismən tamamlandı"]

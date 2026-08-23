@@ -155,7 +155,11 @@ class PostgresServerTimeProbe:
         self._database = database
 
     def read_server_time(self) -> datetime:
-        with self._database.system_scope() as conn, conn.cursor() as cur:
+        # SAAS-2: `tables=()` — "heç bir cədvələ toxunmuram" BƏYANI. Sorğu
+        # `SELECT now()`-dur, yəni kirayəçi məlumatı oxunmur; bəyan yenə də
+        # AÇIQ yazılır, çünki bəyan ETMƏYƏN çağırış owner hovuzunu ALMIR və
+        # bu yol hər sinxronizasiya dövründə işləyir.
+        with self._database.system_scope(tables=()) as conn, conn.cursor() as cur:
             cur.execute(SERVER_TIME_SQL)
             row = cur.fetchone()
         if row is None:  # pragma: no cover - Postgres həmişə sətir qaytarır

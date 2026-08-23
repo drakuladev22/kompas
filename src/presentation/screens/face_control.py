@@ -1070,6 +1070,28 @@ class FaceSetupRequiredScreen(Screen):
         card.add(title_label("Üz qeydiyyatı tələb olunur", size=22))
         self._subject = body_label("", size=15)
         card.add(self._subject)
+
+        # ──────────────────────────────────────────────────────────────────
+        # MÖHLƏT SƏTRİ — «SONRA» ARTIQ SONSUZ DEYİL (DEEP-GAP UX-7)
+        # ──────────────────────────────────────────────────────────────────
+        # ƏVVƏL: işçi «Sonra» basırdı, ertəsi gün eyni pəncərə çıxırdı və bu,
+        # HƏR GÜN təkrarlanırdı. Nə son tarix vardı, nə də menecerin görəcəyi
+        # siyahı — yəni işçi pəncərəni bağlamağı ÖYRƏNİRDİ və qapı öz
+        # məqsədini itirirdi.
+        #
+        # İNDİ: `FACE_ENROLLMENT_GRACE_DAYS` Root açarı möhləti təyin edir,
+        # möhlət bitəndə `OverdueFaceEnrollmentRule` menecerin «İstisnalar»
+        # siyahısına sətir yazır. Bu sətir həmin faktı İŞÇİYƏ göstərir —
+        # «nə vaxta qədər» sualı cavabsız qalmır.
+        #
+        # SƏTİR BOŞ QALA BİLƏR: işə başlama tarixi naməlum olduqda (və ya
+        # Root dəyəri mənasız olduqda) möhlət HESABLANMIR və element
+        # ÜMUMİYYƏTLƏ görünmür — uydurma son tarix göstərmək yanlış rəqəm
+        # göstərməyin eynisidir.
+        self._deadline = body_label("", size=13)
+        self._deadline.setVisible(False)
+        card.add(self._deadline)
+
         card.add(Divider())
         card.add(
             muted_label(
@@ -1136,6 +1158,24 @@ class FaceSetupRequiredScreen(Screen):
         (yenidən-qeydiyyat AYRI, səbəb tələb edən prosesdir).
         """
         self._subject.setText(f"İşçi: {name}" if name else "")
+
+    def set_deadline_notice(self, text: str, *, overdue: bool = False) -> None:
+        """Möhlət sətrini yazır (DEEP-GAP UX-7); boş mətn onu GİZLƏDİR.
+
+        Mətn EKRANDA HESABLANMIR — `FaceEnrollmentUseCase.enrollment_grace()`
+        onu hazır verir (`FaceEnrollmentGrace.label_az()`), çünki eyni qayda
+        `OverdueFaceEnrollmentRule`-da da yaşayır və iki nüsxə Root dəyəri
+        dəyişəndə sükutla ayrılardı.
+
+        GECİKMƏ RƏNGİ `--color-danger` DEYİL: qeydiyyat SELF-SERVICE deyil,
+        işçi onu özü apara bilmir — qırmızı «sən səhv etdin» deməkdir,
+        halbuki gecikmənin səbəbi adətən adminin vaxtıdır. Xəbərdarlıq rəngi
+        faktı bildirir, ittiham etmir.
+        """
+        self._deadline.setText(text)
+        self._deadline.setVisible(bool(text))
+        token = "--color-warning" if overdue else "--color-text-secondary"
+        self._deadline.setStyleSheet(f"color: {self.theme.color(token)};")
 
     def set_busy(self, busy: bool) -> None:
         self._enroll.setEnabled(not busy)

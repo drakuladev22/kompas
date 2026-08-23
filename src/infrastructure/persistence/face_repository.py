@@ -62,7 +62,7 @@ from src.infrastructure.persistence.repositories import _BaseRepository
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from datetime import date, datetime
 
     from psycopg import Connection
 
@@ -105,6 +105,58 @@ class PostgresFaceEmbeddingRepository(_BaseRepository):
         self._encryption = encryption
 
     # -------------------------------- oxu ------------------------------------ #
+
+    def list_unenrolled(self, tenant_id: TenantId, *, hired_before: date) -> list[Any]:
+        """`UnenrolledEmployeeReader` — möhləti keçmiş, üzsüz işçilər (UX-7).
+
+        ──────────────────────────────────────────────────────────────────────
+        EYNİ SİNİF, İKİ PROTOKOL — MİRAS YOX (CLAUDE.md §3)
+        ──────────────────────────────────────────────────────────────────────
+        Sinif həm `FaceEmbeddingRepository`, həm `UnenrolledEmployeeReader`
+        protokolunu STRUCTURAL ödəyir. Ayrı sinif yazmaq eyni `employees`
+        cədvəlinə ikinci bir üz-oxuyucusu gətirərdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        ÜÇ SÜZGƏC VƏ HƏR BİRİNİN SƏBƏBİ
+        ──────────────────────────────────────────────────────────────────────
+        * `is_active` — işdən çıxmış işçinin üzü qeydiyyata alınmır;
+        * `store_id IS NOT NULL` — `exceptions.store_id` `NOT NULL`-dur və üz
+          qapısı KİOSK qapısıdır (mərkəzi ofis işçisi kioskda giriş etmir);
+        * `face_embedding IS NULL` — `PURGED` sətirdə vektor `NULL`-dur, yəni
+          şablonu silinmiş işçi də «qeydiyyatsız» sayılır (doğrudur: onun
+          kioskda girişi YENƏ mümkün deyil).
+
+        `hire_date IS NULL` sətirlər QAYTARILMIR: möhlətin başlanğıc nöqtəsi
+        məlum deyil və uydurma tarix ekranda YALAN son tarix göstərərdi (eyni
+        qərar `FaceEnrollmentUseCase.enrollment_grace`-dədir).
+        """
+        from src.application.use_cases.face_control import (  # noqa: PLC0415
+            UnenrolledEmployee,
+        )
+
+        rows = self._fetch_all(
+            """
+            SELECT id, store_id, first_name, last_name, hire_date
+              FROM employees
+             WHERE tenant_id = %s
+               AND is_active = TRUE
+               AND store_id IS NOT NULL
+               AND face_embedding IS NULL
+               AND hire_date IS NOT NULL
+               AND hire_date < %s
+             ORDER BY hire_date
+            """,
+            (self._require_matching_tenant(tenant_id), hired_before),
+        )
+        return [
+            UnenrolledEmployee(
+                employee_id=EmployeeId(row["id"]),
+                store_id=StoreId(row["store_id"]),
+                full_name=f"{row['first_name']} {row['last_name']}".strip(),
+                hire_date=row["hire_date"],
+            )
+            for row in rows
+        ]
 
     def get_profile(self, employee_id: EmployeeId) -> FaceProfile | None:
         row = self._fetch_one(

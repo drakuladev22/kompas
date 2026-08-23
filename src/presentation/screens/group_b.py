@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDateEdit,
     QDialog,
@@ -95,6 +96,15 @@ QUEUE_STORE_FILTER_THRESHOLD: Final = 3
 #: bilər (məlumat qüsuru) və o zaman "hamısı" ilə "adsız mağaza" eyni dəyərə
 #: düşərdi. `*` isə heç bir mağaza adında olmayan işarədir.
 ALL_STORES: Final = "*"
+
+#: Cərimə formasında işçi sahəsinin BOŞ vəziyyəti (DEEP-GAP OP-6).
+#:
+#: Adi ad OLA BİLMƏZ: sətir tire-işarələri ilə çərçivələnib və işçi
+#: kataloqundakı heç bir dəyərə uyğun gəlmir — `_employees.get(...)` onu
+#: tapmır və forma «işçi seçilməlidir» xətası verir. Boş sətir SEÇİLMƏDİ,
+#: çünki `QComboBox` boş elementi görünməz sətir kimi çəkir və operator onun
+#: seçim OLMADIĞINI anlamazdı.
+EMPLOYEE_PLACEHOLDER: Final = "— İşçi seçin —"
 
 
 # --------------------------------------------------------------------------- #
@@ -163,6 +173,7 @@ class QueueRow(Card):
     approve_requested = Signal(str)
     reject_requested = Signal(str)
     adjust_requested = Signal(str)
+    selection_changed = Signal()
 
     def __init__(
         self,
@@ -179,6 +190,21 @@ class QueueRow(Card):
         layout = QHBoxLayout(line)
         layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(16)
+
+        # ──────────────────────────────────────────────────────────────────
+        # TOPLU SEÇİM YALNIZ GİRİŞ SƏTİRLƏRİNDƏ (DEEP-GAP OP-7)
+        # ──────────────────────────────────────────────────────────────────
+        # Toplu əməliyyat RƏDD-dir, rədd isə YALNIZ giriş təsdiqinə aiddir
+        # (qayıdışda «rədd» anlayışı yoxdur — bax `CameraQueueController::
+        # _on_reject`). Qayıdış sətrində qutu ÜMUMİYYƏTLƏ QURULMUR: seçilə
+        # bilən, lakin heç vaxt işləməyən element «görmək = səlahiyyət»
+        # qaydasının eyni ailəsindəndir.
+        self._select: QCheckBox | None = None
+        if entry.kind.startswith("Giriş"):
+            self._select = QCheckBox()
+            self._select.setAccessibleName(f"{entry.employee_name} — toplu rədd üçün seç")
+            self._select.toggled.connect(lambda _checked: self.selection_changed.emit())
+            layout.addWidget(self._select)
 
         layout.addWidget(
             Avatar(
@@ -252,6 +278,18 @@ class QueueRow(Card):
     def entry(self) -> QueueEntry:
         return self._entry
 
+    def is_selected(self) -> bool:
+        """Sətir toplu rədd üçün seçilibmi (qayıdış sətrində HƏMİŞƏ `False`)."""
+        return self._select is not None and self._select.isChecked()
+
+    def clear_selection(self) -> None:
+        """Seçimi siqnalsız götürür — toplu əməliyyatdan sonra çağırılır."""
+        if self._select is None:
+            return
+        self._select.blockSignals(True)
+        self._select.setChecked(False)
+        self._select.blockSignals(False)
+
 
 class OperatorQueueScreen(Screen):
     """Birləşmiş canlı təsdiq növbəsi (giriş + qayıdış).
@@ -286,6 +324,8 @@ class OperatorQueueScreen(Screen):
     adjust_requested = Signal(str)
     filter_changed = Signal(str)
     store_filter_changed = Signal(str)
+    #: Toplu rədd (DEEP-GAP OP-7) — seçilmiş sətirlərin `request_id` siyahısı.
+    bulk_reject_requested = Signal(list)
 
     _FILTERS: Final = (
         ("all", "Hamısı"),
@@ -399,6 +439,36 @@ class OperatorQueueScreen(Screen):
         )
         self.add(reminder)
 
+        # --- toplu rədd paneli (DEEP-GAP OP-7) --- #
+        #
+        # ──────────────────────────────────────────────────────────────────
+        # NİYƏ TOPLU RƏDD VAR, SƏBƏB İSƏ HƏLƏ DƏ MƏCBURİDİR
+        # ──────────────────────────────────────────────────────────────────
+        # Səhər növbəsində 14 sorğudan 5-6-sı eyni səbəbdən səhv olur (işçi
+        # kartını iki dəfə basıb). Operator hər biri üçün ayrıca modal açıb
+        # eyni mətni yenidən yazırdı — nəticədə səbəb sahəsi «ttttttttt» ilə
+        # dolurdu, yəni MƏCBURİLİK qaydası öz məqsədini itirirdi (audit
+        # jurnalı mənasız mətnlə dolurdu).
+        #
+        # Qayda POZULMUR: səbəb yenə məcburidir və yenə minimum uzunluqdan
+        # keçir — sadəcə BİR DƏFƏ soruşulur və hər sətrə AYRICA audit yazısı
+        # kimi düşür (`publish_batch` naxışı: bir qərar, N qeyd).
+        self._bulk_bar = QWidget()
+        bulk_layout = QHBoxLayout(self._bulk_bar)
+        bulk_layout.setContentsMargins(0, 0, 0, 0)
+        bulk_layout.setSpacing(12)
+        bulk_layout.addWidget(
+            muted_label(
+                "Seçilmiş sətirlər BİR səbəblə rədd edilir — səbəb hər sətrin auditinə yazılır."
+            )
+        )
+        bulk_layout.addStretch(1)
+        self._bulk_button = secondary_button("Seçilmiş 0 sorğunu rədd et")
+        self._bulk_button.clicked.connect(self._emit_bulk_reject)
+        bulk_layout.addWidget(self._bulk_button)
+        self._bulk_bar.setVisible(False)
+        self.add(self._bulk_bar)
+
         # --- sətirlər --- #
         self._rows_host = QWidget()
         self._rows_layout = QVBoxLayout(self._rows_host)
@@ -467,10 +537,35 @@ class OperatorQueueScreen(Screen):
             row.approve_requested.connect(self.approve_requested)
             row.reject_requested.connect(self.reject_requested)
             row.adjust_requested.connect(self.adjust_requested)
+            row.selection_changed.connect(self._on_selection_changed)
             self._rows_layout.addWidget(row)
             self._rows.append(row)
 
+        self._on_selection_changed()
         self.show_content()
+
+    # ---------------------------- toplu rədd --------------------------------- #
+
+    def selected_request_ids(self) -> list[str]:
+        """Seçilmiş GİRİŞ sətirlərinin açarları (DEEP-GAP OP-7)."""
+        return [row.entry.request_id for row in self._rows if row.is_selected()]
+
+    def clear_selection(self) -> None:
+        """Toplu əməliyyatdan sonra bütün qutuları boşaldır."""
+        for row in self._rows:
+            row.clear_selection()
+        self._on_selection_changed()
+
+    def _on_selection_changed(self) -> None:
+        """Panel YALNIZ seçim varkən görünür — boş panel sual doğurardı."""
+        count = len(self.selected_request_ids())
+        self._bulk_bar.setVisible(count > 0)
+        self._bulk_button.setText(f"Seçilmiş {count} sorğunu rədd et")
+
+    def _emit_bulk_reject(self) -> None:
+        selected = self.selected_request_ids()
+        if selected:
+            self.bulk_reject_requested.emit(selected)
 
     def _matches(self, entry: QueueEntry) -> bool:
         # MAĞAZA SÜZGƏCİ ƏVVƏL: tip süzgəci ilə VƏ ilə birləşir — operator
@@ -963,7 +1058,21 @@ class FineEntryScreen(Screen):
         )
         grid_layout.addWidget(self._store, 1)
 
-        self._employee = FormField("İşçi", widget=self._combo(employees))
+        # ──────────────────────────────────────────────────────────────────
+        # İŞÇİ SAHƏSİ BOŞ AÇILIR VƏ HƏR GÖNDƏRİŞDƏN SONRA BOŞALIR (DEEP-GAP OP-6)
+        # ──────────────────────────────────────────────────────────────────
+        # Növ və mağaza seans boyu SABİTdir (operator bir mağazanın kamerasına
+        # baxır), işçi isə HƏR cərimədə dəyişir. Siyahının ilk adı avtomatik
+        # seçili qalanda ardıcıl üç cərimə yazan operatorun dördüncüsü səhvən
+        # ƏVVƏLKİ işçinin adına düşürdü — cərimə isə real pul kəsintisidir və
+        # səhv adam üçün YALNIZ etiraz yolu ilə geri qaytarılır, yəni UI
+        # sürəti audit yükünə çevrilirdi.
+        #
+        # Yer tutucu «boz düymə» qaydasına ZİDD DEYİL: element söndürülmür,
+        # sadəcə HEÇ BİR işçi seçilməmiş vəziyyət açıq göstərilir. Seçilmədən
+        # göndərişdə forma onsuz da «işçi seçilməlidir» xətası verir
+        # (`controllers/fine_entry.py::_on_submitted`).
+        self._employee = FormField("İşçi", widget=self._combo([EMPLOYEE_PLACEHOLDER, *employees]))
         grid_layout.addWidget(self._employee, 1)
         card.add(grid)
 
@@ -1066,6 +1175,19 @@ class FineEntryScreen(Screen):
         """
         self._success_message.setText(message)
         self._success_message.setVisible(bool(message))
+
+    def clear_employee(self) -> None:
+        """İşçi seçimini yer tutucuya qaytarır (DEEP-GAP OP-6).
+
+        Göndərişdən SONRA çağırılır — səbəb `_build_form`-dakı izahdadır.
+        NÖV və MAĞAZA QƏSDƏN TOXUNULMUR: onlar seans boyu sabitdir və hər
+        cərimədə yenidən seçdirmək operatoru əks istiqamətdə yorardı.
+
+        Fokus da işçi sahəsinə qaytarılır ki, növbəti cərimə klaviatura ilə
+        həmin sahədən başlasın (`showEvent`-dəki eyni əsaslandırma).
+        """
+        self._employee.set_text(EMPLOYEE_PLACEHOLDER)
+        self._employee.focus_input()
 
     def clear_photo(self) -> None:
         """Sübut şəklini TƏMİZLƏYİR (DEEP-GAP U1).

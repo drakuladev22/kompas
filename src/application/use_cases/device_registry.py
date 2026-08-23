@@ -376,16 +376,25 @@ class DeviceRegistryUseCase:
 
         Yoxlama məcburidir: cihaz bloklandığı müddətdə onun yeri başqasına
         verilmiş ola bilər və bərpa limiti sükutla aşardı.
+
+        LİMİT YOXLAMASI CİHAZI OXUDUQDAN SONRA GƏLİR — SIRA QƏSDƏN DƏYİŞDİ:
+        filialsız (heç vaxt təsdiqlənməmiş) cihaz bərpadan sonra `ACTIVE`
+        deyil, `PENDING_APPROVAL` olur və `counts_toward_license()` onu
+        SAYMIR. Limit dolu olanda onu bloklamaq təsdiq növbəsinə qayıdışı
+        heç bir yer tutmadan kəsərdi — yəni cihaz yenidən əbədi kiliddə
+        qalardı, bu dəfə lisenziya səbəbi ilə. Həqiqi limit qapısı
+        `approve()`-dədir və o, öz yerində qalır.
         """
         self._require(actor)
-        usage = self.license_usage(tenant_id)
-        if not usage.has_capacity:
-            raise DeviceLimitReachedError(
-                f"Aktiv cihaz sayı həddə çatıb ({usage.active}/{usage.limit})",
-                context={"active": usage.active, "limit": usage.limit},
-            )
         device = self._require_device(device_id)
-        device.reactivate(reactivated_by=actor.id, now=self._clock.now())
+        if device.store_id is not None:
+            usage = self.license_usage(tenant_id)
+            if not usage.has_capacity:
+                raise DeviceLimitReachedError(
+                    f"Aktiv cihaz sayı həddə çatıb ({usage.active}/{usage.limit})",
+                    context={"active": usage.active, "limit": usage.limit},
+                )
+        new_status = device.reactivate(reactivated_by=actor.id, now=self._clock.now())
         self._devices.save(device)
         self._audit.record(
             tenant_id=tenant_id,
@@ -393,6 +402,10 @@ class DeviceRegistryUseCase:
             action="DEVICE_REACTIVATED",
             entity_type="registered_device",
             entity_id=str(device.id),
+            after_state={
+                "status": new_status.value,
+                "store_id": str(device.store_id) if device.store_id else None,
+            },
         )
         return device
 

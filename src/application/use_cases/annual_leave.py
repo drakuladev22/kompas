@@ -544,6 +544,89 @@ class AnnualLeaveUseCase:
         self._warn_planned_shifts(tenant_id=tenant_id, request=request, stranded=stranded)
         return request
 
+    def approve_sick_leave(
+        self,
+        *,
+        tenant_id: TenantId,
+        approver: Employee,
+        request_id: AnnualLeaveRequestId,
+        document_reference: str,
+    ) -> AnnualLeaveRequest:
+        """`[Xəstəlik İcazəsi Kimi Təsdiqlə]` — BALANSA TOXUNMUR (HR-5).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ AYRI MODUL YAZILMADI
+        ──────────────────────────────────────────────────────────────────────
+        Xəstəlik icazəsi nə gündaxili icazədir (o, DƏQİQƏ əsaslıdır və cərimə
+        düsturuna girir), nə də adi illik məzuniyyət (o, balansdan GÜN çıxır).
+        Lakin ÜÇÜNCÜ mexanizm də lazım deyil: bu axının hər iki tələb olunan
+        xassəsi ARTIQ mövcuddur —
+          * gün əsaslı aralıq + təsdiq axını (`AnnualLeaveRequest`);
+          * sıfır çıxımlı təsdiq (`approve()`-un «SIFIR İCAZƏLİDİR» qolu);
+          * tabeldə «qayıb» yazılmaması (DEEP-GAP D1, `on_annual_leave`).
+        Ona görə burada YALNIZ üç addım fərqlənir: balans azalmır, sənəd
+        istinadı məcburidir, qeyd `SICK_LEAVE_PREFIX` ilə işarələnir.
+
+        ──────────────────────────────────────────────────────────────────────
+        `approve()` İLƏ ADDIM SIRASI FƏRQİ — VƏ NİYƏ BU, RİSK YARATMIR
+        ──────────────────────────────────────────────────────────────────────
+        `approve()`-da balans sorğudan ƏVVƏL azalır, çünki `EXCLUDE`
+        pozuntusunda kompensasiya ediləcək tək addım qalsın. Burada balans
+        ÜMUMİYYƏTLƏ toxunulmur, deməli kompensasiya ediləcək ikinci yazı da
+        yoxdur — `_balances` çağırışı YOXDUR və olmamalıdır. Bu, sadələşdirmə
+        deyil, axının həqiqi formasıdır.
+
+        `EXCLUDE` qapağı isə İŞLƏYİR: sorğu `APPROVED` olur, yəni eyni işçinin
+        kəsişən ikinci təsdiqlənmiş aralığı DB tərəfindən rədd edilir — xəstəlik
+        icazəsi məzuniyyətin üstünə sükutla yazıla bilməz.
+
+        Args:
+            document_reference: Xəstəlik vərəqəsinin nömrəsi/istinadı
+                (məcburi — bax `AnnualLeaveRequest.approve_as_sick_leave`).
+        """
+        self._require_manager(approver)
+        request = self._require_request(request_id)
+        now = self._clock.now()
+
+        request.approve_as_sick_leave(
+            approver_id=approver.id,
+            decided_at=now,
+            document_reference=document_reference,
+        )
+        self._requests.save(request)
+
+        stranded = self._planned_work_days(tenant_id=tenant_id, request=request)
+        self._audit.record(
+            tenant_id=tenant_id,
+            actor_id=approver.id,
+            action="ANNUAL_LEAVE_SICK_APPROVED",
+            entity_type="annual_leave_requests",
+            entity_id=request.id,
+            after_state={
+                **request.to_audit_state(),
+                # Balansın TOXUNULMADIĞI audit sətrində AÇIQ görünməlidir:
+                # sonradan «bu 9 gün niyə balansdan çıxmayıb?» sualının
+                # cavabı məhz budur.
+                "balance_charged": False,
+                "stranded_shift_days": len(stranded),
+            },
+            reason=request.decision_note,
+        )
+        self._notifier.notify(
+            tenant_id=tenant_id,
+            recipient_id=request.employee_id,
+            category=DECIDED_NOTIFICATION_CATEGORY,
+            title_az="Xəstəlik icazəniz təsdiqləndi",
+            body_az=(
+                f"{request.start_date.isoformat()} – {request.end_date.isoformat()} "
+                f"tarixləri xəstəlik icazəsi kimi təsdiqləndi. "
+                f"İllik məzuniyyət balansınızdan gün ÇIXILMADI."
+            ),
+            is_critical=False,
+        )
+        self._warn_planned_shifts(tenant_id=tenant_id, request=request, stranded=stranded)
+        return request
+
     def reject(
         self,
         *,
@@ -578,6 +661,97 @@ class AnnualLeaveUseCase:
             ),
             # Kritikdir: işçi həmin günlərdə İŞƏ ÇIXMALI olduğunu MÜTLƏQ
             # bilməlidir (`ShiftSwapUseCase.reject` ilə eyni qərar).
+            is_critical=True,
+        )
+        return request
+
+    def return_early(
+        self,
+        *,
+        tenant_id: TenantId,
+        actor: Employee,
+        request_id: AnnualLeaveRequestId,
+        reason: str,
+        return_date: date | None = None,
+    ) -> AnnualLeaveRequest:
+        """İşçi məzuniyyətdən ERKƏN qayıdır — QALAN günlər balansa dönür.
+
+        `cancel()` YALNIZ hələ başlamamış məzuniyyəti bağlaya bilir
+        (`AnnualLeaveRequest.cancel_approved` qapısı). Başlamış məzuniyyət
+        üçün isə heç bir yol yox idi: qalan günlər nə balansa qayıdırdı, nə də
+        `EXCLUDE` qapağı boşalırdı — yəni işçi həmin tarixlərə yeni sorğu
+        verə bilmirdi. Bu metod həmin ölü-sonu bağlayır.
+
+        KİM EDƏ BİLƏR: `cancel()` ilə EYNİ qayda — sorğunun SAHİBİ (özü işə
+        qayıtdı) və ya `can_manage_leave_balances` sahibi. Ayrı bir səlahiyyət
+        qurmaq iki oxşar əməliyyatı fərqli qapılara bağlayardı və hansının
+        hansı olduğu yalnız audit zamanı üzə çıxardı.
+
+        XƏRCLƏNMİŞ GÜN TƏSDİQLƏ EYNİ DÜSTURLA hesablanır (`_deducted_days`),
+        sadəcə aralıq `start_date .. return_date - 1`-dir. Yeni qayda İCAD
+        EDİLMİR — `ANNUAL_LEAVE_DAY_COUNT_MODE` nə deyirsə, qısaldılmış
+        aralığa da o tətbiq olunur.
+
+        Args:
+            return_date: işə QAYIDIŞ günü. `None` → `Clock`-un bugünü
+                (`cancel()` ilə eyni yerli-zona qaydası).
+        """
+        request = self._require_request(request_id)
+        is_owner = actor.id == request.employee_id
+        if not is_owner:
+            self._require_manager(actor)
+
+        now = self._clock.now()
+        effective_return = return_date or now.astimezone(_LOCAL_TZ).date()
+        year = self._charge_year(request)
+        before_state = request.to_audit_state()
+
+        consumed = self._consumed_until(
+            tenant_id=tenant_id, request=request, return_date=effective_return
+        )
+        restored = request.return_early(
+            cancelled_by=actor.id,
+            cancelled_at=now,
+            reason=reason,
+            return_date=effective_return,
+            consumed_days=consumed,
+        )
+
+        self._requests.save(request)
+        # Balans qeydin YAZILMASINDAN SONRA boşalır (`approve()`-un ƏKSİ
+        # sırası, QƏSDƏN): orada uğursuzluqda "balans azalıb, sorğu yoxdur"
+        # riski var idi, burada isə əks risk təhlükəlidir — balansı əvvəl
+        # açıb sonra yazıda uduzsaq, işçi eyni günü İKİ dəfə xərcləyə bilərdi.
+        self._balances.release(employee_id=request.employee_id, year=year, days=restored)
+
+        self._audit.record(
+            tenant_id=tenant_id,
+            actor_id=actor.id,
+            action="ANNUAL_LEAVE_EARLY_RETURN",
+            entity_type="annual_leave_requests",
+            entity_id=request.id,
+            before_state=before_state,
+            after_state={
+                **request.to_audit_state(),
+                "return_date": effective_return.isoformat(),
+                "consumed_days": str(consumed),
+                "restored_days": str(restored),
+                "charged_year": year,
+            },
+            reason=request.decision_note,
+        )
+        self._notifier.notify(
+            tenant_id=tenant_id,
+            recipient_id=request.employee_id,
+            category=DECIDED_NOTIFICATION_CATEGORY,
+            title_az="Məzuniyyətiniz erkən bitirildi",
+            body_az=(
+                f"{effective_return.isoformat()} tarixindən etibarən məzuniyyətiniz "
+                f"bitmiş sayılır. {restored} gün balansınıza qaytarıldı, "
+                f"{consumed} gün istifadə olunmuş qaldı."
+            ),
+            # Kritikdir: işçi həmin gündən İŞƏ ÇIXMALI olduğunu MÜTLƏQ
+            # bilməlidir (`reject()` ilə eyni qərar).
             is_critical=True,
         )
         return request
@@ -774,6 +948,40 @@ class AnnualLeaveUseCase:
             if (request.start_date + timedelta(days=offset)) not in off_days
         )
         return quantize_days(Decimal(working))
+
+    def _consumed_until(
+        self, *, tenant_id: TenantId, request: AnnualLeaveRequest, return_date: date
+    ) -> Decimal:
+        """Qayıdışa qədər FAKTİKİ xərclənmiş gün — `_deducted_days` ilə EYNİ düstur.
+
+        Ayrıca hesablama qaydası YOXDUR: aralıq `start_date .. return_date - 1`
+        olan MÜVƏQQƏTİ bir sorğu obyekti qurulur və `_deducted_days()`-ə
+        verilir. Düsturu təkrar yazsaydıq, Root `ANNUAL_LEAVE_DAY_COUNT_MODE`-u
+        dəyişdirəndə iki nüsxədən biri köhnə qalar və erkən qayıdış təsdiqlə
+        FƏRQLİ sayardı — yəni balans sükutla sürüşərdi.
+
+        `return_date <= start_date` halı YOXDUR: `return_early()` onu artıq
+        kəsib (məzuniyyət hələ başlamayıbsa yol `cancel()`-dədir).
+
+        MÜVƏQQƏTİ OBYEKT `emit_created_event=False` ilə qurulur — bu, HEÇ VAXT
+        saxlanılmayan hesablama vasitəsidir və "yeni məzuniyyət sorğusu
+        yaradıldı" hadisəsi yaymamalıdır.
+        """
+        last_leave_day = date.fromordinal(return_date.toordinal() - 1)
+        if last_leave_day < request.start_date:
+            return _ZERO
+        probe = AnnualLeaveRequest(
+            request_id=request.id,
+            tenant_id=request.tenant_id,
+            employee_id=request.employee_id,
+            start_date=request.start_date,
+            end_date=last_leave_day,
+            created_at=request.created_at,
+            emit_created_event=False,
+        )
+        return self._deducted_days(
+            tenant_id=tenant_id, request=probe, policy=self.policy(tenant_id)
+        )
 
     def _planned_work_days(self, *, tenant_id: TenantId, request: AnnualLeaveRequest) -> list[date]:
         """Məzuniyyət aralığında PLANLAŞDIRILMIŞ İŞ günləri (bax modul başlığı).

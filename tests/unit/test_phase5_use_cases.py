@@ -1147,7 +1147,11 @@ def test_root_can_now_deactivate_a_ceo_account() -> None:
         tenant_id=TENANT, actor=root, employee_id=ceo.id, reason="Vəzifədən azad edildi"
     )
 
-    assert deactivated.is_active is False
+    # HR-4 — İMZA DƏYİŞDİ: metod `Employee` YOX, `OffboardingReview`
+    # qaytarır (işdən çıxma anında AÇIQ qalan bağlantıların siyahısı ilə).
+    # İşçinin ÖZÜ `review.employee`-dədir, yəni məlumat İTMİR — səbəb
+    # `user_management.py::OffboardingReview` başlığındadır.
+    assert deactivated.employee.is_active is False
     assert "EMPLOYEE_DEACTIVATED" in audit.actions()
 
     # Əks istiqamət: CEO `Root` hesabına toxuna bilmir.
@@ -1256,7 +1260,11 @@ def test_deactivation_reports_open_fine_exposure_and_notifies_without_blocking()
         reason="İşdən çıxdı",
     )
 
-    assert deactivated.is_active is False, (
+    # HR-4 — İMZA DƏYİŞDİ: metod `Employee` YOX, `OffboardingReview`
+    # qaytarır (işdən çıxma anında AÇIQ qalan bağlantıların siyahısı ilə).
+    # İşçinin ÖZÜ `review.employee`-dədir, yəni məlumat İTMİR — səbəb
+    # `user_management.py::OffboardingReview` başlığındadır.
+    assert deactivated.employee.is_active is False, (
         "BLOKLAMIR — açıq iz meşru deaktivasiyanı dayandırmamalıdır"
     )
     assert exposure.queried == [target.id]
@@ -1296,7 +1304,7 @@ def test_deactivation_with_no_open_exposure_does_not_notify() -> None:
 
 
 def test_deactivation_skips_exposure_check_when_port_is_not_wired() -> None:
-    """`fine_exposure=None` — köhnə kompozisiya kökü qırılmır, `None` açıq yazılır."""
+    """`fine_exposure=None` — əməliyyat qırılmır, audit isə SÜKUT SAXLAMIR (AF-5)."""
     target = _employee(code="SATICI", priority=RolePriority.OPERATIONAL)
     repo, audit = _EmployeeRepo([target]), _Audit()
     use_case = _user_use_case(employees=repo, credentials=_Credentials(), audit=audit)
@@ -1309,8 +1317,11 @@ def test_deactivation_skips_exposure_check_when_port_is_not_wired() -> None:
     )
 
     after = audit.records[-1]["after_state"]
-    assert after["open_fine_count"] is None
-    assert after["open_appeal_count"] is None
+    # AF-5 — `None` ARTIQ YAZILMIR: audit oxuyan adam onu «cərimə yoxdur»
+    # ilə «ümumiyyətlə yoxlanmadı» arasında ayıra bilmirdi (fail-OPEN
+    # oxunurdu). Açıq marker sükutu görünən izə çevirir.
+    assert after["open_fine_count"] == "SKIPPED_NO_PORT"
+    assert after["open_appeal_count"] == "SKIPPED_NO_PORT"
 
 
 # --------------------------------------------------------------------------- #

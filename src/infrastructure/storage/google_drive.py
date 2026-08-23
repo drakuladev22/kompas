@@ -92,6 +92,7 @@ FINE_OWNER_TYPE: Final[str] = "FINE"
 EMPLOYEE_DOCUMENT_OWNER_TYPE: Final[str] = "EMPLOYEE_DOCUMENT"
 FIELD_REPORT_OWNER_TYPE: Final[str] = "FIELD_REPORT"
 SUPPORT_MESSAGE_OWNER_TYPE: Final[str] = "SUPPORT_MESSAGE"
+FINE_APPEAL_OWNER_TYPE: Final[str] = "FINE_APPEAL"
 
 PDF_EXTENSION: Final[str] = ".pdf"
 PDF_MIME_TYPE: Final[str] = "application/pdf"
@@ -139,6 +140,20 @@ _ALLOWED_BY_OWNER: Final[dict[str, frozenset[str]]] = {
     SUPPORT_MESSAGE_OWNER_TYPE: IMAGE_EXTENSIONS,
     EMPLOYEE_DOCUMENT_OWNER_TYPE: DOCUMENT_EXTENSIONS,
     FIELD_REPORT_OWNER_TYPE: IMAGE_EXTENSIONS,
+    # ETİRAZ SƏNƏDİ: ŞƏKİL + PDF (UX-4). `EMPLOYEE_DOCUMENT` ilə EYNİ dəst,
+    # `FINE`/`FIELD_REPORT` ilə FƏRQLİ — səbəb sübutun NÖVÜDÜR:
+    #
+    #   * cərimə sübutu MÜŞAHİDƏDİR (kameranın kadrı) → yalnız şəkil,
+    #   * etiraz sübutu isə ƏKS DƏLİLDİR: həkim arayışı, sərəncam, ezamiyyət
+    #     əmri, mağazanın qrafiki — bunların hamısı HAZIRLANMIŞ sənəddir və
+    #     işçiyə çox vaxt məhz PDF kimi verilir. PDF-i bağlasaydıq, işçi onu
+    #     telefonla ŞƏKLƏ çevirməli olardı: oxunaqlılıq itir, sənədin
+    #     bütövlüyü isə sübut edilə bilməz — halbuki bu, PUL mübahisəsidir
+    #     (bölmə 4, 72 saatlıq pəncərə).
+    #
+    # SEC-018 sərhədi POZULMUR: `.pdf` üçün imza yoxlaması (`%PDF-`) ARTIQ
+    # mövcuddur, yəni ağ siyahıya YOXLANMAYAN format ƏLAVƏ EDİLMİR.
+    FINE_APPEAL_OWNER_TYPE: DOCUMENT_EXTENSIONS,
 }
 
 #: Rədd mətnləri sahib tipinə görə seçilir və HƏRFİ SABİTDİR (formatlanmır):
@@ -149,6 +164,7 @@ _FORMAT_MESSAGES: Final[dict[str, str]] = {
     EMPLOYEE_DOCUMENT_OWNER_TYPE: "Yalnız .jpg, .png, .webp və .pdf formatları qəbul olunur.",
     FIELD_REPORT_OWNER_TYPE: "Yalnız .jpg, .png və .webp formatları qəbul olunur.",
     SUPPORT_MESSAGE_OWNER_TYPE: "Yalnız .jpg, .png və .webp formatları qəbul olunur.",
+    FINE_APPEAL_OWNER_TYPE: "Yalnız .jpg, .png, .webp və .pdf formatları qəbul olunur.",
 }
 #: Bölmə 6: maksimum 5 MB — DEFOLT dəyər.
 #:
@@ -532,6 +548,7 @@ __all__ = [
     "ALLOWED_EXTENSIONS",
     "DOCUMENT_EXTENSIONS",
     "EMPLOYEE_DOCUMENT_OWNER_TYPE",
+    "FINE_APPEAL_OWNER_TYPE",
     "FINE_OWNER_TYPE",
     "IMAGE_EXTENSIONS",
     "MAX_UPLOAD_BYTES",

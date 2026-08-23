@@ -151,8 +151,24 @@ class PointsAppealStatus(str, Enum):
     EXPIRED = "EXPIRED"
 
     @property
+    def is_open(self) -> bool:
+        """Hələ qərar GÖZLƏYƏN, pəncərəsi də bağlanmamış etiraz."""
+        return self is PointsAppealStatus.PENDING
+
+    @property
     def is_decided(self) -> bool:
-        return self is not PointsAppealStatus.PENDING
+        """QƏRAR VERİLDİMİ — `EXPIRED` burada `False`-dur (M-6).
+
+        Cərimə tərəfindəki `AppealStatus.is_decided` ilə EYNİ qayda və eyni
+        səbəb: müddətin bitməsi qərar deyil, qərarın GECİKMƏSİDİR. Əvvəl bu
+        xassə `self is not PENDING` yazırdı — yəni müddəti bitmiş etirazı
+        «qərar alınmış» sayırdı. Həmin oxunuş heç yerdən çağırılmırdı
+        (`EXPIRED` dəyəri də kod bazasında heç vaxt yazılmırdı), lakin
+        `PointsEntry.expire_dispute()` ilə birlikdə o, müddəti bitmiş etirazı
+        BİR DAHA qərar alına bilməyən vəziyyətə salardı — yəni bir ölü-son
+        digəri ilə əvəzlənərdi.
+        """
+        return self in (PointsAppealStatus.APPROVED, PointsAppealStatus.REJECTED)
 
 
 class RedemptionStatus(str, Enum):

@@ -137,6 +137,8 @@ class _Appeals:
     def __init__(self, appeals: list[_Appeal]) -> None:
         self._appeals = appeals
         self.submitted: list[dict[str, Any]] = []
+        #: UX-4 — qaytarılan etirazlar (`owner_id` onların İD-sidir).
+        self.submitted_appeals: list[Any] = []
         self.error: KompasOSError | None = None
 
     def my_appeals(self, _employee: Any) -> list[_Appeal]:
@@ -146,7 +148,16 @@ class _Appeals:
         if self.error is not None:
             raise self.error
         self.submitted.append({"fine_id": fine_id, "reason": reason})
-        return object()
+        # UX-4: sənəd növbəsi sahibin İD-sini tələb edir (`owner_id =
+        # fine_appeals.id`) — real `submit()` də `FineAppeal` qaytarır.
+        appeal = _SubmittedAppeal()
+        self.submitted_appeals.append(appeal)
+        return appeal
+
+
+class _SubmittedAppeal:
+    def __init__(self) -> None:
+        self.id = uuid.uuid4()
 
 
 class _Session:
@@ -161,9 +172,36 @@ class _Session:
         self.committed += 1
 
 
+class _EvidenceQueue:
+    """UX-4 — sübut növbəsinin sahtəsi (real növbə lokal SQLite faylı açardı)."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def enqueue(self, **kwargs: Any) -> str:
+        self.calls.append(kwargs)
+        return "entry-1"
+
+
+class _Clock:
+    def now(self) -> Any:
+        from datetime import UTC, datetime
+
+        return datetime(2026, 8, 23, 9, 0, tzinfo=UTC)
+
+
 class _Context:
     def __init__(self, session: _Session) -> None:
         self._session = session
+        self.tenant_id = uuid.uuid4()
+        self.clock = _Clock()
+        self.queue = _EvidenceQueue()
+        # Növbə SESSİYA sahtəsinə də bağlanır ki, test onu `_wire`-in
+        # qaytardığı obyektdən oxuya bilsin (imza dəyişmir).
+        session.queue = self.queue
+
+    def evidence_queue(self) -> _EvidenceQueue:
+        return self.queue
 
     @contextmanager
     def session(self, *, user_id: Any = None):  # type: ignore[no-untyped-def]
@@ -182,6 +220,8 @@ class _Actor:
     def __init__(self) -> None:
         self.id = uuid.uuid4()
         self.full_name = "Rəşad Məmmədov"
+        #: UX-4 — sənəd növbəsi mağazanı YERLƏŞMƏ açarı kimi işlədir.
+        self.store_id = uuid.uuid4()
 
 
 def _wire(theme: Any, *, tasks: Any = None, fines: Any = None, appeals: Any = None) -> Any:
@@ -481,13 +521,21 @@ def test_a_submission_failure_shows_a_real_error_instead_of_a_silent_drop(qtbot,
 
 
 @requires_qt
-def test_an_attached_document_is_reported_not_silently_dropped_via_the_real_click(
-    qtbot, theme
-) -> None:  # type: ignore[no-untyped-def]
+def test_an_attached_document_is_uploaded_via_the_real_click(qtbot, theme, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """DEEP-GAP UX-4 — REAL kliklə: sənəd növbəyə düşür, sahibi ETİRAZDIR.
+
+    Köhnə test sənədin GÖNDƏRİLMƏDİYİNİ kilidləyirdi (o vaxt domendə sənəd
+    anlayışı yox idi). İndi `fine_appeals.document_ref` (miqrasiya 083),
+    `UploadOwnerType.FINE_APPEAL` və geri-çağırış mövcuddur — yəni ölçülən
+    şey dəyişdi: vəd ARTIQ yerinə yetirilir.
+    """
     from PySide6.QtWidgets import QPlainTextEdit
 
+    from src.infrastructure.storage.upload_queue import UploadOwnerType
     from src.presentation.screens.group_f import FineAppealScreen
 
+    document = tmp_path / "arayis.pdf"
+    document.write_bytes(b"%PDF-1.4 saxta sened")
     home, kiosk, session = _wire(theme, fines=[_Fine()], appeals=[])
     qtbot.addWidget(home)
     _click(home, "Etiraz Et")
@@ -496,12 +544,14 @@ def test_an_attached_document_is_reported_not_silently_dropped_via_the_real_clic
 
     # `PhotoDropZone` real fayl seçici pəncərəsi olmadan yazıla bilmir —
     # daxili yolu birbaşa qururuq (real `QFileDialog` modaldır).
-    screen._document._path = "C:/subut.jpg"
+    screen._document._path = str(document)
     explanation = screen.findChild(QPlainTextEdit)
     explanation.setPlainText("Ətraflı izah buradadır və kifayət qədər uzundur.")
     _click(screen, "Etirazı Göndər")
 
-    assert len(session.fine_appeals.submitted) == 1, "Sənədin olmaması etirazı bloklamamalıdır"
-    assert screen.switcher().current_state() == "error", (
-        "İşçi sənədin GÖNDƏRİLMƏDİYİNİ real xəbərdarlıqla görməlidir"
-    )
+    assert len(session.fine_appeals.submitted) == 1
+    queue = session.queue
+    assert len(queue.calls) == 1, "sənəd növbəyə DÜŞMƏDİ"
+    assert queue.calls[0]["owner_type"] is UploadOwnerType.FINE_APPEAL
+    assert queue.calls[0]["owner_id"] == str(session.fine_appeals.submitted_appeals[-1].id)
+    assert screen.switcher().current_state() != "error"

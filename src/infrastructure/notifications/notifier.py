@@ -20,6 +20,33 @@ sətir kritik yazılır (bax `domain/value_objects/notifications.py`). Əks
 istiqamət (kritikdən adiyə endirmə) MÜMKÜN DEYİL.
 
 ──────────────────────────────────────────────────────────────────────────────
+CƏHD SAYĞACI GÖNDƏRİŞDƏN ƏVVƏL ARTIRILIR (AT-MOST-ONCE)
+──────────────────────────────────────────────────────────────────────────────
+`email_attempts` SMTP çağırışından ƏVVƏL, ayrıca COMMIT ilə artırılır. Sıra
+tərsinə idi və nəticəsi belə olurdu: göndəriş uğurlu olsa da status yazısı
+(baza əlçatmaz, kilid, tranzaksiya xətası) uda bilirdi — sətir ƏBƏDİ `PENDING`
+qalır, sayğac artmır, dispetçer isə HƏR dövrədə EYNİ e-poçtu yenidən
+göndərirdi. Nəticə: qutuda yüzlərlə eyni mesaj və provayderin göndərəni
+bloklaması.
+
+NİYƏ AT-MOST-ONCE (at-least-once DEYİL): itirilən e-poçt burada məlumat itkisi
+DEYİL — in-app bildiriş artıq COMMIT olunub və o, ƏSAS kanaldır (modul
+başlığının birinci bölməsi). E-poçt YALNIZ dublikat xəbərdarlıqdır. Sonsuz
+təkrar isə kanalın ÖZÜNÜ öldürür: bloklanan göndərici ilə heç bir kirayəçiyə
+heç bir kritik e-poçt getmir. Yəni seçim "bir e-poçt itə bilər" ilə "bütün
+e-poçt kanalı itə bilər" arasındadır.
+
+──────────────────────────────────────────────────────────────────────────────
+STATUS YAZISI UĞURSUZ OLARSA DÖVRƏ DAYANIR
+──────────────────────────────────────────────────────────────────────────────
+Status yazısının uda bilməsi yuxarıdakı sonsuz təkrarın MƏNBƏYİ idi. İndi
+`_execute()` nəticəni QAYTARIR və `deliver_email()` uğursuzluqda
+`NotificationStatusWriteError` atır: baza yazıla bilmirsə növbəti sətri
+göndərmək eyni vəziyyəti təkrarlamaqdan başqa bir şey deyil. Dispetçer həmin
+KİRAYƏÇİ üçün dövrəni dayandırır, digər kirayəçilər isə öz dövrəsini davam
+etdirir (bax `_run`).
+
+──────────────────────────────────────────────────────────────────────────────
 ALICI: ŞİRKƏT ƏLAQƏSİ, FƏRDİ HESAB DEYİL
 ──────────────────────────────────────────────────────────────────────────────
 E-poçt `license_tenants.company_contact_email`-ə gedir. Səbəb bölmə 2/8-də
@@ -50,6 +77,7 @@ from src.infrastructure.notifications.email import (
     EmailNotConfiguredError,
     OutgoingEmail,
 )
+from src.shared.exceptions import KompasOSError
 from src.shared.logger import get_logger
 
 if TYPE_CHECKING:
@@ -85,6 +113,19 @@ FALLBACK_BACKOFF_MINUTES: Final[tuple[int, ...]] = fallback_int_tuple(
 )
 
 FALLBACK_POLL_SECONDS: Final[float] = fallback_float(SystemLimitKey.NOTIFY_POLL_INTERVAL_SECONDS)
+
+
+class NotificationStatusWriteError(KompasOSError):
+    """Bildirişin göndəriş vəziyyəti bazaya yazıla bilmədi.
+
+    NİYƏ AYRICA TİP: bu, "e-poçt getmədi" DEYİL — "e-poçtun nə olduğunu qeyd
+    edə bilmədik" deməkdir və nəticəsi tam FƏRQLİDİR. Birincisi backoff ilə
+    təkrarlanır; ikincisində təkrar EYNİ e-poçtun yenidən göndərilməsi
+    demək olardı (bax modul başlığı). Ona görə çağıran tərəf iki halı
+    ayırd edə bilməlidir.
+    """
+
+    user_message = "Bildiriş vəziyyəti qeyd edilə bilmədi."
 
 
 class PostgresNotifier:
@@ -125,14 +166,30 @@ class PostgresNotifier:
             return
         # Dərhal cəhd: adminin qutusuna 2 dəqiqə gec düşən "təsdiq gözlənilir"
         # bildirişi çox vaxt artıq gecikmiş olur.
-        self.deliver_email(
-            tenant_id=tenant_id,
-            notification_id=notification_id,
-            category=category,
-            title_az=title_az,
-            body_az=body_az,
-            attempts=0,
-        )
+        try:
+            self.deliver_email(
+                tenant_id=tenant_id,
+                notification_id=notification_id,
+                category=category,
+                title_az=title_az,
+                body_az=body_az,
+                attempts=0,
+            )
+        except NotificationStatusWriteError as exc:
+            # BURADA UDULUR — və bu, qəsdli İSTİSNADIR: `notify()` iş axınının
+            # ORTASINDAN çağırılır (cərimə verildi, icazə təsdiqləndi) və
+            # in-app sətir ARTIQ commit olunub. İstisnanı yuxarı buraxmaq
+            # e-poçt kanalının nasazlığına görə ƏSAS əməliyyatı geri qaytarardı
+            # — halbuki e-poçt yalnız dublikat xəbərdarlıqdır. Dispetçer isə
+            # əksinə: o, məhz bu iş üçün işləyir, ona görə orada dövrə DAYANIR.
+            _log.error(
+                "NOTIFY_EMAIL_SKIPPED",
+                extra={
+                    "notification_id": notification_id,
+                    "error": str(exc),
+                    "impact": "in-app bildiriş yerindədir — e-poçt fon dispetçerinə qalır",
+                },
+            )
 
     # -------------------------------- yazma ---------------------------------- #
 
@@ -178,9 +235,22 @@ class PostgresNotifier:
         `EmailFallbackDispatcher` də bunu çağırır: göndəriş məntiqi (alıcının
         həlli, mövzu formatı, uğur/uğursuzluq qeydi) TƏK YERDƏ qalsın deyə
         ictimai metoddur — iki nüsxə bir gün fərqli davranardı.
+
+        Raises:
+            NotificationStatusWriteError: YEGANƏ atılan istisna — göndəriş
+                DEYİL, STATUS YAZISI uğursuz olduqda (bax modul başlığı).
+                SMTP nasazlığı hələ də istisna atmır: o, DB-də qeyd olunur və
+                backoff ilə təkrarlanır.
         """
         if not notification_id:
             return False
+        # CƏHD REZERVASİYASI — GÖNDƏRİŞDƏN ƏVVƏL, AYRI COMMIT ilə.
+        # Bu sətir yazılmayıbsa GÖNDƏRMİRİK: sayğacsız göndəriş növbəti
+        # dövrədə eyni e-poçtu yenidən göndərməyə aparır (modul başlığı).
+        # Rezervasiya `email_next_attempt_at`-ı da təyin edir ki, proses
+        # göndəriş ORTASINDA çöksə belə sətir dərhal DEYİL, backoff-dan sonra
+        # yenidən götürülsün.
+        self._reserve_attempt(tenant_id, notification_id, attempts)
         if self._sender is None or not self._sender.is_configured:
             self._record_failure(
                 tenant_id, notification_id, "SMTP konfiqurasiya edilməyib", attempts, final=True
@@ -255,19 +325,15 @@ class PostgresNotifier:
         *,
         final: bool,
     ) -> None:
-        # Cəhd tavanı və gözləmə cədvəli UĞURSUZLUQ ANINDA oxunur: dispetçer
-        # günlərlə işləyir və Root ara-sıra SMTP provayderini dəyişir.
-        max_attempts = self._limits.int_of(SystemLimitKey.NOTIFY_MAX_ATTEMPTS)
-        schedule = self._limits.int_tuple_of(SystemLimitKey.NOTIFY_RETRY_BACKOFF_MINUTES)
-        next_attempt = (
-            None if final or attempts + 1 >= max_attempts else _backoff_minutes(attempts, schedule)
-        )
+        next_attempt = self._next_attempt_minutes(attempts, final=final)
+        # `email_attempts` BURADA ARTIRILMIR — `_reserve_attempt()` onu
+        # göndərişdən ƏVVƏL artırıb (modul başlığı). İkinci artım eyni cəhdi
+        # iki dəfə sayardı və tavan yarı-yolda dolardı.
         self._execute(
             tenant_id,
             """
             UPDATE notifications
-               SET email_attempts = email_attempts + 1,
-                   email_error = %s,
+               SET email_error = %s,
                    email_next_attempt_at = CASE
                        WHEN %s::INT IS NULL THEN NULL
                        ELSE now() + (%s::INT * INTERVAL '1 minute')
@@ -287,7 +353,53 @@ class PostgresNotifier:
             },
         )
 
+    def _next_attempt_minutes(self, attempts: int, *, final: bool) -> int | None:
+        """Növbəti cəhdə qalan dəqiqə; `None` = daha cəhd YOXDUR.
+
+        Cəhd tavanı və gözləmə cədvəli HƏR ÇAĞIRIŞDA oxunur: dispetçer
+        günlərlə işləyir və Root ara-sıra SMTP provayderini dəyişir.
+
+        Hesablama AYRI metoddadır, çünki İKİ yerdən çağırılır — rezervasiya
+        (göndərişdən əvvəl) və uğursuzluq qeydi (göndərişdən sonra). İki nüsxə
+        olsaydı, biri dəyişəndə sətir "gözləyir, amma heç vaxt götürülmür"
+        vəziyyətinə düşərdi.
+        """
+        max_attempts = self._limits.int_of(SystemLimitKey.NOTIFY_MAX_ATTEMPTS)
+        schedule = self._limits.int_tuple_of(SystemLimitKey.NOTIFY_RETRY_BACKOFF_MINUTES)
+        if final or attempts + 1 >= max_attempts:
+            return None
+        return _backoff_minutes(attempts, schedule)
+
+    def _reserve_attempt(self, tenant_id: TenantId, notification_id: str, attempts: int) -> None:
+        """Cəhdi GÖNDƏRİŞDƏN ƏVVƏL qeyd edir (at-most-once, modul başlığı).
+
+        Raises:
+            NotificationStatusWriteError: sayğac artırıla bilmədi — çağıran
+                tərəf e-poçtu GÖNDƏRMƏMƏLİDİR.
+        """
+        next_attempt = self._next_attempt_minutes(attempts, final=False)
+        self._execute(
+            tenant_id,
+            """
+            UPDATE notifications
+               SET email_attempts = email_attempts + 1,
+                   email_next_attempt_at = CASE
+                       WHEN %s::INT IS NULL THEN NULL
+                       ELSE now() + (%s::INT * INTERVAL '1 minute')
+                   END
+             WHERE id = %s
+            """,
+            (next_attempt, next_attempt, notification_id),
+        )
+
     def _execute(self, tenant_id: TenantId, sql: str, params: tuple[Any, ...]) -> None:
+        """Status yazısı — uğursuzluq UDULMUR (bax modul başlığı).
+
+        Əvvəl istisna yalnız loglanırdı. Nəticəsi görünməz sonsuz dövrə idi:
+        `email_sent`/`email_attempts` yazılmır → sətir `PENDING` qalır →
+        növbəti dövrədə EYNİ e-poçt yenidən göndərilir. İndi çağıran tərəf
+        vəziyyəti bilir və dövrəni dayandıra bilir.
+        """
         try:
             with self._database.unit_of_work(tenant_id) as uow:
                 with uow.connection.cursor() as cur:
@@ -295,6 +407,10 @@ class PostgresNotifier:
                 uow.commit()
         except Exception as exc:
             _log.error("NOTIFY_STATUS_WRITE_FAILED", extra={"error": str(exc)})
+            raise NotificationStatusWriteError(
+                "Bildirişin göndəriş vəziyyəti yazıla bilmədi",
+                context={"error": str(exc)},
+            ) from exc
 
 
 class EmailFallbackDispatcher:
@@ -334,14 +450,31 @@ class EmailFallbackDispatcher:
         pending = self._pending(tenant_id)
         sent = 0
         for row in pending:
-            ok = self._notifier.deliver_email(
-                tenant_id=tenant_id,
-                notification_id=str(row["id"]),
-                category=str(row["category"]),
-                title_az=str(row["title_az"]),
-                body_az=str(row["body_az"]),
-                attempts=int(row["email_attempts"]),
-            )
+            try:
+                ok = self._notifier.deliver_email(
+                    tenant_id=tenant_id,
+                    notification_id=str(row["id"]),
+                    category=str(row["category"]),
+                    title_az=str(row["title_az"]),
+                    body_az=str(row["body_az"]),
+                    attempts=int(row["email_attempts"]),
+                )
+            except NotificationStatusWriteError as exc:
+                # DÖVRƏ DAYANIR, paket ATLANMIR: baza status yazısını qəbul
+                # etmirsə növbəti sətri göndərmək eyni vəziyyəti təkrarlamaq,
+                # yəni qeydiyyatsız e-poçt axını yaratmaq olardı. Sətirlər
+                # növbədə qalır — bildiriş İTMİR, yalnız gecikir.
+                _log.error(
+                    "NOTIFY_DISPATCH_HALTED",
+                    extra={
+                        "tenant_id": str(tenant_id),
+                        "notification_id": str(row["id"]),
+                        "sent_before_halt": sent,
+                        "error": str(exc),
+                        "impact": "növbə qalır — növbəti dövrədə davam edir",
+                    },
+                )
+                break
             sent += int(ok)
         if pending:
             _log.info(
@@ -395,13 +528,38 @@ class EmailFallbackDispatcher:
     def _run(self) -> None:
         while not self._stop_event.is_set():
             try:
-                for tenant_id in self._tenant_ids():
-                    self.dispatch_once(tenant_id)
+                tenants = self._tenant_ids()
             except Exception as exc:  # arxa fon sapı heç vaxt ölməməlidir
+                # Kirayəçi siyahısının ÖZÜ oxuna bilmədi — bu dövrədə
+                # işlənəcək heç nə yoxdur, sap isə yaşamağa davam edir.
                 _log.error("EMAIL_DISPATCH_CRASHED", extra={"error": str(exc)})
+                tenants = []
+            for tenant_id in tenants:
+                self._dispatch_isolated(tenant_id)
             # Aralıq HƏR DÖVRDƏ oxunur — Root onu dəyişəndə növbəti gözləmə
             # artıq yeni dəyərlə olur, yenidən başlatma tələb olunmur.
             self._stop_event.wait(self._poll_interval())
+
+    def _dispatch_isolated(self, tenant_id: TenantId) -> None:
+        """Bir kirayəçinin xətası BURADA bitir — dövrün qalanı davam edir.
+
+        NİYƏ `try` DÖVRÜN İÇİNDƏDİR: əvvəl blok dövrün XARİCİNDƏ idi, yəni
+        BİRİNCİ kirayəçidə qalxan istisna dövrü qırırdı və sonrakı
+        kirayəçilərin kritik bildirişləri həmin dövrədə HEÇ işlənmirdi. Bir
+        müştərinin baza nasazlığı digərinin "45 dəqiqə gecikmə" e-poçtunu
+        susdururdu. Naxış `erp/sync_worker.py::_sync_isolated`-ın eynisidir.
+        """
+        try:
+            self.dispatch_once(tenant_id)
+        except Exception as exc:
+            _log.error(
+                "EMAIL_DISPATCH_TENANT_FAILED",
+                extra={
+                    "tenant_id": str(tenant_id),
+                    "error": str(exc),
+                    "impact": "yalnız bu kirayəçi — dövrə digərləri ilə davam edir",
+                },
+            )
 
     def _poll_interval(self) -> float:
         if self._explicit_poll_seconds is not None:
@@ -430,5 +588,6 @@ __all__ = [
     "FALLBACK_MAX_BATCH",
     "FALLBACK_POLL_SECONDS",
     "EmailFallbackDispatcher",
+    "NotificationStatusWriteError",
     "PostgresNotifier",
 ]

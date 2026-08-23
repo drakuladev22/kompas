@@ -97,16 +97,27 @@ def _index_predicate(normalized_sql: str, index_name: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+#: SAAS-3 — iki sabit, çünki iki fərqli sual ölçülür: adi növbə
+#: (`QUEUE_TENANT`) və köhnə SQLite faylından KÖÇÜRÜLƏN sətir
+#: (`LEGACY_TENANT`). Köçürmə testinin predmeti sxemdir, kirayəçi
+#: süzgəci deyil — ona görə həmin növbə köhnə sətrin kirayəçisi ilə açılır.
+QUEUE_TENANT: str = str(uuid.uuid4())
+LEGACY_TENANT: str = str(uuid.uuid4())
+
+
 @pytest.fixture
 def queue(tmp_path: Path) -> Iterator[EvidenceUploadQueue]:
-    q = EvidenceUploadQueue(tmp_path / "uploads.db", spool_dir=tmp_path / "spool")
+    q = EvidenceUploadQueue(
+        tmp_path / "uploads.db", spool_dir=tmp_path / "spool", tenant_id=QUEUE_TENANT
+    )
     yield q
     q.close()
 
 
 def _enqueue(queue: EvidenceUploadQueue, *, now: datetime = AUGUST) -> str:
     return queue.enqueue(
-        tenant_id=str(uuid.uuid4()),
+        # SAAS-3: sətir növbənin KİRAYƏÇİSİ ilə eyni olmalıdır.
+        tenant_id=QUEUE_TENANT,
         owner_type=UploadOwnerType.FINE,
         owner_id=str(uuid.uuid4()),
         store_id=STORE,
@@ -329,7 +340,7 @@ def test_legacy_queue_file_gets_the_processing_status(tmp_path: Path) -> None:
         " spool_path, taken_at, queued_at, next_attempt_at)"
         " VALUES ('köhnə-1', 1, ?, ?, ?, 'a.png', ?, ?, ?, ?)",
         (
-            str(uuid.uuid4()),
+            LEGACY_TENANT,
             str(uuid.uuid4()),
             str(STORE),
             str(tmp_path / "spool" / "köhnə-1.bin"),
@@ -341,7 +352,7 @@ def test_legacy_queue_file_gets_the_processing_status(tmp_path: Path) -> None:
     legacy.commit()
     legacy.close()
 
-    queue = EvidenceUploadQueue(db_path, spool_dir=tmp_path / "spool")
+    queue = EvidenceUploadQueue(db_path, spool_dir=tmp_path / "spool", tenant_id=LEGACY_TENANT)
     try:
         assert queue.get("köhnə-1") is not None, "köçürmə sətri itirdi"
         claimed = queue.claim_pending(now=AUGUST)
@@ -391,7 +402,7 @@ def test_legacy_queue_file_without_owner_columns_is_backfilled(tmp_path: Path) -
         " spool_path, taken_at, queued_at, next_attempt_at)"
         " VALUES ('köhnə-2', 1, ?, ?, ?, 'a.png', ?, ?, ?, ?)",
         (
-            str(uuid.uuid4()),
+            LEGACY_TENANT,
             fine_id,
             str(STORE),
             str(spool_path),
@@ -403,7 +414,7 @@ def test_legacy_queue_file_without_owner_columns_is_backfilled(tmp_path: Path) -
     legacy.commit()
     legacy.close()
 
-    queue = EvidenceUploadQueue(db_path, spool_dir=tmp_path / "spool")
+    queue = EvidenceUploadQueue(db_path, spool_dir=tmp_path / "spool", tenant_id=LEGACY_TENANT)
     try:
         entry = queue.get("köhnə-2")
         assert entry is not None, "köçürmə sətri itirdi"
@@ -419,7 +430,10 @@ def test_legacy_queue_file_without_owner_columns_is_backfilled(tmp_path: Path) -
 def test_zero_stale_window_falls_back_to_the_default(tmp_path: Path) -> None:
     """Səhv konfiqurasiya qorumanı SÜKUTLA söndürməməlidir."""
     queue = EvidenceUploadQueue(
-        tmp_path / "q.db", spool_dir=tmp_path / "spool", claim_stale_after_seconds=0
+        tmp_path / "q.db",
+        spool_dir=tmp_path / "spool",
+        claim_stale_after_seconds=0,
+        tenant_id=QUEUE_TENANT,
     )
     try:
         _enqueue(queue)

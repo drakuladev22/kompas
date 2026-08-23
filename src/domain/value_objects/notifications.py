@@ -132,6 +132,20 @@ TENANT_NOTIFICATION_AUDIENCE: Final[dict[str, tuple[str, ...]]] = {
     # həlli təsdiq flag-ini kiməsə vermək olduğu üçün auditoriya icazə paylaya
     # bilən roldur — `can_control_user_permissions` (Admin/CEO/Root, §23).
     "DUAL_CONTROL_DEADLOCK_RISK": ("can_control_user_permissions",),
+    # `dual_control_guard._raise_gap` (AF-1): `DUAL_CONTROL_DEADLOCK_RISK`-in
+    # DİGƏR kritik flaglar üçün ümumiləşdirilmiş qarşılığı. Auditoriya EYNİDİR
+    # və eyni səbəbdən: boşluğun YEGANƏ həlli həmin flagı kiməsə vermək,
+    # bunu edə bilən isə `can_control_user_permissions` sahibidir. Ayrı
+    # kateqoriya saxlanılır ki, mövcud `DUAL_CONTROL_DEADLOCK_RISK` sorğuları
+    # və hesabatları yeni sətirlərlə qarışmasın.
+    "PERMISSION_COVERAGE_GAP": ("can_control_user_permissions",),
+    # `user_management.deactivate_employee` (HR-4): işçi çıxdı, LAKİN onun
+    # tapşırığı/növbəsi/sənədi açıq qaldı. `EMPLOYEE_DEACTIVATED_WITH_OPEN_
+    # FINES`-dan AYRI kateqoriyadır və auditoriyası da AYRIDIR: cərimə sətrini
+    # yalnız `can_publish_fines` bağlaya bilir, bu sətirləri isə işçi
+    # idarəetməsi — tapşırığı yenidən təyin edən, boş qalan növbəni dolduran
+    # və son haqq-hesabı bağlayan tərəf (`can_manage_employees`).
+    "EMPLOYEE_DEACTIVATED_WITH_OPEN_ITEMS": ("can_manage_employees",),
     # `fine_management.submit_appeal`: şərhdə flag adbaad yazılıb.
     "FINE_APPEAL_PENDING": ("can_approve_leave_appeal",),
     # `fine_management.expire_stale` (M-6): "72 saat keçdi, etiraza hələ
@@ -140,6 +154,13 @@ TENANT_NOTIFICATION_AUDIENCE: Final[dict[str, tuple[str, ...]]] = {
     # seçmək (məs. `can_view_audit_logs`) xəbərdarlığı seyrçiyə göstərib
     # məsul şəxsdən gizlədərdi.
     "FINE_APPEAL_SLA_BREACH": ("can_approve_leave_appeal",),
+    # `sales_points.expire_stale_disputes`: `FINE_APPEAL_SLA_BREACH`-in xal
+    # tərəfindəki EYNİSİ və eyni məntiqlə auditoriyalanıb — sətri görməli olan
+    # şəxs onu QAPADA bilən şəxsdir. Xal etirazına qərar verən yeganə flag
+    # `can_manage_sales_points`-dir (`SalesPointsUseCase.MANAGE_POINTS_FLAG`);
+    # cərimə tərəfindəki `can_approve_leave_appeal` BURADA YANLIŞ olardı —
+    # o flag-in sahibi xal sətrinə toxuna bilmir.
+    "POINTS_DISPUTE_SLA_BREACH": ("can_manage_sales_points",),
     # `fine_management.approve` (M-6): cərimə ARTIQ export olunub, sonra
     # ləğv/azaldılıb. Düzəlişi apara bilən yeganə şəxs hesabat faylını
     # göndərəndir — `can_export_reports`. Etiraza qərar verən HR_Admin-in
@@ -168,6 +189,15 @@ TENANT_NOTIFICATION_AUDIENCE: Final[dict[str, tuple[str, ...]]] = {
     # `ATTENDANCE_SHEET_MISMATCH` ilə eyni auditoriya — hər ikisi növbə
     # PLANI ilə faktiki vəziyyət arasındakı fərqdən doğur.
     "SHIFT_CHANGE_CONFLICT": ("can_manage_shifts",),
+    # `open_shift_market.release_claim` (OP-4): tutulmuş növbə geri verildi,
+    # slot yenidən BOŞDUR. Sətir adətən ŞƏXSİDİR (elanı açan şəxsə gedir və
+    # bu cədvəldən ASILI DEYİL) — buradakı yazı yalnız EHTİYAT yolu qapayır:
+    # `open_shift_postings.posted_by` `ON DELETE SET NULL`-dır, yəni elanı
+    # açan hesab silinibsə bildiriş tenant-broadcast olur. Süzgəcsiz qalsaydı
+    # `Satıcı` başqa mağazanın boş slotu barədə xəbərdarlıq görərdi.
+    # Auditoriya `SHIFT_CHANGE_CONFLICT` ilə EYNİDİR və eyni səbəbdən: boş
+    # qalan günü yalnız təqvimi dəyişə bilən şəxs doldura bilər.
+    "OPEN_SHIFT_RELEASED": ("can_manage_shifts",),
     # `payment_reminders.NotifierReminderSender`: lisenziya ödənişi kirayəçi
     # inzibatçısının işidir. `can_manage_license` §22-də səviyyə-1 hardlock-dur
     # (Root; CEO-ya defolt verilmir), yəni auditoriya dar və dəqiqdir.

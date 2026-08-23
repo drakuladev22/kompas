@@ -68,14 +68,16 @@ def test_combine_rejects_bad_input(text: str) -> None:
 class _Screen:
     """`show_error` çağırışlarını yığan minimal ekran əvəzi.
 
-    `clear_photo`/`set_success_message` DEEP-GAP U1-lə əlavə olundu —
-    `FineEntryController._issue`-un UĞUR yolu bunları çağırır (bax onun
-    başlığı), sahtə onlarsız `AttributeError` atardı.
+    `clear_photo`/`set_success_message` DEEP-GAP U1-lə, `clear_employee`
+    isə DEEP-GAP OP-6 ilə əlavə olundu — `FineEntryController._issue`-un
+    UĞUR yolu bunları çağırır (bax onun başlığı), sahtə onlarsız
+    `AttributeError` atardı.
     """
 
     def __init__(self) -> None:
         self.errors: list[tuple[str, str]] = []
         self.photo_cleared = False
+        self.employee_cleared = False
         self.success_message = ""
 
     def show_error(self, *, title: str, message: str, **_: Any) -> None:
@@ -83,6 +85,9 @@ class _Screen:
 
     def clear_photo(self) -> None:
         self.photo_cleared = True
+
+    def clear_employee(self) -> None:
+        self.employee_cleared = True
 
     def set_success_message(self, message: str) -> None:
         self.success_message = message

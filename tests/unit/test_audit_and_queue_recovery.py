@@ -289,7 +289,11 @@ def test_archived_only_history_still_reads_as_not_connected(monkeypatch: Any) ->
 
 @pytest.fixture
 def queue(tmp_path: Path) -> Any:
-    q = EvidenceUploadQueue(tmp_path / "uploads.db", spool_dir=tmp_path / "spool")
+    # SAAS-3: növbə BİR kirayəçiyə bağlıdır — `_enqueue` də EYNİ `TENANT`-i
+    # işlədir, əks halda sətir öz növbəsindən görünməzdi.
+    q = EvidenceUploadQueue(
+        tmp_path / "uploads.db", spool_dir=tmp_path / "spool", tenant_id=str(TENANT)
+    )
     yield q
     q.close()
 

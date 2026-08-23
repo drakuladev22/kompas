@@ -161,8 +161,8 @@ offscreen ölçüsüdür: dəsti fon işi kimi başladıb gözləmək lazımdır
 saymaq yox. Yeganə fərq: `test_mono_role_resolves_to_a_fixed_pitch_font`
 atlanır (aşağıya bax).
 
-Kontrast yoxlayıcısı **160 rəng cütünü** (`--include-high-contrast` olmadan
-158) ölçür — həm `tokens.py` cütlərini,
+Kontrast yoxlayıcısı **162 rəng cütünü** (`--include-high-contrast` olmadan
+160) ölçür — həm `tokens.py` cütlərini,
 həm də `qss.py`-dəki FAKTİKİ istifadəni (`::placeholder`, `:disabled`,
 `:focus`, `:hover`, sərhədlər). Yalnız tokenləri yoxlamaq kifayət etmirdi:
 dörd kontrast qüsuru məhz bu boşluqda gizlənmişdi. **Bu rəqəm dəyişkəndir** —

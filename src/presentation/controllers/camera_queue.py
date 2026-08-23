@@ -52,6 +52,10 @@ class CameraQueueController:
         screen.adjust_requested.connect(lambda request_id: self._on_adjust(screen, request_id))
         screen.approve_requested.connect(lambda request_id: self._on_approve(screen, request_id))
         screen.reject_requested.connect(lambda request_id: self._on_reject(screen, request_id))
+        # DEEP-GAP OP-7 — toplu rədd: BİR səbəb, N sətir, N audit yazısı.
+        screen.bulk_reject_requested.connect(
+            lambda request_ids: self._on_bulk_reject(screen, list(request_ids))
+        )
 
     # ------------------------------- təsdiq ---------------------------------- #
 
@@ -74,6 +78,101 @@ class CameraQueueController:
                 work_date=record.work_date,
             ),
             failure_title="Təsdiq yazılmadı",
+        )
+
+    def _on_bulk_reject(self, screen: OperatorQueueScreen, request_ids: list[str]) -> None:
+        """Seçilmiş GİRİŞ sətirlərini BİR səbəblə rədd edir (DEEP-GAP OP-7).
+
+        ──────────────────────────────────────────────────────────────────────
+        SƏBƏBİN MƏCBURİLİYİ POZULMUR — TƏKRARI ARADAN QALXIR
+        ──────────────────────────────────────────────────────────────────────
+        Səhər 14 sorğudan 5-6-sı eyni səbəbdən səhv olur. Operator hər biri
+        üçün ayrıca modal açıb eyni mətni yenidən yazırdı; nəticədə səbəb
+        sahəsi mənasız təkrarla («ttttttttt») dolurdu — yəni qayda öz
+        məqsədini itirirdi. İndi səbəb BİR DƏFƏ soruşulur (eyni `_ask_reason`,
+        eyni minimum uzunluq) və HƏR sətrə AYRICA audit yazılır.
+
+        ──────────────────────────────────────────────────────────────────────
+        TOPLU MƏNTİQ BURADA DEYİL, USE CASE-DƏDİR
+        ──────────────────────────────────────────────────────────────────────
+        `MorningCheckInUseCase.reject_batch()` MÖVCUDDUR: təkrar işçini bir
+        dəfə emal edir, hər sətir üçün səlahiyyət/əhatə/kilidli oxunu
+        təkrarlayır, qismən uğuru `BatchRejectResult`-da qaytarır və BİR toplu
+        bildiriş göndərir. Kontrollerdə dövrə yazsaydıq, eyni qaydanın İKİNCİ
+        nüsxəsi yaranardı və biri (məs. bildirişin toplanması) sükutla
+        ayrılardı — `publish_batch` naxışının bütün mənası budur.
+
+        ──────────────────────────────────────────────────────────────────────
+        AÇAR → İŞÇİ ÇEVİRMƏSİ VƏ İŞ GÜNÜNƏ GÖRƏ QRUPLAŞMA
+        ──────────────────────────────────────────────────────────────────────
+        Ekran `request_id` (davamiyyət sətrinin açarı) daşıyır, use case isə
+        `employee_id` + iş günü gözləyir. Növbədə DÜNƏNKİ sətir də ola bilər
+        (gecə növbəsi), ona görə dəst İŞ GÜNÜNƏ görə qruplaşdırılır və hər
+        qrup ayrıca çağırılır — tək çağırışda `work_date` bir dəyər ola
+        bilərdi və dünənki sətir səhvən BUGÜNKÜ sətri hədəfləyərdi.
+        """
+        if not request_ids:
+            return
+        reason = self._ask_reason(screen)
+        if reason is None:
+            return
+
+        rejected = 0
+        failures: list[str] = []
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                by_day: dict[Any, list[Any]] = {}
+                for request_id in request_ids:
+                    record = session.uow.attendance.get(_attendance_id(request_id))
+                    if record is None:
+                        # Sətir aradan qalxıb (başqa operator emal edib) —
+                        # dəsti dayandırmır, yekun mesajda sayılır.
+                        failures.append(request_id)
+                        continue
+                    by_day.setdefault(record.work_date, []).append(record.employee_id)
+
+                for work_date, employee_ids in by_day.items():
+                    result = session.morning_check_in.reject_batch(
+                        tenant_id=session.tenant_id,
+                        operator_id=self._actor.id,
+                        employee_ids=employee_ids,
+                        reason=reason,
+                        work_date=work_date,
+                    )
+                    rejected += result.rejected_count
+                    failures.extend(result.failed.values())
+                session.commit()
+        except KompasOSError as error:
+            self._notify(screen, title="Toplu rədd yazılmadı", message=error.user_message)
+            self._refresh(screen)
+            return
+        except Exception:
+            _error_log.exception("QUEUE_BULK_REJECT_FAILED", extra={"count": len(request_ids)})
+            self._notify(
+                screen,
+                title="Toplu rədd yazılmadı",
+                message="Əməliyyat tamamlanmadı. Yenidən cəhd edin.",
+            )
+            self._refresh(screen)
+            return
+
+        screen.clear_selection()
+        self._refresh(screen)
+
+        if failures:
+            self._notify(
+                screen,
+                title="Toplu rədd qismən tamamlandı",
+                message=(
+                    f"{rejected} sorğu rədd edildi, {len(failures)} sorğu yazılmadı "
+                    "(artıq emal olunmuş və ya dəyişmiş ola bilər). Növbəni yoxlayın."
+                ),
+            )
+            return
+        self._notify(
+            screen,
+            title="Toplu rədd tamamlandı",
+            message=f"{rejected} sorğu eyni səbəblə rədd edildi. Səbəb hər sətrin auditindədir.",
         )
 
     def _on_reject(self, screen: OperatorQueueScreen, request_id: str) -> None:

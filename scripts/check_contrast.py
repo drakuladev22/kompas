@@ -105,8 +105,19 @@ REQUIRED_PAIRS: list[tuple[str, str, float, str]] = [
     ("--color-bg-primary", "--color-warning", AA_NORMAL_TEXT, "Nişan mətni — xəbərdarlıq"),
     ("--color-bg-primary", "--color-info", AA_NORMAL_TEXT, "Nişan mətni — məlumat"),
     # --- fonsuz idarəetmə elementinin sərhədi (WCAG 1.4.11) ---
-    ("--color-border-strong", "--color-header-bg", AA_LARGE_TEXT, "İkon düyməsi sərhədi"),
-    ("--color-border-strong", "--color-card-bg", AA_LARGE_TEXT, "İkon sərhədi (kart)"),
+    # `--color-border-strong` ROLU DƏYİŞDİ, ÖLÇÜ DEYİL. Əvvəl başlıqdakı 34×34
+    # ikon düyməsinin çərçivəsi idi; həmin çərçivə silindi (affordans indi
+    # ikonun ÖZÜDÜR — `--color-nav-item-text` ilə çəkilir, yəni mətn
+    # səviyyəsində kontrastdadır). Token isə silinmədi: o, artıq giriş
+    # sahəsinin HOVER kənarıdır. Ölçülən şey hər iki halda eynidir — səthin
+    # üzərindəki 3:1 kontrastlı idarəetmə kənarı, ona görə cütlər qalır.
+    # BAŞLIQ İKONU ARTIQ ÖLÇÜLÜR. Düymənin çərçivəsi silindiyi üçün onun
+    # VARLIĞINI göstərən yeganə şey qlifin özüdür (WCAG 1.4.11) — yəni
+    # ölçülməli olan cüt məhz budur. Cütü əlavə etməsəydik, «ölçülən ≠
+    # render olunan» boşluğu yaranardı (eyni tələ açılış ekranında olub).
+    ("--color-nav-item-text", "--color-header-bg", AA_LARGE_TEXT, "Başlıq ikonu (affordans)"),
+    ("--color-border-strong", "--color-header-bg", AA_LARGE_TEXT, "Sahə kənarı (hover, header)"),
+    ("--color-border-strong", "--color-card-bg", AA_LARGE_TEXT, "Sahə kənarı (hover, kart)"),
     # --- deaktiv mətn: WCAG rəsmən istisna edir, layihə 3:1 tələb edir ---
     ("--color-text-disabled", "--color-bg-primary", AA_LARGE_TEXT, "Deaktiv mətn"),
     ("--color-text-disabled", "--color-bg-surface", AA_LARGE_TEXT, "Deaktiv düymə mətni"),

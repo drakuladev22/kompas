@@ -1419,7 +1419,39 @@ class ApplicationContext:
         if owner_type == UploadOwnerType.SUPPORT_MESSAGE.value:
             self._attach_support_message_evidence(owner_id, reference)
             return
+        if owner_type == UploadOwnerType.FINE_APPEAL.value:
+            self._attach_fine_appeal_evidence(owner_id, reference)
+            return
         self._attach_fine_evidence(owner_id, reference)
+
+    def _attach_fine_appeal_evidence(self, appeal_id: str, reference: Any) -> None:
+        """`fine_appeals.document_ref`-i yeniləyir (DEEP-GAP UX-4).
+
+        `str(reference)` YAZILIR — `employee_documents.file_ref` və
+        `support_messages.attachment_ref` ilə EYNİ format (provider + bağlantı
+        + fayl ID-si bir mətndə). Sütun adı `_url` DEYİL, çünki dəyər URL
+        deyil: private Drive faylının «linki olan hər kəs» yolu YOXDUR
+        (`value_objects/storage.py`).
+
+        SIFIR SƏTİR XƏTA DEYİL: cərimə ləğv olunubsa etiraz sətri `CASCADE`
+        ilə silinmiş ola bilər. Belə halda yazılacaq yer yoxdur — istisna
+        atsaydıq növbə eyni sətri əbədi təkrarlayardı (`link_pending`
+        mexanizmi), halbuki səbəb aradan qalxan deyil.
+
+        AKTOR YOXDUR: geri-çağırış fon işçisindən gəlir (qonşu dörd
+        `_attach_*` metodunun eyni qərarı).
+        """
+        import uuid  # noqa: PLC0415
+
+        from src.domain.value_objects.identifiers import AppealId  # noqa: PLC0415
+
+        with self.session() as session:
+            updated = session.uow.repository("appeals").attach_document(
+                AppealId(uuid.UUID(appeal_id)), reference=str(reference)
+            )
+            session.commit()
+        if not updated:
+            _log.warning("APPEAL_DOCUMENT_OWNER_MISSING", extra={"appeal_id": appeal_id})
 
     def _attach_support_message_evidence(self, message_id: str, reference: Any) -> None:
         """`support_messages.attachment_ref`-i yeniləyir (CHAT-1 Faza 6).
@@ -2039,6 +2071,47 @@ class ApplicationContext:
                 JobCadence.DAILY,
                 JobWeight.LIGHT,
             ),
+            # DEEP-GAP OP-1 — ÜÇ İŞ YAZILMIŞDI, LAKİN HEÇ VAXT İŞƏ DÜŞMÜRDÜ.
+            # Hər üçünün use case metodu mövcud, testli və sənədlidir; yalnız
+            # bu siyahıya salınmamışdı, yəni istehsalatda ölü idi. Ən ağırı
+            # birincisidir: davamiyyət hesabatı `unauthorized_absence` sütununu
+            # oxuyur, onu YAZAN yol isə yox idi.
+            (
+                "MORNING_ABSENCE_DETECTION",
+                self._job_detect_absences,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
+            (
+                "TASK_OVERDUE_ESCALATION",
+                self._job_task_escalation,
+                JobCadence.HOURLY,
+                JobWeight.LIGHT,
+            ),
+            (
+                "DEVICE_INACTIVITY_BLOCK",
+                self._job_block_inactive_devices,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
+            (
+                "OPEN_SHIFT_EXPIRY",
+                self._job_expire_open_shifts,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
+            (
+                "VERIFICATION_TIMEOUT_ESCALATION",
+                self._job_escalate_verification_timeouts,
+                JobCadence.HOURLY,
+                JobWeight.LIGHT,
+            ),
+            (
+                "RETENTION_PURGE",
+                self._job_retention_purge,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
             ("NIGHTLY_BACKUP", self._job_nightly_backup, JobCadence.DAILY, JobWeight.HEAVY),
         ):
             runner.register(ScheduledJob(key=key, handler=handler, cadence=cadence, weight=weight))
@@ -2259,6 +2332,157 @@ class ApplicationContext:
             removed = session.face_log_retention.purge(tenant_id=context.tenant_id, now=context.now)
             session.commit()
         return f"{removed} üz-doğrulama qeydi silindi"
+
+    def _job_detect_absences(self, context: Any) -> str:
+        """Gün sonunda «İcazəsiz Qayıb» təyinetməsi (DEEP-GAP OP-1).
+
+        ──────────────────────────────────────────────────────────────────────
+        BU İŞ NİYƏ İNDİ ƏLAVƏ OLUNUR
+        ──────────────────────────────────────────────────────────────────────
+        `MorningCheckInUseCase.detect_absences()` yazılıb, test edilib və
+        sənəddə «gün sonunda işləyir» kimi təsvir olunub — LAKİN onu çağıran
+        HEÇ BİR yol yox idi (`grep` bütün `src/` üzrə sıfır nəticə). Hesabat və
+        export qatı isə `unauthorized_absence` sütununu OXUYUR, yəni sütunun
+        DOLDURULDUĞUNU fərz edir. Nəticə: qayıb heç vaxt qeydə alınmırdı.
+
+        `work_date` DÜNƏNdir, bugün DEYİL: iş gecə yarısından sonra işləyir və
+        həmin anda «bu gün» hələ başlamayıb. Gecə növbəsi sərhədi
+        `resolve_work_date` ilə həll olunur, yəni burada sadə `-1 gün` kifayət
+        edir (növbə gününün özü domendə hesablanır).
+        """
+        from datetime import timedelta  # noqa: PLC0415
+
+        work_date = (self.clock.now() - timedelta(days=1)).date()
+        with self.session() as session:
+            marked = session.morning_check_in.detect_absences(context.tenant_id, work_date)
+            session.commit()
+        return f"{marked} işçi «İcazəsiz Qayıb» kimi işarələndi ({work_date})"
+
+    def _job_task_escalation(self, context: Any) -> str:
+        """Son tarixi keçmiş tapşırıqları eskalasiya edir (DEEP-GAP OP-1).
+
+        `escalate_overdue` modul başlığında «Onu istifadəçi deyil, planlayıcı
+        çağırır» yazılıb — lakin planlayıcıda qeydiyyatı YOX İDİ. `HOURLY`:
+        son tarix saat dəqiqliyindədir, gündəlik dövrə eskalasiyanı 23 saata
+        qədər gecikdirərdi.
+        """
+        with self.session() as session:
+            result = session.tasks.escalate_overdue(tenant_id=context.tenant_id)
+            session.commit()
+        return f"{result.escalated} tapşırıq gecikmiş kimi işarələndi"
+
+    def _job_block_inactive_devices(self, context: Any) -> str:
+        """Passivlik həddini keçmiş cihazları bloklayır (DEEP-GAP OP-1).
+
+        Məqsəd lisenziya sayğacıdır: illər əvvəl silinmiş mağazanın PC-si
+        əbədi yer tutmamalıdır. Aktor YOXDUR — `blocked_by=None` audit-də
+        «avtomatik» kimi görünür.
+        """
+        with self.session() as session:
+            blocked = session.devices.block_inactive_devices(tenant_id=context.tenant_id)
+            session.commit()
+        return f"{len(blocked)} passiv cihaz bloklandı"
+
+    def _job_expire_open_shifts(self, context: Any) -> str:
+        """Tarixi keçmiş açıq növbə elanlarını bağlayır (DEEP-GAP OP-4).
+
+        `DAILY` — elanın vahidi GÜNdür (`shift_date`), saatlıq dövrə eyni
+        sətirləri 24 dəfə boş yoxlayardı. `LIGHT`: indeksli sorğu + tapılan
+        sətir qədər şərtli `UPDATE`.
+
+        AKTOR YOXDUR: qərarı insan vermir, MÜDDƏT bitir — audit `actor_id=None`
+        ilə yazılır (`FINE_EXPIRE_STALE` ilə eyni forma və eyni səbəb).
+        """
+        with self.session() as session:
+            closed = session.open_shifts.expire_stale_postings(context.tenant_id)
+            session.commit()
+        return f"{closed} tarixi keçmiş elan bağlandı"
+
+    def _job_escalate_verification_timeouts(self, context: Any) -> str:
+        """45 dəqiqədən çox gözləyən təsdiqləri eskalasiya edir — HƏR İKİ tərəf (DEEP-GAP OP-2).
+
+        ──────────────────────────────────────────────────────────────────────
+        HƏDD KAĞIZ ÜZƏRİNDƏ QALMIŞDI
+        ──────────────────────────────────────────────────────────────────────
+        `VERIFICATION_TIMEOUT_MINUTES` Root açarı var, `escalate_timeouts()`
+        yazılıb və testlidir — LAKİN onu çağıran yol YOX İDİ. Nəticə: operator
+        naharda ikən işçinin «Mən Qayıtdım» sorğusu 🟡-da SONSUZ qalırdı, işçi
+        növbəti icazəni ala bilmirdi (sorğu açıq sayılır) və HR heç nə
+        bilmirdi. Hədd yalnız sənəddə işləyirdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        ESKALASİYA QƏRAR VERMİR — SƏLAHİYYƏT GENİŞLƏNMİR
+        ──────────────────────────────────────────────────────────────────────
+        Hər iki metod statusu 🟡 SAXLAYIR (nə təsdiq, nə rədd): yalnız möhür
+        vurulur və HR_Admin/CEO-ya bildiriş gedir. Ona görə aktorsuz icra
+        təhlükəsizdir — manual təsdiq/rədd yolu isə yenə səlahiyyət qapısının
+        arxasındadır və orada aktor VAR.
+
+        İDEMPOTENTLİK MÖHÜRDƏDİR: hər sətir yalnız BİR DƏFƏ qalxır
+        (`escalated_at`), yəni saatlıq dövrə eyni sətri təkrar-təkrar
+        bildirmir.
+
+        Bildiriş `recipient_id=None` ilə gedir — HR_Admin/CEO növbəsinə düşür,
+        konkret şəxsə yox (use case-in öz qərarı, burada təkrarlanmır).
+        """
+        with self.session() as session:
+            returns = session.leave_verification.escalate_timeouts(context.tenant_id)
+            # GİRİŞ TƏRƏFİ — AKTORSUZ İMZA (DEEP-GAP OP-2, ikinci yarı).
+            # `escalate_timeouts(tenant_id, operator_id)` mağaza dəstini
+            # operatorun kamera təyinatından çıxarır və planlayıcıda AKTOR
+            # YOXDUR; uydurma aktor audit izini yalanlaşdırardı. Ona görə
+            # domen AYRI, kirayəçi-geniş metod verdi. İkisi EYNİ işdədir,
+            # çünki hər ikisi EYNİ həddi (`VERIFICATION_TIMEOUT_MINUTES`)
+            # izləyir — ayrı işlərə bölsəydik, eyni 45 dəqiqəlik vəd iki
+            # fərqli gecikmə ilə yerinə yetirilərdi.
+            check_ins = session.morning_check_in.escalate_timeouts_for_tenant(context.tenant_id)
+            session.commit()
+        return f"{returns} qayıdış, {check_ins} giriş təsdiqi eskalasiya olundu"
+
+    def _job_retention_purge(self, context: Any) -> str:
+        """Sonsuz yığılan iki cədvəli saxlama müddətinə görə təmizləyir (SAAS-6).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ BİR İŞ, İKİ CƏDVƏL
+        ──────────────────────────────────────────────────────────────────────
+        Hər ikisi EYNİ sualın cavabıdır: «tamamlanmış qeyd nə qədər saxlanır?»
+        və hər ikisi EYNİ Root açarından (`EVIDENCE_UPLOAD_RETENTION_DAYS`)
+        oxuyur. İki ayrı iş yazsaydıq, planlayıcı hesabatında iki sətir olardı
+        və biri sükutla söndürüləndə digəri «hər şey təmizlənir» təəssüratı
+        yaradardı.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ TƏMİZLƏMƏ PLANLAYICIDADIR, REPOZİTORİYADA DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        `purge_uploaded` / `purge_resolved` KƏSİM ANINI arqument kimi alır və
+        Root açarını ÖZLƏRİ oxumur (`purge_synced` / `purge_older_than` ilə
+        eyni imza qərarı) — belə olduqda repozitoriya siyasətdən asılı qalmır
+        və test determinstik vaxtla işləyir. Siyasəti oxuyan tərəf BURADIR.
+
+        UĞURSUZLUQ İŞİ ÇÖKDÜRMÜR, LAKİN SÜKUTLA DA KEÇMİR: hər iki addım öz
+        nəticəsini mətnə yazır, xəta isə planlayıcının `FAILED` hesabatına
+        düşür — «zibil yığılır» vəziyyəti görünməz qalmamalıdır.
+
+        `context.now` PLANLAYICIDAN gəlir (`_job_drive_quota_check`-dəki eyni
+        səbəb): gecikmiş icrada da kəsim FAKTİKİ ana görə hesablanır.
+        """
+        from datetime import timedelta  # noqa: PLC0415
+
+        key = SystemLimitKey.EVIDENCE_UPLOAD_RETENTION_DAYS
+        with self.session() as session:
+            # `max_upload_bytes()` ilə EYNİ oxu naxışı: dəyər ROOT-dan gəlir,
+            # `DEFAULT_LIMITS` isə YALNIZ fallback-dır (sətir seed edilməyibsə).
+            days = session.limits.get_int(session.tenant_id, key.value, int(DEFAULT_LIMITS[key]))
+        cutoff = context.now - timedelta(days=days)
+
+        # Sübut növbəsi LOKAL SQLite-dadır (kirayəçiyə görə ayrılmır — fayl
+        # onsuz da BİR kirayəçinin maşınındadır, bax SAAS-3), konflikt cədvəli
+        # isə Postgres-dədir və öz sessiyasını tələb edir.
+        uploads = self.evidence_queue().purge_uploaded(older_than=cutoff)
+        with self.session() as session:
+            conflicts = session.uow.repository("sync_conflicts").purge_resolved(cutoff=cutoff)
+            session.commit()
+        return f"{uploads} yüklənmiş sətir, {conflicts} həll edilmiş konflikt silindi ({days} gün)"
 
     def _job_expire_stale_appeals(self, context: Any) -> str:
         """Cavabsız qalmış cərimə etirazlarını bağlayır (72 saatlıq pəncərə)."""
@@ -2569,6 +2793,7 @@ class ApplicationContext:
             FaceReEnrollmentUseCase,
             FaceVerificationLogRetentionUseCase,
             FaceVerificationUseCase,
+            OverdueFaceEnrollmentRule,
         )
         from src.application.use_cases.field_reports import (  # noqa: PLC0415
             FieldReportUseCase,
@@ -2576,9 +2801,12 @@ class ApplicationContext:
         from src.application.use_cases.fine_management import (  # noqa: PLC0415
             FineAppealUseCase,
             ManualFineUseCase,
+            UnansweredFineAppealRule,
         )
         from src.application.use_cases.fine_review import (  # noqa: PLC0415
+            HeldFineForInactiveEmployeeRule,
             MonthlyFineReviewUseCase,
+            OverdueFineReviewRule,
         )
         from src.application.use_cases.first_run_setup import (  # noqa: PLC0415
             FirstRunSetupUseCase,
@@ -2825,6 +3053,40 @@ class ApplicationContext:
             FaceMismatchExceptionRule(verification_log=repo("face_verification_log"))
         )
 
+        # ──────────────────────────────────────────────────────────────────
+        # DÖRD YENİ QAYDA — HR-1/HR-2/HR-3 və UX-7 (DEEP-GAP)
+        # ──────────────────────────────────────────────────────────────────
+        # Hamısı EYNİ naxışdadır: motorun ÖZÜ dəyişmir, hər biri bir sətir
+        # `register_rule(...)` alır. Qeydiyyatsız qalan qayda İŞLƏYİR, lakin
+        # tapıntısı HEÇ BİR ekrana çatmır — yəni «yazılıb, çağırılmır» sinfi
+        # (`test_composition_optional_port_wiring.py` başlığı) burada da
+        # keçərlidir.
+        #
+        # MƏNBƏ KODLARI KATALOQDA OLMALIDIR (`exception_sources`, miqrasiya
+        # 087): motor tapıntını `FOREIGN KEY`-ə görə yaza bilmirsə sükutla
+        # atır — yəni seed olmadan dörd qayda da TƏSİRSİZ qalır.
+        exception_engine.register_rule(
+            # HR-1 — cavabsız cərimə etirazı. Avtomatik QƏRAR YOXDUR: qayda
+            # yalnız GÖRÜNƏN edir (M-6 export kilidi toxunulmaz qalır).
+            UnansweredFineAppealRule(appeals=repo("appeals"), fines=uow.fines)
+        )
+        exception_engine.register_rule(
+            # HR-2 — nəşr gözləyən cərimə. Avtomatik NƏŞR YOXDUR.
+            OverdueFineReviewRule(fines=uow.fines, employees=uow.employees)
+        )
+        exception_engine.register_rule(
+            # HR-3 — deaktiv işçinin nəşr olunmayan cəriməsi. HR-2 ilə
+            # KƏSİŞMİR (o, deaktiv işçini kənarda saxlayır) — eyni sətir iki
+            # mənbədə görünsəydi HR iki fərqli həll yolu axtarardı.
+            HeldFineForInactiveEmployeeRule(fines=uow.fines, employees=uow.employees)
+        )
+        exception_engine.register_rule(
+            # UX-7 — möhləti keçmiş üz qeydiyyatı. Kiosk BLOKLANMIR (səbəb
+            # qaydanın öz başlığındadır): qeydiyyat self-service deyil, yəni
+            # bloklama işçini BAŞQASININ hərəkətsizliyinə görə cəzalandırardı.
+            OverdueFaceEnrollmentRule(employees=repo("face_embeddings"))
+        )
+
         # #15 AŞIM İZLƏYİCİSİ YEREL DƏYİŞƏNDİR, çünki İKİ yerdə lazımdır: həm
         # `Session.overtime` (HR-ın oxu yolu), həm də tabel təsdiqinin yan
         # təsiri (`daily_attendance`). İki nüsxə qursaydıq, eyni günün aşımı
@@ -2893,6 +3155,12 @@ class ApplicationContext:
             # indi bağlanır: deaktiv edilən işçinin AÇIQ cərimə/etiraz izi
             # yoxlanılır (bölmə 4/6). `fines` İLƏ EYNİ `uow` bağlantısıdır.
             fine_exposure=repo("fine_exposure"),
+            # HR-4 — işdən çıxma anında AÇIQ qalan bağlantılar (icazə, tapşırıq,
+            # tutulmuş növbə, istifadə olunmamış məzuniyyət, sənəd, üz şablonu).
+            # `fine_exposure` ilə EYNİ `uow` bağlantısı və EYNİ ön-yoxlama anı:
+            # admin qərar verməzdən ƏVVƏL siyahını görür, sistem isə qərarı
+            # BLOKLAMIR (bax `OffboardingReview` başlığı).
+            offboarding_signals=repo("offboarding_signals"),
         )
 
         def _bulk_create_employee_row(
@@ -3180,6 +3448,14 @@ class ApplicationContext:
                 # SİZLİK QAPISININ ÖZÜDÜR, fail-soft bükücü onu sükutla
                 # söndürərdi.
                 pin_throttle=repo("pin_throttle"),
+                # AF-2 — 1:N ÜZ SAYĞACI PIN SAYĞACINDAN AYRILDI. Ortaq sayğac
+                # zamanı kameraya baxan kənar şəxs bütün mağazanın PIN girişini
+                # dayandıra bilirdi (xidmətdən imtina): 1:N-də cəhd edən şəxs
+                # heç bir kimlik təqdim etmir, yəni «eyni terminalda eyni adam»
+                # fərziyyəsi yoxdur. Hədd DƏYİŞMİR — hər iki kanal EYNİ
+                # `KIOSK_STORE_PIN_*` açarlarını oxuyur (miqrasiya 086).
+                # `pin_throttle` ilə eyni qərar: XAM repo, fail-soft SARILMIR.
+                face_throttle=repo("face_throttle"),
             ),
             # `limits=repo("limits")` — AÇIQ BAĞLANTININ repo-su: istisnanın
             # maksimum müddəti (`FACE_EXEMPTION_MAX_DAYS`) sətrin yazıldığı

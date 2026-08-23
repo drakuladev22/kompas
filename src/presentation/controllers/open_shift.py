@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Final
 
 from src.application.use_cases.open_shift_market import (
     FALLBACK_MAX_LEAD_DAYS,
@@ -74,30 +74,51 @@ class EmployeeOpenShiftController:
         self._context = context
         self._actor = actor
 
+    #: `[Geri Ver]` dialoqunun mətni — hədd DOMENDƏN gəlir (bax `_ask_release_reason`).
+    _RELEASE_PROMPT: Final = "Növbəni niyə geri verirsiniz? Səbəb menecerə görünür və qeydə alınır:"
+
     def attach(self, screen: EmployeeHomeScreen) -> None:
         """Siqnalı bağlayır və kartı ilk dəfə doldurur."""
         screen.open_shift_claim_requested.connect(
             lambda posting_id: self._on_claim(screen, posting_id)
         )
+        # DEEP-GAP OP-4 — tutulmuş növbənin GERİ YOLU.
+        screen.open_shift_release_requested.connect(
+            lambda posting_id: self._on_release(screen, posting_id)
+        )
         self.refresh(screen)
 
     def refresh(self, screen: EmployeeHomeScreen, *, message: str = "") -> None:
-        """Uyğun açıq elanları bazadan yenidən oxuyur."""
+        """Uyğun açıq elanları VƏ işçinin TUTDUĞU növbələri yenidən oxuyur.
+
+        İKİ SİYAHI, BİR SESSİYA (DEEP-GAP OP-4): hər ikisi eyni kartı
+        doldurur və ayrı sessiyada oxunsaydı, işçi bir tıqqıltı ərzində
+        «tutulmuş» sətri həm bazarda, həm öz siyahısında görə bilərdi
+        (aralarında baş verən tutma). Bir tranzaksiya bu ziddiyyəti bağlayır.
+        """
         try:
             with self._context.session(user_id=self._actor.id) as session:
                 views = session.open_shifts.list_for_employee(
                     tenant_id=session.tenant_id, employee=self._actor
                 )
                 rows = [_to_employee_row(session, view) for view in views]
+                claimed = [
+                    _to_employee_row(session, view)
+                    for view in session.open_shifts.list_claimed_for_employee(
+                        tenant_id=session.tenant_id, employee=self._actor
+                    )
+                ]
         except Exception:
             # Kioskda siyahı oxunmaması ekranı SINDIRMAMALIDIR: işçinin əsas
             # axını (giriş/icazə/qayıdış) açıq növbədən asılı deyil.
             _error_log.exception("OPEN_SHIFT_LIST_FAILED")
             screen.set_open_shifts([])
+            screen.set_claimed_shifts([])
             screen.set_open_shift_message("Açıq növbə siyahısı yüklənmədi.")
             return
 
         screen.set_open_shifts(rows)
+        screen.set_claimed_shifts(claimed)
         if message:
             screen.set_open_shift_message(message)
 
@@ -131,6 +152,84 @@ class EmployeeOpenShiftController:
         # deyil və siyahıda qalması yalan olardı.
         self.refresh(screen, message="Növbə sizin adınıza yazıldı.")
 
+    def _on_release(self, screen: EmployeeHomeScreen, posting_id: str) -> None:
+        """`[Geri Ver]` — tutulmuş növbə bazara QAYIDIR (DEEP-GAP OP-4).
+
+        ──────────────────────────────────────────────────────────────────────
+        SƏBƏB NİYƏ SORUŞULUR VƏ NİYƏ KİOSKDA MODAL OLUR
+        ──────────────────────────────────────────────────────────────────────
+        Hədd domendədir (`OpenShiftPosting.release` — `MIN_DECISION_REASON_
+        LENGTH`) və o, `cancel()` ilə eyni əsaslandırmaya söykənir: növbənin
+        yenidən açılması menecerin plan qərarına təsir edir, «niyə?» sualı
+        cavabsız qalmamalıdır. Kioskda sərbəst mətn sahəsi ARTIQ mövcuddur
+        (cərimə etirazı ekranı), yəni yeni giriş üsulu icad edilmir.
+
+        Dialoq DÖVRƏDİR: qısa cavabda yazılan mətn İTMİR, `value=` ilə
+        yenidən açılır — naxış `camera_queue._ask_reason`-dandır (DEEP-GAP
+        U9), orada həmin qüsur ölçülüb.
+
+        İSTİSNA EKRANA ÇIXMIR: kiosk PAYLAŞILAN cihazdır (bax modul başlığı),
+        ona görə hər nəticə `set_open_shift_message(...)` mətninə çevrilir.
+        """
+        try:
+            parsed_id = OpenShiftPostingId(uuid.UUID(posting_id))
+        except ValueError:
+            screen.set_open_shift_message("Elan identifikatoru düzgün deyil.")
+            return
+
+        reason = self._ask_release_reason(screen)
+        if reason is None:
+            return
+
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                session.open_shifts.release_claim(
+                    tenant_id=session.tenant_id,
+                    actor=self._actor,
+                    posting_id=parsed_id,
+                    reason=reason,
+                )
+                session.commit()
+        except KompasOSError as error:
+            # Paralel ləğv/geri buraxma da bura düşür — mesaj domendəndir.
+            self.refresh(screen, message=error.user_message)
+            return
+        except Exception:
+            _error_log.exception("OPEN_SHIFT_RELEASE_FAILED", extra={"posting_id": posting_id})
+            self.refresh(screen, message="Növbə geri verilmədi. Yenidən cəhd edin.")
+            return
+
+        self.refresh(screen, message="Növbə bazara qaytarıldı.")
+
+    def _ask_release_reason(self, screen: EmployeeHomeScreen) -> str | None:
+        """Səbəb dialoqu — QISA cavab yazı yoluna ÜMUMİYYƏTLƏ girmir.
+
+        Hədd DOMENDƏN idxal olunur, burada hərfi rəqəm YAZILMIR: əks halda
+        `MIN_DECISION_REASON_LENGTH` dəyişəndə dialoq sükutla yalan rəqəm
+        göstərərdi (`camera_queue._ask_reason`-da ölçülmüş eyni qüsur).
+        """
+        from PySide6.QtWidgets import QInputDialog, QMessageBox  # noqa: PLC0415
+
+        # Hədd DOMENDƏN — `open_shift.py` entity-si də MƏHZ bu sabiti
+        # işlədir (`from src.domain.entities.shift import ...`), yəni ekranda
+        # göstərilən rəqəm ilə yoxlayan rəqəm EYNİ mənbədəndir.
+        from src.domain.entities.shift import MIN_DECISION_REASON_LENGTH  # noqa: PLC0415
+
+        prompt = f"{self._RELEASE_PROMPT}\n(minimum {MIN_DECISION_REASON_LENGTH} simvol)"
+        text = ""
+        while True:
+            text, accepted = QInputDialog.getMultiLineText(screen, "Növbəni geri ver", prompt, text)
+            if not accepted:
+                return None
+            cleaned = text.strip()
+            if len(cleaned) >= MIN_DECISION_REASON_LENGTH:
+                return cleaned
+            box = QMessageBox(screen)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Növbə geri verilmədi")
+            box.setText(f"Səbəb ən azı {MIN_DECISION_REASON_LENGTH} simvol olmalıdır.")
+            box.exec()
+
 
 class ShiftMatrixOpenShiftController:
     """Növbə Planlama ekranındakı "Açıq Növbə Bazarı" kartı (admin)."""
@@ -144,6 +243,10 @@ class ShiftMatrixOpenShiftController:
         screen.open_shift_cancel_requested.connect(
             lambda posting_id: self._on_cancel(screen, posting_id)
         )
+        # DEEP-GAP OP-4 — işçi işə çıxmayanda slotu MENECER açır.
+        screen.open_shift_release_requested.connect(
+            lambda posting_id: self._on_release(screen, posting_id)
+        )
         self.refresh(screen)
 
     def refresh(self, screen: ShiftPlanningScreen) -> None:
@@ -154,10 +257,20 @@ class ShiftMatrixOpenShiftController:
                     tenant_id=session.tenant_id, actor=self._actor
                 )
                 rows = [_to_admin_row(session, view) for view in views]
+                # DEEP-GAP OP-4 — tutulmuş sətirlər AYRI siyahıdır: `list_open`
+                # yalnız `OPEN` gətirir, yəni geri veriləcək sətir orada
+                # ÜMUMİYYƏTLƏ görünmür.
+                claimed = [
+                    _to_claimed_row(session, view)
+                    for view in session.open_shifts.list_claimed_for_store(
+                        tenant_id=session.tenant_id, actor=self._actor
+                    )
+                ]
         except KompasOSError as error:
             # Səlahiyyəti olmayan istifadəçi bu ekranı ümumiyyətlə görməməli
             # idi (menyu flag-i), lakin görsə — kart sükutla boş qalmır.
             screen.set_open_shift_postings([])
+            screen.set_claimed_open_shifts([])
             screen.show_error(title="Açıq növbələr oxunmadı", message=error.user_message)
             return
         except Exception:
@@ -167,6 +280,7 @@ class ShiftMatrixOpenShiftController:
             # yerdə görünmürdü. İki qol İNDİ SİMMETRİKDİR.
             _error_log.exception("OPEN_SHIFT_ADMIN_LIST_FAILED")
             screen.set_open_shift_postings([])
+            screen.set_claimed_open_shifts([])
             screen.show_error(
                 title="Açıq növbələr oxunmadı",
                 message="Siyahı yüklənmədi. Yenidən cəhd edin.",
@@ -174,6 +288,7 @@ class ShiftMatrixOpenShiftController:
             return
 
         screen.set_open_shift_postings(rows)
+        screen.set_claimed_open_shifts(claimed)
 
     # ------------------------------ yazı yolu -------------------------------- #
 
@@ -293,6 +408,59 @@ class ShiftMatrixOpenShiftController:
 
         self.refresh(screen)
 
+    def _on_release(self, screen: ShiftPlanningScreen, posting_id: str) -> None:
+        """`[Geri Ver]` (menecer) — tutulmuş növbə bazara QAYIDIR (DEEP-GAP OP-4).
+
+        İŞÇİ YOLU İLƏ EYNİ USE CASE, FƏRQLİ AKTOR: `release_claim()` həm
+        növbəni tutan işçini, həm `can_manage_shifts` sahibini qəbul edir
+        (`AnnualLeaveUseCase.cancel` ilə eyni qayda). Menecer yolu olmasaydı,
+        işçi işə çıxmayanda (xəstəxana, telefon söndürülüb) slot açıla
+        bilməzdi — yəni boşluq yarımçıq bağlanardı.
+
+        SƏBƏB DİALOQU MÖVCUD `_ask_reason`-DUR: ləğv ilə eyni hədd
+        (`MIN_DECISION_REASON_LENGTH`) və eyni mətn qaydası. Ekranda İKİ ayrı
+        dialoq yaratmaq eyni qaydanın iki nüsxəsi olardı.
+        """
+        try:
+            parsed_id = OpenShiftPostingId(uuid.UUID(posting_id))
+        except ValueError:
+            screen.show_error(
+                title="Növbə geri verilmədi",
+                message="Elan identifikatoru düzgün deyil.",
+            )
+            return
+
+        reason = self._ask_reason(screen)
+        if reason is None:
+            return
+
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                session.open_shifts.release_claim(
+                    tenant_id=session.tenant_id,
+                    actor=self._actor,
+                    posting_id=parsed_id,
+                    reason=reason,
+                )
+                session.commit()
+        except KompasOSError as error:
+            # Sətir bu arada ləğv olunubsa da bura düşür — admin AÇIQ cavab
+            # alır və siyahı yenidən oxunur (`_on_cancel` ilə eyni qərar).
+            screen.show_error(title="Növbə geri verilmədi", message=error.user_message)
+            self.refresh(screen)
+            return
+        except Exception:
+            _error_log.exception(
+                "OPEN_SHIFT_ADMIN_RELEASE_FAILED", extra={"posting_id": posting_id}
+            )
+            screen.show_error(
+                title="Növbə geri verilmədi",
+                message="Dəyişiklik yazılmadı. Yenidən cəhd edin.",
+            )
+            return
+
+        self.refresh(screen)
+
     @staticmethod
     def _ask_reason(screen: ShiftPlanningScreen) -> str | None:
         from PySide6.QtWidgets import QInputDialog  # noqa: PLC0415
@@ -324,6 +492,25 @@ def _to_admin_row(session: Session, view: OpenShiftView) -> dict[str, str]:
         "work_mode": _work_mode_name(session, view.work_mode_id),
         "store": _store_name(session, view.store_id),
     }
+
+
+def _to_claimed_row(session: Session, view: OpenShiftView) -> dict[str, str]:
+    """`OpenShiftView` → «Tutulmuş növbələr» sətri (DEEP-GAP OP-4).
+
+    `_to_admin_row`-a `employee` açarı ƏLAVƏ EDİLİR: menecer «kimin növbəsini
+    geri verirəm?» sualının cavabını görməlidir. Açıq elanda sahib YOXDUR,
+    ona görə ayrı funksiya — bir funksiyaya boş açar qoysaydıq, maket və canlı
+    yol arasında «bəzən var, bəzən yox» sxemi yaranardı (CLAUDE.md §6).
+    """
+    row = _to_admin_row(session, view)
+    row["employee"] = _employee_name(session, view.claimed_by) if view.claimed_by else ""
+    return row
+
+
+def _employee_name(session: Session, employee_id: Any) -> str:
+    """İşçinin tam adı — tapılmasa BOŞ sətir (yalan ad göstərilmir)."""
+    employee = session.uow.employees.get(employee_id)
+    return str(getattr(employee, "full_name", "")) if employee is not None else ""
 
 
 def _day_label(day: date) -> str:

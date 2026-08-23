@@ -330,9 +330,48 @@ class PermissionFlag:
 
 DUAL_CONTROL_APPROVAL_FLAG: Final[str] = "can_approve_dual_control_override"
 
+#: İTİRİLMƏSİ İŞ AXININI ƏBƏDİ DAYANDIRAN flaglar → nəticənin izahı (AF-1).
+#:
+#: ──────────────────────────────────────────────────────────────────────────
+#: NİYƏ SİYAHI, NİYƏ TƏK FLAG DEYİL
+#: ──────────────────────────────────────────────────────────────────────────
+#: `DualControlDeadlockGuardUseCase` yalnız `can_approve_dual_control_override`
+#: sayğacına baxırdı. Halbuki eyni struktur boşluq DİGƏR qapılarda da var:
+#: aşağı pilləli admin bir flagın son daşıyıcısını (a) fərdi `DENY` override-ı
+#: ilə, (b) rol dəstindən çıxarmaqla itirə bilər — hər ikisi Self-Escalation
+#: Guard-dan AZADDIR, çünki o, yalnız səlahiyyət ARTIRMAĞI kəsir
+#: («azaltmaq təhlükəsizdir» fərziyyəsi). Nəticə sükutlu deadlock-dur.
+#:
+#: ──────────────────────────────────────────────────────────────────────────
+#: SİYAHI UYDURULMUR — MEYAR BUDUR
+#: ──────────────────────────────────────────────────────────────────────────
+#: Bura YALNIZ o flag düşür ki, (1) bir iş axınının YEGANƏ qapısı olsun və
+#: (2) daşıyıcısı qalmayanda həmin axın ÖZ-ÖZÜNƏ bağlana bilməsin — yəni
+#: gözləyən sətirlər başqa yolla son hala çatmasın. Hər dördü layihədə
+#: ARTIQ bu rolda sənədlidir (`TENANT_NOTIFICATION_AUDIENCE`, bax
+#: `value_objects/notifications.py`): bildiriş məhz həmin flagın sahibinə
+#: ünvanlanır, çünki sətri BAĞLAYA BİLƏN yeganə şəxs odur.
+#:
+#: `can_manage_employees` və s. BURADA YOXDUR: onların itirilməsi əməliyyatı
+#: çətinləşdirir, lakin GÖZLƏYƏN sətir yaratmır — Root/CEO həmişə bərpa edə
+#: bilir və heç bir qeyd aralıq vəziyyətdə qalmır.
+DEADLOCK_CRITICAL_FLAGS: Final[dict[str, str]] = {
+    DUAL_CONTROL_APPROVAL_FLAG: (
+        "30 dəqiqədən çox fərq yaradan manual vaxt düzəlişləri təsdiqsiz qalacaq"
+    ),
+    "can_approve_leave_appeal": (
+        "cərimə etirazları qərarsız qalacaq və həmin cərimələr hesabata düşməyəcək"
+    ),
+    "can_publish_fines": (
+        "aylıq icmal keçirilə bilməyəcək — cərimələr nəşr olunmayacaq və işçi onları görməyəcək"
+    ),
+    "can_verify_returns": "icazədən qayıdışlar təsdiqlənməyəcək və sorğular açıq qalacaq",
+}
+
 
 __all__ = [
     "ANTI_FRAUD_FORBIDDEN_ROLES",
+    "DEADLOCK_CRITICAL_FLAGS",
     "DUAL_CONTROL_APPROVAL_FLAG",
     "AuthorizationError",
     "HardlockLevel",

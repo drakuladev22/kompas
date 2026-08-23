@@ -93,7 +93,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import date, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
@@ -109,6 +109,7 @@ from src.domain.policies import (
     SystemLimitKey,
 )
 from src.domain.value_objects.exception_signals import (
+    FACE_ENROLLMENT_OVERDUE_SOURCE,
     FACE_MISMATCH_SOURCE,
     ExceptionFinding,
 )
@@ -146,6 +147,7 @@ if TYPE_CHECKING:
         FaceExemptionRepository,
         FaceMatcher,
         FaceStoreScopeRepository,
+        FaceThrottleRepository,
         FaceVerificationLogRepository,
         FeatureToggles,
         Notifier,
@@ -246,11 +248,17 @@ FACE_LOGIN_FAILED_EVENT: Final = "FACE_LOGIN_FAILED"
 
 #: Terminal kilidinin üzlə giriş yolundakı izi.
 #:
-#: `details["shared_counter"]` QƏSDƏN yazılır: sayğac `store_pin_throttle`-dır,
-#: yəni üz cəhdləri həddi keçirsə PIN girişi DƏ bloklanır. Bu, gizlədiləsi yan
-#: təsir deyil — MƏHZ istənilən davranışdır (terminalın ÖZÜ şübhəlidir), lakin
-#: hadisəni oxuyan adam bunu sətirdən görməlidir, kodu oxumadan.
+#: `details["counter"]` QƏSDƏN yazılır və AF-2-dən sonra dəyəri DƏYİŞİB:
+#: sayğac artıq `store_face_throttle`-dır, yəni ÜZ kilidi PIN girişini
+#: BLOKLAMIR. Əvvəl burada `"shared_counter": "store_pin_throttle"` yazılırdı
+#: və o, doğru idi — indi doğru DEYİL. Sahə saxlanıldı, çünki hadisəni oxuyan
+#: adam «bu kilid hansı kanalı bağladı?» sualına sətirdən cavab tapmalıdır,
+#: kodu oxumadan; köhnə sətirlər isə öz dəyəri ilə tarixdə qalır və
+#: dəyişikliyin NƏ VAXT baş verdiyi məhz o fərqdən görünür.
 FACE_LOGIN_TERMINAL_LOCKED_EVENT: Final = "FACE_LOGIN_TERMINAL_LOCKED"
+
+#: `details["counter"]` dəyəri — hansı sayğacın kilidlədiyi (AF-2).
+FACE_THROTTLE_COUNTER_NAME: Final = "store_face_throttle"
 
 #: `record_failure` çağırılan rədd səbəbləri — `details["reason"]`.
 FACE_LOGIN_REASON_NO_MATCH: Final = "NO_MATCH"
@@ -406,6 +414,40 @@ class AdminCounter(Protocol):
     def count_active_with_flag(self, tenant_id: TenantId, flag_code: str) -> int: ...
 
 
+@dataclass(frozen=True)
+class FaceEnrollmentGrace:
+    """«Üz qeydiyyatına nə qədər qalıb?» oxu-modeli (UX-7).
+
+    Ekranın «N gün qalıb» sayğacı və «möhlət bitib» nişanı BU obyektdən
+    oxunur — hesablama use case-dədir (bax `FaceEnrollmentUseCase.
+    enrollment_grace`).
+    """
+
+    #: Qüvvədə olan Root dəyəri — ekran «7 gün ərzində» cümləsini ondan qurur.
+    grace_days: int
+    #: Son tarix. `None` = möhlət tətbiq edilmir (işə başlama tarixi naməlum
+    #: və ya Root dəyəri mənasızdır) — ekran sayğac GÖSTƏRMƏMƏLİDİR.
+    deadline: date | None
+    #: Qalan gün. MƏNFİ ola bilər (möhlət keçib) — sıxılmır, çünki «5 gün
+    #: gecikib» məlumatı «0 gün qalıb»dan daha faydalıdır.
+    days_left: int
+
+    @property
+    def is_overdue(self) -> bool:
+        """Möhlət keçibmi. `deadline is None` halında HƏMİŞƏ `False`."""
+        return self.deadline is not None and self.days_left < 0
+
+    def label_az(self) -> str:
+        """Ekranda göstərilən qısa mətn (bölmə 9: yeganə interfeys dili)."""
+        if self.deadline is None:
+            return "Üz qeydiyyatı gözlənilir"
+        if self.days_left < 0:
+            return f"Üz qeydiyyatı {abs(self.days_left)} gün gecikib"
+        if self.days_left == 0:
+            return "Üz qeydiyyatının son günüdür"
+        return f"Üz qeydiyyatına {self.days_left} gün qalıb"
+
+
 class FaceEnrollmentUseCase:
     """Nəzarətli üz qeydiyyatı — SELF-SERVICE DEYİL (bənd 1).
 
@@ -557,6 +599,44 @@ class FaceEnrollmentUseCase:
             action="FACE_ENROLLED",
             reason=None,
             archived=False,
+        )
+
+    def enrollment_grace(
+        self, *, tenant_id: TenantId, hire_date: date | None
+    ) -> FaceEnrollmentGrace:
+        """«Qeydiyyat üçün nə qədər vaxt qalıb?» — EKRANIN oxuduğu tək mənbə (UX-7).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ USE CASE-DƏ, EKRANDA YOX
+        ──────────────────────────────────────────────────────────────────────
+        Sayğacı ekranda hesablasaydıq (`hire_date + limit - bugün`), EYNİ
+        qayda İKİ yerdə yaşayardı: bir nüsxə «Sonra» pəncərəsində, digəri
+        `OverdueFaceEnrollmentRule`-da. Root `FACE_ENROLLMENT_GRACE_DAYS`
+        dəyərini dəyişəndə biri yenilənər, digəri köhnə qalardı — ekranda
+        «3 gün qalıb» yazılarkən istisna ARTIQ yaranmış olardı. `menu.py`
+        başlığındakı ikili-ad-məkanı qüsurunun eynisi.
+
+        BLOKLAMIR VƏ HEÇ NƏ DƏYİŞMİR: yalnız oxuyur. Möhlətin bitməsinin
+        YEGANƏ nəticəsi `OverdueFaceEnrollmentRule`-un menecerin «İstisnalar»
+        siyahısına sətir yazmasıdır — kiosk əməliyyatları DAYANMIR (səbəb
+        həmin qaydanın şərhindədir: qeydiyyat self-service deyil, işçi onu
+        özü apara bilmir).
+
+        Args:
+            hire_date: İşçinin işə başlama tarixi. `None` (naməlum) →
+                möhlət HESABLANMIR: uydurma başlanğıc nöqtəsi ekranda YALAN
+                bir son tarix göstərərdi.
+        """
+        grace_days = self._limit_int(tenant_id, SystemLimitKey.FACE_ENROLLMENT_GRACE_DAYS)
+        if hire_date is None or grace_days <= 0:
+            # Mənasız möhlət qaydanı SÖNDÜRÜR (bax `OverdueFaceEnrollmentRule`
+            # — eyni fail-safe istiqamət): ekran da son tarix göstərmir.
+            return FaceEnrollmentGrace(grace_days=max(0, grace_days), deadline=None, days_left=0)
+        deadline = hire_date + timedelta(days=grace_days)
+        return FaceEnrollmentGrace(
+            grace_days=grace_days,
+            deadline=deadline,
+            days_left=(deadline - self._clock.now().date()).days,
         )
 
     def stale_enrollments(self, tenant_id: TenantId) -> list[FaceProfile]:
@@ -847,6 +927,7 @@ class FaceVerificationUseCase:
         notifier: Notifier,
         security_events: SecurityEventRepository,
         pin_throttle: PinThrottleRepository,
+        face_throttle: FaceThrottleRepository | None = None,
     ) -> None:
         self._profiles = profiles
         self._verification_log = verification_log
@@ -874,6 +955,42 @@ class FaceVerificationUseCase:
         # DƏRHAL görünür — sükutla "throttle yoxdur" davranışına qayıtmaq
         # YOX). Bax `identify_for_login`-in "T1 — TERMİNAL THROTTLE" bölməsi.
         self._pin_throttle = pin_throttle
+        # ────────────────────────────────────────────────────────────────────
+        # AF-2 — 1:N ÜZ SAYĞACI PIN SAYĞACINDAN AYRILDI
+        # ────────────────────────────────────────────────────────────────────
+        # `pin_throttle` sahəsi SAXLANILIR və SİLİNMİR: 1:1 `verify()` yolu ona
+        # toxunmur, lakin `PinHandshakeUseCase` ilə eyni sətri paylaşan başqa
+        # yollar gələcəkdə əlavə oluna bilər və asılılığı qoparmaq mövcud
+        # müqaviləni pozardı.
+        #
+        # PORT İSTƏYƏ BAĞLIDIR (`None`) — VƏ BU, «SÜKUTLA SÖNDÜRÜLMÜŞ QORUMA»
+        # DEYİL: `None` halında üz rəddləri KÖHNƏ davranışla PIN sayğacına
+        # yazılmağa davam edir, yəni qoruma İTMİR, yalnız AF-2-dən əvvəlki
+        # (daha sərt, lakin DoS-a açıq) formada qalır. Alternativ — məcburi
+        # arqument — `store_face_throttle` cədvəli hələ yaradılmamış hər
+        # quraşdırmada tətbiqi açılışda çökdürərdi.
+        #
+        # Hansı sayğacın işlədiyi HƏR hadisə sətrində görünür
+        # (`details["counter"]`), yəni seçim jurnaldan oxunur — təxmin
+        # edilmir (AF-5-in eyni prinsipi: naməlum hal görünən olmalıdır).
+        self._face_throttle = face_throttle
+
+    @property
+    def _terminal_throttle(self) -> PinThrottleRepository | FaceThrottleRepository:
+        """1:N üz yolunun işlətdiyi sayğac — AYRI, mümkün olduqda (AF-2).
+
+        İki protokol `get_for_update`/`record_failure` imzalarında EYNİDİR,
+        ona görə çağıran tərəf fərqi görmür. Fərq yalnız HANSI CƏDVƏLƏ
+        yazıldığındadır və o, `_counter_name`-dən oxunur.
+        """
+        return self._face_throttle if self._face_throttle is not None else self._pin_throttle
+
+    @property
+    def _counter_name(self) -> str:
+        """Hadisə sətrinə yazılan sayğac adı (AF-2) — jurnal HƏQİQƏTİ yazır."""
+        return (
+            FACE_THROTTLE_COUNTER_NAME if self._face_throttle is not None else "store_pin_throttle"
+        )
 
     def verify(  # noqa: PLR0911
         self,
@@ -1173,16 +1290,29 @@ class FaceVerificationUseCase:
         (`face_profiles.mismatch_attempts`) yaza bilir. Burada isə işçi
         naməlumdur — `TerminalLockedError`-in öz başlığındakı EYNİ arqument:
         «bloklanacaq konkret işçi yoxdur». Deməli açar `(tenant_id,
-        machine_key)` cütü olmalıdır və belə bir sayğac ARTIQ var
-        (`store_pin_throttle`, SEC-01/SEC-05). YENİ açar/cədvəl YARADILMIR —
-        `_mismatch()`-in «MÖVCUD LOCKOUT MEXANİZMİ, yeni funksiya yazılmır»
-        naxışının eynisi.
+        machine_key)` cütü olmalıdır.
 
-        ORTAQ SAYĞACIN QƏBUL EDİLMİŞ NƏTİCƏSİ: üz cəhdləri həddi keçirsə PIN
-        girişi DƏ bloklanır. Ayrıca üz-sayğacı variantı nəzərdən keçirildi və
-        RƏDD EDİLDİ — iki müstəqil sayğac hücumçuya BUDCƏNİ İKİ QAT edərdi
-        (PIN həddinə çatanda üz yoluna, üz həddinə çatanda PIN yoluna keçmək),
-        halbuki qorunan şey EYNİ terminaldır.
+        ──────────────────────────────────────────────────────────────────────
+        AF-2 — ORTAQ SAYĞAC QƏRARI GERİ ALINDI (VƏ NİYƏ)
+        ──────────────────────────────────────────────────────────────────────
+        Bu bölmə əvvəl belə deyirdi: sayğac `store_pin_throttle`-dır, yəni üz
+        cəhdləri həddi keçirsə PIN girişi DƏ bloklanır; ayrıca üz-sayğacı
+        RƏDD EDİLİB, çünki iki müstəqil sayğac hücumçuya büdcəni İKİ QAT
+        edərdi.
+
+        Həmin mühakimə «eyni terminalda EYNİ ADAM cəhd edir» fərziyyəsinə
+        əsaslanırdı — 1:1 PIN yolunda o fərziyyə DOĞRUDUR (cəhd edən kimlik
+        iddia edir). 1:N-də isə YOXDUR: kameranın qarşısına keçən İSTƏNİLƏN
+        adam, o cümlədən mağazanın işçisi OLMAYAN kənar şəxs, heç bir kimlik
+        təqdim etmədən sayğacı artıra bilir. Nəticədə bir neçə dəfə kameraya
+        baxmaq BÜTÜN mağazanın PIN girişini dayandırırdı — qoruma xidmətdən
+        imtina vasitəsinə çevrilirdi.
+
+        İki riskdən hansının ağır olduğu SİYASƏT qərarıdır və o, verilib:
+        DoS aradan qaldırılır, büdcənin iki qat olması QƏBUL EDİLİR. Hədd
+        HƏR İKİ kanalda EYNİ Root açarlarındandır
+        (`KIOSK_STORE_PIN_MAX_FAILED_ATTEMPTS`/`..._LOCKOUT_MINUTES`), yəni
+        büdcəni geri sıxmaq istəyən Root TƏK dəyəri endirir.
 
         KİLİD YOXLAMASI KAMERADAN ƏVVƏLDİR: `PinHandshakeUseCase.authenticate`
         namizəd dövrəsindən ƏVVƏL yoxladığı kimi. Bloklanmış terminalda kadr
@@ -1330,7 +1460,7 @@ class FaceVerificationUseCase:
         `identify_for_login`-un `Raises` bölməsi).
         """
         try:
-            throttle = self._pin_throttle.get_for_update(tenant_id, machine_key)
+            throttle = self._terminal_throttle.get_for_update(tenant_id, machine_key)
         except Exception as exc:
             _security_log.critical(
                 "FACE_LOGIN_THROTTLE_UNAVAILABLE",
@@ -1361,7 +1491,7 @@ class FaceVerificationUseCase:
             details={
                 "store_id": str(store_id),
                 "trigger": "REJECTED_WHILE_LOCKED",
-                "shared_counter": "store_pin_throttle",
+                "counter": self._counter_name,
                 "locked_until": throttle.locked_until.isoformat()
                 if throttle.locked_until
                 else None,
@@ -1413,7 +1543,7 @@ class FaceVerificationUseCase:
             machine_name=machine_name,
             details={"store_id": str(store_id), "reason": reason, **details},
         )
-        result = self._pin_throttle.record_failure(tenant_id, machine_key, store_id=store_id)
+        result = self._terminal_throttle.record_failure(tenant_id, machine_key, store_id=store_id)
         if result.locked_until is not None:
             # `_require_unlocked_terminal` bu çağırışdan ƏVVƏL "bloklanmayıb"
             # olduğunu təsdiqləyib — deməli MƏHZ BU cəhd həddi keçdi
@@ -1435,7 +1565,7 @@ class FaceVerificationUseCase:
                 details={
                     "store_id": str(store_id),
                     "trigger": "NEW_LOCKOUT",
-                    "shared_counter": "store_pin_throttle",
+                    "counter": self._counter_name,
                     "failed_count": result.failed_count,
                     "locked_until": result.locked_until.isoformat(),
                 },
@@ -2995,6 +3125,150 @@ def _evaluate_frames(
     return tuple(outcomes), accepted
 
 
+@dataclass(frozen=True)
+class UnenrolledEmployee:
+    """Üzü HƏLƏ qeydiyyatda olmayan işçinin oxu-modeli (UX-7).
+
+    `FaceProfile` işlədilmədi, çünki orada `hire_date` YOXDUR — möhlətin
+    başlanğıc nöqtəsi isə məhz odur. `Employee` aqreqatı da işlədilmədi:
+    qayda ondan yalnız üç sahə oxuyur və bütün aqreqatı gəzdirmək `FaceProfile`
+    şərhindəki eyni səbəbdən (ən çox yüklənən aqreqatı lazımsız yollara
+    çıxarmaq) rədd edildi.
+    """
+
+    employee_id: EmployeeId
+    store_id: StoreId
+    full_name: str
+    hire_date: date
+
+
+class UnenrolledEmployeeReader(Protocol):
+    """Möhləti keçmiş, qeydiyyatsız işçiləri BİR sorğuda oxuyur (UX-7).
+
+    AYRI PROTOKOL, `FaceEmbeddingRepository`-yə metod ƏLAVƏSİ DEYİL —
+    `RangeScopedFineReader`/`OpenFineExposureReader` ilə eyni əsaslandırma:
+    mövcud protokola metod əlavə etmək onu ödəyən HƏR sinfi (test sahtələri
+    daxil) dərhal uyğunsuz edərdi, halbuki bu sual YALNIZ gecəlik motora
+    aiddir. Eyni repository sinfi hər iki protokolu ödəyə bilər.
+
+    MAĞAZASIZ İŞÇİ QAYTARILMIR (`store_id` məcburidir): `exceptions.store_id`
+    `NOT NULL`-dur və üz qapısı KİOSK qapısıdır — mağazaya təyin edilməmiş
+    mərkəzi ofis işçisi kioskda onsuz da giriş etmir.
+    """
+
+    def list_unenrolled(
+        self, tenant_id: TenantId, *, hired_before: date
+    ) -> list[UnenrolledEmployee]:
+        """AKTİV, mağazası olan, `hired_before`-dan ƏVVƏL işə götürülmüş və
+        üzü qeydiyyatda OLMAYAN işçilər."""
+        ...
+
+
+class OverdueFaceEnrollmentRule:
+    """UX-7 — «Sonra» düyməsi ilə əbədi təxirə salınan üz qeydiyyatı.
+
+    ──────────────────────────────────────────────────────────────────────────
+    BOŞLUQ NƏ İDİ
+    ──────────────────────────────────────────────────────────────────────────
+    Qeydiyyat ekranındakı «Sonra» düyməsi eyni pəncərəni növbəti girişdə
+    yenidən çıxarır — nə son tarix var, nə də kiminsə görəcəyi siyahı. İşçi
+    bir neçə gündən sonra pəncərəni refleks olaraq bağlamağı öyrənir və qapı
+    öz məqsədini itirir. Qeydiyyatın APARILMADIĞI faktı isə HEÇ BİR ekranda
+    görünmür: `stale_enrollments` (bənd 13) yalnız KÖHNƏLMİŞ qeydiyyatları
+    tapır, «heç vaxt olmamış» qeydiyyatı yox.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ BLOKLAMA SEÇİLMƏDİ — VƏ BU, ZƏİF SEÇİM DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    «Möhlət bitəndə kiosk əməliyyatlarını bloklayaq» variantı nəzərdən
+    keçirildi və RƏDD EDİLDİ, çünki qeydiyyat SELF-SERVICE DEYİL
+    (`facecontrol.md` bənd 1, `assert_may_enroll`): işçi öz üzünü ÖZÜ
+    qeydiyyata sala BİLMİR — admin lazımdır və admin ÖZÜ üçün də edə bilməz.
+    Yəni bloklama işçini BAŞQASININ hərəkətsizliyinə görə cəzalandırardı və
+    onun əlində düzəldəcək heç bir vasitə olmazdı. Bu, layihənin öz qaydasına
+    ziddir: «qoruma öz istifadəçisini cəzalandırmamalıdır» (`_no_face` və
+    `identify_for_login`-un «NƏ SAYILMIR» bölmələri eyni qərarı verir).
+    Praktiki nəticəsi daha da pisdir: səhər növbəsi açıla bilməyən mağaza.
+
+    `FACE_EXEMPTION` naxışı da bu hala UYĞUN GƏLMİR: o, üz qapısından RƏSMİ,
+    əsaslandırılmış və müddətli AZAD ETMƏDİR (kompensasiya edici nəzarətlə,
+    SEC-020). Burada isə istisna verilməyib — sadəcə iş görülməyib.
+
+    Seçilən yol: möhlət `FACE_ENROLLMENT_GRACE_DAYS` Root açarındadır (yəni
+    «son tarix» TƏLƏBİ ödənilir və o, ekranda göstərilə bilər), möhlət
+    keçəndə isə sətir menecerin VAHİD «İstisnalar» siyahısına düşür — yəni
+    «kiminsə görəcəyi siyahı» tələbi də ödənilir. İkinci bildiriş dövrəsi
+    yazılmadı: motorun təkrar qapağı, ciddiyyət defoltu, audit sətri və ekranı
+    ARTIQ mövcuddur (HR-1/HR-2/HR-3 ilə eyni qərar).
+
+    ──────────────────────────────────────────────────────────────────────────
+    İLK İCRADA SİYAHI UZUN OLA BİLƏR — VƏ BU, DOĞRUDUR
+    ──────────────────────────────────────────────────────────────────────────
+    Face Control modulu sonradan qoşulmuş kirayəçidə HEÇ KİM qeydiyyatda
+    olmaya bilər, yəni ilk gecə bütün heyət siyahıya düşər. Bu, səhv deyil —
+    vəziyyətin özü elədir. Sətir sayı `EXCEPTION_MAX_FINDINGS_PER_RULE` ilə
+    onsuz da məhdudlaşır, mənbənin özü isə `exception_sources.is_active` ilə
+    söndürülə bilir (hər ikisi Root-dadır). Süni «modul nə vaxt qoşuldu?»
+    tarixi UYDURULMADI: belə bir sütun yoxdur və onu təxmin etmək siyahını
+    SÜKUTLA natamam edərdi.
+    """
+
+    def __init__(self, *, employees: UnenrolledEmployeeReader) -> None:
+        self._employees = employees
+
+    @property
+    def source_code(self) -> str:
+        return FACE_ENROLLMENT_OVERDUE_SOURCE
+
+    @property
+    def name_az(self) -> str:
+        return "Üz qeydiyyatı aparılmayıb"
+
+    def evaluate(self, context: RuleEvaluationContext) -> list[ExceptionFinding]:
+        """Möhləti keçmiş qeydiyyatsız işçiləri tapıntıya çevirir.
+
+        `dedupe_key` = işçi + gün: problem HƏLL OLUNANA qədər hər gecə bir
+        dəfə görünür. Tək açar (yalnız işçi) seçilsəydi istisna BİR dəfə
+        yaranar və nəzərdən keçirildikdən sonra susardı — halbuki qeydiyyat
+        hələ də aparılmayıb (HR-1 ilə eyni əsaslandırma).
+        """
+        grace_days = context.limit_int(
+            SystemLimitKey.FACE_ENROLLMENT_GRACE_DAYS.value,
+            int(DEFAULT_LIMITS[SystemLimitKey.FACE_ENROLLMENT_GRACE_DAYS]),
+        )
+        if grace_days <= 0:
+            # Mənasız möhlət qaydanı SÖNDÜRÜR, hamını istisnaya salmır:
+            # Root-un yazı səhvi bütün heyəti bir gecədə siyahıya doldurmamalıdır
+            # (`_leave_duration_ceiling` ilə eyni fail-safe istiqamət).
+            return []
+
+        today = context.as_of.date()
+        cutoff = today - timedelta(days=grace_days)
+        findings: list[ExceptionFinding] = []
+
+        for employee in self._employees.list_unenrolled(context.tenant_id, hired_before=cutoff):
+            waiting_days = (today - employee.hire_date).days
+            findings.append(
+                ExceptionFinding(
+                    employee_id=employee.employee_id,
+                    store_id=employee.store_id,
+                    detail=(
+                        f"{employee.full_name} {waiting_days} gündür işdədir, üzü isə "
+                        f"hələ qeydiyyata salınmayıb (möhlət: {grace_days} gün). "
+                        f"Qeydiyyat işçinin ÖZÜ tərəfindən aparıla bilməz — admin ilə "
+                        f"görüş təyin edilməlidir."
+                    ),
+                    context={
+                        "hire_date": employee.hire_date.isoformat(),
+                        "waiting_days": waiting_days,
+                        "grace_days": grace_days,
+                    },
+                    dedupe_key=f"{employee.employee_id}:{today.isoformat()}",
+                )
+            )
+        return findings
+
+
 __all__ = [
     "CAMERA_HEALTH_CATEGORY",
     "COMPENSATION_UNAVAILABLE_ACTION",
@@ -3013,6 +3287,7 @@ __all__ = [
     "FaceCameraUnavailableError",
     "FaceControlExemptionUseCase",
     "FaceControlPermissionError",
+    "FaceEnrollmentGrace",
     "FaceEnrollmentResult",
     "FaceEnrollmentUseCase",
     "FaceExemptionView",
@@ -3024,4 +3299,7 @@ __all__ = [
     "FaceReEnrollmentUseCase",
     "FaceVerificationLogRetentionUseCase",
     "FaceVerificationUseCase",
+    "OverdueFaceEnrollmentRule",
+    "UnenrolledEmployee",
+    "UnenrolledEmployeeReader",
 ]

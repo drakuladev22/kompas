@@ -108,9 +108,16 @@ class SessionReadOnlyController(_BaseRepository):
 class BufferDrainAdapter:
     """`OfflineBuffer`-i `OfflineBufferDrain` portuna uyğunlaşdırır.
 
-    Bufer tenant-a görə bölünmür (bir mağaza PC-si = bir tenant), ona görə
-    `tenant_id` arqumenti qəbul edilir, lakin istifadə olunmur — port
-    imzasının çox-tenant mühitdə də dəyişməməsi üçün saxlanılır.
+    ──────────────────────────────────────────────────────────────────────────
+    `tenant_id` ARTIQ İSTİFADƏ OLUNUR (D2 izolyasiya auditi)
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl bu arqument QƏBUL EDİLİR, LAKİN İSTİFADƏ EDİLMİRDİ — «bir mağaza
+    PC-si = bir tenant» fərziyyəsi ilə. Fərziyyə maşın tenant DƏYİŞDİRİLƏRƏK
+    yenidən quraşdırılanda (və ya köhnə bufer faylı silinmədikdə) POZULUR:
+    SQLite faylı DATA QOVLUĞUNA bağlıdır, kirayəçiyə YOX. Nəticədə ekrandakı
+    «gözləyən yazı» sayğacı köhnə kirayəçinin heç vaxt boşalmayacaq
+    sətirlərini də göstərirdi. Eyni qərar `EvidenceUploadQueue`-nun
+    `tenant_id` konstruktor arqumentində verilmişdi.
     """
 
     def __init__(
@@ -129,7 +136,7 @@ class BufferDrainAdapter:
         self._now = now or (lambda: datetime.now(UTC))
 
     def pending_count(self, tenant_id: TenantId) -> int:
-        return len(self._buffer.pending(now=self._now()))
+        return len(self._buffer.pending(now=self._now(), tenant_id=str(tenant_id)))
 
     def flush(self, tenant_id: TenantId) -> int:
         """Növbəni boşaltmağa cəhd edir və QALAN sətir sayını qaytarır."""

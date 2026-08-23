@@ -144,6 +144,10 @@ _MISSING_TABLE_GROUP: Final[dict[str, str]] = {
     "trg_server_created_at_branding": "tenant_branding",
     "trg_server_created_at_devices": "registered_devices",
     "trg_staffing_suggestions_updated": "staffing_pattern_suggestions",
+    # AF-2 — üz kanalının AYRI sayğacı (miqrasiya 086). PIN əkizi ilə eyni
+    # qrupdadır: hər ikisinin CƏDVƏLİ `schema.sql`-də ÜMUMİYYƏTLƏ yoxdur.
+    "enforce_store_face_throttle_lockout": "store_face_throttle",
+    "trg_store_face_throttle_lockout": "store_face_throttle",
     "enforce_store_pin_throttle_lockout": "store_pin_throttle",
     "trg_store_pin_throttle_lockout": "store_pin_throttle",
     "trg_store_templates_updated": "store_templates",
@@ -213,6 +217,9 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
                 "seed_export_preflight_limits_for_new_tenant",
                 "seed_face_control_limits_for_new_tenant",
                 "seed_field_report_limits_for_new_tenant",
+                # Miqrasiya 084 — dörd yeni Root açarı (saxlama müddəti, üz
+                # qeydiyyatı möhləti, etiraz eskalasiyası, nəşr gecikməsi).
+                "seed_hr_and_retention_limits_for_new_tenant",
                 "seed_history_page_size_limits_for_new_tenant",
                 "seed_infrastructure_runtime_limits_for_new_tenant",
                 "seed_labor_and_staffing_limits_for_new_tenant",
@@ -246,6 +253,7 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
                 "trg_seed_executive_digest_limits",
                 "trg_seed_export_preflight_limits",
                 "trg_seed_face_control_limits",
+                "trg_seed_hr_and_retention_limits",
                 "trg_seed_field_report_limits",
                 "trg_seed_history_page_size_limits",
                 "trg_seed_infrastructure_runtime_limits",

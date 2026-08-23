@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QBoxLayout,
     QHBoxLayout,
@@ -83,7 +83,15 @@ class Screen(QWidget):
 
     Standart daxili boşluğu (maketdə `padding: 22px 26px`) və vəziyyət
     keçidini təmin edir.
+
+    Signals:
+        reload_requested: Xəta ekranındakı «Yenidən Cəhd Et» basıldı və
+            çağıran tərəf `on_retry` VERMƏYİB. Örtük onu tutub ekranı
+            fabrikadan yenidən qurur (`AdminShell.rebuild_screen`) — bax
+            `show_error` başlığındakı izah.
     """
+
+    reload_requested = Signal()
 
     def __init__(
         self,
@@ -115,6 +123,9 @@ class Screen(QWidget):
         outer.setSpacing(metrics.CARD_SPACING)
 
         self._switcher = ContentSwitcher(theme)
+        # Xəta ekranının «yenidən qur» tələbi EKRANIN siqnalı kimi çıxır:
+        # örtük `ContentSwitcher`-i tanımır, ekranı tanıyır.
+        self._switcher.reload_requested.connect(self.reload_requested)
         outer.addWidget(self._switcher)
 
         # Modulun öz məzmunu bura yığılır.
@@ -337,6 +348,11 @@ class ContentSwitcher(QWidget):
     bilər.
     """
 
+    #: Xəta ekranındakı «Yenidən Cəhd Et» — çağıran `on_retry` VERMƏYİBSƏ.
+    #: Ekran onu öz siqnalına ötürür, örtük isə tutub ekranı fabrikadan
+    #: yenidən qurur (bax `show_error` başlığı).
+    reload_requested = Signal()
+
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._theme = theme
@@ -450,20 +466,33 @@ class ContentSwitcher(QWidget):
 
         Düyməni sükutla ölü saxlamaqdansa ÇƏKMƏMƏK seçildi — bu, ekranların
         «görmək = səlahiyyətin olması» qaydası ilə eyni məntiqdir: işləməyən
-        element boz DEYİL, ümumiyyətlə render olunmur. Təkrar cəhdin MƏNASI
-        olan yerlər isə `on_retry` ötürür və düymə həqiqətən işləyir.
+        element boz DEYİL, ümumiyyətlə render olunmur.
+
+        ──────────────────────────────────────────────────────────────────────
+        SONRA ÖLÇÜLDÜ: QƏRAR EKRANI ÖLDÜRÜRDÜ
+        ──────────────────────────────────────────────────────────────────────
+        250 `show_error` çağırışından yalnız 29-u `on_retry` ötürür. Qalan
+        ~220 nöqtədə düymə çəkilmirdi, ekran isə örtükdə KEŞLƏNİR və yalnız
+        `dashboard` qayıdışda təzələnir — yəni tək bir şəbəkə düşməsi həmin
+        ekranı SESSİYANIN SONUNA QƏDƏR ölü saxlayırdı. Başqa ekrana keçib
+        qayıtmaq da kömək etmirdi.
+
+        İNDİ: `on_retry` verilməyibsə düymə YENƏ ÇƏKİLİR, lakin `reload_
+        requested` siqnalını yayır. Örtük onu tutub ekranı fabrikadan
+        yenidən qurur (`AdminShell.rebuild_screen`) — fabrika kontrolleri
+        bağlayır və ilk məlumatı yenidən oxuyur. Yəni düymə HEÇ VAXT ölü
+        deyil: ya çağıranın öz təzələməsi, ya da ekranın tam bərpası.
         """
         state = ErrorState(
             self._theme,
             title=title,
             message=message,
             icon_name=icon_name,
-            primary_text=primary_text if on_retry is not None else "",
+            primary_text=primary_text,
             secondary_text=secondary_text,
             details=details,
         )
-        if on_retry is not None:
-            state.primary_clicked.connect(on_retry)
+        state.primary_clicked.connect(on_retry if on_retry is not None else self.reload_requested)
         if footnote:
             state.set_footnote(footnote)
         self._present(state)

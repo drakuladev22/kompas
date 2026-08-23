@@ -61,6 +61,23 @@ olunur; həmin an keçdikdən sonra element yenidən claim edilə bilir. Yəni
 ilişmə müddəti MƏHDUDDUR və heç bir əl müdaxiləsi tələb etmir.
 
 ──────────────────────────────────────────────────────────────────────────────
+YÜKLƏMƏ BİTDİ ≠ İŞ BİTDİ: BAĞLANTI YAZISI (`link_pending`)
+──────────────────────────────────────────────────────────────────────────────
+Yükləmənin İKİ addımı var: (1) bayt Drive-a gedir, (2) `file_id` SAHİB sətrinə
+(`fines.evidence_drive_file_id`, `employee_documents.file_ref`, ...) yazılır.
+Addım (2)-nin uğursuzluğu əvvəl YALNIZ loglanırdı — element artıq `UPLOADED`
+olduğu üçün heç bir dövrəyə qayıtmırdı. Nəticə sistemin ən pis vəziyyəti idi:
+şəkil Drive-da sahibsiz durur, cərimə sətri isə SÜBUTSUZ qalır — halbuki 72
+saatlıq etiraz pəncərəsində (bölmə 4) cərimənin yeganə əsaslandırması odur.
+
+İndi (2)-nin uğursuzluğu `link_pending` bayrağı ilə qeyd olunur və növbəti
+dövrədə TƏKRARLANIR (`mark_link_pending` → `claim_pending_links` →
+`_retry_pending_links`). FAYL TƏKRAR YÜKLƏNMİR: status `UPLOADED` qalır və
+istinad sətirdəki `drive_file_id` + `connection_id` cütündən BƏRPA edilir —
+yəni təkrarlanan şey yalnız bir `UPDATE`-dir, Drive-da ikinci nüsxə yaranmır.
+Gözləmə cədvəli `mark_failed` ilə eynidir (bir mexanizm, bir davranış).
+
+──────────────────────────────────────────────────────────────────────────────
 SAHİB CƏDVƏLİN ÜMUMİLƏŞDİRİLMƏSİ: `fine_id` → `owner_type` + `owner_id` (#17)
 ──────────────────────────────────────────────────────────────────────────────
 Növbə əvvəllər YALNIZ cərimə sübutu üçün mövcud idi (`fine_id TEXT NOT NULL`).
@@ -105,7 +122,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from src.domain.policies import SystemLimitKey
-from src.infrastructure.config.limits import InfrastructureLimits, fallback_int
+from src.infrastructure.config.limits import (
+    InfrastructureLimits,
+    fallback_int,
+    tenant_from_text,
+)
 from src.infrastructure.storage.google_drive import (
     MAX_UPLOAD_BYTES,
     EvidenceValidationError,
@@ -152,6 +173,14 @@ CREATE TABLE IF NOT EXISTS evidence_uploads (
 _INDEX_SQL: Final[str] = """
 CREATE INDEX IF NOT EXISTS idx_evidence_ready
     ON evidence_uploads (status, next_attempt_at, seq);
+-- SAAS-6: `_next_seq()` hər `enqueue()`-da `MAX(seq)`-i hesablayır. Kompozit
+-- indeks (yuxarıdakı) bunun üçün İŞLƏMİR — onun BİRİNCİ sütunu `status`-dur,
+-- yəni `MAX(seq)` tam cədvəl taraması tələb edirdi və növbə böyüdükcə HƏR
+-- şəkil əlavəsi yavaşlayırdı. Ayrıca `seq` indeksi ilə SQLite indeksin son
+-- yarpağını oxuyur (sabit vaxt). Sətir purge ilə azalsa da indeks qalır —
+-- ona görə düzəliş retention-dan ASILI DEYİL.
+CREATE INDEX IF NOT EXISTS idx_evidence_seq
+    ON evidence_uploads (seq);
 """
 _SCHEMA: Final[str] = _TABLE_SQL + _INDEX_SQL
 
@@ -246,6 +275,20 @@ class UploadOwnerType(str, Enum):
     #: (spool, backoff, `REJECTED` ayrımı). İkinci mexanizm eyni qüsurları
     #: sıfırdan təkrarlamalı olardı.
     SUPPORT_MESSAGE = "SUPPORT_MESSAGE"
+    #: `fine_appeals.document_ref` — cərimə etirazına əlavə edilən SƏNƏD
+    #: (UX-4, bölmə 4).
+    #:
+    #: NİYƏ MÖVCUD NÖVBƏYƏ QOŞULUR (`SUPPORT_MESSAGE` ilə eyni əsaslandırma):
+    #: fayl EYNİ mühitdə yaranır — kiosk PC-si, kəsilən internet, bitən Drive
+    #: tokeni, yararsız fayl. Bu problemlərin hamısı burada artıq həll olunub
+    #: (spool, backoff, `REJECTED` ayrımı, `link_pending` bağlantı borcu).
+    #: Ayrıca mexanizm həmin dörd qüsuru sıfırdan təkrarlamalı olardı.
+    #:
+    #: SAHİB SƏTRİ `fine_appeals.id`-dir, `fines.id` DEYİL: etiraz cəriməyə
+    #: bağlıdır, lakin sənəd ETİRAZIN sübutudur — cəriməyə yazılsaydı, cəzanı
+    #: verən tərəfin sübutu ilə ona etiraz edən tərəfin sübutu EYNİ sahədə
+    #: qarışardı və mübahisədə hansının kimə aid olduğu itərdi.
+    FINE_APPEAL = "FINE_APPEAL"
 
 
 @dataclass(frozen=True)
@@ -266,6 +309,18 @@ class PendingUpload:
     #: bayt YALNIZ `read_bytes()`-dən gəlir — deşifrə üçün
     #: `EvidenceUploadQueue.read_plaintext()` işlədilməlidir.
     is_encrypted: bool = False
+    #: Drive-dakı faylın ID-si — YALNIZ `UPLOADED` sətirlərdə doludur.
+    #: Bağlantı yazısının TƏKRARI üçün saxlanılır (bax `mark_link_pending`):
+    #: istinadı yenidən qurmaq faylı YENİDƏN YÜKLƏMƏKDƏN qat-qat ucuzdur və
+    #: Drive-da ikinci nüsxə yaratmır.
+    drive_file_id: str | None = None
+    #: Faylın hansı Drive HESABINDA olduğu (`StorageReference.connection_id`).
+    #: `drive_file_id` tək başına kifayət etmir — səbəb
+    #: `value_objects/storage.py` başlığındadır (hesab dəyişəndə keçid qırılır).
+    connection_id: str | None = None
+    #: `on_uploaded` geri-çağırışı hələ UĞURLA yazılmayıb (bax
+    #: `mark_link_pending`). Fayl Drive-dadır — TƏKRAR YÜKLƏNMİR.
+    link_pending: bool = False
 
     def read_bytes(self) -> bytes:
         """Spool faylının XAM baytı — şifrələnibsə HƏLƏ ŞİFRƏLİDİR.
@@ -288,6 +343,13 @@ class UploadRunReport:
     #: növbəyə qayıtmır — iki rəqəmi qarışdırmaq "50 uğursuz" xəbərinin
     #: gözləmək lazım olduğunu, yoxsa müdaxilə tələb etdiyini gizlədərdi.
     rejected: int = 0
+    #: Bu dövrədə sahib sətrinə YAZILAN istinad sayı (həm ilk cəhd, həm
+    #: təkrarlar). `uploaded`-dan AYRIDIR: fayl Drive-a getdi, amma cərimə
+    #: sətrinə yazı UĞURSUZ ola bilər — iki rəqəmin fərqi məhz həmin boşluğu
+    #: göstərir (bax `EvidenceUploadQueue.mark_link_pending`).
+    links_written: int = 0
+    #: Hələ də yazıla bilməyən istinadlar — növbəti dövrədə TƏKRAR cəhd edilir.
+    links_pending: int = 0
     skipped_no_connection: bool = False
     errors: list[str] | None = None
 
@@ -299,7 +361,7 @@ class EvidenceUploadQueue:
         self,
         db_path: Path | str,
         *,
-        tenant_id: str | None = None,
+        tenant_id: str,
         spool_dir: Path | str | None = None,
         backoff_schedule: tuple[int, ...] | None = None,
         max_upload_bytes: int = MAX_UPLOAD_BYTES,
@@ -316,10 +378,15 @@ class EvidenceUploadQueue:
             silinməyibsə), köhnə tenant-ın gözləyən sətirləri qalır. Filtrsiz
             `claim_pending()` onları CARİ (`self._factory.active()`) tenant-ın
             Drive-ına yükləyirdi — sübut zənciri qırılırdı: `file_id` A-nın
-            `fines` sətrinə yazılır, fayl isə B-nin Drive-ındadır. `None` =
-            KÖHNƏ (filtrsiz) davranış — YALNIZ `tests/`-in tenant-a əhəmiyyət
-            verməyən ssenariləri üçün; kompozisiya kökü ONU HƏMİŞƏ ötürür
-            (bax `composition.py::evidence_queue`).
+            `fines` sətrinə yazılır, fayl isə B-nin Drive-ındadır.
+
+            MƏCBURİDİR (SAAS-3). Əvvəl `None` = filtrsiz KÖHNƏ davranış idi və
+            «yalnız testlər üçün» sayılırdı — lakin defolt dəyər olduğu üçün
+            onu ötürməyi UNUTMAQ da eyni nəticəni verirdi və nəticə sükutlu
+            idi: yanlış Drive-a yüklənən sübut heç bir xəta qaldırmır.
+            İndi naxış `PostgresUnitOfWork`-un eynisidir — kontekstsiz obyekt
+            TİP SƏVİYYƏSİNDƏ qurula bilmir, yəni səhv kompilyasiya/çağırış
+            anında görünür, istehsalatda yox.
         max_upload_bytes: `enqueue()`-dəki ölçü həddi. Defolt `MAX_UPLOAD_BYTES`
             FALLBACK-dır (həqiqi mənbə `system_limits.MAX_UPLOAD_SIZE_BYTES`);
             provider öz həddini ayrıca tətbiq edir. Sıfır/mənfi dəyər həddi
@@ -344,12 +411,24 @@ class EvidenceUploadQueue:
             encrypted_column`), sükutla "təhlükəsizdir" görünən YALANÇI qat
             DEYİL. İSTEHSALATDA kompozisiya kökü onu HƏMİŞƏ ötürür.
         """
+        if not tenant_id.strip():
+            # Boş sətir tip yoxlamasından KEÇİR, lakin `WHERE tenant_id = ''`
+            # heç bir sətir seçmir — yəni növbə sükutla "həmişə boş" olardı və
+            # sübut şəkilləri heç vaxt yüklənməzdi. Məcburi arqumentin bütün
+            # məqsədi belə sükutlu vəziyyəti aradan qaldırmaqdır.
+            raise ValueError("`tenant_id` boş ola bilməz — növbə kirayəçiyə bağlıdır")
         self._tenant_id = tenant_id
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._spool = Path(spool_dir) if spool_dir else self._path.parent / "evidence_spool"
         self._spool.mkdir(parents=True, exist_ok=True)
-        self._limits = limits or InfrastructureLimits()
+        # SAAS-5: limit oxusu BU kirayəçiyə bağlanır. Növbə obyekti bir
+        # kirayəçiyə aiddir (yuxarıdakı `tenant_id`), `InfrastructureLimits`
+        # nüsxəsi isə çox vaxt PAYLAŞILIR — bağlamasaydıq, A müştərisinin
+        # növbəsi B-nin `UPLOAD_CLAIM_STALE_AFTER_SECONDS` dəyəri ilə işləyə
+        # bilərdi və heç bir xəta qalxmazdı (bax `InfrastructureLimits.
+        # for_tenant`). Mətn UUID deyilsə (test dəyərləri) bağlama DƏYİŞMİR.
+        self._limits = (limits or InfrastructureLimits()).for_tenant(tenant_from_text(tenant_id))
         self._encryption = encryption
         self._explicit_backoff = backoff_schedule
         self._max_upload_bytes = max_upload_bytes if max_upload_bytes > 0 else MAX_UPLOAD_BYTES
@@ -383,6 +462,7 @@ class EvidenceUploadQueue:
         # SEC-4 — `owner_type`/`owner_id` İLƏ EYNİ NAXIŞ: TAMAMİLƏ YENİ,
         # `CHECK`-siz sütun, sadə `ALTER TABLE ADD COLUMN` kifayətdir.
         self._ensure_encrypted_column()
+        self._ensure_link_pending_column()
 
     def _backoff_schedule(self) -> tuple[int, ...]:
         """Təkrar cəhd cədvəli — HƏR UĞURSUZ YÜKLƏMƏDƏ oxunur."""
@@ -541,6 +621,37 @@ class EvidenceUploadQueue:
             )
         _log.info("EVIDENCE_QUEUE_SCHEMA_UPGRADED", extra={"status": "ENCRYPTED_COLUMN"})
 
+    def _ensure_link_pending_column(self) -> None:
+        """`link_pending`-i mövcud növbə faylına gətirir (bax `mark_link_pending`).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ SÜTUN, NİYƏ YENİ STATUS DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Təbii seçim yeni `status` dəyəri (`UPLOADED_PENDING_LINK`) olardı.
+        RƏDD EDİLDİ: `status`-un `CHECK` siyahısını genişləndirmək SQLite-da
+        cədvəlin rename-COPY köçürməsini tələb edir (bax
+        `_ensure_rejected_status`), həmin köçürmə isə `_COLUMNS` siyahısı ilə
+        işləyir — orada `owner_type`/`owner_id`/`is_encrypted` QƏSDƏN YOXDUR
+        (səbəb `_COLUMNS` şərhindədir). Yəni belə bir köçürmə sahib
+        məlumatını və şifrələmə bayrağını İTİRƏRDİ: şifrəli spool faylı
+        "açıq" kimi oxunub Drive-a zibil bayt kimi gedərdi. Bayraq sütunu isə
+        `is_encrypted` ilə EYNİ, sınaqdan çıxmış yolu — sadə `ALTER TABLE ADD
+        COLUMN` — işlədir və mövcud statusların heç birinə toxunmur.
+
+        Element `UPLOADED` QALIR, çünki fakt DƏYİŞMİR: fayl Drive-dadır.
+        Gözləyən yalnız CƏRİMƏ SƏTRİNƏ yazılan istinaddır.
+
+        Əməliyyat idempotentdir: sütun mövcuddursa `ALTER` ötürülür.
+        """
+        with self._lock, self._transaction() as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(evidence_uploads)")}
+            if "link_pending" in columns:
+                return
+            conn.execute(
+                "ALTER TABLE evidence_uploads ADD COLUMN link_pending INTEGER NOT NULL DEFAULT 0"
+            )
+        _log.info("EVIDENCE_QUEUE_SCHEMA_UPGRADED", extra={"status": "LINK_PENDING_COLUMN"})
+
     def set_max_upload_bytes(self, value: int) -> None:
         """Ölçü həddini yeniləyir — Root paneldəki dəyişiklikdən sonra.
 
@@ -574,6 +685,16 @@ class EvidenceUploadQueue:
         owner_id: Həmin cədvəldəki sətrin ID-si (mətn) — `FINE` üçün
             `fines.id`, `EMPLOYEE_DOCUMENT` üçün `employee_documents.id`.
         """
+        # KİRAYƏÇİ UYĞUNLUĞU (SAAS-3): sətir bu növbənin sahibindən BAŞQA
+        # kirayəçiyə yazıla bilməz. Yazılsaydı, sətir DƏRHAL "görünməz"
+        # olardı — `_tenant_clause` onu heç bir seçimə buraxmazdı — və şəkil
+        # sükutla əbədi növbədə qalardı. Açıq xəta bu sükutu əvəz edir.
+        if tenant_id != self._tenant_id:
+            raise ValueError(
+                "Növbə başqa kirayəçinin sətrini qəbul etmir "
+                f"(növbə: {self._tenant_id}, sətir: {tenant_id})"
+            )
+
         # ÖN-ŞƏRT DİSKƏ YAZMAZDAN ƏVVƏL: yararsız fayl növbəyə DÜŞMÜR.
         #
         # Qayda `google_drive.validate_evidence_payload`-dadır — provider ilə
@@ -696,14 +817,15 @@ class EvidenceUploadQueue:
     # -------------------------------- oxuma ---------------------------------- #
 
     def _tenant_clause(self) -> tuple[str, tuple[str, ...]]:
-        """D2: `self._tenant_id` verilibsə SQL-ə `AND tenant_id = ?` qoşur.
+        """D2: SQL-ə HƏMİŞƏ `AND tenant_id = ?` qoşur.
 
-        `None` halı (naxış: konstruktor şərhi) YALNIZ tenant-a əhəmiyyət
-        verməyən köhnə testlər üçün qalır — boş sətir + boş parametr
-        qaytarır, sorğu filtrsiz qalır.
+        Şərtsiz variant (`None` → filtrsiz) SAAS-3-də SİLİNDİ: filtri "bəzən"
+        tətbiq edən sorğu, onu heç tətbiq etməyəndən daha təhlükəlidir —
+        oxuyan adam filtrin mövcudluğunu görür, işlədiyini isə yoxlamır.
+        Metod özü SAXLANILIR, çünki şərt ÜÇ sorğuda (`pending`,
+        `claim_pending`, `claim_pending_links`) təkrarlanır və mətnin tək
+        mənbədə qalması `# noqa: S608` əsaslandırmasının şərtidir.
         """
-        if self._tenant_id is None:
-            return "", ()
         return " AND tenant_id = ?", (self._tenant_id,)
 
     def pending(self, *, now: datetime | None = None, limit: int = 20) -> list[PendingUpload]:
@@ -880,6 +1002,118 @@ class EvidenceUploadQueue:
             # Şəkil artıq Drive-dadır — lokal surət yalnız disk yeyir.
             Path(row["spool_path"]).unlink(missing_ok=True)
 
+    def mark_link_pending(
+        self, entry_id: str, error: str, *, now: datetime | None = None
+    ) -> datetime:
+        """Fayl Drive-dadır, LAKİN sahib sətrinə istinad YAZILA BİLMƏDİ.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ AYRICA VƏZİYYƏT LAZIMDIR
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəl `on_uploaded` geri-çağırışının xətası YALNIZ loglanırdı: element
+        artıq `UPLOADED` idi, yəni növbəyə QAYITMIRDI və istinad HEÇ VAXT
+        yazılmırdı. Nəticə sistemin ən pis halıdır — cərimə sətri sübutsuz
+        qalır, sübut şəkli isə Drive-da sahibsiz durur. 72 saatlıq etiraz
+        pəncərəsində (bölmə 4) cərimənin YEGANƏ əsaslandırması məhz odur.
+
+        ──────────────────────────────────────────────────────────────────────
+        FAYL TƏKRAR YÜKLƏNMİR
+        ──────────────────────────────────────────────────────────────────────
+        `mark_failed`-dən FƏRQ budur: status `UPLOADED` QALIR və `link_pending`
+        bayrağı qalxır. Element `claim_pending()` seçiminə DÜŞMÜR (o, yalnız
+        `PENDING`/`PROCESSING` götürür), yalnız `claim_pending_links()`
+        götürür — yəni növbəti dövrədə TƏKRARLANAN şey bağlantı yazısıdır,
+        şəbəkəyə gedən yükləmə deyil. Drive-da ikinci nüsxə yaranmır.
+
+        Gözləmə cədvəli `mark_failed` ilə EYNİDİR
+        (`OFFLINE_RETRY_BACKOFF_SECONDS`): səbəb də eynidir — baza müvəqqəti
+        əlçatmazdır və dərhal təkrar eyni cavabı alardı. `attempts` sütunu
+        PAYLAŞILIR: yükləmə artıq bitib, yəni sütun bu andan sonra yalnız
+        bağlantı cəhdlərini sayır və iki mənanın qarışması mümkün deyil.
+        """
+        moment = now or datetime.now(UTC)
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                "SELECT attempts FROM evidence_uploads WHERE id = ?", (entry_id,)
+            ).fetchone()
+            attempts = (row["attempts"] if row else 0) + 1
+            schedule = self._backoff_schedule()
+            delay = schedule[min(attempts - 1, len(schedule) - 1)]
+            next_at = moment + timedelta(seconds=delay)
+            conn.execute(
+                """UPDATE evidence_uploads
+                      SET link_pending = 1, attempts = ?, last_error = ?,
+                          next_attempt_at = ?
+                    WHERE id = ? AND status = 'UPLOADED'""",
+                (attempts, error[:500], next_at.isoformat(), entry_id),
+            )
+        _log.error(
+            "EVIDENCE_LINK_RETRY_SCHEDULED",
+            extra={
+                "entry_id": entry_id,
+                "attempts": attempts,
+                "delay_seconds": delay,
+                "impact": "şəkil Drive-dadır — sahib sətrindəki istinad hələ yazılmayıb",
+            },
+        )
+        return next_at
+
+    def mark_link_written(self, entry_id: str) -> None:
+        """Bağlantı yazısı UĞURLA tamamlandı — bayraq düşür.
+
+        `last_error` da təmizlənir: sətir artıq tam bitmiş vəziyyətdədir və
+        köhnə xəta mətnini saxlamaq diaqnostikada yanlış siqnal olardı
+        (`mark_uploaded`-in eyni qərarı).
+        """
+        with self._lock, self._transaction() as conn:
+            conn.execute(
+                """UPDATE evidence_uploads
+                      SET link_pending = 0, last_error = NULL
+                    WHERE id = ?""",
+                (entry_id,),
+            )
+
+    def claim_pending_links(
+        self, *, now: datetime | None = None, limit: int = 20
+    ) -> list[PendingUpload]:
+        """Bağlantı yazısı gözləyən (fayl artıq Drive-da olan) elementlər.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ STATUS DƏYİŞMİR (CLAIM-DƏN FƏRQ)
+        ──────────────────────────────────────────────────────────────────────
+        `claim_pending()` elementi `PROCESSING`-ə keçirir. BURADA belə etmək
+        TƏHLÜKƏLİ olardı: proses bağlantı yazısının ORTASINDA çöksə, sətir
+        `PROCESSING` kimi qalar və növbəti dövrədə faylı Drive-a İKİNCİ dəfə
+        yükləyərdi. Ona görə `UPLOADED` + `link_pending` cütü toxunulmaz
+        qalır — "fayl Drive-dadır" faktı davamlı olaraq sətirdə yazılıdır.
+
+        İkiqat işi `next_attempt_at` özü əngəlləyir: seçilən element dərhal
+        köhnəlmə anına (`claim_stale_after`) itələnir, yəni paralel ikinci
+        işçi onu həmin müddət ərzində GÖRMÜR. Ən pis hal — bir bağlantı
+        yazısının təkrarı — zərərsizdir: `UPDATE ... SET evidence_drive_file_id`
+        idempotentdir (eyni dəyər yazılır).
+        """
+        moment = now or datetime.now(UTC)
+        stale_at = moment + timedelta(seconds=self._claim_stale_after())
+        clause, clause_params = self._tenant_clause()
+        with self._lock, self._transaction() as conn:
+            rows = conn.execute(
+                # `clause` sabit İKİ variantdan biridir (`_tenant_clause`).
+                f"""
+                SELECT * FROM evidence_uploads
+                 WHERE status = 'UPLOADED' AND link_pending = 1
+                   AND next_attempt_at <= ?{clause}
+                 ORDER BY seq LIMIT ?
+                """,  # noqa: S608 — şərtlər sabit siyahıdandır
+                (moment.isoformat(), *clause_params, limit),
+            ).fetchall()
+            for row in rows:
+                conn.execute(
+                    "UPDATE evidence_uploads SET next_attempt_at = ? WHERE id = ?",
+                    (stale_at.isoformat(), row["id"]),
+                )
+        return [_row_to_upload(row) for row in rows]
+
     def mark_failed(self, entry_id: str, error: str, *, now: datetime | None = None) -> datetime:
         moment = now or datetime.now(UTC)
         with self._lock, self._transaction() as conn:
@@ -1018,6 +1252,65 @@ class EvidenceUploadQueue:
             )
         return requeued
 
+    def purge_uploaded(self, *, older_than: datetime) -> int:
+        """Tamamlanmış (`UPLOADED`) sətirləri silir. Qaytarır: silinən say.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ LAZIMDIR (SAAS-6)
+        ──────────────────────────────────────────────────────────────────────
+        Növbə sətirləri İNDİYƏ QƏDƏR heç vaxt silinmirdi: fayl Drive-a gedir,
+        spool faylı silinir, SQLite sətri isə ƏBƏDİ qalırdı. Aktiv mağazada bu,
+        ildə on minlərlə sətir deməkdir — cədvəl böyüdükcə `claim_pending()`
+        indeksi şişir və `MAX(seq)` yavaşlayır. Naxış hazır idi:
+        `OfflineBuffer.purge_synced()` və `FaceVerificationLogRepository.
+        purge_older_than()` EYNİ işi görür.
+
+        ──────────────────────────────────────────────────────────────────────
+        NƏ SİLİNMİR — ÜÇ İSTİSNA
+        ──────────────────────────────────────────────────────────────────────
+        1. `REJECTED` sətirlər: spool faylı DİSKDƏ QALIR (bax `mark_rejected`)
+           və `requeue_rejected()` onu geri qaytara bilər. Sətri silsək fayl
+           sahibsiz qalar — nə silinər, nə tapılar.
+        2. `link_pending = 1` sətirlər: sahib sətrinə istinad HƏLƏ yazılmayıb
+           (bax `mark_link_pending`). Silmək cəriməni əbədi sübutsuz qoyardı.
+        3. `PENDING`/`PROCESSING`: iş hələ bitməyib.
+
+        Yəni silinən YALNIZ tam bitmiş işin qeydidir. Sübutun ÖZÜ Drive-dadır
+        və `fines` sətrindəki istinad da yerindədir — burada silinən sadəcə
+        "yükləmə tapşırığı" tarixçəsidir.
+
+        Args:
+            older_than: bu andan ƏVVƏL yüklənmiş sətirlər silinir. Kəsim anı
+                ÇAĞIRANDAN gəlir (Root açarı burada OXUNMUR) — eyni qərar
+                `purge_synced`/`purge_older_than`-dədir: saxlama müddəti
+                siyasətdir və planlayıcının işidir, növbənin yox.
+
+        Spool faylı da silinir: normal axında `mark_uploaded` onu artıq silib,
+        lakin `delete_spool=False` ilə yüklənmiş sətirlər üçün fayl qalır və
+        sətir gedəndən sonra onu tapan olmazdı.
+        """
+        clause, clause_params = self._tenant_clause()
+        with self._lock, self._transaction() as conn:
+            rows = conn.execute(
+                # `clause` sabit İKİ variantdan biridir (`_tenant_clause`).
+                f"""
+                SELECT id, spool_path FROM evidence_uploads
+                 WHERE status = 'UPLOADED' AND link_pending = 0
+                   AND uploaded_at IS NOT NULL AND uploaded_at < ?{clause}
+                """,  # noqa: S608 — şərtlər sabit siyahıdandır
+                (older_than.isoformat(), *clause_params),
+            ).fetchall()
+            for row in rows:
+                conn.execute("DELETE FROM evidence_uploads WHERE id = ?", (row["id"],))
+        for row in rows:
+            Path(row["spool_path"]).unlink(missing_ok=True)
+        if rows:
+            _log.info(
+                "EVIDENCE_QUEUE_PURGED",
+                extra={"deleted": len(rows), "older_than": older_than.isoformat()},
+            )
+        return len(rows)
+
     def _transaction(self) -> _Tx:
         return _Tx(self._conn)
 
@@ -1052,6 +1345,9 @@ def _row_to_upload(row: sqlite3.Row) -> PendingUpload:
         status=UploadStatus(row["status"]),
         last_error=row["last_error"],
         is_encrypted=bool(row["is_encrypted"]),
+        drive_file_id=row["drive_file_id"],
+        connection_id=row["connection_id"],
+        link_pending=bool(row["link_pending"]),
     )
 
 
@@ -1081,11 +1377,93 @@ class EvidenceUploadWorker:
         self._on_uploaded = on_uploaded
         self._batch_size = batch_size
 
+    def _write_link(
+        self,
+        item: PendingUpload,
+        reference: StorageReference,
+        report: UploadRunReport,
+        *,
+        now: datetime,
+    ) -> bool:
+        """Sahib sətrinə istinadı yazır. Qaytarır: alındımı.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ XƏTA ARTIQ UDULMUR
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəl geri-çağırışın istisnası YALNIZ loglanırdı və element artıq
+        `UPLOADED` olduğu üçün BİR DAHA heç bir dövrəyə düşmürdü: şəkil
+        Drive-da, cərimə sətri isə sübutsuz qalırdı. İndi uğursuzluq
+        `mark_link_pending()` ilə növbəyə QAYTARILIR — fayl təkrar
+        YÜKLƏNMƏDƏN, yalnız yazı təkrarlanır (bax həmin metodun başlığı).
+
+        Geri-çağırış təyin edilməyibsə (`on_uploaded is None` — diaqnostika və
+        test quraşdırmaları) borc da yaranmır: yazılacaq yer yoxdur.
+        """
+        if self._on_uploaded is None:
+            return True
+        try:
+            self._on_uploaded(  # type: ignore[operator]
+                item.owner_type.value, item.owner_id, reference
+            )
+        except Exception as exc:
+            report.links_pending += 1
+            if report.errors is not None:
+                report.errors.append(f"{item.owner_type.value}:{item.owner_id}: {exc}")
+            self._queue.mark_link_pending(item.id, str(exc), now=now)
+            return False
+        report.links_written += 1
+        self._queue.mark_link_written(item.id)
+        return True
+
+    def _retry_pending_links(self, report: UploadRunReport, *, now: datetime) -> None:
+        """Yüklənmiş, lakin sahib sətrinə yazılmamış istinadları TƏKRARLAYIR.
+
+        İstinad növbə sətrindən BƏRPA edilir (`drive_file_id` +
+        `connection_id`) — fayl Drive-dadır, ona görə burada heç bir yükləmə
+        YOXDUR və aktiv Drive bağlantısı da TƏLƏB OLUNMUR: bu addım
+        `self._factory.active()`-dən ƏVVƏL, ondan ASILI OLMADAN işləyir.
+        Beləliklə Drive tokeni bitmiş mağazada belə cərimə-sübut bağlantısı
+        tamamlanır.
+        """
+        from uuid import UUID as _UUID  # noqa: PLC0415
+
+        from src.domain.value_objects.storage import StorageReference  # noqa: PLC0415
+
+        for item in self._queue.claim_pending_links(now=now, limit=self._batch_size):
+            if not item.drive_file_id or not item.connection_id:
+                # BƏRPA MÜMKÜN DEYİL: `mark_uploaded` hər ikisini YAZIR, yəni
+                # bura yalnız sətrin kənardan dəyişdirildiyi halda düşmək olar.
+                # Bayraq DÜŞÜRÜLÜR ki, sonsuz dövrə yaranmasın (`mark_rejected`
+                # ilə eyni fikir), hadisə isə sahib ID-si ilə birlikdə
+                # jurnala düşür — operator əl ilə bağlaya bilsin deyə.
+                _log.error(
+                    "EVIDENCE_LINK_UNRECOVERABLE",
+                    extra={
+                        "entry_id": item.id,
+                        "owner_type": item.owner_type.value,
+                        "owner_id": item.owner_id,
+                        "reason": "növbə sətrində Drive istinadı yoxdur",
+                    },
+                )
+                self._queue.mark_link_written(item.id)
+                continue
+            reference = StorageReference.drive(
+                file_id=item.drive_file_id,
+                connection_id=_UUID(item.connection_id),
+            )
+            self._write_link(item, reference, report, now=now)
+
     def run_once(self, *, now: datetime | None = None) -> UploadRunReport:
         from uuid import UUID as _UUID  # noqa: PLC0415
 
         moment = now or datetime.now(UTC)
         report = UploadRunReport(errors=[])
+        # ƏVVƏLCƏ BAĞLANTI BORCU: faylı Drive-da olan, lakin sahib sətrinə
+        # istinadı yazılmamış elementlər (`mark_link_pending`). Yükləmədən
+        # ƏVVƏL gəlir, çünki bu addım şəbəkəyə çıxmır — yalnız bazaya yazır —
+        # və uzun yükləmə paketi arxasında növbəyə düşməməlidir. Yükləmə
+        # paketi boş olsa belə işə düşür (aşağıdakı erkən `return`-dan əvvəl).
+        self._retry_pending_links(report, now=moment)
         # CLAIM: element seçilən anda `PROCESSING` olur — paralel işləyən ikinci
         # işçi eyni şəkli Drive-a təkrar yükləyə bilmir (bax modul başlığı).
         items = self._queue.claim_pending(now=moment, limit=self._batch_size)
@@ -1153,20 +1531,7 @@ class EvidenceUploadWorker:
 
             self._queue.mark_uploaded(item.id, reference, now=moment)
             report.uploaded += 1
-            if self._on_uploaded is not None:
-                try:
-                    self._on_uploaded(  # type: ignore[operator]
-                        item.owner_type.value, item.owner_id, reference
-                    )
-                except Exception as exc:  # DB yeniləməsi sonra təkrar oluna bilər
-                    _log.error(
-                        "EVIDENCE_UPLOAD_CALLBACK_FAILED",
-                        extra={
-                            "owner_type": item.owner_type.value,
-                            "owner_id": item.owner_id,
-                            "error": str(exc),
-                        },
-                    )
+            self._write_link(item, reference, report, now=moment)
 
         _log.info(
             "EVIDENCE_UPLOAD_RUN",
@@ -1175,6 +1540,8 @@ class EvidenceUploadWorker:
                 "uploaded": report.uploaded,
                 "failed": report.failed,
                 "rejected": report.rejected,
+                "links_written": report.links_written,
+                "links_pending": report.links_pending,
             },
         )
         return report

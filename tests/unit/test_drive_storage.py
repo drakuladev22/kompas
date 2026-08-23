@@ -402,9 +402,17 @@ def test_filename_gets_timestamp_prefix(
 # --------------------------------------------------------------------------- #
 
 
+#: SAAS-3 — sübut növbəsi BİR kirayəçiyə bağlıdır: növbə də, ona düşən
+#: hər sətir də EYNİ dəyəri daşımalıdır (uyğunsuzluq açıq xəta verir,
+#: çünki belə sətir bütün seçimlərdən düşür və şəkil sükutla qalır).
+QUEUE_TENANT: str = str(uuid.uuid4())
+
+
 @pytest.fixture
 def queue(tmp_path: Path) -> Iterator[EvidenceUploadQueue]:
-    q = EvidenceUploadQueue(tmp_path / "uploads.db", spool_dir=tmp_path / "spool")
+    q = EvidenceUploadQueue(
+        tmp_path / "uploads.db", spool_dir=tmp_path / "spool", tenant_id=QUEUE_TENANT
+    )
     yield q
     q.close()
 
@@ -423,7 +431,7 @@ class FakeFactory:
 def test_enqueued_upload_is_pending(queue: EvidenceUploadQueue) -> None:
     fine_id = uuid.uuid4()
     queue.enqueue(
-        tenant_id=str(uuid.uuid4()),
+        tenant_id=QUEUE_TENANT,
         owner_type=UploadOwnerType.FINE,
         owner_id=str(fine_id),
         store_id=STORE_1,
@@ -442,7 +450,7 @@ def test_worker_uploads_and_clears_queue(
     queue: EvidenceUploadQueue, provider: GoogleDriveStorageProvider
 ) -> None:
     queue.enqueue(
-        tenant_id=str(uuid.uuid4()),
+        tenant_id=QUEUE_TENANT,
         owner_type=UploadOwnerType.FINE,
         owner_id=str(uuid.uuid4()),
         store_id=STORE_1,
@@ -466,7 +474,7 @@ def test_failed_upload_stays_queued_with_backoff(
     """Drive müvəqqəti əlçatmazdır — şəkil İTMİR, təkrar cəhd olunur."""
     api.fail_uploads_with = RuntimeError("Drive əlçatmazdır")
     queue.enqueue(
-        tenant_id=str(uuid.uuid4()),
+        tenant_id=QUEUE_TENANT,
         owner_type=UploadOwnerType.FINE,
         owner_id=str(uuid.uuid4()),
         store_id=STORE_1,
@@ -489,7 +497,7 @@ def test_retry_succeeds_after_drive_recovers(
 ) -> None:
     api.fail_uploads_with = RuntimeError("müvəqqəti nasazlıq")
     queue.enqueue(
-        tenant_id=str(uuid.uuid4()),
+        tenant_id=QUEUE_TENANT,
         owner_type=UploadOwnerType.FINE,
         owner_id=str(uuid.uuid4()),
         store_id=STORE_1,
@@ -512,7 +520,7 @@ def test_worker_without_active_connection_keeps_items(
 ) -> None:
     """Kvota dolub və ya hesab hələ qoşulmayıb — şəkillər gözləyir."""
     queue.enqueue(
-        tenant_id=str(uuid.uuid4()),
+        tenant_id=QUEUE_TENANT,
         owner_type=UploadOwnerType.FINE,
         owner_id=str(uuid.uuid4()),
         store_id=STORE_1,
@@ -538,7 +546,7 @@ def test_callback_receives_reference(
     seen: list[tuple[str, str, StorageReference]] = []
     fine_id = uuid.uuid4()
     queue.enqueue(
-        tenant_id=str(uuid.uuid4()),
+        tenant_id=QUEUE_TENANT,
         owner_type=UploadOwnerType.FINE,
         owner_id=str(fine_id),
         store_id=STORE_1,
@@ -568,7 +576,7 @@ def test_callback_failure_does_not_lose_upload(
         raise RuntimeError("DB əlçatmazdır")
 
     queue.enqueue(
-        tenant_id=str(uuid.uuid4()),
+        tenant_id=QUEUE_TENANT,
         owner_type=UploadOwnerType.FINE,
         owner_id=str(uuid.uuid4()),
         store_id=STORE_1,
@@ -685,7 +693,7 @@ def test_document_pdf_travels_through_queue_and_worker(
     """
     document_id = uuid.uuid4()
     queue.enqueue(
-        tenant_id=str(uuid.uuid4()),
+        tenant_id=QUEUE_TENANT,
         owner_type=UploadOwnerType.EMPLOYEE_DOCUMENT,
         owner_id=str(document_id),
         store_id=STORE_1,

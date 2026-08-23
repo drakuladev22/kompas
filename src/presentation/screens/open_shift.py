@@ -45,6 +45,7 @@ from src.presentation.widgets.primitives import (
     Divider,
     body_label,
     muted_label,
+    section_label,
     stretch,
     title_label,
 )
@@ -59,10 +60,13 @@ class OpenShiftMarketCard(QWidget):
     Signals:
         post_requested: `[Açıq Növbə Elan Et]` basıldı.
         cancel_requested: Sətrin `[Ləğv Et]` düyməsi (elan identifikatoru).
+        release_requested: Tutulmuş sətrin `[Geri Ver]` düyməsi (OP-4).
     """
 
     post_requested = Signal()
     cancel_requested = Signal(str)
+    #: DEEP-GAP OP-4 — tutulmuş elanı bazara qaytarır (elan id-si).
+    release_requested = Signal(str)
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -106,6 +110,30 @@ class OpenShiftMarketCard(QWidget):
         self._empty = muted_label("Hazırda açıq elan yoxdur.")
         card.add(self._empty)
 
+        # ──────────────────────────────────────────────────────────────────
+        # «TUTULMUŞ NÖVBƏLƏR» — MENECERİN GERİ YOLU (DEEP-GAP OP-4)
+        # ──────────────────────────────────────────────────────────────────
+        # `release_claim()` İKİ aktora icazə verir: növbəni tutan işçi VƏ
+        # `can_manage_shifts` sahibi. İkinci qol yalnız kiosk ekranına
+        # bağlansaydı ÇAĞIRILA BİLMƏZDİ — işçi işə çıxmayanda (xəstəxana,
+        # telefonu söndürülüb) slotu menecer açmalıdır.
+        #
+        # Bölmə YALNIZ sətir olduqda görünür: tutulmuş növbəsi olmayan
+        # mağazada boş başlıq «burada nəsə olmalıydı» sualı yaradardı.
+        self._claimed_section = QWidget()
+        claimed_layout = QVBoxLayout(self._claimed_section)
+        claimed_layout.setContentsMargins(0, 0, 0, 0)
+        claimed_layout.setSpacing(8)
+        claimed_layout.addWidget(Divider())
+        claimed_layout.addWidget(section_label("Tutulmuş növbələr"))
+        self._claimed_rows_layout = QVBoxLayout()
+        self._claimed_rows_layout.setSpacing(8)
+        claimed_holder = QWidget()
+        claimed_holder.setLayout(self._claimed_rows_layout)
+        claimed_layout.addWidget(claimed_holder)
+        self._claimed_section.setVisible(False)
+        card.add(self._claimed_section)
+
     def set_postings(self, rows: list[dict[str, str]]) -> None:
         """Açıq elanları göstərir.
 
@@ -119,6 +147,40 @@ class OpenShiftMarketCard(QWidget):
 
         for row in rows:
             self._rows_layout.addWidget(self._build_row(row))
+
+    def set_claimed(self, rows: list[dict[str, str]]) -> None:
+        """Tutulmuş, hələ baş verməmiş növbələr (DEEP-GAP OP-4).
+
+        Args:
+            rows: `id`, `date`, `work_mode`, `store`, `employee` açarları.
+                İlk dördü açıq elanlarla EYNİDİR; `employee` YALNIZ burada var,
+                çünki menecer «kimin növbəsini geri verirəm?» sualının cavabını
+                GÖRMƏLİDİR — açıq elanda isə sahib YOXDUR.
+        """
+        clear_layout(self._claimed_rows_layout)
+        self._claimed_section.setVisible(bool(rows))
+        for row in rows:
+            self._claimed_rows_layout.addWidget(self._build_claimed_row(row))
+
+    def _build_claimed_row(self, row: dict[str, str]) -> QWidget:
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        layout.addWidget(body_label(row["date"], size=13, wrap=False))
+        layout.addWidget(
+            muted_label(f"{row['work_mode']} · {row['store']} · {row.get('employee', '')}", size=12)
+        )
+        layout.addWidget(stretch())
+
+        posting_id = row["id"]
+        # «Ləğv Et»DƏN FƏRQLİ: bu, elanı YOX ETMİR, onu bazara QAYTARIR —
+        # ona görə `danger` variantı VERİLMİR (rəng nəticəni bildirir).
+        release = secondary_button("Geri Ver")
+        release.clicked.connect(lambda _=False, key=posting_id: self.release_requested.emit(key))
+        layout.addWidget(release)
+        return container
 
     def _build_row(self, row: dict[str, str]) -> QWidget:
         container = QWidget()

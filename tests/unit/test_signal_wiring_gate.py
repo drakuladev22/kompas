@@ -79,10 +79,6 @@ LOCAL_ONLY: Final[dict[str, str]] = {
     "face_control.FaceEnrollmentScreen.subject_changed": "seçim ekranın öz vəziyyətidir",
     "face_control.FaceVerificationOverlay.dismissed": "örtük özünü bağlayır",
     "group_a_entry.FirstRunWizard.cancelled": "sihirbaz addımı özü geri qaytarır",
-    "group_d.SettingsScreen.notification_changed": (
-        "açar vəziyyəti `collected()` ilə «Yadda Saxla» payload-una düşür və "
-        "`SettingsController` onu yazır — canlı siqnal yalnız məlumatdır"
-    ),
     "group_f.FineAppealScreen.appeal_started": (
         "`start_appeal` formanı ÖZÜ açır və cərimə açarını saxlayır — siqnal "
         "yalnız müşahidəçi üçündür"

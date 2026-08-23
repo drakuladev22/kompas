@@ -331,6 +331,38 @@ class Employee(AggregateRoot):
     def deactivate(self) -> None:
         self.is_active = False
 
+    def activate(self) -> bool:
+        """İşçini YENİDƏN aktivləşdirir (HR-4) — qayıdan işçinin simmetriyası.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ LAZIMDIR
+        ──────────────────────────────────────────────────────────────────────
+        `deactivate()` var idi, əksi YOX. Mövsümi işçi, uzunmüddətli
+        xəstəlikdən qayıdan və ya səhvən deaktiv edilmiş hesab üçün yeganə yol
+        bazada `UPDATE employees SET is_active = true` idi — auditsiz və
+        adsız. Halbuki hesabın YENİDƏN yaradılması variantı DAHA PİSDİR: yeni
+        `employees.id` bütün keçmiş cərimə, xal, davamiyyət və məzuniyyət
+        tarixçəsini köhnə sətirdə qoyub gedərdi, yəni işçinin tarixçəsi ikiyə
+        bölünərdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `bool` QAYTARIR
+        ──────────────────────────────────────────────────────────────────────
+        `FineAppeal.expire()` ilə eyni naxış: artıq aktiv hesabı yenidən
+        aktivləşdirmək XƏTA DEYİL (ekranda iki dəfə basmaq, at-least-once
+        icra), lakin çağıran tərəf audit sətrini və bildirişi YALNIZ HƏQİQİ
+        dəyişiklikdə yazmalıdır — əks halda jurnal heç nə dəyişməyən
+        «aktivləşdirildi» sətirləri ilə dolar.
+
+        SƏLAHİYYƏT, SƏBƏB VƏ AUDİT BURADA YOXDUR: onlar use case qatındadır
+        (`UserManagementUseCase.reactivate_employee`) — `deactivate()` ilə
+        tam simmetrik, çünki entity nə aktoru, nə də audit portunu tanıyır.
+        """
+        if self.is_active:
+            return False
+        self.is_active = True
+        return True
+
     def __repr__(self) -> str:
         return f"Employee(id={self.id}, role={self.position.code})"
 

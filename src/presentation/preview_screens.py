@@ -192,6 +192,21 @@ def _shift_planning(screen: group_c.ShiftPlanningScreen) -> None:
             },
         ]
     )
+    # DEEP-GAP OP-4 — «Tutulmuş növbələr» bölməsi maketdə DƏ görünür: bölmə
+    # yalnız sətir olduqda çəkilir, yəni nümunə verilməsəydi dizayn nəzərdən
+    # keçirilməsində HEÇ VAXT görünməzdi. Açarlar canlı yolla EYNİDİR — dörd
+    # ortaq açar + `employee` (bax `_to_claimed_row`).
+    screen.set_claimed_open_shifts(
+        [
+            {
+                "id": "00000000-0000-0000-0000-000000000018",
+                "date": "18.08.2026 · Çər",
+                "work_mode": "Səhər · 09:00–18:00",
+                "store": data.STORES[0],
+                "employee": "Aygün Məmmədova",
+            },
+        ]
+    )
 
 
 def _shift_swaps(screen: group_c.ShiftSwapScreen) -> None:

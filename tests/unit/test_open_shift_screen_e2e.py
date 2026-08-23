@@ -15,6 +15,7 @@ from __future__ import annotations
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -109,10 +110,25 @@ class _WorkModeRepo:
         return self._modes.get(work_mode_id)
 
 
+class _EmployeesRepo:
+    """DEEP-GAP OP-4 — `_to_claimed_row` işçinin ADINI oxuyur.
+
+    Menecer «kimin növbəsini geri verirəm?» sualının cavabını görməlidir;
+    tapılmayan işçi üçün ad BOŞ qalır (yalan ad göstərilmir).
+    """
+
+    def __init__(self, name: str = "Aygün Məmmədova") -> None:
+        self._name = name
+
+    def get(self, _employee_id: Any) -> Any:
+        return SimpleNamespace(full_name=self._name)
+
+
 class _Uow:
     def __init__(self, stores: dict[str, str], work_modes: dict[Any, Any]) -> None:
         self.connection = _Connection(stores)
         self._work_modes = work_modes
+        self.employees = _EmployeesRepo()
 
     def repository(self, name: str) -> Any:
         if name == "work_modes":
@@ -151,6 +167,15 @@ class _OpenShifts:
     def list_for_employee(self, *, tenant_id: Any, employee: Any) -> list[Any]:
         return list(self.employee_rows)
 
+    def list_claimed_for_employee(self, *, tenant_id: Any, employee: Any) -> list[Any]:
+        """DEEP-GAP OP-4 — «Tutduğunuz növbələr» bölməsinin oxu yolu.
+
+        Sahtə BOŞ siyahı qaytarır: bu faylın testləri TUTMA axınını ölçür,
+        geri vermə isə ayrıca sınanır. Metodun MÖVCUD olması vacibdir —
+        `refresh()` hər çağırışda hər iki siyahını EYNİ sessiyada oxuyur.
+        """
+        return []
+
     def claim(self, *, tenant_id: Any, employee: Any, posting_id: Any) -> None:
         if self.claim_error is not None:
             raise self.claim_error
@@ -160,6 +185,16 @@ class _OpenShifts:
         if self.admin_list_error is not None:
             raise self.admin_list_error
         return list(self.admin_rows)
+
+    def list_claimed_for_store(self, *, tenant_id: Any, actor: Any) -> list[Any]:
+        """DEEP-GAP OP-4 — menecerin «Tutulmuş növbələr» siyahısı.
+
+        Bu faylın testləri ELAN VERMƏ/LƏĞV axınını ölçür, ona görə sahtə boş
+        siyahı qaytarır; geri vermə `test_open_shift_controller.py`-dədir.
+        """
+        if self.admin_list_error is not None:
+            raise self.admin_list_error
+        return []
 
     def post_open_shift(self, **kwargs: Any) -> None:
         if self.post_error is not None:

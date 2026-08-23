@@ -34,7 +34,7 @@ mənbəyi göstərilib" şərtini yoxlayır, konkret buludu yox.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -46,6 +46,11 @@ from src.application.use_cases.leave_verification import (
 from src.domain.entities.appeal import AppealStatus, FineAppeal
 from src.domain.entities.fine import Fine, FineSource, FineStatus
 from src.domain.policies import DEFAULT_LIMITS, FeatureModule, SystemLimitKey
+from src.domain.value_objects.exception_signals import (
+    FINE_APPEAL_UNANSWERED_SOURCE,
+    ExceptionFinding,
+    RuleEvaluationContext,
+)
 from src.domain.value_objects.identifiers import new_appeal_id, new_fine_id
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
@@ -512,8 +517,19 @@ class FineAppealUseCase:
         employee: Employee,
         fine_id: FineId,
         reason: str,
+        document_reference: str | None = None,
     ) -> FineAppeal:
-        """İşçi etiraz göndərir — YALNIZ öz cəriməsinə, YALNIZ pəncərə açıqkən."""
+        """İşçi etiraz göndərir — YALNIZ öz cəriməsinə, YALNIZ pəncərə açıqkən.
+
+        Args:
+            document_reference: İSTƏYƏ BAĞLI sənəd istinadı (UX-4). Adətən
+                `None` ötürülür — kioskda seçilən fayl DƏRHAL Drive-da olmur,
+                yükləmə növbəsindən keçir və istinad sonradan
+                `attach_uploaded_document()` ilə yazılır. Parametr yalnız
+                sənədin ARTIQ yüklənmiş olduğu yollar (idxal, skript) üçün
+                saxlanılır. DEFOLTU `None` olduğu üçün mövcud çağıranların
+                heç biri dəyişmir.
+        """
         now = self._clock.now()
         fine = self._require_fine(fine_id)
 
@@ -567,6 +583,7 @@ class FineAppealUseCase:
             employee_id=employee.id,
             reason=reason,
             created_at=now,
+            document_reference=document_reference,
         )
         self._save(appeal)
         # MÜBAHİSƏ KİLİDİ (M-6): bu andan cərimə qərar verilənə qədər
@@ -581,7 +598,13 @@ class FineAppealUseCase:
             action="FINE_APPEAL_SUBMITTED",
             entity_type="fine_appeals",
             entity_id=appeal.id,
-            after_state={"fine_id": str(fine_id), "status": appeal.status.value},
+            after_state={
+                "fine_id": str(fine_id),
+                "status": appeal.status.value,
+                # UX-4 — sənədin OLUB-OLMADIĞI audit sətrində görünməlidir:
+                # «işçi sübut göndərmişdi?» sualı mübahisə halında verilir.
+                "has_document": appeal.has_document,
+            },
             reason=appeal.reason,
         )
         self._notifier.notify(
@@ -769,6 +792,69 @@ class FineAppealUseCase:
         )
         return AppealDecision(appeal=appeal, fine=fine, was_approved=False)
 
+    # -------------------------------- sənəd ---------------------------------- #
+
+    def attach_uploaded_document(
+        self, *, tenant_id: TenantId, appeal_id: AppealId, document_reference: str
+    ) -> bool:
+        """Sübut yükləmə NÖVBƏSİ bitdikdə çağırılır (UX-4).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `actor` YOXDUR
+        ──────────────────────────────────────────────────────────────────────
+        Səlahiyyət fayl SEÇİLƏN anda artıq yoxlanılıb (`submit` — işçi öz
+        cəriməsinə etiraz edir); Drive-a yükləmə isə arxa planda, dəqiqələr
+        sonra bitir və o anda ekran qarşısında aktor YOXDUR
+        (`FieldReportUseCase.attach_uploaded_photo` və
+        `EmployeeDocumentUseCase.attach_uploaded_file` ilə eyni qərar).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ ETİRAZIN STATUSU YOXLANMIR
+        ──────────────────────────────────────────────────────────────────────
+        Bax `FineAppeal.attach_document` şərhi: qərar verilmiş etirazda da
+        istinad yazılır, çünki bu, iş qərarı deyil — istifadəçinin ARTIQ
+        göndərdiyi sübutun yerinə çatmasıdır və onu atmaq sükutlu itki olardı.
+
+        Returns:
+            İstinad yazıldımı. `False` = etiraz tapılmadı (köhnə növbə faylı
+            BAŞQA kirayəçinin sətrinə işarə edə bilər) VƏ YA eyni istinad
+            artıq yazılıb (növbənin təkrar təsdiqi).
+        """
+        appeal = self._appeals.get(appeal_id)
+        if appeal is None:
+            _audit_log.warning(
+                "FINE_APPEAL_DOCUMENT_OWNER_NOT_FOUND",
+                extra={"appeal_id": str(appeal_id)},
+            )
+            return False
+        if appeal.tenant_id != tenant_id:
+            # KİRAYƏÇİ İZOLYASİYASI: növbə faylı lokal diskdədir və köhnə
+            # quraşdırmadan qalmış sətir başqa kirayəçinin etirazına işarə edə
+            # bilər. RLS-ə ƏLAVƏ ikinci qat (`_require_same_tenant` naxışı).
+            _audit_log.warning(
+                "FINE_APPEAL_DOCUMENT_FOREIGN_TENANT",
+                extra={"appeal_id": str(appeal_id), "tenant_id": str(tenant_id)},
+            )
+            return False
+        if not appeal.attach_document(document_reference=document_reference):
+            return False
+
+        self._save(appeal)
+        self._audit.record(
+            tenant_id=tenant_id,
+            # Aktor YOXDUR: istinadı insan deyil, yükləmə növbəsi yazır.
+            actor_id=None,
+            action="FINE_APPEAL_DOCUMENT_ATTACHED",
+            entity_type="fine_appeals",
+            entity_id=appeal.id,
+            after_state={
+                "fine_id": str(appeal.fine_id),
+                "document_reference": appeal.document_reference,
+            },
+            reason="Etiraza əlavə edilmiş sənəd Drive-a yükləndi",
+        )
+        return True
+
     # ------------------------------ planlanmış ------------------------------- #
 
     def expire_stale(self, tenant_id: TenantId) -> int:
@@ -896,6 +982,101 @@ class FineAppealUseCase:
             )
 
 
+class UnansweredFineAppealRule:
+    """HR-1 — pəncərəsi bağlanmış, LAKİN qərarsız qalmış etirazları qaldırır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    BOŞLUQ NƏ İDİ
+    ──────────────────────────────────────────────────────────────────────────
+    `expire_stale` etirazı `EXPIRED` edir və HR-a BİR dəfə bildiriş göndərir.
+    Ondan sonra HEÇ NƏ olmur: `Fine.is_exportable` «qərar verilib» tələb edir,
+    `EXPIRED` isə qərar SAYILMIR (M-6, QƏSDLİDİR) — deməli cərimə export-a
+    düşmür, işçi pulunu nə ödəyir, nə də azad olunur, sətir isə əbədi asılı
+    qalır. Yəni sistem qərarı GÖZLƏYİR, lakin onu heç kimdən TƏLƏB ETMİR.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ MOTOR, NİYƏ YENİ BİLDİRİŞ DÖVRƏSİ DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Təkrarlanan xəbərdarlıq üçün layihədə ARTIQ mexanizm var: İstisna Motoru
+    (`exception_engine.py`) — təkrar qapağı (`dedupe_key`), ROOT-dan idarə
+    olunan ciddiyyət, audit sətri, bildiriş həddi və «İstisnalar» ekranı
+    hamısı hazırdır. `expire_stale`-ə ikinci bildiriş dövrəsi yazsaydıq,
+    onların hamısını yenidən qurmalı olardıq və nəticə İKİ paralel
+    xəbərdarlıq sistemi olardı.
+
+    AVTOMATİK QƏRAR VERİLMİR: qayda YALNIZ TAPIR. Etirazı avtomatik təsdiq
+    etmək işçiyə pulsuz ləğv, avtomatik rədd isə izahsız cəza olardı — hər
+    ikisi `AuditTrail`-in cavab verə bilmədiyi «kim qərar verdi?» sualını
+    yaradardı.
+
+    ──────────────────────────────────────────────────────────────────────────
+    `dedupe_key` NİYƏ GÜNLÜKDÜR
+    ──────────────────────────────────────────────────────────────────────────
+    Açar `etiraz + gün`-dür: eyni etiraz gecəlik icrada HƏR GÜN bir dəfə
+    görünür. «Etiraz + heç nə» (tək açar) seçilsəydi istisna BİR dəfə yaranar
+    və nəzərdən keçirildikdən sonra bir daha xatırlatmazdı — halbuki problem
+    HƏLL OLUNANA qədər davam edir. Hər icrada YENİ sətir isə (açarsız) jurnalı
+    doldurardı.
+    """
+
+    def __init__(self, *, appeals: FineAppealRepository, fines: FineRepository) -> None:
+        self._appeals = appeals
+        self._fines = fines
+
+    @property
+    def source_code(self) -> str:
+        return FINE_APPEAL_UNANSWERED_SOURCE
+
+    @property
+    def name_az(self) -> str:
+        return "Cavabsız cərimə etirazı"
+
+    def evaluate(self, context: RuleEvaluationContext) -> list[ExceptionFinding]:
+        """Qərarsız etirazlar arasından həddi keçənləri seçir."""
+        escalation_days = context.limit_int(
+            SystemLimitKey.FINE_APPEAL_ESCALATION_DAYS.value,
+            int(DEFAULT_LIMITS[SystemLimitKey.FINE_APPEAL_ESCALATION_DAYS]),
+        )
+        cutoff = context.as_of - timedelta(days=escalation_days)
+        findings: list[ExceptionFinding] = []
+
+        for appeal in self._appeals.list_undecided(context.tenant_id):
+            fine = self._fines.get(appeal.fine_id)
+            if fine is None:
+                # Sətir yoxdursa qaldırmaq mənasızdır: istisna ekranı onu
+                # açan düyməni göstərə bilməzdi. Bu, məlumat bütövlüyü
+                # problemidir və AYRI kanalın (audit) işidir.
+                continue
+            if fine.is_appeal_window_open(now=context.as_of):
+                # Pəncərə HƏLƏ açıqdır — HR gecikməyib.
+                continue
+            if appeal.created_at > cutoff:
+                continue
+
+            waiting_days = int((context.as_of - appeal.created_at).total_seconds() // 86400)
+            findings.append(
+                ExceptionFinding(
+                    employee_id=appeal.employee_id,
+                    store_id=fine.store_id,
+                    detail=(
+                        f"Cərimə etirazı {waiting_days} gündür qərar gözləyir. "
+                        f"Qərar verilməyənə qədər cərimə Premiya&Cərimə hesabatına "
+                        f"DÜŞMÜR — nə tutulur, nə də ləğv olunur."
+                    ),
+                    context={
+                        "appeal_id": str(appeal.id),
+                        "fine_id": str(fine.id),
+                        "appeal_status": appeal.status.value,
+                        "waiting_days": waiting_days,
+                        "escalation_days": escalation_days,
+                        "fine_amount": str(fine.amount.amount),
+                    },
+                    dedupe_key=f"{appeal.id}:{context.as_of.date().isoformat()}",
+                )
+            )
+        return findings
+
+
 __all__ = [
     "APPROVE_APPEAL_FLAG",
     "DUPLICATE_SUBMISSION_WINDOW_SECONDS",
@@ -909,4 +1090,5 @@ __all__ = [
     "FineNotFoundError",
     "FinePermissionError",
     "ManualFineUseCase",
+    "UnansweredFineAppealRule",
 ]

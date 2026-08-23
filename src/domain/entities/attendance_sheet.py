@@ -37,9 +37,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
+from typing import Final
 
 from src.domain.entities.base import AggregateRoot, DomainRuleError
-from src.domain.events import DailyAttendanceSheetConfirmedEvent
+from src.domain.events import (
+    DailyAttendanceSheetConfirmedEvent,
+    DailyAttendanceSheetReopenedEvent,
+)
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.identifiers import (
     DailySheetId,
@@ -49,6 +53,17 @@ from src.domain.value_objects.identifiers import (
 )
 from src.domain.value_objects.scheduling import require_aware
 from src.shared.text import normalise_decision_text
+
+#: Təsdiqin geri açılma səbəbinin minimum uzunluğu.
+#:
+#: Dəyər layihədəki bütün QƏRAR izahları ilə eynidir (`ManualOverride.
+#: MIN_OVERRIDE_REASON_LENGTH`, `MIN_DECISION_REASON_LENGTH`, cərimə etirazı)
+#: və eyni səbəbə görə: «səhv idi» cümləsi audit sətrini izah etmir, halbuki
+#: həmin sətir işçinin maaşına təsir edən bir imzanın geri alınmasıdır.
+#: Ortaq sabitdən İDXAL EDİLMİR — bu modul nə `leave_request.py`-dan, nə də
+#: `appeal.py`-dan asılıdır və bir ədəd üçün belə asılılıq qurmaq iki aqreqatı
+#: bir-birinə bağlayardı (`appeal.MIN_APPEAL_SLA_HOURS` şərhi ilə eyni qərar).
+MIN_REOPEN_REASON_LENGTH: Final[int] = 10
 
 
 class AutoAttendanceStatus(str, Enum):
@@ -280,6 +295,91 @@ class DailyAttendanceSheet(AggregateRoot):
             )
         )
 
+    def reopen(
+        self,
+        *,
+        requested_by: EmployeeId,
+        approved_by: EmployeeId,
+        reason: str,
+        now: datetime,
+    ) -> EmployeeId | None:
+        """Təsdiqlənmiş tabeli YENİDƏN AÇIR — İKİ ŞƏXS + MƏCBURİ SƏBƏB.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ LAZIMDIR — TƏK ÇIXIŞ BAZAYA ƏL İLƏ MÜDAXİLƏ İDİ
+        ──────────────────────────────────────────────────────────────────────
+        `confirm()` birtərəfli idi və `_require_open()` ondan sonra HƏR
+        redaktəni bağlayırdı (`prefill`, `annotate`, `set_manager_note`).
+        Tabel isə əmək haqqı hesablamasının GİRİŞİDİR: səhv təsdiqlənmiş bir
+        gün (məs. menecer `PENDING` sətirləri günün ortasında imzaladı)
+        işçinin maaşına düşür və düzəlişin YEGANƏ yolu `UPDATE`-lə
+        `is_confirmed`-i geri çevirmək olurdu — auditsiz, izsiz, adsız.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ İKİ ŞƏXS — `ManualOverride` NAXIŞI
+        ──────────────────────────────────────────────────────────────────────
+        Bu keçid `[Vaxtı Əllə Təyin Et]` ilə eyni növ hərəkətdir: hər ikisi
+        ARTIQ QEYDƏ ALINMIŞ və pul nəticəsi olan bir faktı geri çevirir. Ona
+        görə qapı da eynidir — İKİNCİ ŞƏXSİN təsdiqi + `MIN_REOPEN_REASON_
+        LENGTH` simvolluq məcburi səbəb. Təsdiqçinin səlahiyyəti
+        (`can_approve_dual_control_override`) use case qatında yoxlanılır;
+        burada yalnız «eyni adam ola bilməz» invariantı yaşayır, çünki ekranı
+        yan keçən skript də ona tabe olmalıdır.
+
+        TƏSDİQÇİNİN İMZALAYAN ŞƏXS OLMASI QADAĞAN EDİLMİR: menecer öz səhvini
+        görüb HR-dan açılış istəyə bilər və HR həm istəyən, həm təsdiqləyən
+        olmadıqca vəzifə ayrılığı pozulmur. Yeganə sərt şərt istəyən ≠
+        təsdiqləyəndir.
+
+        SƏTİRLƏRƏ TOXUNULMUR: yenidən açılan tabel ÖZ məzmununu saxlayır və
+        menecerin qeydləri yerində qalır. `prefill()` sonradan çağırılsa da
+        qeydləri qoruyur (bax həmin metod) — yəni açılış nə məlumat silir, nə
+        də statusları sıfırlayır.
+
+        Returns:
+            Təsdiqi GERİ ALINAN şəxs (`confirmed_by`) — çağıran tərəf audit
+            `before_state`-ini və bildirişin ünvanını ondan qurur. Sahə
+            aqreqatda `None`-a düşür, çünki tabel artıq imzalanmamışdır.
+        """
+        require_aware(now, field="now")
+        if not self.is_confirmed:
+            raise DomainRuleError(
+                "Yalnız təsdiqlənmiş tabel yenidən açıla bilər",
+                user_message="Bu tabel onsuz da açıqdır.",
+                context={"sheet_date": self.sheet_date.isoformat()},
+            )
+        if requested_by == approved_by:
+            raise DomainRuleError(
+                "Tabelin yenidən açılması ikinci şəxsin təsdiqini tələb edir",
+                user_message="Bu əməliyyatı ikinci şəxs təsdiqləməlidir.",
+                context={"requested_by": str(requested_by)},
+            )
+        cleaned = normalise_decision_text(reason)
+        if len(cleaned) < MIN_REOPEN_REASON_LENGTH:
+            raise DomainRuleError(
+                f"Açılış səbəbi minimum {MIN_REOPEN_REASON_LENGTH} simvol olmalıdır",
+                user_message="Tabelin niyə yenidən açıldığını ətraflı yazın.",
+                context={"length": len(cleaned)},
+            )
+
+        previous_confirmer = self.confirmed_by
+        self.is_confirmed = False
+        self.confirmed_by = None
+        self.confirmed_at = None
+        self.record_event(
+            DailyAttendanceSheetReopenedEvent(
+                tenant_id=self.tenant_id,
+                sheet_id=self.id,
+                store_id=self.store_id,
+                sheet_date=self.sheet_date,
+                requested_by=requested_by,
+                approved_by=approved_by,
+                previous_confirmed_by=previous_confirmer,
+                reason=cleaned,
+            )
+        )
+        return previous_confirmer
+
     # ------------------------------ göstəricilər ------------------------------ #
 
     @property
@@ -389,6 +489,7 @@ def build_lines(facts: list[AttendanceFact]) -> list[SheetLine]:
 
 
 __all__ = [
+    "MIN_REOPEN_REASON_LENGTH",
     "AttendanceCountingPolicy",
     "AttendanceFact",
     "AutoAttendanceStatus",

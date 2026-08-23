@@ -59,6 +59,22 @@ class SettingsController:
 
     def attach(self, screen: SettingsScreen) -> None:
         screen.saved.connect(lambda payload: self._on_saved(screen, payload))
+        # ──────────────────────────────────────────────────────────────────
+        # AÇAR DƏRHAL YAZILIR — «YADDA SAXLA»SIZ İTMİR (DEEP-GAP UX-5)
+        # ──────────────────────────────────────────────────────────────────
+        # `notification_changed` siqnalı EKRANDA yayılırdı, LAKİN heç bir
+        # kontroller onu dinləmirdi: istifadəçi açarı çevirir, ekranı bağlayır
+        # və dəyişiklik sükutla itirdi. «Yadda Saxla» düyməsi vardı, amma
+        # açarın YANINDA deyil, kartın altında — yəni bağlantı görünmürdü.
+        #
+        # Sükutla itən dəyişiklik layihənin öz qaydasına ziddir: yarımçıq
+        # vəziyyət qalmır (CLAUDE.md §6 — «commit unudularsa rollback olur»).
+        # Ona görə açar DƏRHAL yazılır; «Yadda Saxla» isə bütün kartı bir
+        # dəfəyə yazan yol kimi QALIR (ikisi eyni metoda gedir, yəni davranış
+        # ayrılmır).
+        screen.notification_changed.connect(
+            lambda key, enabled: self._on_notification_toggled(screen, key, enabled)
+        )
         screen.sessions_close_requested.connect(lambda: self._on_sessions(screen))
         screen.password_change_requested.connect(lambda: self._on_password(screen))
         self.refresh(screen)
@@ -163,6 +179,42 @@ class SettingsController:
             )
             return
         _inform(screen, "Ayarlar", "Bildiriş tərcihləriniz yadda saxlanıldı.")
+
+    def _on_notification_toggled(self, screen: SettingsScreen, key: str, enabled: bool) -> None:
+        """Tək açar çevrildi — BÜTÜN dəst yazılır (bax `attach`-dakı izah).
+
+        NİYƏ TƏK AÇAR YOX, BÜTÜN DƏST: `set_notification_prefs` `jsonb`
+        sütununu TAM ƏVƏZ EDİR (`DO UPDATE SET notification_prefs =
+        EXCLUDED.notification_prefs`). Yalnız çevrilən açarı göndərsəydik,
+        qalan iki kanal sütundan SİLİNƏRDİ və növbəti oxunuşda «açar yoxdursa
+        kanal açıq qalır» qaydası onları sükutla yenidən açardı — yəni bir
+        açarı söndürmək digərini geri qaytarardı.
+
+        Uğurda MODAL AÇILMIR: hər çevrilişdə pəncərə çıxsaydı, üç kanallı
+        kartda üç dialoq olardı. UĞURSUZLUQDA isə açar GERİ QAYTARILIR —
+        yazılmamış dəyişikliyi ekranda saxlamaq istifadəçiyə yalan deməkdir.
+        """
+        collected = screen.collected().get("notifications")
+        prefs = (
+            {str(k): bool(v) for k, v in collected.items()}
+            if isinstance(collected, dict)
+            else {key: enabled}
+        )
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                session.preferences.set_notification_prefs(self._actor.id, prefs)
+                session.commit()
+        except Exception as exc:
+            # Geniş tutma — səbəb `_on_saved`-dakı ilə EYNİDİR (yuxarı).
+            _error_log.exception("SETTINGS_TOGGLE_FAILED", extra={"key": key})
+            # `set_notification_prefs` siqnalları BLOKLAYIR — geri qaytarma
+            # yeni bir «istifadəçi dəyişdi» hadisəsi yaratmır.
+            screen.set_notification_prefs({**prefs, key: not enabled})
+            _inform(
+                screen,
+                "Ayarlar",
+                getattr(exc, "user_message", "Dəyişiklik yadda saxlanılmadı."),
+            )
 
     def _on_sessions(self, screen: SettingsScreen) -> None:
         """«Bütün sessiyaları bağla» — sayı göstərir, LƏĞV ETMİR (SEC-5).

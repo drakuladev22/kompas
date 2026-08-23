@@ -110,9 +110,35 @@ class FaceSetupController:
 
     def attach(self, screen: FaceSetupRequiredScreen) -> None:
         screen.set_employee_name(self._subject.full_name)
+        self._show_deadline(screen)
         screen.enroll_requested.connect(
             lambda username, password: self._on_enroll(screen, username, password)
         )
+
+    def _show_deadline(self, screen: FaceSetupRequiredScreen) -> None:
+        """«Sonra» möhlətini ekrana yazır (DEEP-GAP UX-7).
+
+        HESABLAMA BURADA YOXDUR: `FaceEnrollmentUseCase.enrollment_grace()`
+        həm Root açarını, həm də «tarix naməlumdur» halını özü həll edir —
+        ekran yalnız hazır mətni göstərir. Səbəb həmin metodun başlığındadır
+        (eyni qayda `OverdueFaceEnrollmentRule`-da da var, iki nüsxə sükutla
+        ayrılardı).
+
+        UĞURSUZLUQ SƏSSİZDİR: möhlət KÖMƏKÇİ məlumatdır — onun oxunmaması
+        qeydiyyat ekranını bloklamamalıdır (`is_enrollment_required`-in eyni
+        fail-safe istiqaməti).
+        """
+        try:
+            with self._context.session(user_id=self._subject.id) as session:
+                grace = session.face_enrollment.enrollment_grace(
+                    tenant_id=session.tenant_id, hire_date=self._subject.hire_date
+                )
+        except Exception:
+            _error_log.warning("FACE_SETUP_GRACE_UNAVAILABLE", exc_info=True)
+            return
+        if grace.deadline is None:
+            return
+        screen.set_deadline_notice(grace.label_az(), overdue=grace.is_overdue)
 
     # ------------------------------ qeydiyyat -------------------------------- #
 

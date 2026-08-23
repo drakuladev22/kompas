@@ -558,9 +558,17 @@ def test_new_lockout_is_recorded_when_the_threshold_is_crossed() -> None:
 
     assert events.types() == ["FACE_LOGIN_FAILED", "FACE_LOGIN_TERMINAL_LOCKED"]
     assert events.rows[1]["details"]["trigger"] == "NEW_LOCKOUT"
-    # Sayğacın PIN ilə ORTAQ olduğu sətirdən OXUNA bilməlidir — əks halda
-    # hadisəni araşdıran adam PIN girişinin niyə bağlandığını tapa bilməz.
-    assert events.rows[1]["details"]["shared_counter"] == "store_pin_throttle"
+    # HANSI SAYĞACIN kilidlədiyi sətirdən OXUNA bilməlidir — əks halda
+    # hadisəni araşdıran adam hansı kanalın bağlandığını tapa bilməz.
+    #
+    # AF-2-DƏN SONRA AÇAR VƏ DƏYƏR DƏYİŞDİ: əvvəl `shared_counter` idi və
+    # HƏMİŞƏ `store_pin_throttle` yazırdı, çünki üz rəddləri PIN girişi ilə
+    # ORTAQ sayğaca düşürdü — yəni kameraya bir neçə dəfə baxan kənar şəxs
+    # BÜTÜN mağazanın PIN girişini dayandıra bilirdi (xidmətdən imtina).
+    # İndi açar `counter`-dır və dəyər HƏQİQƏTİ yazır: `face_throttle` portu
+    # bağlanmayıbsa (bu sahtədə bağlanmayıb) köhnə ortaq sayğac, bağlanıbsa
+    # ayrı `store_face_throttle`.
+    assert events.rows[1]["details"]["counter"] == "store_pin_throttle"
 
 
 def test_face_login_fails_closed_when_the_throttle_cannot_be_read() -> None:
@@ -800,3 +808,57 @@ def test_login_trigger_context_exists_for_the_audit_trail() -> None:
 
     assert FaceTriggerContext.LOGIN.value == "LOGIN"
     assert FaceTriggerContext.LOGIN is not FaceTriggerContext.STEP_A
+
+
+# --------------------------------------------------------------------------- #
+# AF-2 — ÜZ SAYĞACI PIN SAYĞACINDAN AYRILDI
+# --------------------------------------------------------------------------- #
+#
+# Ortaq sayğac dövründə kameranın qarşısına keçən İSTƏNİLƏN adam — mağazanın
+# işçisi olmayan kənar şəxs daxil — sayğacı artırırdı və N rəddən sonra BÜTÜN
+# mağazanın PIN girişi kilidlənirdi. 1:N-də cəhd edən şəxs heç bir kimlik
+# təqdim etmir, yəni «eyni terminalda eyni adam» fərziyyəsi YOXDUR.
+
+
+def test_a_wired_face_throttle_never_touches_the_pin_counter() -> None:
+    """AF-2-nin BÜTÜN mahiyyəti: üz rəddi PIN girişini DAYANDIRMIR.
+
+    Köhnə davranış məhz ƏKSİNİ edirdi — test ona görə hər iki sahtəni ayrıca
+    sayır: üz sayğacı artmalı, PIN sayğacına HEÇ TOXUNULMAMALIDIR.
+    """
+    face_throttle = _PinThrottle()
+    pin_throttle = _PinThrottle()
+    stranger = _Employee("Kənar şəxs")
+    use_case = _use_case(
+        {stranger.id: 0.95},
+        pin_throttle=pin_throttle,
+        face_throttle=face_throttle,
+        security_events=_SecurityEvents(),
+    )
+
+    use_case.identify_for_login(
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[stranger]
+    )
+
+    assert face_throttle.failures == 1, "üz rəddi ÖZ sayğacına yazılmalıdır"
+    assert pin_throttle.failures == 0, "PIN sayğacı TOXUNULMAMALIDIR (AF-2)"
+    assert pin_throttle.read_count == 0, "kilid yoxlaması da üz sayğacından oxumalıdır"
+
+
+def test_the_event_row_names_the_counter_that_locked_the_terminal() -> None:
+    """Hadisə sətri HANSI sayğacın kilidlədiyini YAZIR — təxmin edilmir (AF-5 prinsipi)."""
+    events = _SecurityEvents()
+    stranger = _Employee("Kənar şəxs")
+    use_case = _use_case(
+        {stranger.id: 0.95},
+        pin_throttle=_PinThrottle(),
+        face_throttle=_PinThrottle(locks_on=1),
+        security_events=events,
+    )
+
+    use_case.identify_for_login(
+        tenant_id=TENANT, store_id=STORE, machine_key=MACHINE_KEY, candidates=[stranger]
+    )
+
+    assert events.types() == ["FACE_LOGIN_FAILED", "FACE_LOGIN_TERMINAL_LOCKED"]
+    assert events.rows[1]["details"]["counter"] == "store_face_throttle"

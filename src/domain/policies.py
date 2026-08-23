@@ -610,6 +610,20 @@ class SystemLimitKey(str, Enum):
     # bu dövrə yalnız şəbəkə qayıdanda qalanları götürür. Zəif internetli
     # filialda daha seyrək, ofisdə daha sıx ritm seçilə bilər.
     EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS = "EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS"
+    # SAAS-6 — YÜKLƏNMİŞ sübut sətri və HƏLL EDİLMİŞ sinxronizasiya münaqişəsi
+    # lokal SQLite-da nə qədər saxlanılır. Hədd DEYİL, SAXLAMA MÜDDƏTİDİR:
+    # heç bir əməliyyat bloklanmır, yalnız artıq öz işini görmüş sətir təmizlənir.
+    #
+    # NİYƏ HƏR İKİ CƏDVƏL ÜÇÜN TƏK AÇAR: ikisi də EYNİ sualın cavabıdır —
+    # «bu terminaldakı diaqnostika izi nə qədər lazımdır?». Ayrı açarlar
+    # olsaydı, Root birini dəyişib digərini unudar və eyni diskdə iki fərqli
+    # ritmlə böyüyən iki cədvəl qalardı.
+    EVIDENCE_UPLOAD_RETENTION_DAYS = "EVIDENCE_UPLOAD_RETENTION_DAYS"
+    # UX-7 — işə götürüldükdən sonra üz qeydiyyatı üçün verilən möhlət (gün).
+    # BLOKLAMA HƏDDİ DEYİL, GÖRÜNMƏ həddidir: möhlət bitəndə işçiyə heç nə
+    # olmur, sətir menecerin «İstisnalar» siyahısına düşür (bax
+    # `OverdueFaceEnrollmentRule` — niyə bloklama seçilmədiyi orada yazılıb).
+    FACE_ENROLLMENT_GRACE_DAYS = "FACE_ENROLLMENT_GRACE_DAYS"
     # «Şübhəli Satışlar» ekranında uyğunluq faizinin XƏBƏRDARLIQ rənginə
     # keçdiyi hədd. `ERP_NAME_MATCH_THRESHOLD` (qəbul həddi) ilə QARIŞDIRILMIR:
     # o, satışın işçiyə BAĞLANIB-bağlanmamasını həll edir, bu isə operatorun
@@ -974,6 +988,15 @@ class SystemLimitKey(str, Enum):
     # PARAMETRİDİR.
     KIOSK_STORE_PIN_MAX_FAILED_ATTEMPTS = "KIOSK_STORE_PIN_MAX_FAILED_ATTEMPTS"
     KIOSK_STORE_PIN_LOCKOUT_MINUTES = "KIOSK_STORE_PIN_LOCKOUT_MINUTES"
+    #: HR-1 — cavabsız cərimə etirazı neçə gün sonra İstisna Motoruna qalxır.
+    #:
+    #: `FINE_APPEAL_WINDOW_HOURS`-a BAĞLANMADI (xal pəncərəsi ilə eyni
+    #: əsaslandırma, yuxarıya bax): pəncərə İŞÇİNİN nə qədər vaxtı olduğunu
+    #: deyir, bu isə HR-ın cavabsızlığının nə vaxt PROBLEM sayıldığını.
+    #: Root birincisini uzadanda ikincisi sükutla sürüşməməlidir.
+    FINE_APPEAL_ESCALATION_DAYS = "FINE_APPEAL_ESCALATION_DAYS"
+    #: HR-2 — cərimə nəşr gözləməkdə neçə gün qala bilər.
+    FINE_REVIEW_OVERDUE_DAYS = "FINE_REVIEW_OVERDUE_DAYS"
 
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
@@ -1006,6 +1029,18 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # `exceptions`-da `REVOKE DELETE` olduğu üçün onları TƏMİZLƏMƏK MÜMKÜN
     # DEYİL — ona görə tavan konfiqurasiya edilə bilən qoruyucudur.
     SystemLimitKey.EXCEPTION_MAX_FINDINGS_PER_RULE: "500",
+    # HR-1 — 3 gün. Ədəd `FINE_APPEAL_WINDOW_HOURS`-un (72 saat) NƏTİCƏSİDİR,
+    # nüsxəsi deyil: etiraz pəncərəsi bağlananda `expire_stale` sətri
+    # `EXPIRED` edir, LAKİN qərar hələ gözlənilir (M-6). Bir tam pəncərə
+    # qədər daha gözləmək HR-a real imkan verir; ondan sonra cavabsızlıq
+    # artıq gecikmə deyil, İSTİSNA-dır. Sıfır seçilsəydi hər bağlanan
+    # pəncərə dərhal istisna doğurar və jurnal normal iş axını ilə dolardı.
+    SystemLimitKey.FINE_APPEAL_ESCALATION_DAYS: "3",
+    # HR-2 — 30 gün. İcmal AYLIQ dövrədir (`review_month`, `fine_review.py`),
+    # yəni bir tam dövrə buraxılmayınca gözləmə NORMALDIR. 30-dan çox
+    # gözləyən sətir isə o deməkdir ki, icmal HEÇ KEÇİRİLMƏYİB — və məhz o
+    # halda cərimə işçiyə GÖRÜNMÜR, etiraz pəncərəsi də AÇILMIR.
+    SystemLimitKey.FINE_REVIEW_OVERDUE_DAYS: "30",
     # Bu ciddiyyətdən (daxil olmaqla) yuxarı tapıntı DƏRHAL bildiriş doğurur.
     # Defolt HIGH: MEDIUM-da hər gecikmə anomaliyası HR-a mesaj göndərər və
     # bildiriş kanalı bir həftədə "səs-küy" kimi görməzdən gəlinərdi.
@@ -1333,6 +1368,31 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # `REALTIME_POLL_INTERVAL_SECONDS` ilə eyni vahid olsun deyə (Root eyni
     # panelde iki fərqli vahidlə üzləşməməlidir). 120 san = 120_000 ms.
     SystemLimitKey.EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS: "120",
+    # SAAS-6 — 30 gün. Ədəd MƏLUMAT İTKİSİ RİSKİ DAŞIMIR və məhz ona görə bu
+    # qədər qısadır: `UPLOADED` statusuna çatmış sətir o deməkdir ki, şəkil
+    # ARTIQ Google Drive-dadır (`fines.evidence_reference` ona işarə edir) —
+    # lokal SQLite sətri həmin andan etibarən yalnız DİAQNOSTİKA izidir
+    # («bu şəkil nə vaxt, neçə cəhddən sonra yükləndi?»). Eyni məntiq həll
+    # edilmiş sinxronizasiya münaqişəsinə də aiddir: qərar artıq bazadadır,
+    # lokal sətir yalnız izdir.
+    #
+    # NİYƏ SIFIR DEYİL (dərhal silmə): şəbəkə problemi olan filialda
+    # araşdırma adətən həmin gün YOX, həftələr sonra — mühasibat ayı
+    # bağlayanda başlayır. Bir tam aylıq pəncərə həmin sualın cavabını
+    # saxlayır. NİYƏ 365 DEYİL: `%PROGRAMDATA%` altındakı fayl kiosk
+    # maşınının diskindədir və illərlə yığılan iz orada real yer tutur;
+    # DAİMİ sübut onsuz da Drive-dadır, lokal nüsxə onun əvəzi deyil.
+    #
+    # Root bunu dəyişə bilər — həqiqi hüdudlar `INFRA_LIMIT_BOUNDS`-dadır.
+    SystemLimitKey.EVIDENCE_UPLOAD_RETENTION_DAYS: "30",
+    # UX-7 — 7 gün. Qeydiyyat SELF-SERVICE DEYİL (`facecontrol.md` bənd 1):
+    # işçi onu ÖZÜ edə bilmir, admin ilə üzbəüz görüş lazımdır. Bir iş
+    # həftəsi həmin görüşün təbii ölçüsüdür — yeni işçi onsuz da birinci
+    # həftədə sənəd, forma və təlimat üçün adminlə görüşür.
+    # Sıfır seçilsəydi hər yeni işçi elə işə başladığı gün istisna doğurardı;
+    # 30 seçilsəydi «Sonra» düyməsi bir ay ərzində sərbəst basıla bilərdi və
+    # UX-7-nin şikayət etdiyi hal (əbədi təxirə salma) davam edərdi.
+    SystemLimitKey.FACE_ENROLLMENT_GRACE_DAYS: "7",
     # `screens/group_f.py`: 50%-dən aşağı uyğunluq xəbərdarlıq rəngindədir.
     SystemLimitKey.ERP_MATCH_LOW_CONFIDENCE_PERCENT: "50",
     # `developer_panel/ui.py`: hər iki diaqnostika cədvəli 12 sətir göstərir.

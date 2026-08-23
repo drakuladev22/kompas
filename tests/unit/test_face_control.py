@@ -1536,7 +1536,10 @@ def test_deactivation_still_works_when_face_control_is_not_installed() -> None:
         tenant_id=TENANT, actor=root, employee_id=worker.id, reason="İşdən çıxdı"
     )
 
-    assert audit.entries[-1]["after_state"]["face_embedding_purged"] is None
+    # AF-5 — port bağlanmayıbsa audit `None` YOX, açıq `SKIPPED_NO_PORT`
+    # yazır: «şablon silinmədi» ilə «silinib-silinmədiyi naməlumdur» iki
+    # fərqli faktdır və mübahisədə ikincisi daha vacibdir.
+    assert audit.entries[-1]["after_state"]["face_embedding_purged"] == "SKIPPED_NO_PORT"
 
 
 # --------------------------------------------------------------------------- #

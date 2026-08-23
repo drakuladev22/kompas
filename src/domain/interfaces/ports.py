@@ -721,6 +721,78 @@ class PinThrottleRepository(Protocol):
 
 
 @runtime_checkable
+class FaceThrottleRepository(Protocol):
+    """`store_face_throttle` — 1:N ÜZLƏ GİRİŞİN TERMİNAL sayğacı (AF-2).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AYRI CƏDVƏL — VƏ NİYƏ ORTAQ SAYĞAC QƏRARI DƏYİŞDİRİLDİ
+    ──────────────────────────────────────────────────────────────────────────
+    `identify_for_login()` (1:N) rəddləri əvvəl `store_pin_throttle`-a, yəni
+    PIN girişi ilə ORTAQ sayğaca yazılırdı. Həmin qərar sənədli idi və məntiqi
+    də aydın idi: «iki müstəqil sayğac hücumçuya büdcəni İKİ QAT edərdi,
+    halbuki qorunan şey EYNİ terminaldır».
+
+    Lakin o mühakimə «eyni terminalda EYNİ ADAM cəhd edir» fərziyyəsinə
+    əsaslanır. 1:N üz girişində bu fərziyyə YOXDUR: kameranın qarşısına
+    KEÇƏN İSTƏNİLƏN adam — o cümlədən mağazanın işçisi olmayan kənar şəxs —
+    sayğacı artıra bilir və heç bir kimlik təqdim etmir. Nəticədə bir neçə
+    dəfə kameraya baxmaq BÜTÜN mağazanın PIN girişini dayandırırdı, yəni
+    qoruma XİDMƏTDƏN İMTİNA vasitəsinə çevrilirdi (AF-2).
+
+    İki riskdən hansının ağır olduğu SİYASƏT qərarıdır və o, verilib:
+    DoS aradan qaldırılır, büdcənin iki qat olması isə QƏBUL EDİLİR.
+
+    ──────────────────────────────────────────────────────────────────────────
+    HƏDD YENİ ROOT AÇARI DEYİL — MÖVCUD İKİSİ PAYLAŞILIR
+    ──────────────────────────────────────────────────────────────────────────
+    Üz kanalı `KIOSK_STORE_PIN_MAX_FAILED_ATTEMPTS` və
+    `KIOSK_STORE_PIN_LOCKOUT_MINUTES` dəyərlərini işlədir. Ayrı açar
+    yaradılmadı: yeni ədəd icad etmək əvəzinə Root hər iki kanalı BİR
+    parametrlə tənzimləyir və büdcənin iki qat olmasını həmin dəyəri
+    endirməklə kompensasiya edə bilir. İki ayrı açar olsaydı, «ümumi büdcə
+    nə qədərdir?» sualının cavabı iki sətrin cəmindən çıxarılmalı olardı.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ EYNİ `TerminalPinThrottle` TİPİ
+    ──────────────────────────────────────────────────────────────────────────
+    Sətrin FORMASI eynidir (açar, sayğac, sabit pəncərə, kilid) və
+    `advance_after_failure()` spesifikasiyası da eynidir. Yeni dəyər obyekti
+    yaratmaq həmin arifmetikanın İKİNCİ nüsxəsini doğurardı və `pin_throttle.py`
+    başlığındakı «sayğac ƏBƏDİ kilid» qüsuru iki yerdə ayrı-ayrı təkrarlana
+    bilərdi. Fərq CƏDVƏLDƏDİR, tipdə yox.
+
+    ──────────────────────────────────────────────────────────────────────────
+    UĞURLU GİRİŞDƏ SIFIRLAMA YOXDUR
+    ──────────────────────────────────────────────────────────────────────────
+    `PinThrottleRepository`-nin eyni qərarı: sıfırlama olsaydı, hücumçu N-1
+    cəhddən sonra qanuni bir girişi gözləyib sayğacı pulsuz təmizləyərdi.
+    Sabit pəncərə təbii decay verir.
+
+    ⚠️ DB TƏLƏBİ: `store_face_throttle` cədvəli `migrations/075`-in
+    `store_pin_throttle` ilə EYNİ formada olmalıdır (PK `(tenant_id,
+    machine_key)`, `machine_key ~ '^[0-9a-f]{64}$'`, server-vaxtlı sabit
+    pəncərə trigger-i). Sütunlar və trigger məntiqi TƏKRARLANIR, ÇÜNKİ
+    onlar EYNİ qaydadır — fərq yalnız hansı kanalın sayıldığındadır.
+    """
+
+    def get_for_update(
+        self, tenant_id: TenantId, machine_key: MachineIdentityHash
+    ) -> TerminalPinThrottle | None:
+        """`SELECT ... FOR UPDATE`; sətir yoxdursa `None` (hələ uğursuz üz
+        cəhdi qeydə alınmayıb)."""
+        ...
+
+    def record_failure(
+        self, tenant_id: TenantId, machine_key: MachineIdentityHash, *, store_id: StoreId
+    ) -> TerminalPinThrottle:
+        """Atomik artırma — `PinThrottleRepository.record_failure` ilə EYNİ
+        müqavilə: sabit-pəncərə hesablaması DB trigger-indədir (TIME-1) və
+        metod istisnanı UDMUR (sayğac yazılmadan «üz tanınmadı» göstərmək
+        SEC-01-in kök səbəbinin təkrarı olardı)."""
+        ...
+
+
+@runtime_checkable
 class PositionRepository(Protocol):
     def get(self, position_id: PositionId) -> Position | None: ...
 
@@ -1308,6 +1380,49 @@ class OpenShiftPostingRepository(Protocol):
         """Eyni slot üçün ikinci açıq elanın qarşısını almaq üçün."""
         ...
 
+    def list_claimed(
+        self,
+        *,
+        employee_id: EmployeeId | None = None,
+        from_date: date | None = None,
+        limit: int = 100,
+    ) -> list[OpenShiftPosting]:
+        """TUTULMUŞ elanlar — `[Geri Ver]` düyməsinin oxu yolu (OP-4).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `list_open`-a PARAMETR ƏLAVƏ EDİLMƏDİ
+        ──────────────────────────────────────────────────────────────────────
+        `list_open` adı ilə şərtini birlikdə daşıyır (`WHERE status = 'OPEN'`)
+        və onu `status` parametri ilə genişləndirmək adı yalana çevirərdi.
+        Üstəlik indeksləri də FƏRQLİDİR: açıq elanlar
+        `idx_open_shift_postings_open` (mağaza + tarix) ilə oxunur, tutulmuş
+        sətirlər isə `uq_open_shift_one_claim_per_employee_day` (işçi + tarix)
+        yolu ilə — bir metodda birləşdirilsəydi, sorğu planı çağırışdan asılı
+        olaraq dəyişər və hansı indeksin işlədiyi görünməzdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `tenant_id` ARQUMENTİ YOXDUR (bu portdakı DİGƏR metodlardan FƏRQLİ)
+        ──────────────────────────────────────────────────────────────────────
+        Kirayəçi süzgəci implementasiyada bağlantının ÖZ kontekstindən
+        (`_BaseRepository._tenant`) gəlir. Bu, SAAS-1 istiqamətidir: `tenant_id`
+        arqument BORCU yalnız AŞAĞI düşməlidir və yeni metod onu ARTIRA
+        bilməz (`infrastructure/persistence/tenant_argument_audit.py`).
+        Mövcud metodlar köhnə imza ilə qalır — onları köçürmək ayrı işdir.
+
+        Args:
+            employee_id: `None` = kirayəçidəki BÜTÜN tutulmuş elanlar (admin
+                görünüşü); doludursa yalnız həmin işçinin tutduqları.
+            from_date: `None` = tarix süzgəci YOXDUR. Çağıran tərəf «bugündən
+                etibarən» qərarını ÖZÜ verir — bax `OpenShiftMarketUseCase.
+                list_claimed_for_employee` şərhi (keçmiş növbəni geri vermək
+                mənasızdır, LAKİN bu, repo-nun deyil, iş qaydasının qərarıdır).
+
+        Returns:
+            `CLAIMED` statuslu elanlar, `shift_date` üzrə ARTAN sırada — işçi
+            ən yaxın növbəsini siyahının BAŞINDA görməlidir.
+        """
+        ...
+
     def count_claims_in_month(self, employee_id: EmployeeId, *, year: int, month: int) -> int:
         """İşçinin həmin ayda tutduğu elan sayı (aylıq tavan yoxlaması)."""
         ...
@@ -1342,6 +1457,64 @@ class OpenShiftPostingRepository(Protocol):
         reason: str,
     ) -> bool:
         """ŞƏRTLİ `UPDATE` — yalnız HƏLƏ AÇIQ elan ləğv edilə bilər."""
+        ...
+
+    def release(
+        self,
+        *,
+        posting_id: OpenShiftPostingId,
+        released_by: EmployeeId,
+        released_at: datetime,
+    ) -> bool:
+        """ŞƏRTLİ `UPDATE ... WHERE status = 'CLAIMED'` — tutma geri alınır (OP-4).
+
+        `claimed_by`/`claimed_at` `NULL`-a çevrilir və status `OPEN` olur.
+        `claim()` ilə EYNİ formadadır və eyni səbəbdən şərtlidir: geri buraxma
+        ilə ləğv bir-biri ilə YARIŞIR (admin elanı ləğv edərkən işçi eyni anda
+        geri verə bilər) və uduzan tərəf 0 sətir yeniləyib `False` almalıdır.
+
+        `released_by` SƏTRƏ YAZILMIR — cədvəldə belə sütun YOXDUR və əlavə
+        edilməsi də LAZIM DEYİL: geri buraxanın kimliyi audit sətrindədir
+        (`OPEN_SHIFT_RELEASED`) və sətrin ÖZÜ yenidən `OPEN` olduğu üçün orada
+        saxlanılsaydı `chk_open_shift_claim` invariantını pozardı. Parametr
+        yalnız implementasiyanın öz jurnalı/izi üçün ötürülür.
+
+        ⚠️ DB TƏLƏBİ: `migrations/019`-un `enforce_open_shift_claim_transition()`
+        trigger-i hazırda (a) statusun `OPEN`-dən ÇIXMASINDAN başqa hər keçidi
+        rədd edir, (b) `CLAIMED` sətirdə `claimed_by`-ı DONDURUR. Bu metodun
+        işləməsi üçün trigger `CLAIMED → OPEN` keçidini (və yalnız həmin keçid
+        zamanı `claimed_by`-ın `NULL`-a düşməsini) İCAZƏLİ etməlidir — qalan
+        qadağalar OLDUĞU KİMİ qalmalıdır («ilk basan qazanır» zəmanəti
+        `CLAIMED → CLAIMED` sahib dəyişikliyinə qarşıdır və o, POZULMAMALIDIR).
+
+        Returns:
+            Sətir HƏQİQƏTƏN geri buraxıldımı. `False` = elan artıq `CLAIMED`
+            deyil (ləğv edilib və ya paralel geri buraxılıb).
+        """
+        ...
+
+    def expire(self, *, posting_id: OpenShiftPostingId, expired_at: datetime) -> bool:
+        """ŞƏRTLİ `UPDATE ... WHERE status = 'OPEN'` — tarixi keçmiş elanı bağlayır (OP-4).
+
+        `cancel()`-DAN AYRI METODDUR və bu, qəsdəndir: `cancel()` İNSAN
+        qərarıdır (`cancelled_by` MƏCBURİ, səbəb sərbəst mətn), bu isə
+        AVTOMATİKDİR — aktoru YOXDUR. İkisini bir metoda yığmaq `cancelled_by:
+        EmployeeId | None` demək olardı və o zaman İNSAN yolunda da `None`
+        ötürmək mümkün olardı, yəni «kim ləğv etdi?» sualı sükutla cavabsız
+        qala bilərdi.
+
+        Sətrə `cancelled_by = NULL`, `cancelled_at = expired_at` və sabit
+        `cancel_reason` (`open_shift.EXPIRED_CANCEL_REASON`) yazılır.
+
+        ⚠️ DB TƏLƏBİ: `chk_open_shift_cancel` hazırda `cancelled_by IS NOT
+        NULL` tələb edir. Şərt `cancelled_at IS NOT NULL`-a köklənməlidir —
+        domendəki `_require_consistent_state()` ARTIQ belə yoxlayır (CLAUDE.md
+        §5: hər qayda İKİ yerdə və eyni formada).
+
+        Returns:
+            Sətir bağlandımı. `False` = elan artıq `OPEN` deyil (paralel
+            tutma/ləğv qabaqlayıb).
+        """
         ...
 
 

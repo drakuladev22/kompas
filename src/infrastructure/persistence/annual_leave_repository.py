@@ -121,7 +121,7 @@ class PostgresAnnualLeaveBalanceRepository(_BaseRepository):
             ORDER BY employee_id
             LIMIT %s
             """,
-            (tenant_id, year, limit),
+            (self._require_matching_tenant(tenant_id), year, limit),
         )
         return [_row_to_balance(row) for row in rows]
 
@@ -129,7 +129,9 @@ class PostgresAnnualLeaveBalanceRepository(_BaseRepository):
         self, tenant_id: TenantId, *, year: int
     ) -> list[AnnualLeaveRolloverInput]:
         """İl dönümü işinin girişi (bax `_ROLLOVER_INPUTS_QUERY` şərhi)."""
-        rows = self._fetch_all(_ROLLOVER_INPUTS_QUERY, (year - 1, tenant_id))
+        rows = self._fetch_all(
+            _ROLLOVER_INPUTS_QUERY, (year - 1, self._require_matching_tenant(tenant_id))
+        )
         return [
             AnnualLeaveRolloverInput(
                 employee_id=EmployeeId(row["employee_id"]),
@@ -177,7 +179,17 @@ class PostgresAnnualLeaveBalanceRepository(_BaseRepository):
              WHERE annual_leave_balances.updated_by IS NULL
                 OR EXCLUDED.updated_by IS NOT NULL
             """,
-            (tenant_id, employee_id, year, entitled_days, carried_over_days, updated_by),
+            (
+                # SAAS-1 (birinci partiya): BALANS = PUL — səhv `tenant_id` ilə
+                # yazı RLS tərəfindən rədd edilər, lakin çağıran "0 sətir
+                # yeniləndi" cavabını "belə işçi yoxdur" kimi oxuyardı.
+                self._require_matching_tenant(tenant_id),
+                employee_id,
+                year,
+                entitled_days,
+                carried_over_days,
+                updated_by,
+            ),
         )
         return affected == 1
 
@@ -241,7 +253,7 @@ class PostgresAnnualLeaveBalanceRepository(_BaseRepository):
                AND year = %s
                AND carried_over_days > used_days
             """,
-            (tenant_id, year),
+            (self._require_matching_tenant(tenant_id), year),
         )
 
 
@@ -348,6 +360,13 @@ class PostgresAnnualLeaveRequestRepository(_BaseRepository):
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE
                    SET status        = EXCLUDED.status,
+                       -- ERKƏN QAYIDIŞ (HR-6): `return_early()` aralığı
+                       -- QISALDIR, yəni `end_date` DƏYİŞİR. Sütun burada
+                       -- yenilənməsəydi, qısaltma YALNIZ yaddaşda qalar,
+                       -- testdə görünər, İSTEHSALATDA İSƏ İTƏRDİ —
+                       -- növbəti oxunuşda işçi hələ də «məzuniyyətdə»
+                       -- görünərdi.
+                       end_date      = EXCLUDED.end_date,
                        deducted_days = EXCLUDED.deducted_days,
                        approved_by   = EXCLUDED.approved_by,
                        decided_at    = EXCLUDED.decided_at,

@@ -307,13 +307,36 @@ class UserLifecycleController:
     # ------------------------------ deaktivasiya ------------------------------- #
 
     def _deactivate(self, screen: UsersScreen, full_name: str) -> None:
+        """İşçini deaktiv edir — AÇIQ qalan bağlantılar ƏVVƏLCƏ göstərilir (HR-4).
+
+        ──────────────────────────────────────────────────────────────────────
+        SİYAHI QƏRARDAN ƏVVƏL GƏLİR — SONRA DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        İşdən çıxma anında ALTI şey açıq qala bilər: bağlanmamış gündaxili
+        icazə, təhvil verilməmiş tapşırıq, tutulmuş GƏLƏCƏK növbə, istifadə
+        olunmamış illik məzuniyyət, qüvvədə olan sənəd və silinməmiş üz
+        şablonu. Heç biri BLOKLAMIR (işdən çıxarma hüquqi faktdır və sistem
+        onu «tapşırığın var» deyə dayandıra bilməz), lakin admin bunları
+        QƏRARDAN SONRA görsəydi, artıq geri dönüşü olmayan addımı atmış
+        olardı — ona görə `preview_offboarding()` təsdiq dialoqundan ƏVVƏL
+        oxunur.
+
+        MƏTN EKRANDA QURULMUR: `OffboardingReview.checklist_az()` hazır
+        Azərbaycanca sətirləri verir — eyni siyahı audit sətrinə də düşür,
+        yəni iki mənbə ayrıla bilməz.
+
+        ÖN-BAXIŞ UĞURSUZ OLARSA DEAKTİVASİYA DAYANMIR: siyahı KÖMƏKÇİ
+        məlumatdır və onun oxunmaması hüquqi əməliyyatı bloklamamalıdır
+        (use case-in öz «BLOKLAMIR» qərarının davamı).
+        """
         from PySide6.QtWidgets import QInputDialog  # noqa: PLC0415
 
         text, accepted = QInputDialog.getMultiLineText(
             screen,
             "İşçini deaktiv et",
             f"{full_name} niyə deaktiv edilir? GERİ QAYTARILA BİLMİR — "
-            "yenidən işə götürülərsə yeni işçi kartı açılır.",
+            "yenidən işə götürülərsə yeni işçi kartı açılır."
+            + self._offboarding_preview(full_name),
         )
         reason = text.strip()
         if not accepted or not reason:
@@ -346,6 +369,34 @@ class UserLifecycleController:
             return
 
         self._refresh(screen)
+
+    def _offboarding_preview(self, full_name: str) -> str:
+        """Təsdiq dialoquna əlavə olunan «açıq qalanlar» mətni (HR-4).
+
+        Heç nə açıq deyilsə BOŞ sətir qaytarılır — «hər şey təmizdir» cümləsi
+        yazılmır: admin onu oxumağa öyrəşsəydi, siyahı DOLU olduğu gün də
+        eyni sürətlə keçib gedərdi.
+        """
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                employee_id = _find_employee_id(session, full_name)
+                if employee_id is None:
+                    return ""
+                review = session.users.preview_offboarding(
+                    actor=self._actor,
+                    employee_id=employee_id,
+                )
+        except Exception:
+            # Geniş tutma: ön-baxış köməkçidir, hüquqi əməliyyatı dayandırmır.
+            _error_log.warning("USER_LIFECYCLE_OFFBOARDING_PREVIEW_FAILED", exc_info=True)
+            return ""
+
+        lines = review.checklist_az()
+        if not lines:
+            return ""
+        return "\n\nAÇIQ QALANLAR (bloklamır, məlumat üçün):\n" + "\n".join(
+            f"• {line}" for line in lines
+        )
 
     # -------------------------------- oxuma ---------------------------------- #
 

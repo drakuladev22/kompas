@@ -61,6 +61,35 @@ BEHAVIOR_ANOMALY_SOURCE: Final = "BEHAVIOR_ANOMALY"
 #: mənbə seçimi reyestr vasitəsilə edilir, `if source == ...` zənciri yoxdur.
 FACE_MISMATCH_SOURCE: Final = "FACE_MISMATCH"
 
+#: HR-1/HR-2/HR-3 — cərimə axınının ÜÇ dayanma nöqtəsi (DEEP-GAP).
+#:
+#: Sabitlər `BEHAVIOR_ANOMALY_SOURCE`/`FACE_MISMATCH_SOURCE` ilə YAN-YANA
+#: durur və eyni səbəbdən: qaydanın yazdığı sətir ilə `exception_sources`
+#: kataloqundakı sətir arasında İKİNCİ ad məkanı yaranmasın.
+#:
+#: ÜÇÜ NİYƏ AYRI MƏNBƏDİR (bir «FINE_STUCK» mənbəyi kifayət etməzdi): hər
+#: birinin HƏLLİ FƏRQLİ ƏLDƏDİR — etiraza qərar verən `can_approve_leave_
+#: appeal`, icmalı keçirən `can_publish_fines`, işdən çıxmış işçinin
+#: cəriməsinə qərar verən isə HR-dır. Kataloq sətri ROOT tərəfindən ayrıca
+#: söndürülə (`is_active`) və ayrıca ciddiyyət ala bilir; birləşdirilsəydi
+#: bu üç qərar bir açara bağlanardı.
+#: HR-1 — etiraz pəncərəsi bağlanıb, qərar HƏLƏ yoxdur.
+FINE_APPEAL_UNANSWERED_SOURCE: Final = "FINE_APPEAL_UNANSWERED"
+#: HR-2 — cərimə aylıq icmalda ilişib, işçi onu GÖRMÜR.
+FINE_REVIEW_OVERDUE_SOURCE: Final = "FINE_REVIEW_OVERDUE"
+#: HR-3 — işçi deaktivdir, cəriməsi isə nəşr gözləyir (`fine_review.py`
+#: `held_inactive_employee` qolu). Nəşr STRUKTUR olaraq mümkün deyil, ona
+#: görə sətir hər ay yenidən görünür və çıxış yolu YALNIZ insan qərarıdır.
+FINE_HELD_INACTIVE_SOURCE: Final = "FINE_HELD_INACTIVE_EMPLOYEE"
+
+#: UX-7 — möhlət bitib, işçinin üzü HƏLƏ qeydiyyatda deyil.
+#:
+#: `FACE_MISMATCH_SOURCE`-dan AYRIDIR və qarışdırılmamalıdır: o, «qeydiyyatlı
+#: işçinin üzü uyğun gəlmədi» (təhlükə siqnalı), bu isə «qeydiyyat HEÇ VAXT
+#: aparılmayıb» (proses boşluğu) deməkdir. Həlli də fərqlidir — birincisi
+#: araşdırma, ikincisi sadəcə görüş təyin etmək.
+FACE_ENROLLMENT_OVERDUE_SOURCE: Final = "FACE_ENROLLMENT_OVERDUE"
+
 #: `exception_sources.code` üçün minimum uzunluq — DB `CHECK`-inin güzgüsü
 #: (`char_length(trim(code)) >= 3`). Bu, biznes həddi DEYİL, sxem
 #: məhdudiyyətidir; ona görə `system_limits`-ə aid deyil.
@@ -205,7 +234,11 @@ class RuleEvaluationContext:
 
 __all__ = [
     "BEHAVIOR_ANOMALY_SOURCE",
+    "FACE_ENROLLMENT_OVERDUE_SOURCE",
     "FACE_MISMATCH_SOURCE",
+    "FINE_APPEAL_UNANSWERED_SOURCE",
+    "FINE_HELD_INACTIVE_SOURCE",
+    "FINE_REVIEW_OVERDUE_SOURCE",
     "MIN_SOURCE_CODE_LENGTH",
     "ExceptionFinding",
     "ExceptionSeverity",

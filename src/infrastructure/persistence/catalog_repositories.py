@@ -428,8 +428,31 @@ class PostgresSalesPointsRepository(_BaseRepository):
         return [self._hydrate(row) for row in rows]
 
     def list_disputes(self, tenant_id: TenantId) -> list[PointsEntry]:
+        """YALNIZ `PENDING` — müddət bitmə işinin (`expire_stale_disputes`) girişi."""
         rows = self._fetch_all(
             self._SELECT + " WHERE l.tenant_id = %s AND a.status = 'PENDING' ORDER BY a.created_at",
+            (tenant_id,),
+        )
+        return [self._hydrate(row) for row in rows]
+
+    def list_undecided_disputes(self, tenant_id: TenantId) -> list[PointsEntry]:
+        """`PENDING` + `EXPIRED` — İDARƏÇİNİN gələnlər qutusu (DEEP-GAP, xal etirazı).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `list_disputes` KİFAYƏT ETMİR
+        ──────────────────────────────────────────────────────────────────────
+        Pəncərə cavabsız bağlananda etiraz `EXPIRED` olur (M-6 naxışı: «vaxt
+        bitdi» ≠ «qərar verildi»). Yalnız `PENDING` oxunsaydı, həmin sətir
+        idarəçinin siyahısından YOX OLARDI — yəni bir ölü-son (əbədi
+        «gözləyir») digəri ilə (görünməz «bitmiş») əvəzlənərdi.
+
+        Cərimə tərəfindəki əkizi `PostgresFineAppealRepository.list_undecided()`
+        — eyni sual, eyni cavab forması.
+        """
+        rows = self._fetch_all(
+            self._SELECT
+            + " WHERE l.tenant_id = %s AND a.status IN ('PENDING', 'EXPIRED')"
+            + " ORDER BY a.created_at",
             (tenant_id,),
         )
         return [self._hydrate(row) for row in rows]

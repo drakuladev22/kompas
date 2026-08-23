@@ -185,6 +185,11 @@ class _FakeScreen:
 
     def set_notification_prefs(self, prefs: dict[str, bool]) -> None:
         self.notification_prefs = prefs
+        self.toggles = dict(prefs)
+
+    def collected(self) -> dict[str, object]:
+        """`SettingsScreen.collected()`-in əvəzedicisi — açarların CARİ vəziyyəti."""
+        return {"theme": "system", "notifications": dict(getattr(self, "toggles", {}))}
 
     def set_security_info(self, *, password_age: str, sessions: str) -> None:
         self.security_info = {"password_age": password_age, "sessions": sessions}
@@ -344,3 +349,57 @@ def test_on_saved_reports_a_commit_failure_too() -> None:
 # (istisnanın udulub-udulmadığı) DEYİL, ona görə əlavə Qt-asılı test
 # yaradılmadı; yazı yolunun ÖZÜ (`preferences.saved`) yuxarıdakı iki testdə
 # artıq yoxlanılır.
+
+
+# --------------------------------------------------------------------------- #
+# DEEP-GAP UX-5 — açar çevrilişi DƏRHAL yazılır
+# --------------------------------------------------------------------------- #
+
+
+def test_toggling_one_channel_writes_every_channel() -> None:
+    """Çevrilən açar tək göndərilsəydi qalan kanallar sütundan SİLİNƏRDİ.
+
+    `set_notification_prefs` `jsonb` sütununu TAM əvəz edir, oxuma tərəfi isə
+    «açar yoxdursa kanal açıqdır» deyir — yəni bir kanalı söndürmək digər
+    ikisini sükutla geri qaytarardı. Test məhz bunu kilidləyir.
+    """
+    preferences = _FakePreferences()
+    context = _FakeContext(preferences)
+    screen = _FakeScreen()
+    screen.set_notification_prefs({"pending_requests": True, "server_alerts": True})
+    screen.toggles["server_alerts"] = False
+
+    SettingsController(context, _actor())._on_notification_toggled(
+        screen, "server_alerts", enabled=False
+    )
+
+    assert preferences.saved == {"pending_requests": True, "server_alerts": False}
+
+
+def test_a_failed_toggle_is_rolled_back_on_screen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Yazı çökübsə açar ƏVVƏLKİ vəziyyətinə qayıdır.
+
+    Açarı yeni vəziyyətdə saxlamaq istifadəçiyə «yadda saxlandı» deməkdir —
+    halbuki sətir yazılmayıb. `_inform` əvəzlənir, çünki o, REAL `QWidget`
+    tələb edən `QMessageBox`-u açır (bax faylın sonundakı qeyd).
+    """
+    from src.presentation.controllers import settings as settings_module
+
+    messages: list[str] = []
+    monkeypatch.setattr(
+        settings_module,
+        "_inform",
+        lambda screen, title, message: messages.append(message),
+    )
+    preferences = _FakePreferences()
+    context = _FakeContext(preferences, enter_failure=_OperationalError("pool exhausted"))
+    screen = _FakeScreen()
+    screen.set_notification_prefs({"pending_requests": True, "server_alerts": True})
+    screen.toggles["server_alerts"] = False
+
+    SettingsController(context, _actor())._on_notification_toggled(
+        screen, "server_alerts", enabled=False
+    )
+
+    assert screen.notification_prefs == {"pending_requests": True, "server_alerts": True}
+    assert messages == ["Dəyişiklik yadda saxlanılmadı."]

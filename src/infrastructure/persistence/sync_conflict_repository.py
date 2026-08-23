@@ -106,6 +106,44 @@ class PostgresSyncConflictRepository(_BaseRepository):
         )
         return int(row["total"]) if row else 0
 
+    def purge_resolved(self, *, cutoff: datetime) -> int:
+        """HƏLL EDİLMİŞ və köhnəlmiş konflikt sətirlərini silir (SAAS-6).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ LAZIMDIR
+        ──────────────────────────────────────────────────────────────────────
+        `sync_conflicts` yalnız BÖYÜYÜRDÜ: həll `resolved_at`-i doldurur, sətri
+        SİLMİR. Hər sətrin içində `local_version` + `remote_version` JSON-ları
+        var — yəni cədvəl həm yer yeyir, həm də köhnə PII-ni (ad, məbləğ)
+        müddətsiz saxlayır. `OfflineBuffer.purge_synced()` və
+        `FaceVerificationLogRepository.purge_older_than()` ilə eyni qərar.
+
+        ──────────────────────────────────────────────────────────────────────
+        AUDİT İZİ İTMİR
+        ──────────────────────────────────────────────────────────────────────
+        Həll qərarı `audit_logs`-a AYRICA yazılır (`SYNC_CONFLICT_RESOLVED` —
+        `use_cases/sync_conflicts.py`) və orada hər İKİ versiya
+        `before_state`-də saxlanılır. Yəni silinən sətir izin NÜSXƏSİDİR,
+        özü deyil. `audit_logs`-a bu metod TOXUNMUR (hüquqi iz).
+
+        AÇIQ (`resolved_at IS NULL`) konflikt HEÇ VAXT silinmir — nə qədər
+        köhnə olsa da o, HR_Admin-in gözləyən işidir.
+
+        Args:
+            cutoff: bu andan ƏVVƏL həll edilmiş sətirlər silinir. Saxlama
+                müddəti ÇAĞIRANDAN gəlir (planlayıcı) — repository siyasət
+                oxumur (`purge_older_than` ilə eyni imza qərarı).
+        """
+        return self._execute(
+            """
+            DELETE FROM sync_conflicts
+             WHERE tenant_id = %s
+               AND resolved_at IS NOT NULL
+               AND resolved_at < %s
+            """,
+            (self._tenant, cutoff),
+        )
+
     def resolve(
         self,
         conflict_id: object,

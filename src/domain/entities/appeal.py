@@ -115,6 +115,7 @@ class FineAppeal(AggregateRoot):
         decision_note: str | None = None,
         decided_at: datetime | None = None,
         new_amount: Money | None = None,
+        document_reference: str | None = None,
         emit_created_event: bool = True,
     ) -> None:
         super().__init__()
@@ -136,6 +137,33 @@ class FineAppeal(AggregateRoot):
         self.decision_note = decision_note
         self.decided_at = decided_at
         self.new_amount = new_amount
+        #: İşçinin etiraza əlavə etdiyi SƏNƏDİN istinadı (UX-4).
+        #:
+        #: ────────────────────────────────────────────────────────────────
+        #: NİYƏ İSTİNAD, NİYƏ FAYLIN ÖZÜ DEYİL
+        #: ────────────────────────────────────────────────────────────────
+        #: Dəyər `StorageReference` formatındadır
+        #: (`GOOGLE_DRIVE:<connection_id>:<file_id>`) — `employee_documents.
+        #: file_ref` və `support_messages.attachment_ref` ilə EYNİ naxış.
+        #: Faylın ÖZÜ Drive-dadır; aqreqat yalnız «hansı sənəd?» sualına
+        #: cavab verir. Sahə adı `document_reference`-dir, sütun isə
+        #: `fine_appeals.document_ref` — `_url` DEYİL, çünki dəyər URL deyil.
+        #:
+        #: ────────────────────────────────────────────────────────────────
+        #: NİYƏ GÖNDƏRMƏ ANINDA `None` OLUR
+        #: ────────────────────────────────────────────────────────────────
+        #: Kioskda seçilən fayl DƏRHAL Drive-a getmir — sübut yükləmə
+        #: növbəsinə (`EvidenceUploadQueue`) düşür və şəbəkə qayıdanda
+        #: yüklənir. Etirazın ÖZÜ isə gözləyə bilməz: 72 saatlıq pəncərə
+        #: işləyir və zəif internetə görə itirilə bilməz. Ona görə sətir
+        #: sənədsiz yaranır, istinad isə yükləmə bitəndə
+        #: `attach_uploaded_document()` ilə yazılır
+        #: (`FieldReportUseCase.attach_uploaded_photo` ilə eyni ayrım).
+        #:
+        #: SƏNƏD İSTƏYƏ BAĞLIDIR (`None` qanuni haldır): etiraz mətni tək
+        #: başına kifayətdir — sənədi məcbur etmək internetsiz filialda
+        #: işçini etiraz hüququndan məhrum edərdi.
+        self.document_reference = _clean_reference(document_reference)
         self.created_at = require_aware(created_at, field="created_at")
 
         if emit_created_event and status is AppealStatus.PENDING:
@@ -149,6 +177,47 @@ class FineAppeal(AggregateRoot):
                     reason=cleaned,
                 )
             )
+
+    # -------------------------------- sənəd ---------------------------------- #
+
+    def attach_document(self, *, document_reference: str) -> bool:
+        """Yüklənmiş sənədin istinadını yazır — növbə bitdikdə çağırılır (UX-4).
+
+        ──────────────────────────────────────────────────────────────────────
+        QƏRAR VERİLMİŞ ETİRAZDA DA İCAZƏLİDİR — QƏSDƏN
+        ──────────────────────────────────────────────────────────────────────
+        `_require_decidable()` BURADA ÇAĞIRILMIR. Səbəb: bu, iş qərarı deyil,
+        İNFRASTRUKTUR TAMAMLANMASIDIR (`FieldReportItem.attach_photo` ilə eyni
+        ayrım). Yükləmə dəqiqələr, zəif şəbəkədə saatlar çəkə bilər və bu
+        müddətdə HR qərar vermiş ola bilər — həmin halda istinadı ATMAQ
+        istifadəçinin göndərdiyi sübutu sükutla itirmək olardı, halbuki sənəd
+        məhz qərarın SƏNƏDLİ əsasıdır və mübahisə halında lazım olacaq.
+
+        TƏKRAR ÇAĞIRIŞ İSTİSNA ATMIR: eyni yükləmə növbə tərəfindən iki dəfə
+        təsdiqlənə bilər (`FieldReport.add_photo` ilə eyni əsaslandırma) —
+        istisna atsaydıq geri-çağırış çökər və növbə elementi əbədi
+        `PROCESSING`-də qalardı.
+
+        Returns:
+            İstinad DƏYİŞDİmi. `False` = eyni dəyər artıq yazılıb (çağıran
+            yalnız `True` halında yazır və audit sətri qurur).
+        """
+        cleaned = _clean_reference(document_reference)
+        if cleaned is None:
+            raise DomainRuleError(
+                "Sənəd istinadı boş ola bilməz",
+                user_message="Sənəd istinadı boşdur.",
+                context={"appeal_id": str(self.id)},
+            )
+        if cleaned == self.document_reference:
+            return False
+        self.document_reference = cleaned
+        return True
+
+    @property
+    def has_document(self) -> bool:
+        """Etiraza sənəd əlavə edilibmi (ekran nişanı üçün)."""
+        return self.document_reference is not None
 
     # -------------------------------- qərar ---------------------------------- #
 
@@ -262,6 +331,18 @@ class FineAppeal(AggregateRoot):
 
     def __repr__(self) -> str:
         return f"FineAppeal(id={self.id}, fine={self.fine_id}, status={self.status.value})"
+
+
+def _clean_reference(value: str | None) -> str | None:
+    """Boş/yalnız-boşluqlu istinadı `None`-a çevirir (UX-4).
+
+    Boş sətri OLDUĞU KİMİ saxlamaq `has_document` xassəsini yalanlayardı:
+    ekran «sənəd var» nişanı göstərər, açanda isə heç nə tapılmazdı.
+    """
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
 
 
 __all__ = [

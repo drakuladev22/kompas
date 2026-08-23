@@ -204,6 +204,15 @@ class AdminShell(QWidget):
         if widget is None:
             widget = factory()
             self._screens[key] = widget
+            # XƏTA EKRANINDAN ÇIXIŞ YOLU — `Screen.reload_requested`.
+            # Siqnal YALNIZ `on_retry` verilməyən `show_error` çağırışlarında
+            # yayılır (bax `screens/base.py`), yəni burada bağlanan `lambda`
+            # normal axına heç vaxt qarışmır. `key` bağlamada saxlanılır:
+            # `rebuild_screen` çağırılanda widget artıq silinmiş olur.
+            if hasattr(widget, "reload_requested"):
+                widget.reload_requested.connect(
+                    lambda screen_key=key: self.rebuild_screen(screen_key)
+                )
             self._stack.addWidget(widget)
             # Ekran GEC qurulur (bax modul başlığı), yəni rejim siqnalını
             # qaçırıb. Onsuz daraldılmış pəncərədə ilk dəfə açılan ekran
@@ -240,6 +249,44 @@ class AdminShell(QWidget):
         """
         return self._screens.get(key)
 
+    def rebuild_screen(self, key: str) -> bool:
+        """Ekranı SIFIRDAN qurur — xəta vəziyyətindən universal çıxış yolu.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ «YENİDƏN CƏHD ET» ÜÇÜN BU LAZIM OLDU
+        ──────────────────────────────────────────────────────────────────────
+        `Screen.show_error()` məzmunu ÖRTÜR (`_present` stack-ə keçici widget
+        qoyur) və `on_retry` verilməyibsə düymə ümumiyyətlə çəkilmirdi.
+        Ölçüldü: 250 `show_error` çağırışından yalnız 29-unda `on_retry` var —
+        yəni ~220 nöqtədə tək bir şəbəkə düşməsi ekranı SESSİYANIN SONUNA
+        QƏDƏR ölü saxlayırdı, çünki ekranlar `_screens`-də keşlənir və yalnız
+        `dashboard` qayıdışda təzələnirdi.
+
+        Hər kontrollerə ayrıca «təzələ» metodu əlavə etmək 35 ekranı bir-bir
+        dəyişmək demək olardı və biri həmişə unudulardı. Ekranın ÖZÜNÜ atıb
+        fabrikadan yenidən qurmaq isə HƏR ekran üçün eyni dərəcədə işləyir:
+        fabrika onsuz da kontrolleri bağlayır və ilk məlumatı oxuyur
+        (`app.py::_attach_*`).
+
+        Kontrollerə istinad `lambda` bağlamasında yaşayır və ekranla birlikdə
+        ölür (CLAUDE.md §6) — yəni köhnə ekranın silinməsi kontrolleri də
+        təmizləyir, sızma yaranmır.
+
+        Returns:
+            Ekran yenidən quruldusa `True`; heç vaxt açılmayıbsa `False`
+            (o halda təzələməyə bir şey yoxdur).
+        """
+        widget = self._screens.pop(key, None)
+        if widget is None:
+            return False
+        was_current = self._stack.currentWidget() is widget
+        self._stack.removeWidget(widget)
+        widget.deleteLater()
+        if was_current:
+            # `show_screen` fabrikadan yenisini qurur və stack-ə qoyur.
+            self.show_screen(key)
+        return True
+
     def set_screen_subtitle(self, key: str, subtitle: str) -> None:
         """Bir ekranın kontekst mətnini AÇARLA yeniləyir.
 
@@ -253,6 +300,17 @@ class AdminShell(QWidget):
         self._titles[key] = (title, subtitle)
         if self._sidebar.active_key == key:
             self._header.set_page(title, subtitle)
+
+    def screen_subtitle(self, key: str) -> str:
+        """Ekranın CARİ kontekst mətni — drill-down onu bərpa etmək üçün oxuyur.
+
+        `_titles` xaricə AÇILIR (bax `screen_for`-dakı eyni əsaslandırma):
+        `app.py::_on_ranking_row_selected` başqa mağazaya keçməzdən ƏVVƏL
+        köhnə mətni saxlayır və sol paneldən qayıdışda geri yazır. Ayrı
+        vəziyyət obyekti yaratmaq eyni məlumatı İKİ yerdə saxlamaq olardı.
+        """
+        _, subtitle = self._titles.get(key, ("", ""))
+        return subtitle
 
     def set_page_subtitle(self, subtitle: str) -> None:
         """Aktiv ekranın kontekst mətnini yeniləyir ("Avqust 2026 · Bellona")."""

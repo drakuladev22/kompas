@@ -431,6 +431,37 @@ class PostgresFineAppealRepository(_BaseRepository):
         )
         return [_row_to_appeal(row) for row in rows]
 
+    def attach_document(self, appeal_id: AppealId, *, reference: str) -> int:
+        """Yüklənmiş sənədin Drive istinadını yazır (UX-4). Qaytarır: sətir sayı.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `save()`-DAN KEÇMİR
+        ──────────────────────────────────────────────────────────────────────
+        Naxış `fines.attach_drive_evidence` və `support_messages.attach_file`
+        ilə eynidir: istinad etiraz YARADILAN anda hələ MƏLUM DEYİL — fayl
+        arxa planda yüklənir (`EvidenceUploadWorker`) və geri-çağırış bu
+        metodu ÇOX SONRA çağırır. `save()` ilə yazsaydıq, fon işçisi bütün
+        aqreqatı oxuyub yenidən yazmalı olardı və bu müddətdə HR-ın verdiyi
+        qərarı (status, `decision_note`) köhnə surətlə üstələyə bilərdi.
+
+        AKTOR YOXDUR: çağırış fon işçisindən gəlir, sessiya istifadəçisi
+        mövcud deyil (qonşu üç `attach_*` metodunun eyni qərarı).
+
+        `tenant_id` şərti RLS-ə ƏLAVƏ ikinci qatdır (`_BaseRepository`
+        naxışı). Qaytarılan sətir sayı çağırana «sahib sətri hələ də
+        mövcuddurmu» sualına cavab verir: etiraz silinibsə (cərimə ləğv
+        olunub → `ON DELETE CASCADE`) nəticə `0` olur və işçi bunu
+        `EVIDENCE_LINK_UNRECOVERABLE` kimi jurnala yaza bilər.
+        """
+        return self._execute(
+            """
+            UPDATE fine_appeals
+               SET document_ref = %s
+             WHERE id = %s AND tenant_id = %s
+            """,
+            (reference, appeal_id, self._tenant),
+        )
+
     def save(self, appeal: FineAppeal) -> None:
         self._execute(
             """

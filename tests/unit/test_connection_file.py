@@ -151,6 +151,12 @@ def test_the_file_is_used_when_the_environment_is_empty(
     save_settings(_SETTINGS, target)
     monkeypatch.setenv(CONNECTION_FILE_ENV, str(target))
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    # AF-3 (fail-closed): `_SETTINGS` istifadəçi adı OWNER rolundadır
+    # (`postgres.abcdefgh`) və `build_dsn_from_env` onu artıq İSTEHSALATDA
+    # RƏDD EDİR. Bu testin predmeti isə ROL deyil, MƏNBƏDİR — «dəyişən boşdur,
+    # fayl oxunur». Ona görə mühit açıq şəkildə DEV elan olunur; owner rolunun
+    # istehsalatda dayandırılması AYRICA testdə ölçülür.
+    monkeypatch.setenv("KOMPASOS_ENV", "DEV")
 
     assert build_dsn_from_env() == _SETTINGS.dsn()
 

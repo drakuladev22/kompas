@@ -331,18 +331,37 @@ class KioskSelfServiceController:
         məlumatı itirmir; yalnız izahı göndərsəydik, işçinin seçdiyi kateqoriya
         (təsdiqləyicinin ilk oxuduğu sətir) itərdi.
 
-        SƏNƏD ƏLAVƏSİ HƏLƏ GÖNDƏRİLMİR və bu, SÜKUTLA buraxılmır: domendə
-        (`FineAppeal`) sənəd anlayışı ümumiyyətlə yoxdur — cədvəl sütunu,
-        saxlama yolu və audit qaydası tələb edir, yəni məhsul qərarıdır.
-        İşçiyə açıq deyilir ki, faylı ayrıca təqdim etməlidir; əks halda o,
-        sübutunun göndərildiyini sanardı.
+        ──────────────────────────────────────────────────────────────────────
+        SƏNƏD ARTIQ HƏQİQƏTƏN GÖNDƏRİLİR (DEEP-GAP UX-4)
+        ──────────────────────────────────────────────────────────────────────
+        ƏVVƏL: sahə vardı, fayl `payload`-a düşürdü, heç yerə yüklənmirdi —
+        istifadəçiyə açıq mesaj göstərilirdi («HR-ə ayrıca təqdim edin»), yəni
+        sükut yox idi, LAKİN interfeys yerinə yetirmədiyi bir şeyi VƏD EDİRDİ.
+
+        İNDİ: `fine_appeals.document_ref` sütunu (miqrasiya 083),
+        `UploadOwnerType.FINE_APPEAL` və `FineAppeal.document_reference`
+        mövcuddur — fayl MÖVCUD sübut növbəsindən keçir (spool, backoff,
+        `REJECTED` ayrımı orada onsuz da həll olunub) və istinad yükləmədən
+        SONRA geri-çağırışla sütuna yazılır (`composition.py::_attach_evidence`).
+
+        SIRA MƏCBURİDİR — ƏVVƏLCƏ ETİRAZ, SONRA FAYL: növbə sətri sahibin
+        İD-sini tələb edir (`owner_id = fine_appeals.id`) və o, yalnız etiraz
+        yazıldıqdan sonra mövcuddur. Tərsinə etsəydik, sahibsiz sətir növbədə
+        qalardı. Cərimə formasında (`fine_entry.py`) sıra ƏKSİNƏDİR, çünki
+        orada İD (`new_fine_id()`) yazıdan ƏVVƏL yaradılır və sübut cərimənin
+        ÖZ şərtidir — burada isə sənəd İSTƏYƏ BAĞLIDIR.
+
+        SƏNƏD YÜKLƏNMƏSƏ ETİRAZ QALIR: fayl oxunmadıqda və ya növbə onu rədd
+        etdikdə etiraz GERİ QAYTARILMIR — hüquq artıq qeydə alınıb və onu
+        texniki səbəbə görə ləğv etmək işçini pəncərəsiz qoyardı (72 saat
+        işləyir). İşçiyə isə NƏYİN olmadığı açıq deyilir.
         """
         reason = " — ".join(
             part for part in (payload.get("reason", ""), payload.get("explanation", "")) if part
         )
         try:
             with self._context.session(user_id=self._actor.id) as session:
-                session.fine_appeals.submit(
+                appeal = session.fine_appeals.submit(
                     tenant_id=session.tenant_id,
                     employee=self._actor,
                     fine_id=FineId(UUID(str(payload["fine_id"]))),
@@ -353,22 +372,81 @@ class KioskSelfServiceController:
             self._report(screen, "Etiraz göndərilə bilmədi", exc)
             return
 
-        if payload.get("document"):
-            screen.show_error(
-                title="Etiraz qeydə alındı — sənəd GÖNDƏRİLMƏDİ",
-                message=(
-                    "Etirazınız yazıldı, lakin əlavə etdiyiniz sənəd hələ "
-                    "sistemə yüklənmir. Onu HR bölməsinə ayrıca təqdim edin."
-                ),
-                primary_text="Başa düşdüm",
-                # Düymə əvvəl HEÇ NƏYƏ bağlı deyildi (UI-R4-01): işçi onu
-                # basırdı və kiosk xəta ekranında qalırdı. Təsdiq edilən mesaj
-                # məhz «etiraz yazıldı» olduğu üçün davamı sənədsiz axının
-                # davamı ilə EYNİDİR — cərimə siyahısına qayıtmaq.
-                on_retry=self._open_fines,
-            )
-            return
+        document_path = str(payload.get("document", "")).strip()
+        if document_path:
+            failure = self._queue_appeal_document(appeal, document_path)
+            if failure:
+                screen.show_error(
+                    title="Etiraz qeydə alındı — sənəd GÖNDƏRİLMƏDİ",
+                    message=failure,
+                    primary_text="Başa düşdüm",
+                    # Düymə əvvəl HEÇ NƏYƏ bağlı deyildi (UI-R4-01): işçi onu
+                    # basırdı və kiosk xəta ekranında qalırdı. Təsdiq edilən
+                    # mesaj «etiraz yazıldı» olduğu üçün davamı sənədsiz axının
+                    # davamı ilə EYNİDİR — cərimə siyahısına qayıtmaq.
+                    on_retry=self._open_fines,
+                )
+                return
         self._open_fines()
+
+    def _queue_appeal_document(self, appeal: Any, document_path: str) -> str:
+        """Sənədi sübut növbəsinə qoyur — qaytarır: BOŞ sətir = uğur (UX-4).
+
+        Xəta MƏTNLƏ qaytarılır, istisna ilə YOX: bu nöqtədə etiraz ARTIQ
+        yazılıb və commit olunub. İstisna atsaydıq, çağıran tərəf «etiraz
+        göndərilmədi» mesajı göstərərdi — halbuki göndərilib, yalnız sənəd
+        çatmayıb. İki fərqli fakt iki fərqli mesaj tələb edir.
+
+        MAĞAZA sətrin YERLƏŞMƏ açarıdır (Drive qovluq strukturu) — işçinin öz
+        mağazası götürülür; təyin edilməyibsə cərimənin mağazası ilə əvəz
+        edilmir, sənəd növbəyə DÜŞMÜR və səbəb deyilir, çünki səhv qovluğa
+        düşən sübut sonradan tapılmır.
+        """
+        from pathlib import Path  # noqa: PLC0415
+
+        from src.infrastructure.storage.upload_queue import UploadOwnerType  # noqa: PLC0415
+
+        store_id = getattr(self._actor, "store_id", None)
+        if store_id is None:
+            _error_log.warning("APPEAL_DOCUMENT_NO_STORE", extra={"appeal_id": str(appeal.id)})
+            return (
+                "Etirazınız yazıldı, lakin sənəd göndərilmədi: hesabınıza mağaza "
+                "təyin edilməyib. Sənədi HR bölməsinə ayrıca təqdim edin."
+            )
+
+        document = Path(document_path)
+        try:
+            content = document.read_bytes()
+        except OSError:
+            _error_log.warning("APPEAL_DOCUMENT_UNREADABLE", extra={"path": document_path})
+            return (
+                "Etirazınız yazıldı, lakin seçilmiş sənəd faylı açıla bilmədi. "
+                "Faylı yenidən seçib «Sənəd əlavə et» ilə göndərin."
+            )
+
+        try:
+            self._context.evidence_queue().enqueue(
+                tenant_id=str(self._context.tenant_id),
+                owner_type=UploadOwnerType.FINE_APPEAL,
+                owner_id=str(appeal.id),
+                store_id=store_id,
+                filename=document.name,
+                content=content,
+                taken_at=self._context.clock.now(),
+            )
+        except Exception as exc:
+            # Növbə YARARSIZ faylı ÖZÜ rədd edir (format/ölçü — SEC-018) və
+            # səbəbi istisnada daşıyır; şəbəkə/disk xətası da bura düşür.
+            # Hər ikisində etiraz TOXUNULMAZ qalır.
+            _error_log.warning(
+                "APPEAL_DOCUMENT_ENQUEUE_FAILED",
+                extra={"appeal_id": str(appeal.id)},
+                exc_info=True,
+            )
+            reason = getattr(exc, "user_message", str(exc))
+            return f"Etirazınız yazıldı, lakin sənəd qəbul edilmədi: {reason}"
+
+        return ""
 
     # ------------------------------ köməkçilər -------------------------------- #
 

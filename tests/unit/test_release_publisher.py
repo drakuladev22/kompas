@@ -53,8 +53,18 @@ class FakeDatabase:
         self.inserted: list[tuple[Any, ...]] = []
         self.committed = 0
         self.fail_on_insert = False
+        #: SAAS-2 — hər `system_scope()` bəyanı (cədvəl siyahısı, cross_tenant).
+        self.scopes: list[tuple[Any, bool]] = []
 
-    def system_scope(self) -> _Conn:
+    def system_scope(self, *, tables: Any = None, cross_tenant: bool = False) -> _Conn:
+        """SAAS-2: çağıran indi HANSI cədvələ toxunduğunu BƏYAN edir.
+
+        Sahtə bəyanı yoxlamır (real `Database` onu ağ siyahı ilə üzləşdirir) —
+        burada yalnız İMZA uyğunluğu lazımdır, əks halda yeni açar-arqumentlə
+        gələn çağırış `TypeError` verərdi və test məhsulun qüsurunu deyil,
+        sahtənin köhnəliyini göstərərdi.
+        """
+        self.scopes.append((tables, cross_tenant))
         return _Conn(self)
 
 

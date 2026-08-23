@@ -373,6 +373,15 @@ class _RealisticOpenShiftsDroppedOnCommit:
     def list_for_employee(self, *, tenant_id: Any, employee: Any) -> list[Any]:
         return []
 
+    def list_claimed_for_employee(self, *, tenant_id: Any, employee: Any) -> list[Any]:
+        """DEEP-GAP OP-4 — «Tutduğunuz növbələr» bölməsinin oxu yolu.
+
+        Sahtə BOŞ siyahı qaytarır: bu faylın testləri TUTMA axınını ölçür,
+        geri vermə isə ayrıca sınanır. Metodun MÖVCUD olması vacibdir —
+        `refresh()` hər çağırışda hər iki siyahını EYNİ sessiyada oxuyur.
+        """
+        return []
+
     def claim(self, *, tenant_id: Any, employee: Any, posting_id: Any) -> None:
         return None
 

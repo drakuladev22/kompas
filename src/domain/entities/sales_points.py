@@ -136,8 +136,24 @@ class PointsEntry(AggregateRoot):
 
     @property
     def has_open_dispute(self) -> bool:
-        """Qərar gözləyən etiraz varmı."""
+        """Qərar gözləyən VƏ pəncərəsi hələ bağlanmamış etiraz varmı.
+
+        İkinci etirazın qarşısını almaq üçün işlədilir. `EXPIRED` bura
+        DAXİL DEYİL — bax `has_undecided_dispute`.
+        """
         return self.appeal_status is PointsAppealStatus.PENDING
+
+    @property
+    def has_undecided_dispute(self) -> bool:
+        """Qərarı HƏLƏ VERİLMƏMİŞ etiraz varmı — `PENDING` VƏ YA `EXPIRED`.
+
+        Qərar qapıları (`reject_dispute`, `correct`, `reverse`) məhz bu
+        xassəyə baxır, `has_open_dispute`-a yox: pəncərənin bağlanması
+        idarəçinin cavabını ƏVƏZ ETMİR (`FineAppeal._require_decidable` ilə
+        eyni qayda, M-6). Əks halda `expire_dispute()` işçinin etirazını
+        cavabsız və artıq cavablanması MÜMKÜN OLMAYAN vəziyyətdə dondurardı.
+        """
+        return self.appeal_status is not None and not self.appeal_status.is_decided
 
     def belongs_to(self, period: PointsPeriod) -> bool:
         """Sətir verilmiş 6 aylıq dövrə düşürmü (sıfırlanma məntiqi)."""
@@ -183,6 +199,36 @@ class PointsEntry(AggregateRoot):
         self.dispute_reason = cleaned
         self.disputed_at = disputed_at
 
+    def expire_dispute(self, *, now: datetime) -> bool:
+        """Cavabsız qalmış etirazı `EXPIRED` işarələyir (planlaşdırılmış iş).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ LAZIMDIR — `PENDING` ƏBƏDİ QALIRDI
+        ──────────────────────────────────────────────────────────────────────
+        `PointsAppealStatus.EXPIRED` enum-da (və DB `appeal_status` tipində)
+        MÖVCUD idi, lakin kod bazasında HEÇ YERDƏ yazılmırdı. Nəticədə qərar
+        verilməyən etiraz idarəçinin gələnlər qutusunda əbədi «gözləyir»
+        qalırdı və hesabatda «cavab verilmədi» halını «hələ vaxt var»
+        halından ayırmaq mümkün deyildi.
+
+        `FineAppeal.expire()` naxışı HƏRFƏN təkrarlanır: status dəyişir,
+        lakin qərar HƏLƏ MÜMKÜNDÜR (`has_undecided_dispute`) və xal sətrinin
+        özünə TOXUNULMUR — idarəçinin süstlüyü işçinin xalını nə artırmalı,
+        nə də azaltmalıdır.
+
+        Returns:
+            Vəziyyət dəyişdisə `True` — çağıran YALNIZ o zaman yazır və audit
+            sətri qurur (planlayıcı hər dövrədə eyni sətri görür).
+        """
+        require_aware(now, field="now")
+        if not self.has_open_dispute:
+            return False
+        if self.is_dispute_window_open(now=now):
+            # Pəncərə hələ açıqdır — «cavabsız qaldı» demək tezdir.
+            return False
+        self.appeal_status = PointsAppealStatus.EXPIRED
+        return True
+
     def correct(
         self, *, new_points: int, decided_by: EmployeeId, decided_at: datetime, reason: str
     ) -> None:
@@ -205,7 +251,12 @@ class PointsEntry(AggregateRoot):
 
         cleaned = self._clean_reason(reason)
         self.status = PointsEntryStatus.CORRECTED
-        if self.has_open_dispute:
+        if self.has_undecided_dispute:
+            # `EXPIRED` də DAXİLDİR (M-6): pəncərənin bağlanması qərarı
+            # ƏVƏZ ETMİR, ona görə gec gələn qərar etiraz sətrini də
+            # yekunlaşdırır. Şərt `has_open_dispute` qalsaydı, ledger
+            # «CORRECTED», etiraz sətri isə «EXPIRED» qalar və işçiyə iki
+            # ziddiyyətli cavab görünərdi.
             self.appeal_status = PointsAppealStatus.APPROVED
         self.points = new_points
         self.decided_by = decided_by
@@ -219,7 +270,8 @@ class PointsEntry(AggregateRoot):
 
         cleaned = self._clean_reason(reason)
         self.status = PointsEntryStatus.REVERSED
-        if self.has_open_dispute:
+        if self.has_undecided_dispute:
+            # Bax `correct()` — eyni səbəb (M-6).
             self.appeal_status = PointsAppealStatus.APPROVED
         self.decided_by = decided_by
         self.decided_at = decided_at
@@ -229,7 +281,11 @@ class PointsEntry(AggregateRoot):
     def reject_dispute(self, *, decided_by: EmployeeId, decided_at: datetime, reason: str) -> None:
         """Etiraz rədd edilir — xal sətri OLDUĞU KİMİ qalır."""
         require_aware(decided_at, field="decided_at")
-        if not self.has_open_dispute:
+        if not self.has_undecided_dispute:
+            # ŞƏRT `has_open_dispute` DEYİL (M-6): 72 saatlıq pəncərə
+            # bağlandıqdan sonra da idarəçi cavab verə bilməlidir — əks halda
+            # `expire_dispute()` etirazı cavabsız VƏ cavablanması mümkün
+            # olmayan vəziyyətdə dondurardı.
             raise DomainRuleError(
                 "Bu sətir üzrə qərar gözləyən etiraz yoxdur",
                 context={"entry_id": str(self.id)},

@@ -34,6 +34,7 @@ from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
     Chip,
+    Divider,
     body_label,
     mono_label,
     muted_label,
@@ -479,6 +480,7 @@ class EmployeeHomeScreen(QWidget):
         logout_requested: "Çıxış".
         tasks_requested / rewards_requested / appeal_requested: kart keçidləri.
         open_shift_claim_requested: `[Bu Növbəni Götür]` (#16 — elan id-si).
+        open_shift_release_requested: `[Geri Ver]` (OP-4 — tutulmuş elan id-si).
         annual_leave_request_requested: `[Məzuniyyət Sorğusu]` (#28).
 
     ──────────────────────────────────────────────────────────────────────────
@@ -506,6 +508,8 @@ class EmployeeHomeScreen(QWidget):
     rewards_requested = Signal()
     appeal_requested = Signal()
     open_shift_claim_requested = Signal(str)
+    #: DEEP-GAP OP-4 — tutduğu növbəni geri verən işçi (elan id-si).
+    open_shift_release_requested = Signal(str)
     annual_leave_request_requested = Signal()
 
     def __init__(
@@ -889,8 +893,70 @@ class EmployeeHomeScreen(QWidget):
         )
         card.add(self._open_shift_hint)
 
+        # ──────────────────────────────────────────────────────────────────
+        # «TUTDUĞUNUZ NÖVBƏLƏR» — GERİ YOL (DEEP-GAP OP-4)
+        # ──────────────────────────────────────────────────────────────────
+        # `claim()` TERMİNAL idi: işçi növbəni götürüb sonra xəstələnsə, slot
+        # təqvimdə DOLU görünürdü, faktiki isə boş qalırdı və heç kim onun
+        # yenidən doldurulmalı olduğunu bilmirdi.
+        #
+        # AYRI KART YARADILMADI: hər iki siyahı EYNİ anlayışın iki üzüdür
+        # («bazarda nə var» / «məndə nə var») və kiosk ekranında kart sayı
+        # artdıqca işçinin gözü bölünür. Bölmə YALNIZ sətir olduqda görünür
+        # (`set_claimed_shifts`) — boş başlıq «burada nəsə olmalıydı» sualı
+        # yaradardı.
+        self._claimed_section = QWidget()
+        claimed_layout = QVBoxLayout(self._claimed_section)
+        claimed_layout.setContentsMargins(0, 0, 0, 0)
+        claimed_layout.setSpacing(8)
+        claimed_layout.addWidget(Divider())
+        claimed_layout.addWidget(section_label("Tutduğunuz növbələr"))
+        self._claimed_body = QVBoxLayout()
+        self._claimed_body.setSpacing(12)
+        claimed_holder = QWidget()
+        claimed_holder.setLayout(self._claimed_body)
+        claimed_layout.addWidget(claimed_holder)
+        self._claimed_section.setVisible(False)
+        card.add(self._claimed_section)
+
         card.body().addStretch(1)
         return card
+
+    def set_claimed_shifts(self, shifts: list[dict[str, str]]) -> None:
+        """İşçinin TUTDUĞU, hələ baş verməmiş növbələr (DEEP-GAP OP-4).
+
+        Args:
+            shifts: `id`, `date`, `work_mode` açarları — açıq elanlarla EYNİ
+                sxem (CLAUDE.md §6: maket və canlı yol eyni açarları işlədir).
+
+        Boş siyahı bölməni GİZLƏDİR: növbə tutmamış işçi üçün «geri ver»
+        anlayışı ümumiyyətlə mövcud deyil.
+        """
+        clear_layout(self._claimed_body)
+        self._claimed_section.setVisible(bool(shifts))
+        for shift in shifts:
+            self._claimed_body.addWidget(self._build_claimed_row(shift))
+
+    def _build_claimed_row(self, shift: dict[str, str]) -> QWidget:
+        row = QWidget()
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        layout.addWidget(body_label(shift["date"], size=13))
+        layout.addWidget(muted_label(shift["work_mode"], size=12))
+
+        posting_id = shift["id"]
+        # İKİNCİ DƏRƏCƏLİ DÜYMƏ: geri vermək istisna haldır, tutmaq isə əsas
+        # axındır — ikisi eyni vizual çəkidə olsaydı, işçi səhvən geri verə
+        # bilərdi (düymələr yan-yana deyil, amma eyni kartdadır).
+        release = secondary_button("Geri Ver")
+        release.setMinimumHeight(44)  # bölmə 9 — toxunma hədəfinin minimumu
+        release.clicked.connect(
+            lambda _=False, key=posting_id: self.open_shift_release_requested.emit(key)
+        )
+        layout.addWidget(release)
+        return row
 
     def set_open_shifts(self, shifts: list[dict[str, str]]) -> None:
         """Açıq növbə elanlarını göstərir (#16).

@@ -43,6 +43,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
+from typing import Final
 
 from src.domain.entities.base import AggregateRoot, DomainRuleError, InvalidStateTransitionError
 
@@ -50,7 +51,11 @@ from src.domain.entities.base import AggregateRoot, DomainRuleError, InvalidStat
 # işçi üçün hər ikisi "növbəm dəyişdi — niyə?" sualıdır və iki fərqli hədd
 # saxlamaq eyni sualın iki cür cavablanması demək olardı.
 from src.domain.entities.shift import MIN_DECISION_REASON_LENGTH
-from src.domain.events import OpenShiftClaimedEvent, OpenShiftPostedEvent
+from src.domain.events import (
+    OpenShiftClaimedEvent,
+    OpenShiftPostedEvent,
+    OpenShiftReleasedEvent,
+)
 from src.domain.value_objects.identifiers import (
     EmployeeId,
     OpenShiftPostingId,
@@ -61,19 +66,44 @@ from src.domain.value_objects.identifiers import (
 from src.domain.value_objects.scheduling import require_aware
 from src.shared.text import normalise_decision_text
 
+#: `expire()`-in yazdığı ləğv səbəbi — İNSAN mətni deyil, SİSTEM izahıdır.
+#:
+#: Sabit olması qəsdəndir: ekran «bu elan niyə bağlandı?» sualına cavab
+#: verərkən mətni TANIMALI və lokallaşdırılmış izah göstərə bilməlidir.
+#: Sərbəst mətn olsaydı, hər çağırış onu bir az fərqli yazar və ekranın
+#: tanıması mümkünsüz olardı.
+EXPIRED_CANCEL_REASON: Final[str] = "Tarixi keçdiyi üçün avtomatik bağlandı"
+
 
 class OpenShiftStatus(str, Enum):
     """`open_shift_postings.status` — DB `CHECK`-i ilə EYNİ üç dəyər.
 
-    Keçid qrafı BİR İSTİQAMƏTLİDİR (DB trigger-i də bunu qoruyur):
+    Keçid qrafı (DB trigger-i də onu qoruyur):
 
-        OPEN ──claim()───> CLAIMED    (terminal)
+        OPEN ──claim()───> CLAIMED ──release(səbəb)──┐
+          │                                          │
+          │  ◄───────────────────────────────────────┘
           │
-          └──cancel()───> CANCELLED   (terminal)
+          └──cancel()───> CANCELLED   (TERMİNAL)
 
-    Geri keçid YOXDUR: tutulmuş növbəni "yenidən açmaq" işçinin artıq
-    planlaşdırdığı günü əlindən almaq olardı, ləğv edilmiş elanı isə yenidən
-    açmaq YENİ elandır (yeni sətir) — köhnəsinin tarixçəsi qorunur.
+    ──────────────────────────────────────────────────────────────────────────
+    `release()` NİYƏ ƏLAVƏ EDİLDİ — VƏ KÖHNƏ QADAĞA NİYƏ SƏHV DEYİLDİ (OP-4)
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl burada belə yazılırdı: «Geri keçid YOXDUR: tutulmuş növbəni yenidən
+    açmaq işçinin artıq planlaşdırdığı günü ƏLİNDƏN ALMAQ olardı». Həmin
+    cümlə DOĞRUDUR və qorunur — məhz ona görə `release()` **BAŞQASI
+    TƏRƏFİNDƏN sükutla** çağırıla bilməz: onu ya növbəni TUTAN işçinin ÖZÜ
+    («xəstələndim, gedə bilmirəm»), ya da `can_manage_shifts` sahibi edir və
+    hər iki halda SƏBƏB məcburidir.
+
+    Qadağanın örtmədiyi hal isə budur: işçi xəstələnir və növbəni geri verə
+    bilmir — nə o, nə admin. Nəticədə slot təqvimdə DOLU görünür, faktiki isə
+    boş qalır; bazar onu yenidən elan edə bilmir, çünki `uq_open_shift_one_
+    open_per_slot` üçün AÇIQ elan yoxdur və `CLAIMED` sətir terminaldır.
+    Yəni köhnə qayda bir problemi həll edərkən ikincisini yaradırdı.
+
+    `CANCELLED` TERMİNAL QALIR: ləğv edilmiş elanı yenidən açmaq YENİ elandır
+    (yeni sətir) — köhnəsinin tarixçəsi toxunulmaz qalır.
     """
 
     OPEN = "OPEN"
@@ -82,7 +112,23 @@ class OpenShiftStatus(str, Enum):
 
     @property
     def is_final(self) -> bool:
-        """Qərar verilibmi — `OPEN`-dən çıxmış hər status terminaldır."""
+        """Status BİR DAHA dəyişə bilməzmi.
+
+        OP-4-DƏN SONRA YALNIZ `CANCELLED` TERMİNALDIR: `CLAIMED` sətir
+        `release()` ilə `OPEN`-ə qayıda bilir (bax sinif başlığı). Şərti
+        `is not OPEN` olaraq saxlasaydıq, xassənin adı ilə davranışı bir-birini
+        təkzib edərdi — `CLAIMED` «qəti» sayılar, lakin dəyişərdi.
+        """
+        return self is OpenShiftStatus.CANCELLED
+
+    @property
+    def is_decided(self) -> bool:
+        """Elan HƏLƏ AÇIQ bazarda gözləyirmi (`OPEN`) — yoxsa cavabını alıb.
+
+        `is_final`-dən FƏRQİ: bu, «bazarda görünürmü?» sualına cavab verir və
+        `CLAIMED`-i də əhatə edir. Köhnə `is_final`-in MƏNASI məhz bu idi;
+        ondan asılı olan çağırışlar bura keçməlidir.
+        """
         return self is not OpenShiftStatus.OPEN
 
 
@@ -222,6 +268,102 @@ class OpenShiftPosting(AggregateRoot):
             )
         )
 
+    def release(self, *, released_by: EmployeeId, released_at: datetime, reason: str) -> None:
+        """Tutulmuş növbə bazara QAYTARILIR — `CLAIMED` → `OPEN` (OP-4).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ SƏBƏB MƏCBURİDİR
+        ──────────────────────────────────────────────────────────────────────
+        `cancel()` ilə EYNİ hədd (`MIN_DECISION_REASON_LENGTH`) və eyni
+        əsaslandırma: elanı görmüş — bu halda onu TUTMUŞ — işçi üçün «növbə
+        yoxa çıxdı» izahsız qalmamalıdır. Üstəlik geri buraxma təkrarlanan
+        bir davranışa çevrilirsə (hər həftə tutub geri verən işçi), səbəb
+        sətirləri bunu göstərən yeganə izdir.
+
+        ──────────────────────────────────────────────────────────────────────
+        SƏLAHİYYƏT BURADA YOXLANMIR — VƏ BU, QƏSDƏNDİR
+        ──────────────────────────────────────────────────────────────────────
+        «Kim geri buraxa bilər?» sualı TƏTBİQ qatındadır
+        (`OpenShiftMarketUseCase.release_claim`): cavab «tutan işçinin ÖZÜ və
+        ya `can_manage_shifts` sahibi»dir və o, `Employee` obyektini tələb
+        edir — aqreqat isə işçi entity-sini TANIMIR. Aqreqatın öhdəliyi
+        vəziyyət maşınının bütövlüyüdür: `OPEN` və ya `CANCELLED` sətir geri
+        buraxıla bilməz.
+
+        TUTMA SAHƏLƏRİ TƏMİZLƏNİR (`claimed_by`/`claimed_at` → `None`):
+        `_require_consistent_state()` invariantı bunu TƏLƏB EDİR — `OPEN`
+        statusda hər ikisi `NULL` olmalıdır (DB `chk_open_shift_claim` ilə
+        eyni qayda). Köhnə sahibi «xatırlatmaq» üçün saxlamaq həmin
+        invariantı pozar və sətir nə bazadan bərpa oluna, nə də yazıla
+        bilərdi; kimin tutub geri verdiyi audit sətrindədir.
+        """
+        if self.status is not OpenShiftStatus.CLAIMED:
+            raise InvalidStateTransitionError(
+                f"«{self.status.value}» statusundakı elan geri buraxıla bilməz",
+                user_message="Bu növbə tutulmayıb.",
+                context={"posting_id": str(self.id), "status": self.status.value},
+            )
+        cleaned = normalise_decision_text(reason)
+        if len(cleaned) < MIN_DECISION_REASON_LENGTH:
+            raise DomainRuleError(
+                f"Geri buraxma səbəbi minimum {MIN_DECISION_REASON_LENGTH} simvol olmalıdır",
+                user_message="Növbəni niyə geri verdiyinizi ətraflı yazın.",
+                context={"length": len(cleaned)},
+            )
+
+        self.status = OpenShiftStatus.OPEN
+        self.claimed_by = None
+        self.claimed_at = None
+        self.record_event(
+            OpenShiftReleasedEvent(
+                tenant_id=self.tenant_id,
+                posting_id=self.id,
+                released_by=released_by,
+                store_id=self.slot.store_id,
+                shift_date=self.slot.shift_date,
+                reason=cleaned,
+            )
+        )
+
+    def expire(self, *, now: datetime) -> bool:
+        """Tarixi KEÇMİŞ açıq elanı bağlayır (planlaşdırılmış iş, OP-4).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ LAZIMDIR — «GÖRÜNMÜR» İLƏ «BAĞLIDIR» EYNİ ŞEY DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Ekranlar keçmiş elanları onsuz da göstərmir (`list_open(from_date=
+        bugün)`), yəni işçi yanlış bir şey GÖRMÜR. Lakin sətir bazada əbədi
+        `OPEN` qalır: hesabatda «neçə açıq elan var?» sualı ildən-ilə böyüyən
+        yalan rəqəm verir və `uq_open_shift_one_open_per_slot` qismən indeksi
+        heç vaxt təkrarlanmayacaq bir slot üçün yer tutmağa davam edir.
+
+        ──────────────────────────────────────────────────────────────────────
+        `cancelled_by` NİYƏ `None`
+        ──────────────────────────────────────────────────────────────────────
+        Qərarı İNSAN vermir — müddət bitib. Elanı açan şəxsi (`posted_by`)
+        yazmaq audit izini YALANLAŞDIRARDI: o adam heç nə etməyib.
+        `RegisteredDevice.block(blocked_by=None)` və `ManualOverride.
+        reject(rejected_by=None)` EYNİ qərarı verib — avtomatik qərar
+        aktorsuz qalır və `cancel_reason` mətni onu izah edir.
+
+        Returns:
+            Vəziyyət dəyişdisə `True` — çağıran YALNIZ o zaman yazır
+            (`FineAppeal.expire()` ilə eyni naxış, planlayıcı hər dövrədə
+            eyni sətri görür).
+        """
+        require_aware(now, field="now")
+        if self.status is not OpenShiftStatus.OPEN:
+            return False
+        if self.slot.shift_date >= now.date():
+            # Tarix hələ gəlməyib və ya BUGÜNDÜR — bugünkü slot səhər hələ
+            # tutula bilər, ona görə gün BİTMƏMİŞ bağlanmır.
+            return False
+        self.status = OpenShiftStatus.CANCELLED
+        self.cancelled_by = None
+        self.cancelled_at = now
+        self.cancel_reason = EXPIRED_CANCEL_REASON
+        return True
+
     def cancel(self, *, cancelled_by: EmployeeId, cancelled_at: datetime, reason: str) -> None:
         """Admin elanı geri çəkir — SƏBƏB MƏCBURİDİR."""
         if self.status is not OpenShiftStatus.OPEN:
@@ -267,9 +409,20 @@ class OpenShiftPosting(AggregateRoot):
                 context={"posting_id": str(self.id), "status": self.status.value},
             )
         cancelled = self.status is OpenShiftStatus.CANCELLED
-        if cancelled != (self.cancelled_by is not None and self.cancelled_at is not None):
+        # ŞƏRT `cancelled_at`-A BAĞLANIB, `cancelled_by`-A YOX (OP-4):
+        # avtomatik müddət bitməsində (`expire()`) qərarı insan vermir və
+        # `cancelled_by` `None` qalır — uydurma aktor audit izini
+        # yalanlaşdırardı. «Nə vaxt bağlandı?» isə HƏR İKİ yolda məlumdur,
+        # ona görə vaxt möhürü invariantın etibarlı dayağıdır.
+        if cancelled != (self.cancelled_at is not None):
             raise DomainRuleError(
                 "Ləğv sahələri status ilə uyğun gəlmir",
+                user_message="Açıq növbə qeydi oxunmadı.",
+                context={"posting_id": str(self.id), "status": self.status.value},
+            )
+        if not cancelled and self.cancelled_by is not None:
+            raise DomainRuleError(
+                "Ləğv edilməmiş elanın ləğv edəni ola bilməz",
                 user_message="Açıq növbə qeydi oxunmadı.",
                 context={"posting_id": str(self.id), "status": self.status.value},
             )
@@ -282,6 +435,7 @@ class OpenShiftPosting(AggregateRoot):
 
 
 __all__ = [
+    "EXPIRED_CANCEL_REASON",
     "OpenShiftPosting",
     "OpenShiftSlot",
     "OpenShiftStatus",

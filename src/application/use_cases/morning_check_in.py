@@ -11,7 +11,8 @@ lazımsız yükləyərdi (bax SEC-003).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 from src.application.use_cases.leave_verification import (
@@ -42,6 +43,7 @@ from src.domain.value_objects.identifiers import (
     new_attendance_record_id,
 )
 from src.domain.value_objects.scheduling import LatenessAssessment, resolve_work_date
+from src.shared.exceptions import KompasOSError
 from src.shared.logger import get_logger
 
 _log = get_logger(__name__)
@@ -54,6 +56,38 @@ class CheckInOutcome:
     record: AttendanceRecord
     lateness: LatenessAssessment | None
     was_rejected: bool = False
+
+
+@dataclass
+class BatchRejectResult:
+    """Toplu rəddin nəticəsi (OP-7).
+
+    `PublishResult` (`fine_review.py`) ilə eyni formadadır və eyni səbəbdən:
+    toplu əməliyyat «hamısı və ya heç biri» DEYİL, ona görə nəticə hansı
+    sətrin keçdiyini VƏ hansının niyə keçmədiyini daşımalıdır.
+    """
+
+    rejected: list[EmployeeId] = field(default_factory=list)
+    #: İşçi → istifadəçiyə göstərilən səbəb (artıq təsdiqlənib, sətir yoxdur, ...).
+    failed: dict[EmployeeId, str] = field(default_factory=dict)
+
+    @property
+    def rejected_count(self) -> int:
+        return len(self.rejected)
+
+    @property
+    def has_failures(self) -> bool:
+        return bool(self.failed)
+
+
+def _compose_reason(shared: str, note: str | None) -> str:
+    """Ortaq səbəb + sətir qeydi (OP-7).
+
+    Qeyd verilməyibsə ortaq səbəb OLDUĞU KİMİ işlədilir — boş bir ayırıcı
+    əlavə etmək audit mətninə mənasız simvol yazardı.
+    """
+    cleaned = (note or "").strip()
+    return f"{shared} — {cleaned}" if cleaned else shared
 
 
 class MorningCheckInUseCase:
@@ -230,6 +264,141 @@ class MorningCheckInUseCase:
         )
         return CheckInOutcome(record=record, lateness=None, was_rejected=True)
 
+    def reject_batch(
+        self,
+        *,
+        tenant_id: TenantId,
+        operator_id: EmployeeId,
+        employee_ids: Sequence[EmployeeId],
+        reason: str,
+        notes: Mapping[EmployeeId, str] | None = None,
+        work_date: date | None = None,
+    ) -> BatchRejectResult:
+        """`[Seçilmişləri Rədd Et]` — BİR qərar, N sətir, N audit yazısı (OP-7).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ LAZIMDIR — TƏKRAR MƏTN QORUMANI ZƏİFLƏDİR
+        ──────────────────────────────────────────────────────────────────────
+        `reject()` hər sətir üçün minimum 10 simvolluq səbəb tələb edir
+        və bu, DOĞRU qaydadır: işçi «niyə rədd edildim?» sualının cavabını
+        almalıdır. Lakin növbədə eyni səbəblə (məs. «kamera bir saat işləmədi,
+        heç bir görüntü yoxdur») on sətir rədd edən operator həmin mətni on
+        dəfə yazır — praktikada bu, mətnin kopyalanmasına və ya «asdfghjklm»
+        tipli doldurucuya sövq edir. Yəni qayda formal olaraq işləyir, məqsədi
+        isə itir.
+
+        `MonthlyFineReviewUseCase.publish_batch` NAXIŞI TƏKRARLANIR: qərar
+        BİRDİR, tətbiq isə sətir-sətirdir və HƏR sətrin ÖZ audit yazısı olur —
+        toplu əməliyyat auditdə bir sətrə yığılsaydı, «filan işçi nə vaxt, kim
+        tərəfindən rədd edildi?» sualı cavabsız qalardı.
+
+        ──────────────────────────────────────────────────────────────────────
+        NƏ DƏYİŞMİR
+        ──────────────────────────────────────────────────────────────────────
+        * Səlahiyyət və əhatə yoxlaması HƏR sətir üçün ayrıca aparılır
+          (`reject()` ilə eyni sıra) — operatorun görmədiyi mağazanın sətri
+          dəstə salınsa da keçmir.
+        * Kilidli oxu HƏR sətir üçün qalır: paralel təsdiq/rədd yarışı toplu
+          yolda da mümkündür.
+        * Domen qaydası (`AttendanceRecord.reject`) TOXUNULMUR — səbəbin
+          uzunluğu yenə orada yoxlanılır.
+
+        BİLDİRİŞ TOPLANIR (sətir-sətir YOX): bir qərardan doğan N kritik
+        bildiriş HR panelini doldurar və `TENANT_NOTIFICATION_AUDIENCE`
+        başlığındakı «həqiqi bildirişləri səs-küydə itirmək» halını yaradardı.
+
+        Args:
+            employee_ids: Rədd ediləcək işçilər. TƏKRARLAR bir dəfə emal
+                olunur — ekranın iki dəfə seçilmiş sətri ikiqat audit yazısı
+                yaratmamalıdır.
+            reason: HAMISI üçün ORTAQ səbəb (minimum uzunluq `reject()`-dədir).
+            notes: İSTƏYƏ BAĞLI sətir-səviyyəli əlavə («BİR qərar, N qeyd»).
+                Verilibsə həmin sətrin səbəbi «ortaq səbəb — qeyd» olur.
+
+        Returns:
+            Rədd edilənlər və rədd edilə BİLMƏYƏNLƏR (səbəbi ilə). Uğursuz
+            sətir bütün dəsti dayandırmır — `ExceptionEngineUseCase.run`-un
+            «qismən uğur» qərarı ilə eyni: on sətrin biri artıq təsdiqlənibsə,
+            qalan doqquzun rədd edilməməsi üçün səbəb yoxdur.
+        """
+        result = BatchRejectResult()
+        if not employee_ids:
+            return result
+
+        rejected_at, _ = self._verified_now(tenant_id, operation="STEP_C_REJECT_BATCH")
+        line_notes = notes or {}
+        seen: set[EmployeeId] = set()
+
+        for employee_id in employee_ids:
+            if employee_id in seen:
+                continue
+            seen.add(employee_id)
+            line_reason = _compose_reason(reason, line_notes.get(employee_id))
+            try:
+                self._reject_one(
+                    tenant_id=tenant_id,
+                    operator_id=operator_id,
+                    employee_id=employee_id,
+                    reason=line_reason,
+                    rejected_at=rejected_at,
+                    work_date=work_date,
+                )
+            except KompasOSError as exc:
+                # SÜKUTLA ATLANMIR: hansı sətrin niyə keçmədiyi çağırana
+                # QAYTARILIR və ekran onu istifadəçiyə göstərir.
+                result.failed[employee_id] = exc.user_message
+                continue
+            result.rejected.append(employee_id)
+
+        if result.rejected:
+            self._notifier.notify(
+                tenant_id=tenant_id,
+                recipient_id=None,  # HR_Admin + Store Manager
+                category="CHECK_IN_REJECTED",
+                title_az="İşə giriş təsdiqləri rədd edildi",
+                body_az=(
+                    f"Kamera Operatoru {len(result.rejected)} işçinin giriş təsdiqini "
+                    f"rədd etdi. Səbəb: {reason}. Araşdırma tələb oluna bilər."
+                ),
+                is_critical=True,
+            )
+        return result
+
+    def _reject_one(
+        self,
+        *,
+        tenant_id: TenantId,
+        operator_id: EmployeeId,
+        employee_id: EmployeeId,
+        reason: str,
+        rejected_at: datetime,
+        work_date: date | None,
+    ) -> None:
+        """Toplu rəddin BİR sətri — `reject()`-in bildirişsiz qarşılığı.
+
+        `reject()` YENİDƏN YAZILMADI və onu bu metodun üzərinə köçürmək də
+        RƏDD EDİLDİ: tək-sətir yolunun öz bildirişi var və o, mövcud ekranın
+        gözlədiyi davranışdır. Ortaq olan hissə (kilidli oxu → səlahiyyət →
+        əhatə → domen → yazı → audit) burada TƏKRARLANIR, çünki fərq məhz
+        bildirişdədir və onu parametrləşdirmək iki yolu bir-birinə bağlayardı.
+        """
+        day = work_date or self._resolve_work_date(employee_id, at=rejected_at)
+        record = self._require_record_locked(employee_id, day)
+        self._require_camera_permission(operator_id, record)
+        self._require_operator_scope(operator_id, record.store_id)
+
+        record.reject(operator_id=operator_id, reason=reason, rejected_at=rejected_at)
+        self._attendance.save(record)
+        self._audit.record(
+            tenant_id=tenant_id,
+            actor_id=operator_id,
+            action="MORNING_CHECK_IN_REJECTED",
+            entity_type="attendance_records",
+            entity_id=record.id,
+            after_state={"rejected_at": rejected_at.isoformat(), "batch": True},
+            reason=reason,
+        )
+
     # ----------------------------- TIMEOUT ---------------------------------- #
 
     def escalate_timeouts(self, tenant_id: TenantId, operator_id: EmployeeId) -> int:
@@ -255,6 +424,93 @@ class MorningCheckInUseCase:
                     f"(Mağaza Meneceri YOX — cüt nəzarət pilləliyi)."
                 ),
                 is_critical=True,
+            )
+        return escalated
+
+    def escalate_timeouts_for_tenant(self, tenant_id: TenantId) -> int:
+        """AKTORSUZ eskalasiya — PLANLAYICININ çağırdığı variant (OP-2).
+
+        ──────────────────────────────────────────────────────────────────────
+        BOŞLUQ NƏ İDİ
+        ──────────────────────────────────────────────────────────────────────
+        `escalate_timeouts(tenant_id, operator_id)` mağaza dəstini
+        `camera_assignments.stores_for_operator(operator_id)`-dan alır, yəni
+        AKTOR TƏLƏB EDİR. Planlayıcıda aktor YOXDUR və uydurma aktor (məs.
+        ilk CEO) audit izini YALANLAŞDIRARDI — `RegisteredDevice.approve()`
+        şərhindəki eyni qadağa. Nəticədə 45 dəqiqəlik hədd YALNIZ operator
+        həmin ekranı AÇDIQDA işləyirdi: operator naharda olanda və ya növbəni
+        təhvil verəndə eskalasiya heç vaxt baş vermirdi — yəni hədd kağız
+        üzərində qalırdı.
+
+        ──────────────────────────────────────────────────────────────────────
+        AKTORSUZ VARİANT NİYƏ TƏHLÜKƏSİZDİR
+        ──────────────────────────────────────────────────────────────────────
+        Eskalasiya QƏRAR VERMİR. Status `PENDING_VERIFICATION` (`🟡`) OLARAQ
+        QALIR (`AttendanceRecord.escalate_timeout` — nə təsdiq, nə rədd),
+        yalnız `escalated_at` möhürlənir və HR_Admin/CEO-ya bildiriş gedir.
+        Yəni heç kimin səlahiyyəti genişlənmir, heç bir işçinin davamiyyəti
+        dəyişmir — sadəcə gözləyən sətir GÖRÜNƏN olur. Səlahiyyət qapısı öz
+        yerində qalır: manual təsdiq/rədd hələ də `_require_camera_permission`
+        arxasındadır və orada aktor VAR.
+        Eyni qərar qayıdış tərəfində ARTIQ verilib
+        (`LeaveVerificationUseCase.escalate_timeouts(tenant_id)` — aktorsuz).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ YENİ REPOSİTORY METODU YAZILMADI
+        ──────────────────────────────────────────────────────────────────────
+        `AttendanceRepository`-yə kirayəçi-geniş `list_pending_verification`
+        əlavə etmək cazibədar idi, lakin LAZIM DEYİL: `list_expected_on(
+        tenant_id, work_date)` ARTIQ kirayəçi üzrə süzülür və həmin günün
+        BÜTÜN sətirlərini qaytarır (`PENDING_VERIFICATION` daxil). Süzgəci
+        `escalate_timeout()`-un ÖZÜ edir — o, status, `escalated_at` və
+        gözləmə müddətini yoxlayıb `False` qaytarır. Yeni port metodu
+        `AttendanceRepository`-ni ödəyən HƏR sinfi (test sahtələri daxil)
+        dərhal uyğunsuz edərdi, halbuki mövcud metod eyni cavabı verir.
+
+        İKİ GÜN OXUNUR (bugün + dünən), bir deyil: gecə növbəsində sorğu
+        23:50-də verilib, hədd isə növbəti təqvim gününə düşür — yalnız
+        bugünü oxusaydıq həmin sətir HEÇ VAXT eskalasiya olunmazdı. Dünəndən
+        əvvəlki günlər LAZIM DEYİL, çünki `escalated_at` möhürü idempotentliyi
+        təmin edir və gün sonunda `detect_absences` sətri onsuz da öz yoluna
+        salır.
+
+        Returns:
+            Eskalasiya edilmiş sətir sayı — planlayıcının icra hesabatı üçün.
+        """
+        now = self._clock.now()
+        timeout = self._limit_int(tenant_id, SystemLimitKey.VERIFICATION_TIMEOUT_MINUTES)
+        today = now.date()
+        escalated = 0
+
+        for day in (today, today - timedelta(days=1)):
+            for record in self._attendance.list_expected_on(tenant_id, day):
+                if not record.escalate_timeout(now=now, timeout_minutes=timeout):
+                    continue
+                self._attendance.save(record)
+                escalated += 1
+                self._notifier.notify(
+                    tenant_id=tenant_id,
+                    recipient_id=None,
+                    category="CHECK_IN_TIMEOUT",
+                    title_az="İşə giriş təsdiqi gecikir",
+                    body_az=(
+                        f"İşçinin giriş təsdiqi {timeout} dəqiqədən çoxdur gözləyir. "
+                        f"HR_Admin və ya CEO manual təsdiq/rədd edə bilər "
+                        f"(Mağaza Meneceri YOX — cüt nəzarət pilləliyi)."
+                    ),
+                    is_critical=True,
+                )
+
+        if escalated:
+            # BİR SƏTİR = BİR BİLDİRİŞ (yuxarıda) QALDI, LAKİN JURNAL SƏTRİ
+            # TOPLUDUR: bildiriş HƏR İŞÇİ üçün ayrıca lazımdır (HR hər biri
+            # üzrə ayrıca qərar verməlidir), planlayıcının izi isə «bu
+            # dövrədə neçə sətir qalxdı?» sualına cavab verir. Təkrar
+            # bildiriş RİSKİ YOXDUR: `escalate_timeout` `escalated_at`
+            # möhürünə görə hər sətri YALNIZ BİR DƏFƏ qaldırır.
+            _log.warning(
+                "CHECK_IN_TIMEOUTS_ESCALATED",
+                extra={"tenant_id": str(tenant_id), "count": escalated},
             )
         return escalated
 
@@ -428,4 +684,4 @@ class MorningCheckInUseCase:
         return self._limits.get_int(tenant_id, key.value, int(DEFAULT_LIMITS[key]))
 
 
-__all__ = ["CheckInOutcome", "MorningCheckInUseCase"]
+__all__ = ["BatchRejectResult", "CheckInOutcome", "MorningCheckInUseCase"]

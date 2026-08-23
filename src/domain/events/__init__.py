@@ -269,6 +269,49 @@ class AnnualLeaveCancelledEvent(DomainEvent):
 
 
 @dataclass(frozen=True, kw_only=True)
+class AnnualLeaveEarlyReturnEvent(DomainEvent):
+    """#28: işçi məzuniyyətdən ERKƏN qayıtdı — QALAN günlər balansa döndü.
+
+    `AnnualLeaveCancelledEvent`-dən AYRIDIR və səbəb onunla eynidir (bax
+    həmin sinfin şərhi): ləğvdə plan HEÇ VAXT icra olunmayıb və günlərin
+    HAMISI qayıdır; erkən qayıdışda isə məzuniyyət BAŞLAYIB, bir hissəsi
+    xərclənib və sətir `APPROVED` qalır. İki halı bir hadisə ilə ifadə
+    etsəydik, abunəçi "neçə gün faktiki istifadə olundu?" sualına cavab
+    verə bilməzdi — `restored_days` hər iki halda dolu olardı, `consumed_
+    days` isə yalnız birində mənalıdır.
+    """
+
+    request_id: uuid.UUID
+    employee_id: uuid.UUID
+    returned_by: uuid.UUID
+    return_date: date
+    #: Faktiki xərclənmiş gün — sətrin YENİ `deducted_days` dəyəri.
+    consumed_days: str
+    restored_days: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class OpenShiftReleasedEvent(DomainEvent):
+    """#16 (OP-4): tutulmuş açıq növbə bazara GERİ QAYTARILDI.
+
+    `OpenShiftClaimedEvent`-in əksi DEYİL, ONDAN AYRI hadisədir: tutma
+    təqvimə YAZI əlavə edir, geri buraxma isə onu GERİ ALIR və slotu yenidən
+    doldurulmalı edir. Abunəçi (məs. gələcək bildiriş kanalı) ikisini
+    ayırd edə bilməsəydi, «növbə boşaldı, kimsə götürsün» siqnalı «növbə
+    tutuldu» siqnalından fərqlənməzdi.
+
+    `reason` hadisəyə DAXİLDİR: geri buraxmanın səbəbi elanı açan şəxsin
+    bilməli olduğu YEGANƏ məlumatdır — o, slotu yenidən doldurmalıdır.
+    """
+
+    posting_id: uuid.UUID
+    released_by: uuid.UUID
+    store_id: uuid.UUID
+    shift_date: date
+    reason: str
+
+
+@dataclass(frozen=True, kw_only=True)
 class OpenShiftPostedEvent(DomainEvent):
     """#16: admin doldurulmamış slotu "açıq" elan etdi.
 
@@ -301,6 +344,29 @@ class DailyAttendanceSheetConfirmedEvent(DomainEvent):
     sheet_date: date
     confirmed_by: uuid.UUID
     mismatch_count: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class DailyAttendanceSheetReopenedEvent(DomainEvent):
+    """Təsdiqlənmiş tabelin imzası İKİ ŞƏXSİN qərarı ilə geri alındı.
+
+    `DailyAttendanceSheetConfirmedEvent`-in əksi DEYİL, ONDAN AYRI hadisədir:
+    təsdiq NORMAL axının addımıdır, açılış isə İSTİSNA — audit və hesabat
+    tərəfi bu ikisini eyni saya bilməz. Sahələr də fərqlidir: burada
+    «kim istədi», «kim təsdiqlədi» və «kimin imzası geri alındı» üç AYRI
+    şəxsdir və üçü də saxlanmalıdır.
+    """
+
+    sheet_id: uuid.UUID
+    store_id: uuid.UUID
+    sheet_date: date
+    requested_by: uuid.UUID
+    approved_by: uuid.UUID
+    #: Təsdiqi geri alınan şəxs. `None` ola bilər: sətir köhnə/idxal edilmiş
+    #: məlumatdan gəlirsə `confirmed_by` boş qala bilər (sütun `NULL`
+    #: qəbul edir) və o halı UYDURMAQ audit izini yalanlaşdırardı.
+    previous_confirmed_by: uuid.UUID | None
+    reason: str
 
 
 # --------------------------------------------------------------------------- #
@@ -631,8 +697,10 @@ __all__ = [
     "AnnouncementBroadcastEvent",
     "AnnualLeaveCancelledEvent",
     "AnnualLeaveDecidedEvent",
+    "AnnualLeaveEarlyReturnEvent",
     "AnnualLeaveRequestedEvent",
     "DailyAttendanceSheetConfirmedEvent",
+    "DailyAttendanceSheetReopenedEvent",
     "DeviceApprovedEvent",
     "DeviceBlockedEvent",
     "DeviceFingerprintAcceptedEvent",
@@ -659,6 +727,7 @@ __all__ = [
     "MorningCheckInVerifiedEvent",
     "OpenShiftClaimedEvent",
     "OpenShiftPostedEvent",
+    "OpenShiftReleasedEvent",
     "PerformanceReviewRecordedEvent",
     "PermissionChangedEvent",
     "ShiftAssignmentChangedEvent",

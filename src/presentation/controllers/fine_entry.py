@@ -217,6 +217,10 @@ class FineEntryController:
         #    aradan qaldırır: operator artıq "heç nə olmadı" güman edib
         #    yenidən basmır.
         screen.clear_photo()
+        # DEEP-GAP OP-6 — İŞÇİ sahəsi də boşalır (səbəb `group_b.py::
+        # clear_employee` başlığındadır). Növ/mağaza QALIR: onlar seans boyu
+        # sabitdir, işçi isə hər cərimədə dəyişir.
+        screen.clear_employee()
         message = f"Cərimə qeydə alındı — {employee_name}"
         if amount_text:
             message += f" · {amount_text}"

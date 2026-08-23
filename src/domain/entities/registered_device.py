@@ -4,8 +4,15 @@
 TƏSDİQ AXINI VƏZİYYƏT MAŞINIDIR — VƏ MƏHZ ONA GÖRƏ ENTITY-DƏDİR
 ──────────────────────────────────────────────────────────────────────────────
     PENDING_APPROVAL ──approve()──► ACTIVE ──block()──► BLOCKED
-                          ▲                                │
-                          └──────── reactivate() ──────────┘
+       │  ▲                            ▲                   │  │
+       │  └──── reactivate() (filialsız cihaz) ─────────────┘  │
+       │                               └── reactivate() ───────┘
+       └──block()──────────────────────────────────────────► BLOCKED
+
+`reactivate()` İKİ hədəfə gedir və hədəfi `store_id` seçir: filialı olan cihaz
+`ACTIVE`-ə, heç vaxt təsdiqlənməmiş (filialsız) cihaz isə `PENDING_APPROVAL`-a
+qayıdır. İkinci qol olmadan `PENDING_APPROVAL`-da bloklanmış cihaz əbədi
+kiliddə qalırdı — bax `reactivate()` şərhi.
 
 Keçidlərin hamısı BURADA, use case-də deyil. Səbəb: eyni cihaz iki yerdən
 dəyişdirilir — admin ekranı (`approve`, `block`) və cihazın özü (`touch`,
@@ -219,26 +226,48 @@ class RegisteredDevice(AggregateRoot):
             )
         )
 
-    def reactivate(self, *, reactivated_by: EmployeeId, now: datetime) -> None:
+    def reactivate(self, *, reactivated_by: EmployeeId, now: datetime) -> DeviceStatus:
         """Bloklanmış cihazı yenidən işə salır.
 
         Filial TƏLƏB OLUNMUR, çünki bloklama onu SİLMİR — cihaz hansı filiala
         aid olduğunu «xatırlayır». Filialsız bloklanmış cihaz isə heç vaxt
         təsdiqlənməmiş deməkdir və o, `PENDING_APPROVAL`-a qayıtmalıdır.
+
+        ──────────────────────────────────────────────────────────────────────
+        FİLİALSIZ HAL NİYƏ İSTİSNA DEYİL — ƏBƏDİ KİLİDİN QAPADILMASI
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəl bu hal `DomainRuleError` atırdı («əvvəlcə təsdiqdən keçməlidir»),
+        halbuki `approve()` YALNIZ `PENDING_APPROVAL`-dan işləyir — yəni
+        göstərilən yol MÖVCUD DEYİLDİ. Nəticədə təsdiq gözləyən cihaz
+        bloklandıqda (`block()` `PENDING_APPROVAL`-ı da qəbul edir) HEÇ BİR
+        keçidlə geri qaytarıla bilmirdi: nə `approve()`, nə `reactivate()`.
+        Yeganə çıxış bazaya əl ilə müdaxilə olardı — auditsiz.
+
+        Yuxarıdakı cümlə DÜZGÜN davranışı ARTIQ yazırdı; burada icra olunur.
+        Aktiv etmək İSTİSNA EDİLİR: filialsız aktiv cihaz `__post_init__`
+        invariantını (və DB `CHECK (status <> 'ACTIVE' OR store_id IS NOT
+        NULL)`) pozardı və DEVICE-1-in həll etdiyi problemi geri gətirərdi.
+
+        Returns:
+            Cihazın YENİ vəziyyəti — çağıran tərəf lisenziya sayğacını və
+            audit sətrini ona görə qurur (`PENDING_APPROVAL` yer tutmur).
         """
         require_aware(now, field="now")
         if self.status is not DeviceStatus.BLOCKED:
             raise InvalidStateTransitionError(
                 f"Yalnız bloklanmış cihaz bərpa edilə bilər (cari: {self.status.value})"
             )
-        if self.store_id is None:
-            raise DomainRuleError(
-                "Filialsız cihaz bərpa edilə bilməz — əvvəlcə təsdiqdən keçməlidir"
-            )
-        self.status = DeviceStatus.ACTIVE
         self.block_reason = ""
-        self.approved_by = reactivated_by
         self.last_seen_at = now
+        if self.store_id is None:
+            # Heç vaxt təsdiqlənməmiş cihaz — təsdiq növbəsinə QAYIDIR.
+            # `approved_by` TOXUNULMUR: onu doldurmaq «kimsə bu cihazı
+            # təsdiqləyib» yalanını yazardı, halbuki təsdiq hələ verilməyib.
+            self.status = DeviceStatus.PENDING_APPROVAL
+            return self.status
+        self.status = DeviceStatus.ACTIVE
+        self.approved_by = reactivated_by
+        return self.status
 
     def reassign_store(self, *, store_id: StoreId, now: datetime) -> None:
         """Cihazı başqa filiala köçürür (PC fiziki olaraq daşınıb).

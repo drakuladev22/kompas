@@ -289,7 +289,10 @@ class ReleasePublisher:
 
         # 2) SƏTİR — bundan sonra buraxılış klientlərə GÖRÜNÜR.
         try:
-            with self._database.system_scope() as conn, conn.cursor() as cur:
+            with (
+                self._database.system_scope(tables=("app_versions",)) as conn,
+                conn.cursor() as cur,
+            ):
                 cur.execute(
                     _INSERT_SQL,
                     (
@@ -339,7 +342,10 @@ class ReleasePublisher:
 
     def _version_exists(self, version: str, channel: ReleaseChannel) -> bool:
         try:
-            with self._database.system_scope() as conn, conn.cursor() as cur:
+            with (
+                self._database.system_scope(tables=("app_versions",)) as conn,
+                conn.cursor() as cur,
+            ):
                 cur.execute(_EXISTS_SQL, (version, channel.value))
                 return cur.fetchone() is not None
         except Exception as exc:
@@ -390,7 +396,10 @@ class ReleasePublisher:
     def list_published(self, *, limit: int = 20) -> list[dict[str, Any]]:
         """Son buraxılışlar — panelin "Yayımlanmış versiyalar" siyahısı."""
         try:
-            with self._database.system_scope() as conn, conn.cursor() as cur:
+            with (
+                self._database.system_scope(tables=("app_versions",)) as conn,
+                conn.cursor() as cur,
+            ):
                 cur.execute(
                     """
                     SELECT version_number, channel, release_date, is_mandatory,

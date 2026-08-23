@@ -56,7 +56,7 @@ from src.shared.exceptions import ConfigurationError, KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
 
 _log = get_logger(__name__)
 _security_log = get_logger(__name__, channel=LogChannel.SECURITY)
@@ -79,6 +79,63 @@ FALLBACK_TIMEOUT_SECONDS: Final[float] = fallback_float(SystemLimitKey.DB_CONNEC
 
 #: Owner rolları — bunlarla qoşulmaq RLS-i yan keçir (yalnız miqrasiya üçün).
 OWNER_ROLE_PREFIXES: Final[tuple[str, ...]] = ("postgres", "supabase_admin")
+
+#: Bu mühitlərdə owner rolu ilə qoşulmaq tətbiqi DAYANDIRIR (AF-3).
+#:
+#: Defolt `PRODUCTION`-dur — dəyişən ÜMUMİYYƏTLƏ təyin edilməyibsə sərt
+#: davranış seçilir (fail-closed). Eyni konvensiya `main.py::PRODUCTION_ENVS`
+#: və `i18n/translator.py::_LENIENT_ENVS`-dədir; üçüncü bir qayda uydurmaq
+#: «hansı dəyişən hansı qatı idarə edir» sualını yaradardı.
+PRODUCTION_ENVS: Final[frozenset[str]] = frozenset({"PRODUCTION", "STAGING"})
+
+#: `system_scope()`-un TOXUNA BİLDİYİ, kirayəçiyə AİD OLMAYAN cədvəllər.
+#:
+#: SİYAHI BAĞLIDIR (SAAS-2). Əvvəl belə bir siyahı YALNIZ docstring-də vardı
+#: və `DATABASE_ADMIN_URL` təyin edilibsə HƏR `system_scope()` çağırışı owner
+#: bağlantısı ilə — yəni RLS-siz — gedirdi. Server vaxtı sinxronizasiyası bunu
+#: HƏR dövrədə edir, yəni ən tez-tez işləyən yol da ən imtiyazlı yol idi.
+#: İndi çağıran tərəf toxunacağı cədvəlləri BƏYAN EDİR və bəyan bu siyahıdan
+#: kənara çıxsa açıq xəta qalxır.
+SYSTEM_SCOPE_TABLES: Final[frozenset[str]] = frozenset(
+    {
+        "license_tenants",
+        "license_audit_log",
+        "permission_flags",
+        "scheduled_job_runs",
+        "crash_reports",
+        "app_versions",
+        "schema_migrations",
+        "system_limits",
+    }
+)
+
+#: ÇOX-KİRAYƏÇİ Developer Panelinin oxuduğu, kirayəçiyə AİD cədvəllər.
+#:
+#: Bunlar `SYSTEM_SCOPE_TABLES`-dən AYRI saxlanılır və YALNIZ
+#: `system_scope(..., cross_tenant=True)` ilə açılır. Səbəb: təchizatçının
+#: paneli (`licensing/developer_directory.py`) bütün müştəriləri BİR ekranda
+#: göstərmək üçün onları RLS-siz oxumalıdır — bu, sənədləşdirilmiş qərardır
+#: (CLAUDE.md §9: Master Panel `service_role` + RLS). Lakin həmin icazə adi
+#: yollara SIZMAMALIDIR: `cross_tenant` bayrağı olmadan bu cədvəllərdən biri
+#: bəyan edilsə çağırış RƏDD OLUNUR.
+DEVELOPER_SCOPE_TABLES: Final[frozenset[str]] = frozenset(
+    {
+        "employees",
+        "positions",
+        "stores",
+        "erp_servers",
+        "registered_devices",
+        "sync_conflicts",
+        "support_tickets",
+        "support_messages",
+        "tenant_check_ins",
+    }
+)
+
+
+def _is_production_env() -> bool:
+    """`KOMPASOS_ENV` istehsalat/staging-dirmi (təyin edilməyibsə — BƏLİ)."""
+    return os.environ.get("KOMPASOS_ENV", "PRODUCTION").upper() in PRODUCTION_ENVS
 
 
 def _clamped_pool_settings(min_size: int, max_size: int, timeout: float) -> tuple[int, int, float]:
@@ -189,6 +246,37 @@ def build_dsn_from_env() -> str:
                 "action": "kompasos_app rolundan istifadə edin (SEC-009)",
             },
         )
+        # ──────────────────────────────────────────────────────────────────
+        # FAIL-CLOSED SƏRHƏDİ (AF-3): İSTEHSALATDA XƏBƏRDARLIQ KİFAYƏT DEYİL
+        # ──────────────────────────────────────────────────────────────────
+        # Əvvəl yalnız yuxarıdakı kritik log yazılır və tətbiq NORMAL işləyirdi
+        # — yəni çox-kirayəçi izolyasiyasının BİRİNCİ qatı sükutla yoxa çıxırdı
+        # və bunu heç kim görmürdü (log faylını kim açır?). Eyni qərar
+        # `KOMPASOS_HASH_PEPPER` üçün artıq verilib (`main.py::_check_pepper`):
+        # istehsalatda çatışmayan qoruma XƏTA, inkişafda XƏBƏRDARLIQDIR.
+        #
+        # SƏRHƏD: `KOMPASOS_ENV` ∈ {PRODUCTION, STAGING} — və dəyişən
+        # təyin edilməyibsə DƏ istehsalat sayılır. Tərs defolt (naməlum mühit =
+        # inkişaf) qorumanı məhz onun ən çox lazım olduğu yerdə — konfiqurasiya
+        # edilməmiş müştəri maşınında — söndürərdi.
+        #
+        # DEV/TEST mühiti TOXUNULMAZ: `KOMPASOS_ENV=DEV` ilə işləyən inkişaf
+        # maşını, miqrasiya skriptləri (`scripts/apply_migrations.py` — o,
+        # `Database`-dən KEÇMİR, öz psycopg bağlantısını qurur) və inteqrasiya
+        # testləri əvvəlki kimi owner ilə işləyə bilir.
+        if _is_production_env():
+            raise ConfigurationError(
+                "Baza bağlantısı owner rolu ilə qurulub — RLS yan keçilir",
+                user_message=(
+                    "Baza bağlantısı yanlış hesabla qurulub. Quraşdırma "
+                    "tamamlanmayıb — texniki dəstəklə əlaqə saxlayın."
+                ),
+                context={
+                    "role": username,
+                    "action": "DSN-də `kompasos_app` rolundan istifadə edin (SEC-009)",
+                    "env": os.environ.get("KOMPASOS_ENV", "PRODUCTION"),
+                },
+            )
     if parsed.hostname and parsed.hostname.startswith("db."):
         _log.warning(
             "DB_DIRECT_HOST_IN_USE",
@@ -382,7 +470,12 @@ class Database:
         return PostgresUnitOfWork(self._pool, TenantContext(tenant_id=tenant_id, user_id=user_id))
 
     @contextmanager
-    def system_scope(self) -> Iterator[Connection[dict[str, Any]]]:
+    def system_scope(
+        self,
+        *,
+        tables: Sequence[str] | None = None,
+        cross_tenant: bool = False,
+    ) -> Iterator[Connection[dict[str, Any]]]:
         """Tenant-dan KƏNAR cədvəllər üçün bağlantı (RLS konteksti YOXDUR).
 
         ──────────────────────────────────────────────────────────────────
@@ -394,25 +487,97 @@ class Database:
         Nəticə: tenant-a aid cədvəllər (employees, leave_requests, ...) BOŞ
         görünür — bu, fail-closed siyasətin düzgün işləməsidir, səhv deyil.
 
-        İSTİFADƏ SAHƏSİ: yalnız tenant-a aid OLMAYAN cədvəllər —
-        `license_tenants`, `permission_flags`, `scheduled_job_runs`,
-        `crash_reports`.
+        ──────────────────────────────────────────────────────────────────
+        AĞ SİYAHI VƏ OWNER HOVUZU (SAAS-2)
+        ──────────────────────────────────────────────────────────────────
+        `DATABASE_ADMIN_URL` təyin edilibsə owner (RLS-siz) bağlantısı
+        MÖVCUDDUR. Əvvəl həmin hovuz HƏR çağırışa avtomatik verilirdi —
+        yəni server vaxtının hər dövrəsi də owner ilə gedirdi. İndi qayda
+        belədir:
 
-        `admin_dsn` verilibsə owner bağlantısı istifadə olunur (provisioning,
-        miqrasiya, test setup) və bu, ayrıca KRİTİK log yazısı yaradır.
+            * `tables` BƏYAN EDİLİB və hamısı ağ siyahıdadırsa → owner
+              hovuzu (varsa) işlədilir;
+            * `tables=None` (bəyan yoxdur) → HƏMİŞƏ adi tətbiq hovuzu, yəni
+              RLS qüvvədədir. Bəyan etməyən çağırış imtiyaz ALMIR;
+            * bəyan siyahıdan kənara çıxırsa → `TenantContextError`.
+
+        NİYƏ BƏYAN, NİYƏ SQL TƏHLİLİ DEYİL: sorğu mətnindən cədvəl adlarını
+        çıxarmaq CTE, alt-sorğu, funksiya və ləqəblərlə səhv nəticə verir —
+        həm yalançı bloklama (işləyən ekran ölür), həm yalançı buraxma
+        (qorumanın olmadığını gizlədir) mümkündür. Bəyan isə çağırış yerində
+        AÇIQ yazılır, kod-review-də görünür və siyahı BAĞLI olduğu üçün yeni
+        cədvəl əlavə etmək şüurlu qərar tələb edir.
+
+        Args:
+            tables: bu blokun toxunacağı cədvəllər (`SYSTEM_SCOPE_TABLES`,
+                `cross_tenant=True` halında əlavə olaraq
+                `DEVELOPER_SCOPE_TABLES`).
+            cross_tenant: təchizatçının çox-kirayəçi paneli (CLAUDE.md §9).
+                YALNIZ `licensing/developer_directory.py` işlədir.
+
+        Raises:
+            TenantContextError: bəyan edilən cədvəl ağ siyahıda deyil, və ya
+                kirayəçi cədvəli `cross_tenant` bayrağı olmadan istənilib.
         """
-        if self._admin_pool is not None:
+        declared = self._validate_scope(tables, cross_tenant=cross_tenant)
+        if declared is not None and self._admin_pool is not None:
             _security_log.warning(
                 "DB_ADMIN_CONNECTION_USED",
-                extra={"impact": "RLS yan keçilir", "schema": SCHEMA},
+                extra={
+                    "impact": "RLS yan keçilir",
+                    "schema": SCHEMA,
+                    "tables": sorted(declared),
+                    "cross_tenant": cross_tenant,
+                },
             )
             with self._admin_pool.connection() as conn:
                 yield cast("Connection[dict[str, Any]]", conn)
                 return
 
-        _log.debug("DB_SYSTEM_SCOPE", extra={"schema": SCHEMA})
+        _log.debug(
+            "DB_SYSTEM_SCOPE",
+            extra={"schema": SCHEMA, "tables": sorted(declared or ())},
+        )
         with self._pool.connection() as conn:
             yield cast("Connection[dict[str, Any]]", conn)
+
+    @staticmethod
+    def _validate_scope(
+        tables: Sequence[str] | None, *, cross_tenant: bool
+    ) -> frozenset[str] | None:
+        """Bəyanı ağ siyahı ilə tutuşdurur. Qaytarır: bəyan (yoxdursa `None`).
+
+        Boş ardıcıllıq (`tables=()`) `None` DEYİL: o, "cədvələ toxunmuram"
+        deməkdir (məs. `SELECT now()`, bax `timekeeping/server_time.py`) və
+        bəyan sayılır — yəni owner hovuzuna icazəlidir, çünki heç bir
+        kirayəçi məlumatı oxunmur.
+        """
+        if tables is None:
+            return None
+        allowed = (
+            SYSTEM_SCOPE_TABLES | DEVELOPER_SCOPE_TABLES if cross_tenant else (SYSTEM_SCOPE_TABLES)
+        )
+        declared = frozenset(tables)
+        unknown = declared - allowed
+        if unknown:
+            # Səbəb İKİ cür ola bilər və mesaj onları AYIRIR: (a) cədvəl
+            # ümumiyyətlə tanınmır, (b) tanınır, lakin kirayəçiyə aiddir və
+            # `cross_tenant` bayrağı verilməyib. İkincisi çağıran tərəfin
+            # düzəldə biləcəyi haldır, birincisi isə siyahıya şüurlu əlavə
+            # tələb edir.
+            tenant_scoped = unknown & DEVELOPER_SCOPE_TABLES
+            raise TenantContextError(
+                "`system_scope()` ağ siyahıdan kənar cədvəl bəyan etdi",
+                context={
+                    "unknown_tables": sorted(unknown),
+                    "reason": (
+                        "kirayəçi cədvəli — `cross_tenant=True` tələb olunur"
+                        if tenant_scoped
+                        else "cədvəl `SYSTEM_SCOPE_TABLES` siyahısında deyil"
+                    ),
+                },
+            )
+        return declared
 
     def health_check(self) -> bool:
         """System Health Monitor üçün sadə DB ping (bölmə 6)."""
@@ -592,6 +757,9 @@ class PostgresUnitOfWork:
             PostgresFaceStoreScopeRepository,
             PostgresFaceVerificationLogRepository,
         )
+        from src.infrastructure.persistence.face_throttle_repository import (  # noqa: PLC0415
+            PostgresFaceThrottleRepository,
+        )
         from src.infrastructure.persistence.field_report_repositories import (  # noqa: PLC0415
             PostgresFieldReportCatalog,
             PostgresFieldReportRepository,
@@ -637,6 +805,7 @@ class PostgresUnitOfWork:
             PostgresEmployeeRepository,
             PostgresFineRepository,
             PostgresLeaveRequestRepository,
+            PostgresOffboardingSignalReader,
             PostgresOpenFineExposureReader,
             PostgresPositionRepository,
         )
@@ -700,6 +869,14 @@ class PostgresUnitOfWork:
             # (`user_management.py`). `fines` İLƏ EYNİ BAĞLANTIDADIR, çünki
             # ikisi eyni tranzaksiyada oxunur (deaktivasiya ön-yoxlaması).
             "fine_exposure": PostgresOpenFineExposureReader(conn, self._context),
+            # HR-4 — `OffboardingSignalReader` portunun adapteri
+            # (`user_management.py`). `fine_exposure` İLƏ QONŞU və eyni
+            # bağlantıdadır: hər ikisi EYNİ deaktivasiya ön-yoxlamasında,
+            # eyni tranzaksiyada oxunur. AYRI adaptordur, çünki sualları
+            # fərqlidir — biri maliyyə izi, digəri açıq bağlantılar (bax
+            # `OffboardingSignals` başlığı: birləşdirmək işləyən portu
+            # yenidən yazmaq olardı).
+            "offboarding_signals": PostgresOffboardingSignalReader(conn, self._context),
             # Audit iş vahidinin İÇİNDƏDİR: yazı onu doğuran əməliyyatla eyni
             # tranzaksiyada olmalıdır (bax `audit.py` başlığı).
             "audit": PostgresAuditTrail(conn),
@@ -918,6 +1095,13 @@ class PostgresUnitOfWork:
             # `security_events`-dən FƏRQLİ olaraq fail-soft SARILMIR — throttle
             # QORUMADIR, uddurulan yazı qorumanı söndürər (domain-in qərarı).
             "pin_throttle": PostgresPinThrottleRepository(conn, self._context),
+            # --- Terminal ÜZ throttle (AF-2) ------------------------------------
+            # AYRI CƏDVƏL, AYRI SƏTİR: 1:N üz rəddləri artıq PIN sayğacına
+            # yazılmır — kameraya baxan kənar şəxs bütün mağazanın PIN girişini
+            # dayandıra bilirdi (xidmətdən imtina). Səbəb və qəbul edilən güzəşt
+            # `face_throttle_repository.py` başlığındadır. `pin_throttle` ilə
+            # eyni qərar: fail-soft SARILMIR, çünki throttle QORUMADIR.
+            "face_throttle": PostgresFaceThrottleRepository(conn, self._context),
         }
 
     def _release(self, *, rollback: bool) -> None:

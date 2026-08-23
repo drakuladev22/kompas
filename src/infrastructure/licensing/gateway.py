@@ -105,7 +105,10 @@ class SupabaseLicenseGateway:
         `tenant_id` GÖNDƏRİLMİR — yalnız geri-çevrilməyən referans.
         """
         try:
-            with self._database.system_scope() as conn, conn.cursor() as cur:
+            with (
+                self._database.system_scope(tables=("crash_reports",)) as conn,
+                conn.cursor() as cur,
+            ):
                 cur.execute(
                     """
                     INSERT INTO crash_reports

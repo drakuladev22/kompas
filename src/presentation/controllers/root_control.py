@@ -412,10 +412,57 @@ class RootControlController:
             # Ekran YALAN göstərməməlidir: rədd edilibsə açar geri qayıdır.
             screen.reject_module_change(module_key)
             screen.set_module_message(error.user_message, error=True)
+            return
         except Exception:
             _error_log.exception("ROOT_CONTROL_TOGGLE_FAILED", extra={"module": module_key})
             screen.reject_module_change(module_key)
             screen.set_module_message("Dəyişiklik saxlanmadı. Yenidən cəhd edin.", error=True)
+            return
+
+        if not enabled:
+            screen.set_module_message(self._in_flight_notice(module_key))
+
+    def _in_flight_notice(self, module_key: str) -> str:
+        """Söndürüləndən SONRA hələ AXINDA qalan qeydlərin sayı (DEEP-GAP OP-3).
+
+        ──────────────────────────────────────────────────────────────────────
+        QAYDA POZULMUR — YALNIZ GÖRÜNƏN OLUR
+        ──────────────────────────────────────────────────────────────────────
+        Feature Toggle-ın RETROAKTİV OLMAMASI qəsdli qaydadır (CLAUDE.md §5):
+        yoxlama YARADAN metoddadır (`post_open_shift`), tutma və təsdiq
+        (`claim`/`approve`) isə toggle-a BAXMIR — başlanmış əməliyyat
+        tamamlanmalıdır.
+
+        Problem qaydada deyil, GÖRÜNMƏZLİYİNDƏ idi: Root açarı söndürür,
+        ekranda heç nə yazılmır və o, «növbə dəyişmə bağlandı» sanır —
+        halbuki açıq elanlar hələ tutula bilir və növbə matrisi dəyişməyə
+        davam edir. İki başlıq altına düşən məhz bu sükutdur.
+
+        SAY ALINMASA MƏTN YENƏ QAYTARILIR: sorğunun uğursuzluğu söndürməni
+        ləğv etmir (açar artıq yazılıb) və istifadəçiyə xəta göstərmək onu
+        «söndürmə baş tutmadı» zənn etdirərdi.
+        """
+        from src.domain.policies import FeatureModule  # noqa: PLC0415
+
+        base = "Modul söndürüldü — YENİ qeyd yaradıla bilməz."
+        if module_key != FeatureModule.SHIFT_SWAP.value:
+            return base
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                open_count = len(
+                    session.open_shifts.list_active(tenant_id=session.tenant_id, actor=self._actor)
+                )
+        except Exception:
+            # Geniş tutma: bu, KÖMƏKÇİ məlumatdır — oxunmaması söndürmənin
+            # ÖZÜNÜ şübhəli göstərməməlidir.
+            _error_log.warning("ROOT_CONTROL_IN_FLIGHT_COUNT_FAILED", exc_info=True)
+            return base
+        if open_count == 0:
+            return base
+        return (
+            f"{base} {open_count} açıq elan hələ tutula bilər və təsdiqlənə bilər — "
+            "başlanmış əməliyyat tamamlanır (söndürmə geriyə işləmir)."
+        )
 
     def _on_branding_changed(self, screen: RootControlScreen, payload: object) -> None:
         """Şirkət kimliyi (TENANT-1 Faza 2) — use case YAZIR, kontroller körpüdür.

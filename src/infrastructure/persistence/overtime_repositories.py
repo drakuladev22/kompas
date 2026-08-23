@@ -115,7 +115,7 @@ class PostgresOvertimeLogRepository(_BaseRepository):
             WHERE tenant_id = %s AND work_date BETWEEN %s AND %s
             ORDER BY work_date DESC, employee_id
             """,
-            (tenant_id, start, end),
+            (self._require_matching_tenant(tenant_id), start, end),
         )
         return [_row_to_entry(row) for row in rows]
 
@@ -127,7 +127,7 @@ class PostgresOvertimeLogRepository(_BaseRepository):
             WHERE tenant_id = %s AND employee_id = %s AND work_date BETWEEN %s AND %s
             ORDER BY work_date
             """,
-            (tenant_id, employee_id, start, end),
+            (self._require_matching_tenant(tenant_id), employee_id, start, end),
         )
         return [_row_to_entry(row) for row in rows]
 

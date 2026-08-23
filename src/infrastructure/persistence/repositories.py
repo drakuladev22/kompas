@@ -14,6 +14,7 @@ səhvən owner rolu ilə qoşulsa) izolyasiya qalsın.
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final
 from uuid import UUID
 
@@ -24,12 +25,13 @@ from src.application.use_cases.fine_management import (
     DuplicateFineSubmissionError,
 )
 from src.application.use_cases.leave_verification import OperationNotPermittedError
-from src.application.use_cases.user_management import OpenFineExposure
+from src.application.use_cases.user_management import OffboardingSignals, OpenFineExposure
 from src.domain.entities.attendance_record import AttendanceRecord, CheckInStatus
 from src.domain.entities.employee import Employee
 from src.domain.entities.fine import EXPORTABLE_STATUSES, Fine, FineStatus
 from src.domain.entities.leave_request import LeaveRequest, LeaveStatus
 from src.domain.entities.position import Position
+from src.domain.entities.task import TaskStatus
 from src.domain.value_objects.authorization import RolePriority
 from src.domain.value_objects.credentials import Username
 from src.domain.value_objects.identifiers import (
@@ -827,7 +829,7 @@ class PostgresLeaveRequestRepository(_BaseRepository):
               AND return_claimed_time < %s - make_interval(mins => %s)
             """,
             (
-                tenant_id,
+                self._require_matching_tenant(tenant_id),
                 LeaveStatus.PENDING_RETURN_VERIFICATION.value,
                 now,
                 timeout_minutes,
@@ -852,7 +854,10 @@ class PostgresLeaveRequestRepository(_BaseRepository):
         `ORDER BY created_at DESC LIMIT 1`. İki yer eyni sətri görməlidir,
         əks halda repo bir vəziyyət, entity başqa vəziyyət oxuyardı.
         """
-        rows = self._fetch_all(self._SELECT + _PENDING_DUAL_CONTROL_WHERE, (tenant_id,))
+        rows = self._fetch_all(
+            self._SELECT + _PENDING_DUAL_CONTROL_WHERE,
+            (self._require_matching_tenant(tenant_id),),
+        )
         return [self._hydrate(row) for row in rows]
 
     def monthly_used_minutes(self, employee_id: EmployeeId, *, year: int, month: int) -> int:
@@ -1072,7 +1077,7 @@ class PostgresAttendanceRepository(_BaseRepository):
     def list_expected_on(self, tenant_id: TenantId, work_date: date) -> list[AttendanceRecord]:
         rows = self._fetch_all(
             self._SELECT + " WHERE tenant_id = %s AND work_date = %s",
-            (tenant_id, work_date),
+            (self._require_matching_tenant(tenant_id), work_date),
         )
         return [attendance_from_row(row) for row in rows]
 
@@ -1316,9 +1321,12 @@ class PostgresFineRepository(_BaseRepository):
         anlayışını açıq göstərməlidir — filtr statusdan asılı gizli
         fərziyyəyə söykənməsin.
         """
+        # SAAS-1 (birinci partiya): sorğu arqumentin ÖZÜNÜ yox, bağlantının
+        # kontekstini işlədir — uyğunsuzluq sükutla "boş siyahı" yox, açıq
+        # xəta verir (bax `_require_matching_tenant`).
         rows = self._fetch_all(
             self._SELECT + _EXPORTABLE_FINES_WHERE,
-            (tenant_id, now),
+            (self._require_matching_tenant(tenant_id), now),
         )
         return [fine_from_row(row) for row in rows]
 
@@ -1342,7 +1350,7 @@ class PostgresFineRepository(_BaseRepository):
         rows = self._fetch_all(
             self._SELECT
             + " WHERE tenant_id = %s AND fine_date BETWEEN %s AND %s ORDER BY fine_date",
-            (tenant_id, start, end),
+            (self._require_matching_tenant(tenant_id), start, end),
         )
         return [fine_from_row(row) for row in rows]
 
@@ -1385,7 +1393,7 @@ class PostgresFineRepository(_BaseRepository):
               AND fine_date >= %s AND fine_date < %s
             ORDER BY store_id, fine_date
             """,
-            (tenant_id, start, end),
+            (self._require_matching_tenant(tenant_id), start, end),
         )
         return [fine_from_row(row) for row in rows]
 
@@ -1407,7 +1415,7 @@ class PostgresFineRepository(_BaseRepository):
              WHERE tenant_id = %s AND status = {_PENDING_REVIEW_LITERAL}
              ORDER BY period
             """,  # noqa: S608 — status literalı enum-dan gəlir, bax `_PENDING_REVIEW_LITERAL`
-            (tenant_id,),
+            (self._require_matching_tenant(tenant_id),),
         )
         return [str(row["period"]) for row in rows]
 
@@ -1603,11 +1611,116 @@ class PostgresOpenFineExposureReader(_BaseRepository):
         )
 
 
+#: Bağlanmamış tapşırıq statusları — `TaskStatus.is_terminal`-in SQL güzgüsü.
+#:
+#: Dəyərlər enum-dan GÖTÜRÜLÜR, əl ilə yazılmır (`_EXPORTABLE_STATUS_LITERALS`
+#: ilə eyni qərar): yeni status əlavə olunsa və ya adı dəyişsə, əl ilə yazılmış
+#: siyahı sükutla köhnələr və işdən çıxma ekranı «tapşırıq yoxdur» göstərərdi.
+#: `sorted(...)` determinizm üçündür — sorğu mətni hər başlanğıcda EYNİ olmalıdır.
+_TERMINAL_TASK_LITERALS: Final = ", ".join(
+    f"'{status.value}'"
+    for status in sorted(TaskStatus, key=lambda status: status.value)
+    if status.is_terminal
+)
+
+
+class PostgresOffboardingSignalReader(_BaseRepository):
+    """HR-4: `OffboardingSignalReader` portunu ödəyir (`user_management.py`).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ BİR SORĞU
+    ──────────────────────────────────────────────────────────────────────────
+    Portun docstring-i bunu TƏLƏB EDİR: altı siqnal BİR siyahıda göstərilir və
+    biri çatışmasa admin «hər şey təmizdir» oxuyar. Altı ayrı sorğu (və ya altı
+    ayrı port) hər birinin ayrıca uğursuz ola biləcəyi ALTI yol yaradardı —
+    tək sorğuda ya hamısı gəlir, ya da istisna qalxır.
+
+    Bu, `PostgresOpenFineExposureReader`-in İKİ ayrı `COUNT` seçimi ilə
+    ZİDDİYYƏT DEYİL: orada nəticə İKİ müstəqil ədəddir və hər ikisi eyni
+    cədvəl ailəsindəndir (`fines`/`fine_appeals`); burada isə ALTI fərqli
+    cədvəl var və natamamlıq riski məhz ondan doğur.
+
+    Skalyar alt-sorğular `JOIN`-dan seçilib: hər siqnalın öz süzgəci var
+    (status, tarix, `is_active`) və `JOIN` ilə yazsaydıq sətir çoxalması
+    (fan-out) sayları şişirdərdi — məs. iki sənədi olan işçinin tapşırıqları
+    ikiqat sayılardı.
+
+    Kirayəçi şərti HƏR alt-sorğuda AYRICA yazılır (RLS-ə əlavə ikinci qat,
+    `_BaseRepository` naxışı): bir alt-sorğuda unudulsa, həmin siqnal
+    kirayəçilər arasında sızardı.
+    """
+
+    def read_offboarding_signals(self, employee_id: EmployeeId) -> OffboardingSignals:
+        row = self._fetch_one(
+            f"""
+            SELECT
+              (SELECT count(*) FROM leave_requests lr
+                WHERE lr.employee_id = %s AND lr.tenant_id = %s
+                  AND lr.status = ANY(%s))                       AS open_leave_requests,
+              (SELECT count(*) FROM tasks t
+                WHERE t.assignee_id = %s AND t.tenant_id = %s
+                  AND t.status NOT IN ({_TERMINAL_TASK_LITERALS})) AS pending_tasks,
+              (SELECT count(*) FROM open_shift_postings o
+                WHERE o.claimed_by = %s AND o.tenant_id = %s
+                  AND o.status = 'CLAIMED'
+                  AND o.shift_date >= current_date)              AS upcoming_claimed_shifts,
+              (SELECT COALESCE(
+                        sum(GREATEST(b.entitled_days + b.carried_over_days - b.used_days, 0)),
+                        0)
+                 FROM annual_leave_balances b
+                WHERE b.employee_id = %s AND b.tenant_id = %s
+                  AND b.year = date_part('year', current_date))  AS unused_annual_leave_days,
+              (SELECT count(*) FROM employee_documents d
+                WHERE d.employee_id = %s AND d.tenant_id = %s
+                  AND d.is_active
+                  AND (d.expiry_date IS NULL OR d.expiry_date >= current_date))
+                                                                 AS active_documents,
+              (SELECT e.face_embedding IS NOT NULL FROM employees e
+                WHERE e.id = %s AND e.tenant_id = %s)            AS has_face_template
+            """,  # noqa: S608 — status literalları enum-dan gəlir, bax `_TERMINAL_TASK_LITERALS`
+            (
+                employee_id,
+                self._tenant,
+                # `_OPEN_STATUSES` ilə EYNİ dəst: «hələ xaricdə» tərifi bir
+                # yerdə qalmalıdır, əks halda bu ekran icazəni açıq sayarkən
+                # davamiyyət ekranı bağlanmış sayardı.
+                list(PostgresLeaveRequestRepository._OPEN_STATUSES),
+                employee_id,
+                self._tenant,
+                employee_id,
+                self._tenant,
+                employee_id,
+                self._tenant,
+                employee_id,
+                self._tenant,
+                employee_id,
+                self._tenant,
+            ),
+        )
+        if row is None:  # pragma: no cover - `SELECT` skalyarları həmişə sətir qaytarır
+            return OffboardingSignals()
+        return OffboardingSignals(
+            open_leave_requests=int(row["open_leave_requests"] or 0),
+            pending_tasks=int(row["pending_tasks"] or 0),
+            upcoming_claimed_shifts=int(row["upcoming_claimed_shifts"] or 0),
+            # `NUMERIC` sürücüdən `Decimal` kimi gəlir; `str()` üzərindən
+            # keçirmək `float` yuvarlaqlaşdırmasının yolunu STRUKTUR olaraq
+            # bağlayır — bu dəyər son haqq-hesabın girişidir (PUL).
+            unused_annual_leave_days=Decimal(str(row["unused_annual_leave_days"] or 0)),
+            active_documents=int(row["active_documents"] or 0),
+            # İşçi sətri tapılmasa (`NULL`) cavab `False`-dur: «şablon var»
+            # deyə YANLIŞ siqnal vermək, olmayan işçi üçün silinməli biometrik
+            # məlumat axtarmağa aparardı.
+            has_face_template=bool(row["has_face_template"]),
+        )
+
+
 __all__ = [
     "PostgresAttendanceRepository",
     "PostgresEmployeeRepository",
     "PostgresFineRepository",
     "PostgresLeaveRequestRepository",
+    "PostgresOffboardingSignalReader",
     "PostgresOpenFineExposureReader",
     "PostgresPositionRepository",
 ]

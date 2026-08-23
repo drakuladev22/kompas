@@ -2447,6 +2447,7 @@ class ShiftPlanningScreen(Screen):
         month_changed: (-1 və ya +1).
         open_shift_post_requested: "Açıq Növbə Elan Et" (#16).
         open_shift_cancel_requested: Elanın "Ləğv Et" düyməsi (#16, elan id-si).
+        open_shift_release_requested: Tutulmuş elanın "Geri Ver" düyməsi (OP-4).
         work_mode_selected: İş Rejimi dropdown-unda seçim (Faza 7, `work_mode_id`).
 
     #16 (AÇIQ NÖVBƏ BAZARI) MATRİSƏ TOXUNMUR: kart matrisin ALTINA əlavə
@@ -2472,6 +2473,8 @@ class ShiftPlanningScreen(Screen):
     month_changed = Signal(int)
     open_shift_post_requested = Signal()
     open_shift_cancel_requested = Signal(str)
+    #: DEEP-GAP OP-4 — tutulmuş elanı bazara qaytarır (elan id-si).
+    open_shift_release_requested = Signal(str)
     work_mode_selected = Signal(str)
 
     #: Növbə kodları (maketdəki izah sətri).
@@ -2517,6 +2520,7 @@ class ShiftPlanningScreen(Screen):
         self._open_shift_card = OpenShiftMarketCard(theme)
         self._open_shift_card.post_requested.connect(self.open_shift_post_requested)
         self._open_shift_card.cancel_requested.connect(self.open_shift_cancel_requested)
+        self._open_shift_card.release_requested.connect(self.open_shift_release_requested)
         self.add(self._open_shift_card)
 
         self.add(self._build_footer())
@@ -2821,6 +2825,14 @@ class ShiftPlanningScreen(Screen):
         Bu, matrisin kodu ilə bazarın kodunu qarışdırmamaq üçündür.
         """
         self._open_shift_card.set_postings(rows)
+
+    def set_claimed_open_shifts(self, rows: list[dict[str, str]]) -> None:
+        """OP-4 — tutulmuş, hələ baş verməmiş elanlar (`employee` açarı ilə).
+
+        `set_open_shift_postings` ilə EYNİ naxış: ekran yalnız ötürür, sətirləri
+        kartın ÖZÜ qurur.
+        """
+        self._open_shift_card.set_claimed(rows)
 
     def set_staffing_pattern(
         self,

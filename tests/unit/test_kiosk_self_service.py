@@ -127,13 +127,25 @@ class _Appeals:
     def __init__(self, appeals: list[_Appeal]) -> None:
         self._appeals = appeals
         self.submitted: list[dict[str, Any]] = []
+        #: UX-4 — qaytarılan etiraz obyektləri (`owner_id` onların İD-sidir).
+        self.submitted_appeals: list[Any] = []
 
     def my_appeals(self, _employee: Any) -> list[_Appeal]:
         return self._appeals
 
     def submit(self, *, tenant_id: Any, employee: Any, fine_id: Any, reason: str) -> Any:
         self.submitted.append({"fine_id": fine_id, "reason": reason})
-        return object()
+        # UX-4: sənəd növbəsi sahibin İD-sini tələb edir (`owner_id =
+        # fine_appeals.id`), ona görə sahtə `object()` deyil, İD daşıyan
+        # obyekt qaytarır — real `submit()` də `FineAppeal` qaytarır.
+        appeal = _SubmittedAppeal()
+        self.submitted_appeals.append(appeal)
+        return appeal
+
+
+class _SubmittedAppeal:
+    def __init__(self) -> None:
+        self.id = uuid.uuid4()
 
 
 class _RewardItem:
@@ -186,10 +198,37 @@ class _Session:
         self.committed += 1
 
 
+class _EvidenceQueue:
+    """UX-4 — sübut növbəsinin sahtəsi (`enqueue` çağırışlarını yığır)."""
+
+    def __init__(self, *, failure: Exception | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._failure = failure
+
+    def enqueue(self, **kwargs: Any) -> str:
+        if self._failure is not None:
+            raise self._failure
+        self.calls.append(kwargs)
+        return "entry-1"
+
+
+class _Clock:
+    def now(self) -> Any:
+        from datetime import UTC, datetime
+
+        return datetime(2026, 8, 23, 9, 0, tzinfo=UTC)
+
+
 class _Context:
-    def __init__(self, session: _Session) -> None:
+    def __init__(self, session: _Session, *, queue: _EvidenceQueue | None = None) -> None:
         self._session = session
         self.opened = 0
+        self.tenant_id = uuid.uuid4()
+        self.clock = _Clock()
+        self._queue = queue or _EvidenceQueue()
+
+    def evidence_queue(self) -> _EvidenceQueue:
+        return self._queue
 
     @contextmanager
     def session(self, *, user_id: Any = None):  # type: ignore[no-untyped-def]
@@ -206,9 +245,12 @@ class _Kiosk:
 
 
 class _Actor:
-    def __init__(self) -> None:
+    def __init__(self, *, store_id: Any = None) -> None:
         self.id = uuid.uuid4()
         self.full_name = "Rəşad Məmmədov"
+        #: UX-4 — sənəd növbəsi mağazanı YERLƏŞMƏ açarı kimi işlədir (Drive
+        #: qovluq strukturu). `None` = mağazası olmayan hesab (aşağıdakı test).
+        self.store_id = store_id if store_id is not None else uuid.uuid4()
 
 
 def _wire(
@@ -218,6 +260,8 @@ def _wire(
     fines: Any = None,
     appeals: Any = None,
     sales_points: _SalesPoints | None = None,
+    queue: _EvidenceQueue | None = None,
+    actor: _Actor | None = None,
 ) -> Any:
     from src.presentation.controllers.kiosk_self_service import KioskSelfServiceController
     from src.presentation.screens.group_a_kiosk import EmployeeHomeScreen
@@ -228,7 +272,7 @@ def _wire(
         appeals=appeals if appeals is not None else [],
         sales_points=sales_points,
     )
-    context = _Context(session)
+    context = _Context(session, queue=queue)
     kiosk = _Kiosk()
     home = EmployeeHomeScreen(
         theme,
@@ -236,7 +280,7 @@ def _wire(
         position_name="Satıcı",
         store_name="Bellona 28 May",
     )
-    controller = KioskSelfServiceController(context, _Actor(), kiosk=kiosk, theme=theme)
+    controller = KioskSelfServiceController(context, actor or _Actor(), kiosk=kiosk, theme=theme)
     controller.attach(home)
     return home, kiosk, session
 
@@ -336,15 +380,24 @@ def test_appeal_submission_reaches_the_use_case_with_both_fields(qtbot, theme) -
 
 
 @requires_qt
-def test_attached_document_is_reported_not_silently_dropped(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
-    """Sənəd hələ göndərilmir — işçi bunu BİLMƏLİDİR.
+def test_an_attached_document_is_queued_for_upload(qtbot, theme, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """DEEP-GAP UX-4 — sənəd ARTIQ HƏQİQƏTƏN göndərilir.
 
-    Sükutla buraxılsaydı, işçi sübutunun sistemə düşdüyünü sanar və mübahisə
-    zamanı onu ayrıca təqdim etməzdi.
+    ƏVVƏL: sahə vardı, fayl `payload`-a düşürdü, heç yerə yüklənmirdi və
+    istifadəçiyə «HR-ə ayrıca təqdim edin» deyilirdi — yəni sükut yox idi,
+    lakin interfeys yerinə yetirmədiyi bir şeyi VƏD EDİRDİ.
+
+    İNDİ: fayl MÖVCUD sübut növbəsindən keçir, sahibi isə ETİRAZDIR
+    (`owner_id = fine_appeals.id`, `owner_type = FINE_APPEAL`) — cərimənin
+    sübutu ilə ona etiraz edənin sübutu eyni sahədə qarışmır.
     """
+    from src.infrastructure.storage.upload_queue import UploadOwnerType
     from src.presentation.screens.group_f import FineAppealScreen
 
-    home, kiosk, session = _wire(theme, fines=[_Fine()], appeals=[])
+    document = tmp_path / "arayış.pdf"
+    document.write_bytes(b"%PDF-1.4 saxta sened")
+    queue = _EvidenceQueue()
+    home, kiosk, session = _wire(theme, fines=[_Fine()], appeals=[], queue=queue)
     qtbot.addWidget(home)
     home.appeal_requested.emit()
     screen = _find(kiosk.shown[-1], FineAppealScreen)
@@ -354,13 +407,73 @@ def test_attached_document_is_reported_not_silently_dropped(qtbot, theme) -> Non
             "fine_id": str(FINE_ID),
             "reason": "Digər",
             "explanation": "Ətraflı izah buradadır və kifayət qədər uzundur.",
-            "document": "C:/subut.jpg",
+            "document": str(document),
         }
     )
 
-    # Etiraz YAZILIR (sənədin olmaması onu bloklamamalıdır) …
     assert len(session.fine_appeals.submitted) == 1
-    # … lakin ekran vəziyyəti AÇIQ xəbərdarlığa keçir.
+    assert len(queue.calls) == 1, "sənəd növbəyə DÜŞMƏDİ"
+    call = queue.calls[0]
+    assert call["owner_type"] is UploadOwnerType.FINE_APPEAL
+    assert call["owner_id"] == str(session.fine_appeals.submitted_appeals[-1].id)
+    assert call["content"] == b"%PDF-1.4 saxta sened"
+    assert call["filename"] == "arayış.pdf"
+    # Xəta ekranı YOXDUR — vəd yerinə yetirildi.
+    assert screen.switcher().current_state() != "error"
+
+
+@requires_qt
+def test_an_unreadable_document_reports_the_failure_but_keeps_the_appeal(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """Fayl oxunmasa ETİRAZ QALIR — hüquq texniki səbəbə görə ləğv edilmir.
+
+    72 saatlıq pəncərə işləyir; etirazı geri qaytarmaq işçini pəncərəsiz
+    qoyardı. Nəyin ÇATMADIĞI isə açıq deyilir.
+    """
+    from src.presentation.screens.group_f import FineAppealScreen
+
+    queue = _EvidenceQueue()
+    home, kiosk, session = _wire(theme, fines=[_Fine()], appeals=[], queue=queue)
+    qtbot.addWidget(home)
+    home.appeal_requested.emit()
+    screen = _find(kiosk.shown[-1], FineAppealScreen)
+
+    screen.appeal_submitted.emit(
+        {
+            "fine_id": str(FINE_ID),
+            "reason": "Digər",
+            "explanation": "Ətraflı izah buradadır və kifayət qədər uzundur.",
+            "document": "C:/mövcud-olmayan-fayl.jpg",
+        }
+    )
+
+    assert len(session.fine_appeals.submitted) == 1
+    assert queue.calls == []
+    assert screen.switcher().current_state() == "error"
+
+
+@requires_qt
+def test_a_queue_rejection_does_not_undo_the_appeal(qtbot, theme, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Növbə yararsız faylı ÖZÜ rədd edir (SEC-018) — etiraz yenə qalır."""
+    from src.presentation.screens.group_f import FineAppealScreen
+
+    document = tmp_path / "virus.exe"
+    document.write_bytes(b"MZ icra olunan fayl")
+    queue = _EvidenceQueue(failure=ValueError("Bu format qəbul edilmir"))
+    home, kiosk, session = _wire(theme, fines=[_Fine()], appeals=[], queue=queue)
+    qtbot.addWidget(home)
+    home.appeal_requested.emit()
+    screen = _find(kiosk.shown[-1], FineAppealScreen)
+
+    screen.appeal_submitted.emit(
+        {
+            "fine_id": str(FINE_ID),
+            "reason": "Digər",
+            "explanation": "Ətraflı izah buradadır və kifayət qədər uzundur.",
+            "document": str(document),
+        }
+    )
+
+    assert len(session.fine_appeals.submitted) == 1
     assert screen.switcher().current_state() == "error"
 
 

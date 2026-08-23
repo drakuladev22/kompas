@@ -38,8 +38,9 @@ isə kəsilən dəyər deməkdir).
 
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.shared.logger import get_logger
@@ -156,6 +157,23 @@ class LimitReader(Protocol):
     def get_str(self, tenant_id: TenantId, key: str, default: str) -> str: ...
 
 
+def tenant_from_text(raw: str | None) -> TenantId | None:
+    """UUID mətnini `TenantId`-ə çevirir; tanınmasa `None` (SAAS-5).
+
+    Bir çox infrastruktur obyekti kirayəçini MƏTN kimi daşıyır (SQLite sütunu,
+    konfiqurasiya faylı). Çevirmə XƏTA ATMIR: tanınmayan dəyər limit oxusunu
+    dayandırmamalıdır — o, `for_tenant(None)` ilə mövcud bağlamanı saxlayır.
+    Eyni çevirmə `offline/sync.py`-də AÇIQ şəkildə edilir, lakin orada dəyərin
+    UUID olması sinxronizasiyanın ÖN ŞƏRTİDİR — burada isə deyil.
+    """
+    if not raw:
+        return None
+    try:
+        return cast("TenantId", uuid.UUID(str(raw)))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 def fallback_int(key: SystemLimitKey) -> int:
     """`DEFAULT_LIMITS`-dən tam ədəd fallback — modul sabitləri üçün.
 
@@ -244,6 +262,32 @@ class InfrastructureLimits:
         """ROOT dəyərləri oxuna bilirmi (diaqnostika və test üçün)."""
         return self._limits is not None and self._tenant_id is not None
 
+    def for_tenant(self, tenant_id: TenantId | None) -> InfrastructureLimits:
+        """EYNİ oxucu, BAŞQA kirayəçi ilə bağlanmış yeni pəncərə (SAAS-5).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ LAZIMDIR
+        ──────────────────────────────────────────────────────────────────────
+        `system_limits` sətri KİRAYƏÇİYƏ aiddir, bu obyekt isə tez-tez
+        PAYLAŞILAN servislərə (növbə, bufer, vaxt xidməti) TƏK NÜSXƏ kimi
+        ötürülür. Çox-kirayəçi prosesdə həmin nüsxə hansı kirayəçiyə bağlıdır —
+        koddan görünmürdü, yəni A müştərisinin növbəsi B-nin gözləmə cədvəli
+        ilə işləyə bilərdi və heç bir xəta qalxmazdı.
+
+        Metod obyekti DƏYİŞMİR (yeni nüsxə qaytarır): `InfrastructureLimits`
+        vəziyyətsizdir və elə qalmalıdır — yerində dəyişən bağlama iki sapın
+        bir-birinin kirayəçisini oxumasına yol açardı.
+
+        `None` verilərsə MÖVCUD bağlama SAXLANILIR. Səbəb: çağıran tərəf
+        kirayəçini çox vaxt MƏTNDƏN (SQLite sətri) həll edir və mətn UUID
+        deyilsə (test/diaqnostika dəyərləri) doğru davranış «bağlamanı
+        sıfırlamaq» yox, «əlindəkini saxlamaq»dır — əks halda düzəliş
+        özü fallback-a düşmə səbəbinə çevrilərdi.
+        """
+        if tenant_id is None:
+            return self
+        return InfrastructureLimits(limits=self._limits, tenant_id=tenant_id)
+
     def int_of(self, key: SystemLimitKey) -> int:
         """Tam ədəd limit — klamp edilmiş."""
         return int(_clamp(key, self._decimal(key)))
@@ -299,4 +343,5 @@ __all__ = [
     "fallback_float",
     "fallback_int",
     "fallback_int_tuple",
+    "tenant_from_text",
 ]

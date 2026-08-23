@@ -416,11 +416,27 @@ def test_blocking_twice_is_idempotent() -> None:
     assert device.block_reason == "ilk", "ikinci bloklama səbəbi üzərinə yazdı"
 
 
-def test_a_blocked_device_without_a_store_cannot_be_reactivated() -> None:
-    """Filialsız bloklanmış cihaz heç vaxt təsdiqlənməyib — `approve()` yolundadır."""
+def test_a_blocked_device_without_a_store_returns_to_the_approval_queue() -> None:
+    """DEEP-GAP — ƏBƏDİ KİLİD BAĞLANDI: filialsız cihaz artıq dalanda qalmır.
+
+    ƏVVƏLKİ QAYDA (bu testin köhnə forması) `DomainRuleError` tələb edirdi və
+    səbəb kimi «əvvəlcə `approve()`-dan keçsin» deyirdi — HALBUKİ `approve()`
+    YALNIZ `PENDING_APPROVAL`-dan işləyir. Yəni göstərilən yol MÖVCUD DEYİLDİ:
+    təsdiq gözləyən cihaz bloklandıqda (`block()` onu da qəbul edir) heç bir
+    keçidlə geri qaytarıla bilmirdi və yeganə çıxış bazaya ƏL İLƏ, AUDİTSİZ
+    müdaxilə olurdu.
+
+    YENİ QAYDA: filialsız cihaz `PENDING_APPROVAL`-a QAYIDIR — aktiv OLMUR
+    (filialsız aktiv cihaz `__post_init__` invariantını və DB `CHECK`-ini
+    pozardı, yəni DEVICE-1-in həll etdiyi problem geri qayıdardı).
+    """
     device = _device(status=DeviceStatus.BLOCKED)
-    with pytest.raises(DomainRuleError):
-        device.reactivate(reactivated_by=ACTOR_ID, now=NOW)
+
+    result = device.reactivate(reactivated_by=ACTOR_ID, now=NOW)
+
+    assert result is DeviceStatus.PENDING_APPROVAL
+    assert device.status is DeviceStatus.PENDING_APPROVAL
+    assert device.store_id is None
 
 
 # --------------------------------------------------------------------------- #

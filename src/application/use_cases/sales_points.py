@@ -38,6 +38,7 @@ from src.domain.entities.sales_points import PointsEntry, RewardRedemption
 from src.domain.policies import FeatureModule, SystemLimitKey
 from src.domain.value_objects.erp import MatchConfidence
 from src.domain.value_objects.gamification import (
+    PointsAppealStatus,
     PointsBalance,
     PointsEntryStatus,
     PointsPeriod,
@@ -298,6 +299,70 @@ class SalesPointsUseCase:
             body=f"Nəticə: {entry.status.value}. Səbəb: {entry.decision_reason}",
         )
         return entry
+
+    # ------------------------------ planlanmış ------------------------------- #
+
+    def expire_stale_disputes(self, tenant_id: TenantId) -> int:
+        """Pəncərəsi cavabsız bağlanan xal etirazlarını `EXPIRED` edir.
+
+        `FineAppealManagementUseCase.expire_stale` ilə EYNİ naxış və eyni
+        səbəb — cərimə tərəfində bu axın artıq mövcuddur, xal tərəfində isə
+        `PointsAppealStatus.EXPIRED` dəyəri enum-da olsa da HEÇ VAXT
+        yazılmırdı. Nəticədə qərar verilməyən etiraz idarəçinin gələnlər
+        qutusunda əbədi «gözləyir» qalırdı və hesabatda «cavab verilmədi»
+        halı «hələ vaxt var» halından ayırd edilə bilmirdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        `EXPIRED` «İŞ BİTDİ» DEMƏK DEYİL (M-6)
+        ──────────────────────────────────────────────────────────────────────
+        Status dəyişir, LAKİN qərar hələ mümkündür
+        (`PointsEntry.has_undecided_dispute`) və xal sətrinin ÖZÜNƏ
+        toxunulmur — idarəçinin süstlüyü nə xalı silməli, nə də təsdiqləməli
+        deyil. Hər dövrədə auditoriyaya xəbərdarlıq gedir: addım səssiz
+        olsaydı, sətir statusunu dəyişib heç kimə heç nə deməzdi.
+
+        SƏLAHİYYƏT YOXLANMIR: `send_reset_notices` ilə eyni — bu, insan
+        aktoru olmayan planlayıcı işidir (bax modul başlığı, dördüncü axın).
+        """
+        now = self._clock.now()
+        closed = 0
+        for entry in self._points.list_disputes(tenant_id):
+            if not entry.expire_dispute(now=now):
+                continue
+            self._points.save(entry)
+            entry.collect_events()
+            closed += 1
+            self._audit.record(
+                tenant_id=tenant_id,
+                actor_id=None,
+                action="POINTS_DISPUTE_EXPIRED",
+                entity_type="points_entry",
+                entity_id=entry.id,
+                after_state={
+                    "appeal_status": PointsAppealStatus.EXPIRED.value,
+                    # Qərar HƏLƏ gözlənilir — sətir «bağlandı» kimi
+                    # oxunmamalıdır (bax metod başlığı).
+                    "is_decided": False,
+                    "points": entry.points,
+                },
+                reason="Etiraz pəncərəsi cavabsız bağlandı — qərar hələ gözlənilir",
+            )
+
+        if closed:
+            self._notifier.notify(
+                tenant_id=tenant_id,
+                # `can_manage_sales_points` sahibləri
+                # (`TENANT_NOTIFICATION_AUDIENCE["POINTS_DISPUTE_SLA_BREACH"]`).
+                recipient_id=None,
+                category="POINTS_DISPUTE_SLA_BREACH",
+                title_az="Cavabsız xal etirazları var",
+                body_az=(
+                    f"{closed} xal etirazının pəncərəsi qərar verilmədən bağlandı. "
+                    f"Qərar HƏLƏ verilə bilər — etirazlara baxılması gözlənilir."
+                ),
+                is_critical=True,
+            )
+        return closed
 
     # ------------------------------ mükafat ---------------------------------- #
 

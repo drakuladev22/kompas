@@ -80,6 +80,14 @@ FALLBACK_MAX_PARALLEL_SERVERS: Final[int] = fallback_int(
 #: uzadardı. Qalan sənədlər növbəti dövrdə davam edir (kursor saxlanılır).
 FALLBACK_MAX_PAGES_PER_RUN: Final[int] = fallback_int(SystemLimitKey.ERP_SYNC_MAX_PAGES_PER_RUN)
 
+#: Sinxronizasiyaya VERİLMƏYƏN bağlantı sayı (SAAS-7, bax `_max_parallel_value`).
+#:
+#: Root parametri DEYİL, «bir istifadəçi + bir fon oxuması» tərifidir: dəyəri
+#: Root-a versəydik, onu sıfıra endirmək paralelliyin hovuzu TAM tutmasına
+#: icazə verərdi — yəni klampın bütün mənası itərdi. Hovuzun ÖZÜ isə Root
+#: açarıdır (`DB_POOL_MAX_SIZE`) — tənzimləmə oradan aparılır.
+_POOL_HEADROOM_CONNECTIONS: Final[int] = 2
+
 
 @dataclass
 class SyncReport:
@@ -333,10 +341,52 @@ class ErpSyncManager:
         self._limits = limits or InfrastructureLimits()
 
     def _max_parallel_value(self) -> int:
-        """Paralel worker sayı — HƏR DÖVRDƏ oxunur (dövrlər arası dəyişə bilər)."""
-        if self._explicit_max_parallel is not None:
-            return self._explicit_max_parallel
-        return self._limits.int_of(SystemLimitKey.ERP_SYNC_MAX_PARALLEL_SERVERS)
+        """Paralel worker sayı — HƏR DÖVRDƏ oxunur (dövrlər arası dəyişə bilər).
+
+        ──────────────────────────────────────────────────────────────────────
+        HOVUZA GÖRƏ KLAMP (SAAS-7)
+        ──────────────────────────────────────────────────────────────────────
+        `ERP_SYNC_MAX_PARALLEL_SERVERS` və `DB_POOL_MAX_SIZE` İKİ AYRI Root
+        açarıdır və bir-birindən xəbərsiz idi. Hər sync worker-i bir DB
+        bağlantısı tutur; paralellik hovuzdan böyük seçilsə (məs. paralellik 8,
+        hovuz 4) sinxronizasiya bütün bağlantıları yeyir və İSTİFADƏÇİ
+        əməliyyatları `psycopg_pool` taymautuna düşür — yəni fon işi ön planı
+        dayandırır. Qüsur yalnız 1C serverlərinin sayı artanda üzə çıxır.
+
+        TAVAN `pool_max - 2`-dir: iki bağlantı QƏSDƏN kənarda saxlanılır —
+        biri istifadəçinin cari əməliyyatı, biri isə fon oxumaları
+        (bildiriş dispetçeri, server vaxtı) üçün. `max(1, ...)` isə ən dar
+        hovuzda belə sinxronizasiyanın TAM dayanmamasını təmin edir: bir
+        worker həmişə qalır.
+
+        AÇIQ DƏYƏR DƏ KLAMP EDİLİR: `_explicit_max_parallel` testdən/xüsusi
+        quraşdırmadan gəlir, lakin hovuz məhdudiyyəti fiziki həqiqətdir —
+        onu «açıq üstünlük» ilə yan keçmək eyni taymautu yaradardı.
+
+        Hovuz dəyəri ROOT açarından oxunur (canlı `ConnectionPool`-dan yox):
+        bu sinifin `Database`-ə istinadı YOXDUR və onu əlavə etmək ERP
+        modulunu bağlantı qatına bağlayardı. Eyni açar `apply_root_pool_limits`
+        ilə canlı hovuza tətbiq olunur, yəni mənbə birdir.
+        """
+        requested = (
+            self._explicit_max_parallel
+            if self._explicit_max_parallel is not None
+            else self._limits.int_of(SystemLimitKey.ERP_SYNC_MAX_PARALLEL_SERVERS)
+        )
+        pool_max = self._limits.int_of(SystemLimitKey.DB_POOL_MAX_SIZE)
+        ceiling = max(1, pool_max - _POOL_HEADROOM_CONNECTIONS)
+        if requested <= ceiling:
+            return requested
+        _log.warning(
+            "ERP_SYNC_PARALLELISM_CLAMPED",
+            extra={
+                "requested": requested,
+                "applied": ceiling,
+                "pool_max": pool_max,
+                "reason": "paralellik hovuzdan böyükdür — istifadəçi əməliyyatları gözləyərdi",
+            },
+        )
+        return ceiling
 
     def run_cycle(self, *, now: datetime | None = None, force: bool = False) -> SyncCycleReport:
         """Bir sinxronizasiya dövrü.

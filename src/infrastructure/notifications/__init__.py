@@ -21,6 +21,7 @@ from src.infrastructure.notifications.notifier import (
     FALLBACK_BACKOFF_MINUTES,
     FALLBACK_MAX_ATTEMPTS,
     EmailFallbackDispatcher,
+    NotificationStatusWriteError,
     PostgresNotifier,
 )
 
@@ -43,6 +44,7 @@ __all__ = [
     "EmailError",
     "EmailFallbackDispatcher",
     "EmailNotConfiguredError",
+    "NotificationStatusWriteError",
     "OutgoingEmail",
     "PostgresNotifier",
     "SmtpEmailSender",

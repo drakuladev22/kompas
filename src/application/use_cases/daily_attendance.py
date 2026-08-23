@@ -56,6 +56,7 @@ from src.domain.entities.attendance_sheet import (
     build_lines,
 )
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
+from src.domain.value_objects.authorization import DUAL_CONTROL_APPROVAL_FLAG
 from src.domain.value_objects.identifiers import new_daily_sheet_id
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
@@ -362,6 +363,111 @@ class DailyAttendanceSheetUseCase:
             )
 
         return SheetView(sheet=sheet, mismatches=sheet.mismatched_lines, is_editable=False)
+
+    # ---------------------------- təsdiqin açılması --------------------------- #
+
+    def reopen(
+        self,
+        *,
+        tenant_id: TenantId,
+        actor: Employee,
+        approver: Employee,
+        store_id: StoreId,
+        sheet_date: date,
+        reason: str,
+    ) -> SheetView:
+        """Təsdiqlənmiş tabeli yenidən açır — İKİ ŞƏXS, MƏCBURİ SƏBƏB, AUDİT.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ DUAL-CONTROL, SADƏ SƏLAHİYYƏT DEYİL
+        ──────────────────────────────────────────────────────────────────────
+        Tabel əmək haqqının GİRİŞİDİR. Açılışı tək `can_fill_daily_attendance`
+        ilə bağlasaydıq, tabeli imzalayan menecer onu ÖZÜ də aça bilərdi —
+        yəni imza heç nəyi bağlamazdı və `confirm()`-un bütün mənası itərdi.
+        Ona görə qapı `[Vaxtı Əllə Təyin Et]` ilə eynidir: dəyişikliyi
+        İSTƏYƏN `can_fill_daily_attendance`, TƏSDİQLƏYƏN isə
+        `can_approve_dual_control_override` daşıyır.
+
+        Həmin flag anti-fraud vəzifə ayrılığına görə `Mağaza_Meneceri`-yə
+        HEÇ VAXT verilmir (CLAUDE.md §5) — yəni təsdiqçi struktur olaraq
+        menecerdən YUXARI pillədəndir və qayda konfiqurasiya ilə söndürülə
+        bilmir.
+
+        Səlahiyyət `Employee` obyektlərindən oxunur, repo-dan YOX
+        (`AnnualLeaveUseCase.approve(approver=...)` ilə eyni qərar): bu use
+        case `EmployeeRepository` asılılığı GÖTÜRMÜR — ekran hər iki şəxsi
+        onsuz da əlində saxlayır və əlavə asılılıq tabel axınını istifadəçi
+        idarəetməsinə bağlayardı.
+        """
+        now = self._clock.now()
+        self._require_store_access(actor, store_id)
+        if not actor.has_permission(FILL_ATTENDANCE_FLAG, now=now):
+            raise SheetPermissionError(
+                f"«{FILL_ATTENDANCE_FLAG}» səlahiyyəti yoxdur",
+                context={"actor_id": str(actor.id)},
+            )
+        if not approver.has_permission(DUAL_CONTROL_APPROVAL_FLAG, now=now):
+            _audit_log.warning(
+                "ATTENDANCE_SHEET_REOPEN_DENIED",
+                extra={
+                    "actor_id": str(actor.id),
+                    "approver_id": str(approver.id),
+                    "flag": DUAL_CONTROL_APPROVAL_FLAG,
+                },
+            )
+            raise SheetPermissionError(
+                f"«{DUAL_CONTROL_APPROVAL_FLAG}» səlahiyyəti olmadan tabel açıla bilməz",
+                user_message="Bu əməliyyatı təsdiqləmək səlahiyyətiniz yoxdur.",
+                context={"approver_id": str(approver.id)},
+            )
+
+        sheet = self._require_sheet(store_id, sheet_date)
+        before_state: dict[str, object] = {
+            "is_confirmed": sheet.is_confirmed,
+            "confirmed_by": str(sheet.confirmed_by) if sheet.confirmed_by else None,
+            "confirmed_at": sheet.confirmed_at.isoformat() if sheet.confirmed_at else None,
+        }
+        previous_confirmer = sheet.reopen(
+            requested_by=actor.id, approved_by=approver.id, reason=reason, now=now
+        )
+        self._sheets.save(sheet)
+        # Hadisə YAZIDAN SONRA boşaldılır (CLAUDE.md §3): yazı uğursuz olsaydı
+        # «tabel açıldı» hadisəsi heç vaxt baş verməmiş olmalıdır.
+        sheet.collect_events()
+
+        self._audit.record(
+            tenant_id=tenant_id,
+            actor_id=actor.id,
+            action="ATTENDANCE_SHEET_REOPENED",
+            entity_type="daily_attendance_sheets",
+            entity_id=sheet.id,
+            before_state=before_state,
+            after_state={
+                "is_confirmed": False,
+                "sheet_date": sheet_date.isoformat(),
+                "approved_by": str(approver.id),
+                "line_count": len(sheet.lines),
+            },
+            reason=reason,
+        )
+
+        if previous_confirmer is not None and previous_confirmer != actor.id:
+            # İMZASI GERİ ALINAN ŞƏXS BUNU BİLMƏLİDİR — ŞƏXSİ sətir
+            # (`recipient_id` dolu), yəni auditoriya cədvəlindən asılı deyil.
+            # Öz açılışını istəyən menecerə bildiriş getmir: o, nəticəni
+            # ekranda onsuz da görür.
+            self._notifier.notify(
+                tenant_id=tenant_id,
+                recipient_id=previous_confirmer,
+                category="ATTENDANCE_SHEET_REOPENED",
+                title_az="Təsdiqlədiyiniz tabel yenidən açıldı",
+                body_az=(
+                    f"{sheet_date.isoformat()} tarixli tabelin təsdiqi geri alındı. Səbəb: {reason}"
+                ),
+                is_critical=True,
+            )
+
+        return SheetView(sheet=sheet, mismatches=sheet.mismatched_lines, is_editable=True)
 
     # ------------------------------- hesabat --------------------------------- #
 

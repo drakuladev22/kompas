@@ -248,6 +248,7 @@ class _Session:
         *,
         stores: list[dict[str, str]] | None = None,
         scope: _FaceScopeRepo | None = None,
+        open_shifts: Any = None,
     ) -> None:
         self.tenant_id = TENANT
         self.root_control = use_case
@@ -255,6 +256,10 @@ class _Session:
         self.limits = _RootLimits()
         self.branding = _Branding()
         self.telegram_config = _TelegramConfig()
+        #: DEEP-GAP OP-3 — söndürmədən sonra AXINDA qalan açıq elanların sayı.
+        #: `None` = repo ümumiyyətlə yoxdur (köhnə testlərin vəziyyəti), yəni
+        #: kontroller ehtiyat mətnə düşməlidir.
+        self.open_shifts = open_shifts
         self.committed = False
 
     def commit(self) -> None:
@@ -276,16 +281,23 @@ class _Context:
         *,
         stores: list[dict[str, str]] | None = None,
         scope: _FaceScopeRepo | None = None,
+        open_shifts: Any = None,
     ) -> None:
         self._use_case = use_case
         self._stores = stores or []
         self._scope = scope or _FaceScopeRepo()
+        self._open_shifts = open_shifts
         self.clock = _Clock()
         self.sessions: list[_Session] = []
 
     @contextmanager
     def session(self, *, user_id: Any = None) -> Any:
-        created = _Session(self._use_case, stores=self._stores, scope=self._scope)
+        created = _Session(
+            self._use_case,
+            stores=self._stores,
+            scope=self._scope,
+            open_shifts=self._open_shifts,
+        )
         self.sessions.append(created)
         yield created
 
@@ -778,3 +790,72 @@ def test_declining_the_narrowing_dialog_writes_nothing_and_reverts_the_toggle(  
 
     assert scope.written == [], "rədd edilmiş daralma bazaya YAZILMAMALIDIR"
     assert not toggle.isChecked(), "açar əvvəlki vəziyyətinə qaytarılmalıdır"
+
+
+# --------------------------------------------------------------------------- #
+# 5. DEEP-GAP OP-3 — söndürmə AXINDA qalanları GÖRÜNƏN edir
+# --------------------------------------------------------------------------- #
+
+
+class _OpenShiftMarket:
+    """`session.open_shifts.list_active`-in əvəzedicisi."""
+
+    def __init__(self, count: int) -> None:
+        self._count = count
+        self.calls = 0
+
+    def list_active(self, *, tenant_id: Any, actor: Any) -> list[object]:
+        self.calls += 1
+        return [object()] * self._count
+
+
+@requires_qt
+def test_disabling_shift_swap_reports_how_many_postings_can_still_be_claimed(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """Toggle-ın RETROAKTİV OLMAMASI qaydası qalır — sükut ARADAN QALXIR.
+
+    Root açarı söndürür və «növbə dəyişmə bağlandı» sanırdı, halbuki açıq
+    elanlar hələ tutulur və təsdiqlənir (`claim`/`approve` toggle-a BAXMIR,
+    bu qəsdlidir). Mesaj həmin fərqi göstərir.
+    """
+    key = FeatureModule.SHIFT_SWAP
+    use_case = _RootUseCase(modules=[_ModuleView(key.value, enabled=True, structural=False)])
+    market = _OpenShiftMarket(3)
+    context = _Context(use_case, open_shifts=market)
+    screen = _attach(context, theme, qtbot=qtbot)
+
+    screen._module_toggles[key.value].click()
+
+    assert use_case.toggled and use_case.toggled[0]["enabled"] is False
+    assert market.calls == 1
+    message = screen._module_message.text()
+    assert "3 açıq elan" in message
+    assert screen._module_message.isVisible() or not screen.isVisible()
+
+
+@requires_qt
+def test_enabling_a_module_shows_no_in_flight_notice(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """Mesaj YALNIZ söndürməyə aiddir — açılışda axında qalan qeyd anlayışı yoxdur."""
+    key = FeatureModule.SHIFT_SWAP
+    use_case = _RootUseCase(modules=[_ModuleView(key.value, enabled=False, structural=False)])
+    market = _OpenShiftMarket(3)
+    context = _Context(use_case, open_shifts=market)
+    screen = _attach(context, theme, qtbot=qtbot)
+
+    screen._module_toggles[key.value].click()
+
+    assert use_case.toggled and use_case.toggled[0]["enabled"] is True
+    assert market.calls == 0
+    assert screen._module_message.text() == ""
+
+
+@requires_qt
+def test_a_module_without_in_flight_records_still_confirms_the_change(qtbot, theme) -> None:  # type: ignore[no-untyped-def]
+    """Sayğac sıfırdırsa/başqa moduldursa qısa təsdiq mətni qalır — sükut YOX."""
+    key = FeatureModule.FINE_MODULE
+    use_case = _RootUseCase(modules=[_ModuleView(key.value, enabled=True, structural=False)])
+    context = _Context(use_case)
+    screen = _attach(context, theme, qtbot=qtbot)
+
+    screen._module_toggles[key.value].click()
+
+    assert screen._module_message.text() == "Modul söndürüldü — YENİ qeyd yaradıla bilməz."

@@ -18,6 +18,7 @@ from __future__ import annotations
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -64,10 +65,15 @@ def _view(*, posting: Any = POSTING, store: Any = STORE, mode: Any = WORK_MODE) 
 class _EmployeeScreen:
     def __init__(self) -> None:
         self.rows: list[dict[str, str]] = []
+        #: DEEP-GAP OP-4 — «Tutduğunuz növbələr» bölməsinin sətirləri.
+        self.claimed_rows: list[dict[str, str]] = []
         self.messages: list[str] = []
 
     def set_open_shifts(self, rows: list[dict[str, str]]) -> None:
         self.rows = rows
+
+    def set_claimed_shifts(self, rows: list[dict[str, str]]) -> None:
+        self.claimed_rows = rows
 
     def set_open_shift_message(self, message: str) -> None:
         self.messages.append(message)
@@ -76,10 +82,15 @@ class _EmployeeScreen:
 class _AdminScreen:
     def __init__(self) -> None:
         self.postings: list[dict[str, str]] = []
+        #: DEEP-GAP OP-4 — «Tutulmuş növbələr» bölməsinin sətirləri.
+        self.claimed: list[dict[str, str]] = []
         self.errors: list[tuple[str, str]] = []
 
     def set_open_shift_postings(self, rows: list[dict[str, str]]) -> None:
         self.postings = rows
+
+    def set_claimed_open_shifts(self, rows: list[dict[str, str]]) -> None:
+        self.claimed = rows
 
     def show_error(self, *, title: str, message: str) -> None:
         self.errors.append((title, message))
@@ -92,13 +103,17 @@ class _OpenShifts:
         self,
         *,
         views: list[OpenShiftView] | None = None,
+        claimed_views: list[OpenShiftView] | None = None,
         list_failure: Exception | None = None,
         write_failure: Exception | None = None,
     ) -> None:
         self.views = views if views is not None else [_view()]
+        #: DEEP-GAP OP-4 — işçinin TUTDUĞU, hələ baş verməmiş növbələr.
+        self.claimed_views = claimed_views or []
         self.list_failure = list_failure
         self.write_failure = write_failure
         self.claims: list[Any] = []
+        self.releases: list[dict[str, Any]] = []
         self.posts: list[dict[str, Any]] = []
         self.cancels: list[dict[str, Any]] = []
 
@@ -107,10 +122,38 @@ class _OpenShifts:
             raise self.list_failure
         return self.views
 
+    def list_claimed_for_employee(self, *, tenant_id: Any, employee: Any) -> list[OpenShiftView]:
+        """DEEP-GAP OP-4 — «Tutduğunuz növbələr» bölməsinin oxu yolu.
+
+        Defolt BOŞ siyahıdır: mövcud testlər TUTMA axınını ölçür və orada
+        işçinin hələ tutduğu növbə yoxdur. Geri vermə testləri `claimed_views`
+        ötürür. Oxu uğursuzluğu `list_failure` ilə EYNİ yoldan gedir — hər iki
+        siyahı `refresh()`-də EYNİ sessiyadadır, yəni biri çöksə ikincisi də
+        oxunmur.
+        """
+        if self.list_failure is not None:
+            raise self.list_failure
+        return self.claimed_views
+
+    def release_claim(self, *, tenant_id: Any, actor: Any, posting_id: Any, reason: str) -> None:
+        if self.write_failure is not None:
+            raise self.write_failure
+        self.releases.append({"posting_id": posting_id, "reason": reason})
+
     def list_active(self, *, tenant_id: Any, actor: Any) -> list[OpenShiftView]:
         if self.list_failure is not None:
             raise self.list_failure
         return self.views
+
+    def list_claimed_for_store(self, *, tenant_id: Any, actor: Any) -> list[OpenShiftView]:
+        """DEEP-GAP OP-4 — menecerin «Tutulmuş növbələr» siyahısı.
+
+        `list_active` ilə EYNİ sessiyada oxunur, ona görə uğursuzluq da EYNİ
+        `list_failure` açarından gəlir.
+        """
+        if self.list_failure is not None:
+            raise self.list_failure
+        return self.claimed_views
 
     def claim(self, *, tenant_id: Any, employee: Any, posting_id: Any) -> None:
         if self.write_failure is not None:
@@ -164,10 +207,25 @@ class _Connection:
         return _Row(self._rows[0]) if self._rows else None
 
 
+class _EmployeesRepo:
+    """DEEP-GAP OP-4 — `_to_claimed_row` işçinin ADINI oxuyur.
+
+    Menecer «kimin növbəsini geri verirəm?» sualının cavabını görməlidir;
+    tapılmayan işçi üçün ad BOŞ qalır (yalan ad göstərilmir).
+    """
+
+    def __init__(self, name: str = "Aygün Məmmədova") -> None:
+        self._name = name
+
+    def get(self, _employee_id: Any) -> Any:
+        return SimpleNamespace(full_name=self._name)
+
+
 class _Uow:
     def __init__(self, *, work_mode: _WorkMode | None) -> None:
         self._repos = {"work_modes": _WorkModesRepo(mode=work_mode)}
         self.connection = _Connection()
+        self.employees = _EmployeesRepo()
 
     def repository(self, name: str) -> Any:
         return self._repos[name]
@@ -573,3 +631,145 @@ def test_on_post_loads_choices_and_opens_a_real_dialog(monkeypatch: pytest.Monke
     assert captured["executed"] is True
     assert len(captured["days"]) == 31, "FALLBACK_MAX_LEAD_DAYS=30 → bugün + 30 gün"
     assert captured["days"][0][0] == date.today().isoformat()  # noqa: DTZ011 — `_day_choices` ilə EYNİ qərar
+
+
+# --------------------------------------------------------------------------- #
+# DEEP-GAP OP-4 — `[Geri Ver]`: tutulmuş növbə bazara QAYIDIR
+# --------------------------------------------------------------------------- #
+#
+# `claim()` TERMİNAL idi: işçi növbəni götürüb sonra xəstələnsə, slot təqvimdə
+# DOLU görünürdü, faktiki isə boş qalırdı və heç kim onun yenidən
+# doldurulmalı olduğunu bilmirdi. Aşağıdakı testlər həm siyahının GÖRÜNDÜYÜNÜ,
+# həm də səbəb qaydasının POZULMADIĞINI kilidləyir.
+
+
+def test_the_claimed_shifts_are_shown_to_the_employee() -> None:
+    """Geri vermə düyməsinin ASILDIĞI sətir mövcud olmalıdır."""
+    market = _OpenShifts(views=[], claimed_views=[_view()])
+    context = _Context(open_shifts=market)
+    screen = _EmployeeScreen()
+
+    EmployeeOpenShiftController(context, _Actor()).refresh(screen)  # type: ignore[arg-type]
+
+    assert screen.rows == []
+    assert len(screen.claimed_rows) == 1
+
+
+def test_releasing_a_claim_asks_for_a_reason_and_writes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BİR dialoq, BİR yazı — səbəb domenə OLDUĞU KİMİ ötürülür."""
+    from PySide6.QtWidgets import QInputDialog
+
+    monkeypatch.setattr(
+        QInputDialog,
+        "getMultiLineText",
+        staticmethod(lambda *a, **k: ("Xəstələndim, həkim arayışı var", True)),
+    )
+    market = _OpenShifts(views=[], claimed_views=[_view()])
+    context = _Context(open_shifts=market)
+    screen = _EmployeeScreen()
+    controller = EmployeeOpenShiftController(context, _Actor())  # type: ignore[arg-type]
+
+    controller._on_release(screen, str(POSTING))  # type: ignore[arg-type]
+
+    assert len(market.releases) == 1
+    assert market.releases[0]["reason"] == "Xəstələndim, həkim arayışı var"
+    # YAZI sessiyası commit olunur; SONUNCU sessiya isə `refresh()`-in OXU
+    # sessiyasıdır və o, commit ETMİR (kontroller sessiyanı saxlamır — hər
+    # əməliyyat üçün yenisini açır, CLAUDE.md §6).
+    assert any(session.committed for session in context.sessions)
+    assert screen.messages[-1] == "Növbə bazara qaytarıldı."
+
+
+def test_a_cancelled_reason_dialog_releases_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Səbəb MƏCBURİDİR — ləğv edilən dialoq heç nə yazmır."""
+    from PySide6.QtWidgets import QInputDialog
+
+    monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(lambda *a, **k: ("", False)))
+    market = _OpenShifts(views=[], claimed_views=[_view()])
+    context = _Context(open_shifts=market)
+    controller = EmployeeOpenShiftController(context, _Actor())  # type: ignore[arg-type]
+
+    controller._on_release(_EmployeeScreen(), str(POSTING))  # type: ignore[arg-type]
+
+    assert market.releases == []
+    assert context.sessions == []
+
+
+def test_a_short_reason_never_reaches_the_use_case(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hədd DOMENDƏNDİR — dialoq onu ekranda TƏKRAR yoxlayır (mətn itmir).
+
+    Naxış `camera_queue._ask_reason`-dandır (DEEP-GAP U9): qısa cavabdan sonra
+    dialoq YAZILAN MƏTNLƏ yenidən açılır, operator sıfırdan yazmır. Burada
+    ikinci dəfə ləğv edilir — dövrə sonsuz olmamalıdır.
+    """
+    from PySide6.QtWidgets import QInputDialog
+
+    calls: list[tuple[Any, ...]] = []
+
+    def _multiline(*args: Any, **kwargs: Any) -> tuple[str, bool]:
+        calls.append(args)
+        return ("qısa", True) if len(calls) == 1 else ("", False)
+
+    monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(_multiline))
+
+    # `QMessageBox` SİNFİ əvəzlənir, YALNIZ `exec` deyil: xəbərdarlıq qutusu
+    # `QMessageBox(screen)` şəklində qurulur və bu faylın ekran sahtəsi REAL
+    # `QWidget` DEYİL (testlər Qt-siz işləyir — bax faylın digər testləri).
+    class _Box:
+        Icon = type("Icon", (), {"Warning": 0})
+
+        def __init__(self, _parent: Any) -> None:
+            pass
+
+        def setIcon(self, _icon: Any) -> None:  # noqa: N802 - Qt adlandırması
+            pass
+
+        def setWindowTitle(self, _title: str) -> None:  # noqa: N802 - Qt adlandırması
+            pass
+
+        def setText(self, _text: str) -> None:  # noqa: N802 - Qt adlandırması
+            pass
+
+        def exec(self) -> None:
+            pass
+
+    from PySide6 import QtWidgets
+
+    monkeypatch.setattr(QtWidgets, "QMessageBox", _Box)
+    market = _OpenShifts(views=[], claimed_views=[_view()])
+    context = _Context(open_shifts=market)
+    controller = EmployeeOpenShiftController(context, _Actor())  # type: ignore[arg-type]
+
+    controller._on_release(_EmployeeScreen(), str(POSTING))  # type: ignore[arg-type]
+
+    assert len(calls) == 2, "qısa cavabdan sonra dialoq YENİDƏN açılmalıdır"
+    assert market.releases == []
+
+
+def test_a_rejected_release_shows_the_domain_message_and_does_not_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Paralel ləğv/geri buraxma — işçi SƏBƏBİ görür, kiosk çökmür."""
+    from PySide6.QtWidgets import QInputDialog
+
+    monkeypatch.setattr(
+        QInputDialog,
+        "getMultiLineText",
+        staticmethod(lambda *a, **k: ("Xəstələndim, həkim arayışı var", True)),
+    )
+    market = _OpenShifts(
+        views=[],
+        claimed_views=[_view()],
+        write_failure=KompasOSError("not claimed", user_message="Bu növbə tutulmayıb."),
+    )
+    context = _Context(open_shifts=market)
+    screen = _EmployeeScreen()
+    controller = EmployeeOpenShiftController(context, _Actor())  # type: ignore[arg-type]
+
+    controller._on_release(screen, str(POSTING))  # type: ignore[arg-type]
+
+    assert market.releases == []
+    assert all(not session.committed for session in context.sessions)
+    assert screen.messages[-1] == "Bu növbə tutulmayıb."

@@ -149,7 +149,8 @@ def test_developer_panel_labels_declare_plain_text() -> None:
 
 @pytest.fixture
 def queue(tmp_path: Path) -> Iterator[EvidenceUploadQueue]:
-    q = EvidenceUploadQueue(tmp_path / "uploads.db", spool_dir=tmp_path / "spool")
+    # SAAS-3: növbə BİR kirayəçiyə bağlıdır — `_enqueue` EYNİ `TENANT`-i işlədir.
+    q = EvidenceUploadQueue(tmp_path / "uploads.db", spool_dir=tmp_path / "spool", tenant_id=TENANT)
     yield q
     q.close()
 
@@ -423,7 +424,7 @@ def test_legacy_queue_file_gets_the_rejected_status(tmp_path: Path) -> None:
     legacy.commit()
     legacy.close()
 
-    queue = EvidenceUploadQueue(db_path, spool_dir=tmp_path / "spool")
+    queue = EvidenceUploadQueue(db_path, spool_dir=tmp_path / "spool", tenant_id=TENANT)
     try:
         assert queue.get("köhnə-1") is not None, "köçürmə sətri itirdi"
         queue.mark_rejected("köhnə-1", "Şəkil çox böyükdür", now=AUGUST)

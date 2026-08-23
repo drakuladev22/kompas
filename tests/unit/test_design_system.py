@@ -179,12 +179,49 @@ def test_placeholder_uses_its_own_token() -> None:
     assert "--color-text-disabled" not in rule
 
 
-def test_icon_button_border_uses_the_strong_token() -> None:
-    """Fonsuz ikon düyməsinin sərhədi kart sərhədi ola bilməz (1.30:1)."""
+def test_icon_button_has_no_resting_border_but_keeps_its_geometry() -> None:
+    """Başlıqdakı ikon düyməsi RESTİNQ halında çərçivəsizdir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    QAYDA DƏYİŞDİ, ZƏMANƏT DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl bu test çərçivənin `--color-border-strong` olmasını TƏLƏB EDİRDİ və
+    səbəb WCAG 1.4.11 idi: «düymənin varlığını göstərən yeganə şey sərhəddir».
+    Həmin arqument İKONUN RƏNGİNİ nəzərə almırdı — başlıq düymələri
+    `--color-nav-item-text` ilə çəkilir, yəni MƏTN səviyyəsində kontrastdadır
+    və qlif özü affordansdır. Cüt indi kontrast qapısında ayrıca ölçülür
+    («Başlıq ikonu (affordans)», `scripts/check_contrast.py`).
+
+    Test isə YOX OLMUR, çünki iki şey hələ də qorunmalıdır:
+
+    1. ZƏİF ÇƏRÇİVƏ QAYITMAMALIDIR — `--color-card-border` (ağ fonda 1.30:1)
+       bura bir daha yazılmamalıdır; köhnə testin əsl məqsədi bu idi.
+    2. HƏNDƏSƏ SABİT QALMALIDIR — sərhəd `none` deyil, `transparent` olmalıdır:
+       Qt sərhədi qutu ölçüsünə daxil edir, ona görə `none` yazılsaydı, hover
+       və ya fokusda 1-2px əlavə olunanda düymə YERİNDƏN TƏRPƏNƏRDİ.
+    """
     rule = _rule_body('QPushButton[variant="icon"]')
 
-    assert "<--color-border-strong>" in rule
+    assert "transparent" in rule, "restinq sərhədi şəffaf olmalıdır"
     assert "--color-card-border" not in rule
+    assert "--color-border-strong" not in rule, "çərçivə qayıdıb — bax docstring"
+
+    # Fokus halqası SİLİNMİR: klaviatura ilə gəzən istifadəçi düymənin harada
+    # olduğunu görməlidir və bu, çərçivədən TAMAMİLƏ ayrı zəmanətdir.
+    #
+    # `_rule_body` BURADA İŞLƏMİR: fokus qaydası İKİ selektorlu blokdur
+    # (`:focus, [active="true"]:focus`) və köməkçi ilk uyğun gələn TƏK
+    # selektoru tapır — nəticədə şəffaf sərhədli BAŞQA blok qayıdırdı.
+    # Ona görə blok şablonun özündən oxunur.
+    anchor = 'QPushButton[variant="icon"]:focus,'
+    start = QSS_TEMPLATE.index(anchor)
+    # Blokun sonu sətir-sonu + `}` ilə tapılır, tək `}` ilə YOX: token
+    # sintaksisi (`{{--…}}`) qoşa mötərizə ilə bitir və sadə axtarış qaydanı
+    # yarıda kəsir.
+    end = QSS_TEMPLATE.index(chr(10) + "}", start)
+    focus_block = QSS_TEMPLATE[start:end]
+
+    assert "{{--color-focus-ring}}" in focus_block
 
 
 #: Fokus halqası olmadan qalmış variantlar (auditin 5-ci tapıntısı) + `nav`.

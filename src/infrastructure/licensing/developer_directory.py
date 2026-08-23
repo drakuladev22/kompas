@@ -259,7 +259,15 @@ class DeveloperTenantDirectory:
         Süzgəc SQL-də deyil, yaddaşda tətbiq olunur: tenant sayı onlarladır,
         `ILIKE` sorğusu isə paneldə hər hərf yazılışında bazaya gedərdi.
         """
-        rows = [_row_from_record(record) for record in self._fetch_all(_LIST_SQL, ())]
+        rows = [
+            _row_from_record(record)
+            for record in self._fetch_all(
+                _LIST_SQL,
+                (),
+                tables=("license_tenants", "tenant_check_ins"),
+                cross_tenant=True,
+            )
+        ]
         needle = search.strip().casefold()
         if not needle:
             return rows
@@ -274,6 +282,8 @@ class DeveloperTenantDirectory:
         rows = self._fetch_all(
             _LIST_SQL.replace("ORDER BY t.tenant_name", "").rstrip() + " WHERE t.tenant_id = %s",
             (tenant_id,),
+            tables=("license_tenants", "tenant_check_ins"),
+            cross_tenant=True,
         )
         return _row_from_record(rows[0]) if rows else None
 
@@ -300,7 +310,10 @@ class DeveloperTenantDirectory:
         new_expiry = extend_by_month(current.expires_at, now=moment)
         reactivated = current.status is not LicenseStatus.AKTIV
 
-        with self._database.system_scope() as conn, conn.cursor() as cur:
+        with (
+            self._database.system_scope(tables=("license_tenants", "license_audit_log")) as conn,
+            conn.cursor() as cur,
+        ):
             cur.execute(
                 """
                 UPDATE license_tenants
@@ -366,7 +379,10 @@ class DeveloperTenantDirectory:
         if current is None:
             return None
 
-        with self._database.system_scope() as conn, conn.cursor() as cur:
+        with (
+            self._database.system_scope(tables=("license_tenants", "license_audit_log")) as conn,
+            conn.cursor() as cur,
+        ):
             cur.execute(
                 """
                 UPDATE license_tenants
@@ -422,7 +438,10 @@ class DeveloperTenantDirectory:
         if current is None:
             return None
 
-        with self._database.system_scope() as conn, conn.cursor() as cur:
+        with (
+            self._database.system_scope(tables=("license_tenants", "license_audit_log")) as conn,
+            conn.cursor() as cur,
+        ):
             cur.execute(
                 "UPDATE license_tenants SET forced_update_version = %s WHERE tenant_id = %s",
                 (cleaned or None, tenant_id),
@@ -475,6 +494,7 @@ class DeveloperTenantDirectory:
              LIMIT %s
             """,
             (days, limit),
+            tables=("crash_reports",),
         )
         return [
             CrashRecord(
@@ -519,6 +539,8 @@ class DeveloperTenantDirectory:
              LIMIT %s
             """,
             (limit,),
+            tables=("support_tickets", "support_messages", "license_tenants"),
+            cross_tenant=True,
         )
         return [
             TicketRecord(
@@ -546,6 +568,7 @@ class DeveloperTenantDirectory:
              LIMIT %s
             """,
             (tenant_id, limit),
+            tables=("license_audit_log",),
         )
 
     def active_admin_count(self, tenant_id: str) -> int:
@@ -574,6 +597,8 @@ class DeveloperTenantDirectory:
                AND p.priority <= %s
             """,
             (tenant_id, int(RolePriority.ADMIN)),
+            tables=("employees", "positions"),
+            cross_tenant=True,
         )
         return int(rows[0]["total"]) if rows else 0
 
@@ -620,6 +645,16 @@ class DeveloperTenantDirectory:
             ORDER BY t.tenant_name
             """,
             (days,),
+            tables=(
+                "license_tenants",
+                "employees",
+                "erp_servers",
+                "stores",
+                "registered_devices",
+                "sync_conflicts",
+                "crash_reports",
+            ),
+            cross_tenant=True,
         )
         return [
             TenantTelemetry(
@@ -638,8 +673,27 @@ class DeveloperTenantDirectory:
 
     # ------------------------------- köməkçilər ------------------------------ #
 
-    def _fetch_all(self, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
-        with self._database.system_scope() as conn, conn.cursor() as cur:
+    def _fetch_all(
+        self,
+        sql: str,
+        params: tuple[Any, ...],
+        *,
+        tables: tuple[str, ...],
+        cross_tenant: bool = False,
+    ) -> list[dict[str, Any]]:
+        """SAAS-2: hər çağırış toxunduğu cədvəlləri BƏYAN EDİR.
+
+        Bəyan `sql`-dən çıxarılmır (SQL təhlili rədd edildi — səbəb
+        `Database.system_scope` docstring-indədir), çağıran metod onu AÇIQ
+        yazır. `cross_tenant=True` yalnız kirayəçi cədvəllərini oxuyan
+        panel sorğularındadır: təchizatçının çox-kirayəçi görünüşü
+        sənədləşdirilmiş qərardır (CLAUDE.md §9), lakin o icazə bu faylın
+        DİGƏR sorğularına sızmamalıdır.
+        """
+        with (
+            self._database.system_scope(tables=tables, cross_tenant=cross_tenant) as conn,
+            conn.cursor() as cur,
+        ):
             cur.execute(sql, params)
             return [dict(row) for row in cur.fetchall()]
 

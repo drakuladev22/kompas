@@ -76,6 +76,7 @@ from src.application.use_cases.license_status import (
     blocked_screen_text,
 )
 from src.application.use_cases.morning_check_in import (
+    BatchRejectResult,
     CheckInOutcome,
     MorningCheckInUseCase,
 )
@@ -157,6 +158,7 @@ __all__ = [
     "WIDGET_CATALOG",
     "WORK_MODES_FLAG",
     "AttendanceRow",
+    "BatchRejectResult",
     "BonusPenaltyRow",
     "BonusPenaltySelection",
     "CatalogChange",

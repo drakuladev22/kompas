@@ -516,6 +516,20 @@ def test_deadlock_guard_healthy_when_approver_exists() -> None:
 
 
 def test_deadlock_guard_warns_when_no_approver() -> None:
+    """Dual-control xəbərdarlığı AYRICA sətir olaraq QALIR (AF-8 genişlənməsi).
+
+    Qapı artıq YALNIZ dual-control flag-inə baxmır — bütün kritik
+    səlahiyyətlərin daşıyıcı sayını ölçür (`DEADLOCK_CRITICAL_FLAGS`). Sahtə
+    repo HƏR flag üçün sıfır qaytardığı üçün İKİ bildiriş gedir:
+
+      1. `DUAL_CONTROL_DEADLOCK_RISK` — mətni HƏRFƏN dəyişməyib, çünki ekran,
+         audit sorğusu və auditoriya cədvəli məhz həmin kateqoriyaya bağlıdır;
+      2. `PERMISSION_COVERAGE_GAP` — QALAN flag-lər BİR sətirdə toplanır
+         (flag başına ayrıca bildiriş «həqiqi xəbərdarlığı səs-küydə itirmək»
+         olardı, bax `_notify_gaps` başlığı).
+
+    Test hər ikisinin GETDİYİNİ və dual-control-un AYRI qaldığını kilidləyir.
+    """
     notifier = RecordingNotifier()
     guard = DualControlDeadlockGuardUseCase(FakeEmployeeRepo(0), notifier)  # type: ignore[arg-type]
 
@@ -523,8 +537,9 @@ def test_deadlock_guard_warns_when_no_approver() -> None:
 
     assert result.is_deadlocked is True
     assert result.warning_az is not None
-    assert len(notifier.messages) == 1
-    assert notifier.messages[0]["is_critical"] is True
+    categories = [message["category"] for message in notifier.messages]
+    assert categories == ["DUAL_CONTROL_DEADLOCK_RISK", "PERMISSION_COVERAGE_GAP"]
+    assert all(message["is_critical"] is True for message in notifier.messages)
 
 
 def test_deadlock_guard_detects_last_approver_removal() -> None:

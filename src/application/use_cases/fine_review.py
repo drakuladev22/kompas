@@ -29,12 +29,18 @@ sonradan sual olunanda cavab verilə bilməlidir.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from src.domain.entities.fine import Fine, FineSource, FineStatus
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
+from src.domain.value_objects.exception_signals import (
+    FINE_HELD_INACTIVE_SOURCE,
+    FINE_REVIEW_OVERDUE_SOURCE,
+    ExceptionFinding,
+    RuleEvaluationContext,
+)
 from src.domain.value_objects.identifiers import new_fine_review_batch_id
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
@@ -49,6 +55,7 @@ if TYPE_CHECKING:
         Clock,
         EmployeeRepository,
         Notifier,
+        RangeScopedFineReader,
         SystemLimits,
     )
     from src.domain.value_objects.identifiers import EmployeeId, FineId, FineReviewBatchId, TenantId
@@ -62,6 +69,16 @@ _audit_log = get_logger(__name__, channel=LogChannel.AUDIT)
 PUBLISH_FINES_FLAG = "can_publish_fines"
 
 MIN_DISCARD_REASON_LENGTH = 10
+
+#: `_StuckFineScan`-in geriyə oxu pəncərəsi (gün) — «Root parametri DEYİL».
+#:
+#: Bu, SORĞU ölçüsüdür, siyasət deyil: gecikmə həddinin ÖZÜ Root-dadır
+#: (`FINE_REVIEW_OVERDUE_DAYS`). Pəncərə yalnız «hər gecə nə qədər tarixçə
+#: oxunsun?» sualına cavab verir və həddən qat-qat genişdir, yəni onu
+#: kiçiltmək/böyütmək heç bir cəriməni gözdən qaçırmır və heç bir qərarı
+#: dəyişmir. Root-a verilsəydi iki ziddiyyətli ədəd yaranardı — hədd 30,
+#: pəncərə 10 seçilsə, 15 gündür gözləyən sətir SÜKUTLA görünməz olardı.
+_STUCK_FINE_LOOKBACK_DAYS = 400
 
 
 class FineReviewError(KompasOSError):
@@ -542,13 +559,220 @@ def _require_month(value: str) -> None:
         raise FineReviewError(f"Ay formatı 'YYYY-MM' olmalıdır: {value!r}")
 
 
+class _StuckFineScan:
+    """HR-2/HR-3 üçün ORTAQ oxu — `PENDING_REVIEW` sətirlərinin bir sorğusu.
+
+    İki qayda AYRI mənbələrdir (bax `exception_signals.py` şərhi), lakin
+    HƏR İKİSİ eyni sualdan başlayır: «hansı cərimələr hələ nəşr olunmayıb?».
+    Sorğunu iki dəfə göndərmək motorun gecəlik icrasında eyni cədvəli iki
+    dəfə oxumaq olardı; ona görə oxu bir yerdə, QƏRAR isə qaydalarda qalır.
+
+    `RangeScopedFineReader` işlədilir, `FineRepository`-yə yeni metod ƏLAVƏ
+    EDİLMİR: həmin protokolu ödəyən HƏR sinif (test sahtələri daxil) dərhal
+    uyğunsuz olardı (`OpenFineExposureReader` şərhindəki eyni əsaslandırma).
+    Süzgəc (`status`, yaş, işçinin aktivliyi) BURADADIR, SQL-də yox — bunlar
+    BİZNES qaydalarıdır və SQL-ə köçürülsəydi İKİ yerdə yaşayardı.
+    """
+
+    def __init__(
+        self,
+        *,
+        fines: RangeScopedFineReader,
+        employees: EmployeeRepository | None,
+        lookback_days: int,
+    ) -> None:
+        self._fines = fines
+        self._employees = employees
+        self._lookback_days = lookback_days
+
+    def pending(self, context: RuleEvaluationContext) -> list[Fine]:
+        """Nəşr gözləyən cərimələr — GERİYƏ pəncərə ilə.
+
+        Pəncərə (`lookback_days`) SORĞU ölçüsüdür, biznes həddi DEYİL: bütün
+        tarixçəni hər gecə oxumaq 21 filialın illik cərimə cədvəlini
+        gəzmək olardı. Pəncərə həddən (`FINE_REVIEW_OVERDUE_DAYS`) HƏMİŞƏ
+        genişdir, ona görə heç bir gecikmiş sətir onun kənarında qalmır.
+        """
+        end = context.as_of.date()
+        start = end - timedelta(days=self._lookback_days)
+        return [
+            fine
+            for fine in self._fines.list_in_range(context.tenant_id, start=start, end=end)
+            if fine.status is FineStatus.PENDING_REVIEW
+        ]
+
+    def is_employee_inactive(self, employee_id: EmployeeId) -> bool:
+        """`MonthlyFineReviewUseCase._is_employee_inactive` ilə EYNİ qayda.
+
+        Port yoxdursa «aktiv» sayılır — orada «deaktiv» sayılırdı, çünki
+        oradakı nəticə NƏŞR ETMƏMƏKdir (təhlükəsiz tərəf). Burada nəticə
+        İSTİSNA YARATMAQdır və port olmadan hər sətri «deaktiv işçi» kimi
+        qaldırmaq jurnalı yalan tapıntı ilə doldurardı — təhlükəsiz tərəf
+        bu dəfə ƏKSİDİR.
+        """
+        if self._employees is None:
+            return False
+        employee = self._employees.get(employee_id)
+        return employee is None or not employee.is_active
+
+
+class OverdueFineReviewRule:
+    """HR-2 — aylıq icmal keçirilmədiyi üçün NƏŞR OLUNMAYAN cərimələr.
+
+    ──────────────────────────────────────────────────────────────────────────
+    BOŞLUQ NƏ İDİ
+    ──────────────────────────────────────────────────────────────────────────
+    Cərimə `PENDING_REVIEW` statusunda yaranır və YALNIZ `publish_batch` onu
+    işçiyə görünən edir (`Fine.is_visible_to_employee`). İcmal keçirilməzsə
+    sətir orada qalır: işçi cəriməni GÖRMÜR, 72 saatlıq etiraz pəncərəsi
+    BAŞLAMIR (`published_at`-dan sayılır), hesabata da düşmür. Yəni real pul
+    kəsintisi görünməz bir gözləmə otağında ilişir və bunu HEÇ NƏ bildirmir.
+
+    AVTOMATİK NƏŞR QADAĞANDIR: nəşr `can_publish_fines` sahibinin QƏRARIDIR
+    (`fine_review.py` başlığı, spesifikasiyadan qəsdli deviasiya) — icmalın
+    bütün mənası hər sətrə insanın baxmasıdır. Bu qayda yalnız GÖRÜNƏN edir.
+
+    DEAKTİV İŞÇİNİN SƏTİRLƏRİ BURADAN ÇIXARILIR — onlar `HeldFineForInactive
+    EmployeeRule`-a aiddir. Səbəb: eyni sətir iki mənbədə görünsəydi, HR onu
+    iki dəfə nəzərdən keçirər və iki fərqli qərar yolu axtarardı; halbuki
+    həll yolları FƏRQLİDİR (biri icmalı keçirmək, digəri əl ilə qərar).
+    """
+
+    def __init__(
+        self,
+        *,
+        fines: RangeScopedFineReader,
+        employees: EmployeeRepository | None = None,
+        lookback_days: int = _STUCK_FINE_LOOKBACK_DAYS,
+    ) -> None:
+        self._scan = _StuckFineScan(fines=fines, employees=employees, lookback_days=lookback_days)
+
+    @property
+    def source_code(self) -> str:
+        return FINE_REVIEW_OVERDUE_SOURCE
+
+    @property
+    def name_az(self) -> str:
+        return "Nəşr gözləyən cərimə"
+
+    def evaluate(self, context: RuleEvaluationContext) -> list[ExceptionFinding]:
+        overdue_days = context.limit_int(
+            SystemLimitKey.FINE_REVIEW_OVERDUE_DAYS.value,
+            int(DEFAULT_LIMITS[SystemLimitKey.FINE_REVIEW_OVERDUE_DAYS]),
+        )
+        cutoff = context.as_of - timedelta(days=overdue_days)
+        findings: list[ExceptionFinding] = []
+
+        for fine in self._scan.pending(context):
+            if fine.issued_at > cutoff:
+                continue
+            if self._scan.is_employee_inactive(fine.employee_id):
+                continue
+            waiting_days = int((context.as_of - fine.issued_at).total_seconds() // 86400)
+            findings.append(
+                ExceptionFinding(
+                    employee_id=fine.employee_id,
+                    store_id=fine.store_id,
+                    detail=(
+                        f"Cərimə {waiting_days} gündür aylıq icmalda nəşr gözləyir. "
+                        f"İşçi onu GÖRMÜR və 72 saatlıq etiraz pəncərəsi HƏLƏ "
+                        f"başlamayıb — icmal keçirilməlidir."
+                    ),
+                    context={
+                        "fine_id": str(fine.id),
+                        "source": fine.source.value,
+                        "amount": str(fine.amount.amount),
+                        "waiting_days": waiting_days,
+                        "overdue_days": overdue_days,
+                    },
+                    dedupe_key=f"{fine.id}:{context.as_of.date().isoformat()}",
+                )
+            )
+        return findings
+
+
+class HeldFineForInactiveEmployeeRule:
+    """HR-3 — işdən çıxmış işçinin cəriməsi hər ay növbəyə qayıdır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    BOŞLUQ NƏ İDİ
+    ──────────────────────────────────────────────────────────────────────────
+    `publish_batch` deaktiv işçinin cəriməsini QƏSDƏN nəşr etmir (DEEP-GAP
+    D2): etiraz pəncərəsi `published_at`-dan başlayır, deaktiv hesab isə
+    giriş edə bilmir — yəni açıla bilməyən pəncərəli cərimə struktur olaraq
+    natamamdır. Qərar DOĞRUDUR və DƏYİŞMİR.
+
+    Nəticəsi isə açıq qalmışdı: sətir `PENDING_REVIEW`-də qalır və HƏR AYIN
+    icmalında `held_inactive_employee` siyahısında yenidən görünür. Çıxış yolu
+    yoxdur — nə nəşr olunur, nə silinir, nə də kimsə ondan MƏSULDUR.
+    Deaktivasiya anındakı bildiriş (`EMPLOYEE_DEACTIVATED_WITH_OPEN_FINES`)
+    BİR dəfə gedir və unudula bilər; bu qayda isə qərar verilənə qədər sətri
+    hər gecə görünən saxlayır.
+
+    HƏLL YOLU (istisna sətrinin izahında yazılır): HR ya cəriməni `discard_in_
+    review()` ilə əsaslandırılmış şəkildə silir, ya da işçini `reactivate_
+    employee()` ilə bərpa edib normal axına qaytarır. Qaydanın ÖZÜ heç birini
+    ETMİR — avtomatik silmə real pul kəsintisini izahsız yox edərdi.
+
+    HƏDD YOXDUR (HR-2-dən FƏRQ): burada gözləmə müddəti ƏHƏMİYYƏTSİZDİR —
+    işçi deaktiv olan kimi sətrin çıxışı BAĞLANIR və bir ay gözləmək heç nəyi
+    dəyişmir. HR-2-də isə gözləmə normaldır (icmal aylıqdır) və yalnız
+    həddi keçəndə problemə çevrilir.
+    """
+
+    def __init__(
+        self,
+        *,
+        fines: RangeScopedFineReader,
+        employees: EmployeeRepository,
+        lookback_days: int = _STUCK_FINE_LOOKBACK_DAYS,
+    ) -> None:
+        self._scan = _StuckFineScan(fines=fines, employees=employees, lookback_days=lookback_days)
+
+    @property
+    def source_code(self) -> str:
+        return FINE_HELD_INACTIVE_SOURCE
+
+    @property
+    def name_az(self) -> str:
+        return "Deaktiv işçinin nəşr olunmayan cəriməsi"
+
+    def evaluate(self, context: RuleEvaluationContext) -> list[ExceptionFinding]:
+        findings: list[ExceptionFinding] = []
+        for fine in self._scan.pending(context):
+            if not self._scan.is_employee_inactive(fine.employee_id):
+                continue
+            findings.append(
+                ExceptionFinding(
+                    employee_id=fine.employee_id,
+                    store_id=fine.store_id,
+                    detail=(
+                        "İşçi deaktivdir, cəriməsi isə nəşr gözləyir. Nəşr STRUKTUR "
+                        "olaraq mümkün deyil (etiraz pəncərəsi açıla bilməz), ona görə "
+                        "sətir hər icmalda yenidən görünür. Qərar tələb olunur: cərimə "
+                        "əsaslandırılmış şəkildə silinməli, ya da hesab bərpa edilməlidir."
+                    ),
+                    context={
+                        "fine_id": str(fine.id),
+                        "source": fine.source.value,
+                        "amount": str(fine.amount.amount),
+                        "issued_at": fine.issued_at.isoformat(),
+                    },
+                    dedupe_key=f"{fine.id}:{context.as_of.date().isoformat()}",
+                )
+            )
+        return findings
+
+
 __all__ = [
     "PUBLISH_FINES_FLAG",
     "FineDecision",
     "FineReviewBatch",
     "FineReviewBatchRepository",
     "FineReviewError",
+    "HeldFineForInactiveEmployeeRule",
     "MonthlyFineReviewUseCase",
+    "OverdueFineReviewRule",
     "PublishResult",
     "ReviewDecision",
 ]

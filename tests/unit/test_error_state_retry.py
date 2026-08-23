@@ -9,10 +9,18 @@ halbuki `Screen.show_error(...)` 200-dən çox yerdən çağırılır və hər d
 istifadəçi tam ekran xəta görür, düyməni basır və HEÇ NƏ olmurdu: siyahı artıq
 silinmişdi, geri qayıtmağın yeganə yolu isə başqa ekrana keçib qayıtmaq idi.
 
-Bu, ekranların «görmək = səlahiyyətin olması» qaydası ilə eyni ailədəndir:
-işləməyən element boz DEYİL, ÜMUMİYYƏTLƏ render olunmamalıdır. Test hər iki
-istiqaməti kilidləyir — `on_retry` yoxdursa düymə YOXDUR, varsa düymə HƏQİQƏTƏN
-həmin funksiyanı çağırır.
+İLK HƏLL: `on_retry` verilməyibsə düymə ÜMUMİYYƏTLƏ çəkilmirdi («işləməyən
+element boz deyil, render olunmur» qaydası).
+
+SONRA ÖLÇÜLDÜ VƏ QƏRAR DƏYİŞDİ: 250 `show_error` çağırışından yalnız 29-u
+`on_retry` ötürür. Qalan ~220 nöqtədə düyməsiz xəta ekranı qalırdı, ekranlar isə
+örtükdə KEŞLƏNİR və yalnız `dashboard` qayıdışda təzələnir — yəni tək bir şəbəkə
+düşməsi həmin ekranı SESSİYANIN SONUNA QƏDƏR ölü saxlayırdı. Düyməni gizlətmək
+qüsuru görünməz etdi, aradan qaldırmadı.
+
+İNDİKİ QAYDA: düymə HƏMİŞƏ çəkilir və HEÇ VAXT ölü deyil — `on_retry` varsa onu
+çağırır, yoxdursa `reload_requested` siqnalını yayır və örtük ekranı fabrikadan
+yenidən qurur (`AdminShell.rebuild_screen`). Test hər iki yolu kilidləyir.
 """
 
 from __future__ import annotations
@@ -37,18 +45,27 @@ def _buttons(widget):  # type: ignore[no-untyped-def]
 
 
 @requires_qt
-def test_an_error_without_a_retry_handler_draws_no_dead_button(qt_app) -> None:  # type: ignore[no-untyped-def]
-    """Qüsurun ÖZÜ: düymə çəkilirdi, heç nəyə bağlı deyildi."""
+def test_an_error_without_a_retry_handler_asks_the_shell_to_rebuild(qt_app) -> None:  # type: ignore[no-untyped-def]
+    """`on_retry` yoxdursa düymə QALIR və ekranın bərpasını istəyir.
+
+    Bu, faylın başlığındakı qərar dəyişikliyinin ölçüsüdür: köhnə test
+    düymənin OLMAMASINI tələb edirdi, indi isə onun İŞLƏMƏSİNİ tələb edir.
+    """
     from src.presentation.theme.manager import ThemeManager
     from src.presentation.theme.tokens import ThemeMode
 
     theme = ThemeManager(preference=ThemeMode.LIGHT)
     theme.apply(qt_app)
     screen = _screen(theme)
+    reloads: list[int] = []
+    screen.reload_requested.connect(lambda: reloads.append(1))
 
     state = screen.show_error(title="Baza əlçatmazdır", message="Yenidən cəhd edin.")
+    buttons = _buttons(state)
 
-    assert _buttons(state) == []
+    assert [button.text() for button in buttons] == ["Yenidən Cəhd Et"]
+    buttons[0].click()
+    assert reloads == [1], "düymə basıldı, ekranın bərpası istənmədi"
 
 
 @requires_qt
@@ -89,4 +106,6 @@ def test_a_secondary_button_is_untouched_by_the_rule(qt_app) -> None:  # type: i
         secondary_text="Dəstəyə yaz",
     )
 
-    assert [button.text() for button in _buttons(state)] == ["Dəstəyə yaz"]
+    # Əsas düymə indi HƏMİŞƏ var (bax fayl başlığı), ikinci düymə isə onun
+    # YANINDA qalır — qayda ikincisinə toxunmur.
+    assert [button.text() for button in _buttons(state)] == ["Yenidən Cəhd Et", "Dəstəyə yaz"]

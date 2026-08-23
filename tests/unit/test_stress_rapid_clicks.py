@@ -246,6 +246,11 @@ def test_twenty_rapid_clicks_on_fine_entry_within_the_dedupe_window_reuse_a_sing
     `FineEntryController._issue`), ona görə hər klikdən ƏVVƏL foto YENİDƏN
     seçilir — real operator da eyni "sürətli, ardıcıl 20 cərimə" ssenarisində
     hər sətir üçün yeni foto seçərdi, köhnəni YENİDƏN göndərməzdi.
+
+    DEEP-GAP OP-6: göndəriş İŞÇİ sahəsini də boşaldır (səbəb `group_b.py::
+    clear_employee` başlığındadır), ona görə ad da hər klikdən ƏVVƏL yenidən
+    seçilir. Bu, testin ölçdüyü şeyi DƏYİŞMİR — ölçülən idempotentlik
+    açarıdır, forma vəziyyəti yox.
     """
     from src.presentation.controllers import fine_entry as fine_entry_module
 
@@ -263,6 +268,7 @@ def test_twenty_rapid_clicks_on_fine_entry_within_the_dedupe_window_reuse_a_sing
     for i in range(RAPID_CLICKS):
         clock["t"] = i * 0.1  # 20 klik, cəmi 1.9 saniyə — pəncərədən (10s) çox uzaqda deyil
         screen._photo.set_file(str(photo))  # U1: əvvəlki klik fotonu TƏMİZLƏYİB
+        screen._employee.set_text("Aygün Məmmədova")  # OP-6: işçi də təmizlənib
         _click(screen, "Cəriməni Qeyd Et")  # ÇÖKMƏMƏLİDİR
 
     assert len(context.manual_fines.issued) == RAPID_CLICKS
@@ -285,8 +291,9 @@ def test_rapid_clicks_straddling_the_dedupe_window_boundary_rotate_keys_correctl
     _idempotency_key_for_submission` başlığı) — əks halda tamamilə ayrı iki
     cərimə partiyası eyni DB unikal indeksinə toqquşardı.
 
-    DEEP-GAP U1: hər uğurlu göndəriş fotonu TƏMİZLƏYİR — hər klikdən ƏVVƏL
-    yenidən seçilir (bax yuxarıdakı testin eyni şərhi).
+    DEEP-GAP U1 / OP-6: hər uğurlu göndəriş həm fotonu, həm İŞÇİ seçimini
+    TƏMİZLƏYİR — ikisi də hər klikdən ƏVVƏL yenidən verilir (bax yuxarıdakı
+    testin eyni şərhi).
     """
     from src.application.use_cases.fine_management import DUPLICATE_SUBMISSION_WINDOW_SECONDS
     from src.presentation.controllers import fine_entry as fine_entry_module
@@ -305,12 +312,14 @@ def test_rapid_clicks_straddling_the_dedupe_window_boundary_rotate_keys_correctl
     for i in range(10):
         clock["t"] = i * 0.1
         screen._photo.set_file(str(photo))
+        screen._employee.set_text("Aygün Məmmədova")
         _click(screen, "Cəriməni Qeyd Et")
 
     clock["t"] = DUPLICATE_SUBMISSION_WINDOW_SECONDS + 1.0
     for _i in range(10):
         clock["t"] += 0.1
         screen._photo.set_file(str(photo))
+        screen._employee.set_text("Aygün Məmmədova")
         _click(screen, "Cəriməni Qeyd Et")  # ÇÖKMƏMƏLİDİR
 
     keys = [issued["idempotency_key"] for issued in context.manual_fines.issued]
@@ -343,6 +352,15 @@ class _RealisticOpenShifts:
 
     def list_for_employee(self, *, tenant_id: Any, employee: Any) -> list[Any]:
         return list(self.employee_rows)
+
+    def list_claimed_for_employee(self, *, tenant_id: Any, employee: Any) -> list[Any]:
+        """DEEP-GAP OP-4 — «Tutduğunuz növbələr» bölməsinin oxu yolu.
+
+        Sahtə BOŞ siyahı qaytarır: bu faylın testləri TUTMA axınını ölçür,
+        geri vermə isə ayrıca sınanır. Metodun MÖVCUD olması vacibdir —
+        `refresh()` hər çağırışda hər iki siyahını EYNİ sessiyada oxuyur.
+        """
+        return []
 
     def claim(self, *, tenant_id: Any, employee: Any, posting_id: Any) -> None:
         if posting_id in self._claimed:

@@ -22,8 +22,24 @@ yaradılmış yazılar dayanır və sinxronizasiyadan sonra silinir.
 ──────────────────────────────────────────────────────────────────────────────
 Bufer mağaza PC-sinin diskindədir və içində PII var (ad, PIN handshake vaxtı,
 cərimə məbləği). `payload` AES-256-GCM ilə şifrələnir; AAD kontekstinə
-`table:record_id` bağlanır — beləliklə şifrəli sahəni başqa sətrə köçürmək
-mümkün olmur.
+`tenant_id:table:record_id` bağlanır — beləliklə şifrəli sahəni başqa sətrə
+KÖÇÜRMƏK, həm də BAŞQA KİRAYƏÇİNİN kontekstində AÇMAQ mümkün olmur.
+
+`tenant_id` AAD-ə SONRADAN əlavə edildi (D2 izolyasiya auditi). Əvvəlki
+kontekst `offline:<cədvəl>:<id>` idi, yəni maşın tenant DƏYİŞDİRİLƏRƏK yenidən
+quraşdırılsa köhnə kirayəçinin sətri yeni kontekstdə problemsiz açılırdı və
+kripto qatı bunu TUTMURDU. Naxış `license_state:<tenant_id>`
+(`licensing/state_store.py`) və `telegram_config:<tenant_id>`
+(`persistence/telegram_repositories.py`) AAD-lərindən gəlir — orada kirayəçi
+ARTIQ kontekstin bir hissəsidir.
+
+GERİYƏ UYĞUNLUQ — MƏCBURİDİR: AAD-in dəyişməsi MÖVCUD şifrəli sətirləri
+oxunmaz edərdi, halbuki onlar sinxronlaşdırılmamış davamiyyət/cərimə
+yazılarıdır və heç yerdə başqa surətdə YOXDUR. Ona görə oxu iki addımlıdır —
+əvvəlcə YENİ AAD sınanır, `DecryptionError` alınarsa KÖHNƏ AAD ilə açılır
+(`EncryptionService._decrypt_legacy_fernet` ilə eyni fikir). YENİ yazılar
+həmişə yeni formatdadır; köhnə sətirlər sinxronizasiyadan sonra `purge_synced`
+ilə onsuz da silinir, yəni ayrıca köçürmə keçidi TƏLƏB OLUNMUR.
 
 ──────────────────────────────────────────────────────────────────────────────
 DAVAMLILIQ (CRASH SAFETY)
@@ -51,7 +67,9 @@ from src.infrastructure.config.limits import (
     InfrastructureLimits,
     fallback_float,
     fallback_int_tuple,
+    tenant_from_text,
 )
+from src.shared.exceptions import DecryptionError
 from src.shared.logger import get_logger
 
 if TYPE_CHECKING:
@@ -86,8 +104,30 @@ FALLBACK_SQLITE_TIMEOUT_SECONDS: Final[float] = fallback_float(
 #: `attendance_records` da əlavə edilib — gecikmə dəqiqələri birbaşa
 #: `fines`-a çevrilir, yəni onu sükutla üzərinə yazmaq PUL dəyişdirmək
 #: deməkdir. Sadalanan üçünü qorumaq, mənbəyini qorumamaq məntiqsiz olardı.
+#:
+#: ÜÇ CƏDVƏL SONRADAN ƏLAVƏ OLUNDU (AF-6) — eyni məntiqin davamı: hər üçünün
+#: nəticəsi PULDUR və konfliktdə sükutla üzərinə yazılması real məbləği
+#: dəyişərdi:
+#:     * `points_ledger`          — xal → mükafat,
+#:     * `overtime_log`           — aşım saatı → əlavə ödəniş,
+#:     * `annual_leave_balances`  — qalıq gün → istifadə olunmamış günün ödənişi.
+#:
+#: NİYƏ İNDİ ƏLAVƏ OLUNUR, HALBUKİ ONLAR HƏLƏ `SYNCABLE_TABLES`-də YOXDUR
+#: (`offline/sync.py`): bu siyahı cədvəlin XASSƏSİDİR («üzərinə yazılsa pul
+#: dəyişir»), sinxronizasiya dəstinin surəti DEYİL. Sıra məhz belə təhlükəsizdir
+#: — əks sıra (əvvəl `SYNCABLE_TABLES`-ə əlavə etmək, audit-kritikliyi sonraya
+#: saxlamaq) həmin cədvəlin ilk konfliktini last-write-wins ilə həll edərdi və
+#: itki yalnız maaş hesablanandan SONRA görünərdi.
 AUDIT_CRITICAL_TABLES: Final[frozenset[str]] = frozenset(
-    {"leave_requests", "fines", "audit_logs", "attendance_records"}
+    {
+        "leave_requests",
+        "fines",
+        "audit_logs",
+        "attendance_records",
+        "points_ledger",
+        "overtime_log",
+        "annual_leave_balances",
+    }
 )
 
 _SCHEMA: Final[str] = """
@@ -244,17 +284,27 @@ class OfflineBuffer:
             )
             _log.info("OFFLINE_BUFFER_SCHEMA_UPGRADED", extra={"column": "time_trust_level"})
 
-    def _backoff_schedule(self) -> tuple[int, ...]:
+    def _backoff_schedule(self, tenant_id: str | None = None) -> tuple[int, ...]:
         """Təkrar cəhd cədvəli — HƏR UĞURSUZLUQDA oxunur.
 
         Bufer prosesin bütün ömrü boyu açıq qalır; cədvəli konstruktorda
         dondursaydıq, Root-un dəyişikliyi yalnız tətbiq yenidən açılanda
         qüvvəyə minərdi — halbuki dəyişiklik məhz uzun-sürən offline
         dövründə lazım olur.
+
+        Args:
+            tenant_id: SAAS-5 — cədvəl SƏTRİN kirayəçisindən oxunur. Bufer
+                faylı MAŞINA aiddir və içində birdən çox kirayəçinin sətri ola
+                bilər (bax `_tenant_clause`); paylaşılan `InfrastructureLimits`
+                nüsxəsi isə tək kirayəçiyə bağlıdır. Bağlamanı sətir üzrə
+                dəyişmək «hansı müştərinin gözləmə cədvəli tətbiq olunur»
+                sualını koddan görünən edir. Mətn UUID deyilsə mövcud bağlama
+                saxlanılır.
         """
         if self._explicit_backoff is not None:
             return self._explicit_backoff
-        return self._limits.int_tuple_of(SystemLimitKey.OFFLINE_RETRY_BACKOFF_SECONDS)
+        limits = self._limits.for_tenant(tenant_from_text(tenant_id))
+        return limits.int_tuple_of(SystemLimitKey.OFFLINE_RETRY_BACKOFF_SECONDS)
 
     def close(self) -> None:
         with self._lock:
@@ -288,7 +338,7 @@ class OfflineBuffer:
         entry_id = str(uuid.uuid4())
         token = self._encryption.encrypt(
             json.dumps(payload, ensure_ascii=False, default=str),
-            context=self._aad(table_name, record_id),
+            context=self._aad(tenant_id, table_name, record_id),
         )
         with self._lock, self._transaction() as conn:
             seq = self._next_seq(conn)
@@ -327,46 +377,87 @@ class OfflineBuffer:
 
     # -------------------------------- oxuma ---------------------------------- #
 
-    def pending(self, *, now: datetime | None = None, limit: int = 100) -> list[BufferedWrite]:
+    def pending(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int = 100,
+        tenant_id: str | None = None,
+    ) -> list[BufferedWrite]:
         """Sinxronizasiyaya HAZIR yazılar — FIFO sırası ilə.
 
         Konfliktdə qalmış qeydi olan `record_id` üçün SONRAKI yazılar da
         buraxılır: onlar həll olunmamış vəziyyətin üzərinə tikilib, ardıcıl
         tətbiq edilsə məlumatı korlayardılar.
+
+        Args:
+            tenant_id: verilərsə YALNIZ həmin kirayəçinin sətirləri
+                (`_tenant_clause`). Bloklama yoxlaması DA süzülür — əks halda
+                BAŞQA kirayəçinin həll olunmamış konflikti bu kirayəçinin
+                növbəsini dayandırardı (ID-lər UUID olsa da qayda "eyni sətir"
+                haqqındadır, "eyni ada malik sətir" haqqında yox).
         """
         moment = now or datetime.now(UTC)
+        clause, clause_params = self._tenant_clause(tenant_id)
         with self._lock:
             blocked = {
                 (row["table_name"], row["record_id"])
                 for row in self._conn.execute(
-                    "SELECT DISTINCT table_name, record_id FROM outbox "
-                    "WHERE sync_status = 'CONFLICT'"
+                    # `clause` sabit İKİ variantdan biridir (`_tenant_clause`).
+                    f"""
+                    SELECT DISTINCT table_name, record_id FROM outbox
+                     WHERE sync_status = 'CONFLICT'{clause}
+                    """,  # noqa: S608 — şərtlər sabit siyahıdandır
+                    clause_params,
                 )
             }
             rows = self._conn.execute(
-                """
+                f"""
                 SELECT * FROM outbox
-                 WHERE sync_status = 'PENDING' AND next_attempt_at <= ?
+                 WHERE sync_status = 'PENDING' AND next_attempt_at <= ?{clause}
                  ORDER BY seq
                  LIMIT ?
-                """,
-                (moment.isoformat(), limit),
+                """,  # noqa: S608 — şərtlər sabit siyahıdandır
+                (moment.isoformat(), *clause_params, limit),
             ).fetchall()
         return [write for row in rows if (write := self._to_write(row)).record_key not in blocked]
 
-    def conflicts(self) -> list[BufferedWrite]:
-        """HR_Admin-in manual həlli gözləyən yazılar (bölmə 5)."""
+    def conflicts(self, *, tenant_id: str | None = None) -> list[BufferedWrite]:
+        """HR_Admin-in manual həlli gözləyən yazılar (bölmə 5).
+
+        Args:
+            tenant_id: verilərsə YALNIZ həmin kirayəçinin konfliktləri — bir
+                müştərinin HR_Admin-i digərinin yazısını (payload-da ad, məbləğ
+                var) siyahıda GÖRMƏMƏLİDİR.
+        """
+        clause, clause_params = self._tenant_clause(tenant_id)
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM outbox WHERE sync_status = 'CONFLICT' ORDER BY seq"
+                # `clause` sabit İKİ variantdan biridir (`_tenant_clause`).
+                f"SELECT * FROM outbox WHERE sync_status = 'CONFLICT'{clause} "  # noqa: S608
+                "ORDER BY seq",
+                clause_params,
             ).fetchall()
         return [self._to_write(row) for row in rows]
 
-    def counts(self) -> dict[str, int]:
-        """System Health Monitor üçün sayğaclar."""
+    def counts(self, *, tenant_id: str | None = None) -> dict[str, int]:
+        """System Health Monitor üçün sayğaclar.
+
+        Args:
+            tenant_id: verilərsə YALNIZ həmin kirayəçinin sətirləri sayılır —
+                əks halda ekrandakı "gözləyən yazı" rəqəmi başqa quraşdırmanın
+                qalıq sətirlərini də göstərər və admin heç vaxt boşalmayan
+                növbə görərdi.
+        """
+        clause, clause_params = self._tenant_clause(tenant_id)
         with self._lock:
             rows = self._conn.execute(
-                "SELECT sync_status, COUNT(*) AS n FROM outbox GROUP BY sync_status"
+                # `WHERE 1 = 1` sabit şərtin AND-lə birləşməsi üçündür:
+                # `_tenant_clause` hər yerdə EYNİ formatı (` AND ...`) qaytarır
+                # ki, çağırış yerlərində iki fərqli yığma qaydası yaranmasın.
+                f"SELECT sync_status, COUNT(*) AS n FROM outbox "  # noqa: S608
+                f"WHERE 1 = 1{clause} GROUP BY sync_status",
+                clause_params,
             ).fetchall()
         counts = {status.value: 0 for status in SyncStatus}
         for row in rows:
@@ -394,9 +485,11 @@ class OfflineBuffer:
         """Cəhdi artırır və eksponensial gözləmə təyin edir. Növbəti cəhd anını qaytarır."""
         moment = now or datetime.now(UTC)
         with self._lock, self._transaction() as conn:
-            row = conn.execute("SELECT attempts FROM outbox WHERE id = ?", (entry_id,)).fetchone()
+            row = conn.execute(
+                "SELECT attempts, tenant_id FROM outbox WHERE id = ?", (entry_id,)
+            ).fetchone()
             attempts = (row["attempts"] if row else 0) + 1
-            schedule = self._backoff_schedule()
+            schedule = self._backoff_schedule(row["tenant_id"] if row else None)
             delay = schedule[min(attempts - 1, len(schedule) - 1)]
             next_at = moment + timedelta(seconds=delay)
             conn.execute(
@@ -422,13 +515,17 @@ class OfflineBuffer:
         moment = now or datetime.now(UTC)
         with self._lock, self._transaction() as conn:
             row = conn.execute(
-                "SELECT table_name, record_id FROM outbox WHERE id = ?", (entry_id,)
+                "SELECT tenant_id, table_name, record_id FROM outbox WHERE id = ?", (entry_id,)
             ).fetchone()
             if row is None:
                 return
+            # Uzaq versiya da sətrin ÖZ kirayəçisinə bağlanır — payload ilə
+            # eyni AAD. Köhnə formatda yazılmış sətrin uzaq versiyası yeni
+            # formatda yazılır və `_decrypt_field` hər iki sahəni AYRI-AYRI
+            # sınadığı üçün qarışıq sətir də problemsiz oxunur.
             token = self._encryption.encrypt(
                 json.dumps(remote_version, ensure_ascii=False, default=str),
-                context=self._aad(row["table_name"], row["record_id"]),
+                context=self._aad(row["tenant_id"], row["table_name"], row["record_id"]),
             )
             conn.execute(
                 """UPDATE outbox
@@ -480,12 +577,22 @@ class OfflineBuffer:
             },
         )
 
-    def purge_synced(self, *, older_than: datetime) -> int:
-        """Sinxronlaşmış yazıları silir — bufer PII-ni lazımsız saxlamamalıdır."""
+    def purge_synced(self, *, older_than: datetime, tenant_id: str | None = None) -> int:
+        """Sinxronlaşmış yazıları silir — bufer PII-ni lazımsız saxlamamalıdır.
+
+        Args:
+            tenant_id: verilərsə YALNIZ həmin kirayəçinin sətirləri silinir.
+                Silmə əməliyyatında filtr xüsusilə vacibdir: filtrsiz çağırış
+                bir müştərinin təmizləmə əməliyyatını DİGƏRİNİN sətirlərinə
+                də tətbiq edərdi.
+        """
+        clause, clause_params = self._tenant_clause(tenant_id)
         with self._lock, self._transaction() as conn:
             cursor = conn.execute(
-                "DELETE FROM outbox WHERE sync_status = 'SYNCED' AND synced_at < ?",
-                (older_than.isoformat(),),
+                # `clause` sabit İKİ variantdan biridir (`_tenant_clause`).
+                f"DELETE FROM outbox WHERE sync_status = 'SYNCED' "  # noqa: S608
+                f"AND synced_at < ?{clause}",
+                (older_than.isoformat(), *clause_params),
             )
             deleted = cursor.rowcount
         if deleted:
@@ -495,8 +602,63 @@ class OfflineBuffer:
     # ------------------------------- daxili ---------------------------------- #
 
     @staticmethod
-    def _aad(table_name: str, record_id: str) -> str:
+    def _aad(tenant_id: str, table_name: str, record_id: str) -> str:
+        """Şifrələmə konteksti — kirayəçi DAXİLDİR (bax modul başlığı)."""
+        return f"offline:{tenant_id}:{table_name}:{record_id}"
+
+    @staticmethod
+    def _legacy_aad(table_name: str, record_id: str) -> str:
+        """Kirayəçisiz KÖHNƏ kontekst — YALNIZ OXU yolunda, ehtiyat variant kimi.
+
+        Yazı yolunda İSTİFADƏ EDİLMİR: köhnə formatda yeni sətir yaratmaq
+        düzəlişi mənasız edərdi. Metod SİLİNMİR — mağazada aylarla oflayn
+        qalmış bufer faylı yenilənmiş tətbiqlə açıla bilər.
+        """
         return f"offline:{table_name}:{record_id}"
+
+    def _decrypt_field(self, row: sqlite3.Row, column: str) -> str:
+        """Şifrəli sahəni açır: ƏVVƏLCƏ yeni AAD, uğursuz olarsa KÖHNƏ.
+
+        Sıra qəsdən BELƏDİR — yeni format hər yazıda yaranır, köhnəsi isə
+        yalnız keçid dövründə mövcuddur. Tərs sıra hər oxuda bir artıq
+        (uğursuz) deşifrə cəhdi demək olardı.
+
+        Köhnə AAD də uğursuz olarsa istisna ÖTÜRÜLÜR: bu artıq keçid halı
+        deyil, faylın dəyişdirilməsi və ya açarın itməsi əlamətidir — sükutla
+        boş payload qaytarmaq həmin yazını itirmək olardı.
+        """
+        token = row[column]
+        try:
+            return self._encryption.decrypt(
+                token,
+                context=self._aad(row["tenant_id"], row["table_name"], row["record_id"]),
+            )
+        except DecryptionError:
+            plaintext = self._encryption.decrypt(
+                token, context=self._legacy_aad(row["table_name"], row["record_id"])
+            )
+            _log.info(
+                "OFFLINE_BUFFER_LEGACY_AAD_READ",
+                extra={
+                    "entry_id": row["id"],
+                    "column": column,
+                    "reason": "kirayəçisiz KÖHNƏ AAD — sətir yeni formata YAZILMADAN oxundu",
+                },
+            )
+            return plaintext
+
+    @staticmethod
+    def _tenant_clause(tenant_id: str | None) -> tuple[str, tuple[str, ...]]:
+        """`AND`-lə başlayan kirayəçi şərti + parametrləri (D2 izolyasiya).
+
+        Naxış `EvidenceUploadQueue._tenant_clause()`-un eynidir: `None` halı
+        KÖHNƏ (filtrsiz) davranışı saxlayır və YALNIZ kirayəçiyə əhəmiyyət
+        verməyən çağırışlar üçündür (diaqnostika, testlər). İstehsalat yolu —
+        `BufferDrainAdapter` — `tenant_id`-ni HƏMİŞƏ ötürür.
+        """
+        if tenant_id is None:
+            return "", ()
+        return " AND tenant_id = ?", (tenant_id,)
 
     def _transaction(self) -> _SqliteTransaction:
         return _SqliteTransaction(self._conn)
@@ -507,20 +669,10 @@ class OfflineBuffer:
         return int(row["n"])
 
     def _to_write(self, row: sqlite3.Row) -> BufferedWrite:
-        payload = json.loads(
-            self._encryption.decrypt(
-                row["payload_encrypted"],
-                context=self._aad(row["table_name"], row["record_id"]),
-            )
-        )
+        payload = json.loads(self._decrypt_field(row, "payload_encrypted"))
         remote: dict[str, Any] | None = None
         if row["remote_version_encrypted"]:
-            remote = json.loads(
-                self._encryption.decrypt(
-                    row["remote_version_encrypted"],
-                    context=self._aad(row["table_name"], row["record_id"]),
-                )
-            )
+            remote = json.loads(self._decrypt_field(row, "remote_version_encrypted"))
         write = BufferedWrite(
             id=row["id"],
             seq=row["seq"],

@@ -42,14 +42,20 @@ qoruyucusu (bölmə 3) deaktivləşdirmədən ƏVVƏL işə düşür.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol
 
 from src.domain.entities.employee import Employee
 from src.domain.interfaces.ports import EmployeeRepository
-from src.domain.value_objects.authorization import AuthorizationError, SystemRole
+from src.domain.value_objects.authorization import (
+    DEADLOCK_CRITICAL_FLAGS,
+    AuthorizationError,
+    SystemRole,
+)
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
+from src.shared.text import normalise_decision_text
 
 if TYPE_CHECKING:
     from datetime import date, datetime
@@ -78,6 +84,47 @@ MANAGE_EMPLOYEES_FLAG = "can_manage_employees"
 RESET_PASSWORD_FLAG = "can_reset_password"  # noqa: S105
 RESET_PIN_FLAG = "can_reset_pin"
 MANAGE_ROLES_FLAG = "can_manage_roles"
+
+#: Hesabın aktivlik statusunu dəyişən qərarın izahı üçün minimum uzunluq.
+#: Layihədəki bütün qərar izahları ilə eyni dəyər və eyni səbəb: «lazım
+#: oldu» cümləsi aylar sonra heç nə izah etmir, halbuki bu sətir işçinin
+#: sistemə çıxışını açır/bağlayır.
+MIN_STATUS_CHANGE_REASON_LENGTH = 10
+
+#: AUDİT MARKERİ — «bu qoruma İŞLƏMƏDİ, çünki portu bağlanmayıb» (AF-5).
+#:
+#: ──────────────────────────────────────────────────────────────────────────
+#: NİYƏ `None` DEYİL
+#: ──────────────────────────────────────────────────────────────────────────
+#: Bu use case-in beş İSTƏYƏ BAĞLI portu var (`flags`, `deadlock_guard`,
+#: `face_embeddings`, `fine_exposure`, `offboarding_signals`) və hər biri
+#: `None` olanda müvafiq yoxlama APARILMIR. Nəticə audit sətrinə `None` (və
+#: ya boş siyahı) kimi düşürdü — jurnalı oxuyan adam üçün bu, İKİ TAMAMİLƏ
+#: FƏRQLİ halın eyni görünüşüdür:
+#:     * «yoxlandı, tapılmadı»    — sistem işlədi, nəticə mənfidir;
+#:     * «ümumiyyətlə yoxlanmadı» — qoruma həmin quraşdırmada YOX İDİ.
+#: Birincisi normal iş, ikincisi isə audit tapıntısıdır. Onları ayırd edə
+#: bilməmək fail-OPEN oxunuşudur: aylar sonra «üzü silinibmi?» sualına
+#: baxan adam `None` görüb «deməli silinməyib» qərarına gəlir, halbuki
+#: həqiqət «bilmirik»dir.
+#:
+#: Eyni prinsip layihədə artıq yazılıb — `recovery_console.may_open`:
+#: NAMƏLUM səbəb ən az etibar edilən haldır və onu «hər şey qaydasındadır»
+#: kimi oxumaq olmaz. Sükut deyil, GÖRÜNƏN iz seçilir.
+#:
+#: Marker MƏTNDİR, `False` DEYİL: `False` «yoxlandı, nəticə mənfi» deməkdir
+#: və məhz qarışdırdığımız iki haldan birincisidir.
+PORT_NOT_WIRED = "SKIPPED_NO_PORT"
+
+
+def _audited(value: object, *, checked: bool) -> object:
+    """Audit dəyəri: yoxlama aparılıbsa nəticə, aparılmayıbsa AÇIQ marker (AF-5).
+
+    Kiçik köməkçidir, lakin AYRICA yazılır: `X if port is not None else
+    PORT_NOT_WIRED` ifadəsi beş yerdə təkrarlanmalı olardı və birində
+    unudulmuş şərt məhz AF-5-in şikayət etdiyi sükutu geri gətirərdi.
+    """
+    return value if checked else PORT_NOT_WIRED
 
 
 class UserManagementError(KompasOSError):
@@ -185,6 +232,132 @@ class OpenFineExposureReader(Protocol):
     def count_open_for_employee(self, employee_id: EmployeeId) -> OpenFineExposure: ...
 
 
+@dataclass(frozen=True)
+class OffboardingSignals:
+    """İşdən çıxma anında AÇIQ qalan bağlantılar (HR-4).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ TƏK SORĞU, NİYƏ ALTI AYRI PORT DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Bu siqnalların hamısı EYNİ ana aiddir («bu şəxs indi sistemdən çıxır») və
+    hamısı BİR ekranda, BİR siyahıda göstərilir. Altı ayrı port olsaydı,
+    deaktivasiya yolu altı ayrı `None` yoxlaması daşıyardı və birinin
+    bağlanmaması SÜKUTLA siyahını natamam edərdi — halbuki natamam yoxlama
+    siyahısı olmayandan daha təhlükəlidir (admin «hər şey təmizdir» oxuyur).
+
+    `OpenFineExposure` (DEEP-GAP D2) AYRI QALIR və bura BİRLƏŞDİRİLMİR: o,
+    ARTIQ mövcuddur, ARTIQ bağlıdır və onun sualı maliyyə izidir. İkisini
+    birləşdirmək işləyən bir portu yenidən yazmaq olardı (CLAUDE.md qırmızı
+    xətt 1).
+
+    HEÇ BİRİ BLOKLAMIR — bax `OffboardingReview` şərhi.
+    """
+
+    #: Hələ bağlanmamış gündaxili icazə (🔵/🟡) — işçi «xaricdə» qalıb.
+    open_leave_requests: int = 0
+    #: Təhvil verilməmiş/qərar gözləyən tapşırıqlar.
+    pending_tasks: int = 0
+    #: Tutulmuş, lakin HƏLƏ BAŞ VERMƏMİŞ açıq növbələr — həmin günlər
+    #: doldurulmamış qalacaq və heç kim xəbər tutmayacaq.
+    upcoming_claimed_shifts: int = 0
+    #: İstifadə olunmamış illik məzuniyyət günü (son haqq-hesabın girişi).
+    unused_annual_leave_days: Decimal = Decimal("0")
+    #: Qüvvədə olan sənəd/müqavilə qeydləri (müddəti bitməmiş).
+    active_documents: int = 0
+    #: Üz şablonu hələ silinməyibsə `True` (`facecontrol.md` bənd 8).
+    has_face_template: bool = False
+
+    @property
+    def has_any(self) -> bool:
+        return bool(
+            self.open_leave_requests
+            or self.pending_tasks
+            or self.upcoming_claimed_shifts
+            or self.unused_annual_leave_days > 0
+            or self.active_documents
+            or self.has_face_template
+        )
+
+
+class OffboardingSignalReader(Protocol):
+    """İşdən çıxma siqnallarını BİR sorğuda oxuyur (HR-4).
+
+    `OpenFineExposureReader` ilə EYNİ naxış və eyni əsaslandırma: mövcud
+    repository protokollarına metod əlavə etmək onları ödəyən HƏR sinfi
+    (test sahtələri daxil) uyğunsuz edərdi, halbuki bu sual YALNIZ
+    deaktivasiya axınına aiddir.
+    """
+
+    def read_offboarding_signals(self, employee_id: EmployeeId) -> OffboardingSignals: ...
+
+
+@dataclass(frozen=True)
+class OffboardingReview:
+    """Deaktivasiyanın TAM mənzərəsi — işçi + açıq bağlantılar (HR-4).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ BLOKLAMIR
+    ──────────────────────────────────────────────────────────────────────────
+    `_check_deadlock` və `_check_open_fine_exposure` ilə EYNİ qərar: işdən
+    çıxarma HÜQUQİ faktdır və sistem onu «tapşırığın var» deyə dayandıra
+    bilməz. Sistemin işi qərarı VERƏNƏ nəyin açıq qaldığını GÖSTƏRMƏKDİR —
+    qərar isə insanındır.
+
+    NƏ ÜÇÜN HƏM ƏVVƏL, HƏM SONRA ƏLÇATANDIR: `preview_offboarding()` qərardan
+    ƏVVƏL çağırılır (siyahı məhz o zaman faydalıdır), `deactivate_employee()`
+    isə eyni strukturu nəticə kimi qaytarır — deaktivasiya ekranı yan keçilib
+    birbaşa çağırıla bilər (skript, toplu əməliyyat) və o yolda da siyahı
+    audit sətrinə düşməlidir.
+    """
+
+    employee: Employee
+    signals: OffboardingSignals
+    #: `None` = `fine_exposure` portu qoşulmayıb (yoxlama APARILMAYIB).
+    fine_exposure: OpenFineExposure | None = None
+    #: `None` = deadlock qoruyucusu qoşulmayıb.
+    deadlock: Any = None
+
+    @property
+    def requires_attention(self) -> bool:
+        """Admin-in GÖRMƏLİ olduğu bir şey varmı."""
+        if self.signals.has_any:
+            return True
+        return self.fine_exposure is not None and self.fine_exposure.has_any
+
+    def checklist_az(self) -> tuple[str, ...]:
+        """Ekranda sətir-sətir göstərilən yoxlama siyahısı.
+
+        Mətnlər BURADA qurulur, ekranda yox: eyni siyahı həm GUI-də, həm
+        audit `after_state`-ində, həm də bildirişdə görünür — üç yerdə üç
+        fərqli ifadə ikinci ad məkanı yaradardı (`menu.py` başlığındakı
+        qüsurun eynisi).
+        """
+        lines: list[str] = []
+        signals = self.signals
+        if signals.open_leave_requests:
+            lines.append(f"Bağlanmamış icazə sorğusu: {signals.open_leave_requests}")
+        if signals.pending_tasks:
+            lines.append(f"Gözləyən tapşırıq: {signals.pending_tasks}")
+        if signals.upcoming_claimed_shifts:
+            lines.append(
+                f"Tutulmuş gələcək açıq növbə: {signals.upcoming_claimed_shifts} "
+                f"(həmin günlər boş qalacaq)"
+            )
+        if signals.unused_annual_leave_days > 0:
+            lines.append(
+                f"İstifadə olunmamış illik məzuniyyət: {signals.unused_annual_leave_days} gün"
+            )
+        if signals.active_documents:
+            lines.append(f"Qüvvədə olan sənəd/müqavilə: {signals.active_documents}")
+        if signals.has_face_template:
+            lines.append("Üz şablonu hələ silinməyib")
+        if self.fine_exposure is not None and self.fine_exposure.pending_review_fine_count:
+            lines.append(f"Nəşr gözləyən cərimə: {self.fine_exposure.pending_review_fine_count}")
+        if self.fine_exposure is not None and self.fine_exposure.open_appeal_count:
+            lines.append(f"Qərar gözləyən cərimə etirazı: {self.fine_exposure.open_appeal_count}")
+        return tuple(lines)
+
+
 class UserManagementUseCase:
     """İşçi yaratma/redaktə, şifrə & PIN sıfırlama, mağaza təyinatı."""
 
@@ -201,6 +374,7 @@ class UserManagementUseCase:
         deadlock_guard: DualControlDeadlockGuardUseCase | None = None,
         face_embeddings: FaceEmbeddingRepository | None = None,
         fine_exposure: OpenFineExposureReader | None = None,
+        offboarding_signals: OffboardingSignalReader | None = None,
     ) -> None:
         self._employees = employees
         self._credentials = credentials
@@ -230,8 +404,9 @@ class UserManagementUseCase:
         # PORT İSTƏYƏ BAĞLIDIR (`None` = təmizləmə yoxdur): mövcud testlər və
         # Face Control modulu qurulmamış quraşdırmalar bu use case-i portsuz
         # yaradır. `None` halı SÜKUTLA UDULMUR — `deactivate_employee` audit
-        # sətrinə `face_embedding_purged` açarını `None` kimi yazır, yəni
-        # "təmizləmə cəhdi edilməyib" faktı jurnalda görünür.
+        # sətrinə `face_embedding_purged` açarını `PORT_NOT_WIRED` markeri ilə
+        # yazır (AF-5), yəni "təmizləmə cəhdi edilməyib" faktı jurnalda
+        # `False` ("cəhd edildi, vektor yox idi") halından AYIRD EDİLİR.
         self._face_embeddings = face_embeddings
         # DEEP-GAP D2 — deaktivasiyadan ƏVVƏL açıq cərimə/etiraz sayını
         # yoxlayır (`_check_deadlock` ilə EYNİ yerdə, EYNİ "BLOKLAMIR, yalnız
@@ -239,6 +414,11 @@ class UserManagementUseCase:
         # UDULMUR — `deactivate_employee` audit sətrinə `open_fine_count`/
         # `open_appeal_count` açarlarını `None` kimi yazır.
         self._fine_exposure = fine_exposure
+        # HR-4 — `fine_exposure` ilə EYNİ naxış: port yoxdursa siyahı BOŞ
+        # gəlir və köhnə davranış DƏYİŞMİR. Boş siyahı «hər şey təmizdir»
+        # DEMƏK DEYİL və `OffboardingReview` bunu `signals.has_any` ilə
+        # ayırd edə bilir — ekran «yoxlanılmadı» halını göstərməlidir.
+        self._offboarding_signals = offboarding_signals
 
     # ------------------------------- yaratma --------------------------------- #
 
@@ -365,7 +545,23 @@ class UserManagementUseCase:
                 # Silinən override-lar audit-də AÇIQ görünməlidir: bu, işçinin
                 # səlahiyyətinin AZALMASIDIR və mübahisə halında nəyin nə vaxt
                 # götürüldüyü sübut edilə bilməlidir.
-                "removed_overrides": removed_overrides,
+                #
+                # AF-5 — BOŞ SİYAHI BURADA ƏN TƏHLÜKƏLİ SÜKUT İDİ: kataloq
+                # portu (`flags`) bağlanmayanda `_flag_catalog()` boş lüğət
+                # qaytarır, `change_position` isə HEÇ BİR override-ı silmir və
+                # nəticə `[]` olur — yəni «yeni rolda qadağan flag yox idi» ilə
+                # «anti-fraud süzgəci ÜMUMİYYƏTLƏ işləmədi» eyni görünürdü.
+                # İkincisi o deməkdir ki, HR_Admin ikən verilmiş
+                # `can_approve_dual_control_override` Mağaza Menecerinə keçən
+                # işçidə QÜVVƏDƏ QALIB — bu, struktur zəmanətin sükutla
+                # pozulmasıdır və jurnalda görünməlidir.
+                #
+                # Rol DƏYİŞMƏYİBSƏ marker YAZILMIR: orada süzgəc «işləmədi»
+                # deyil, TƏTBİQ EDİLMİR — boş siyahı düzgün cavabdır.
+                "removed_overrides": _audited(
+                    removed_overrides,
+                    checked=not role_changed or self._flags is not None,
+                ),
             },
         )
         if removed_overrides:
@@ -379,10 +575,118 @@ class UserManagementUseCase:
             )
         return employee
 
-    def deactivate_employee(
+    def preview_offboarding(self, *, actor: Employee, employee_id: EmployeeId) -> OffboardingReview:
+        """Deaktivasiyadan ƏVVƏL açıq bağlantıların siyahısı (HR-4) — HEÇ NƏ DƏYİŞMİR.
+
+        Siyahı məhz QƏRARDAN ƏVVƏL faydalıdır: «bu işçinin üç gözləyən
+        tapşırığı və 12 gün istifadə olunmamış məzuniyyəti var» məlumatı
+        deaktivasiyadan SONRA gəlsəydi, admin artıq geri dönüşü olmayan
+        addımı atmış olardı.
+
+        Səlahiyyət `deactivate_employee` ilə EYNİDİR (`can_manage_employees` +
+        iyerarxiya): siyahı işçinin şəxsi məlumatını (məzuniyyət balansı,
+        tapşırıq sayı) açır, yəni ondan zəif qapı arxasında dayana bilməz.
+        """
+        now = self._clock.now()
+        self._require(actor, MANAGE_EMPLOYEES_FLAG, now=now)
+        employee = self._load(employee_id)
+        self._assert_may_manage(actor, employee, now=now)
+        return OffboardingReview(
+            employee=employee,
+            signals=self._read_offboarding_signals(employee_id),
+            fine_exposure=self._check_open_fine_exposure(employee_id),
+        )
+
+    def reactivate_employee(
         self, *, tenant_id: TenantId, actor: Employee, employee_id: EmployeeId, reason: str
     ) -> Employee:
-        """İşçini deaktiv edir — SİLMİR (modul başlığına bax)."""
+        """Deaktiv edilmiş işçini YENİDƏN aktivləşdirir (HR-4) — səbəb MƏCBURİDİR.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `deactivate_employee`-in TAM SİMMETRİYASI
+        ──────────────────────────────────────────────────────────────────────
+        Eyni səlahiyyət (`can_manage_employees`), eyni iyerarxiya qapısı, eyni
+        audit forması. Fərqli bir qapı seçsəydik («yalnız CEO bərpa edə
+        bilər» kimi), deaktivasiya ilə bərpa arasında asimmetriya yaranardı
+        və praktikada bu, adminləri bazaya əl ilə müdaxiləyə qaytarardı —
+        yəni qorumanı gücləndirmək əvəzinə tamamilə yan keçərdi.
+
+        ÖZ HESABI İSTİSNASI BURADA YOXDUR (deaktivasiyadan fərqli olaraq):
+        deaktiv işçi giriş edə bilmir, deməli öz hesabını özü bərpa etmək
+        fiziki olaraq mümkün deyil və süni qapı əlavə etmək mənasız olardı.
+
+        SƏBƏB MƏCBURİDİR: «niyə geri qayıtdı?» sualının cavabı yalnız audit
+        sətrində qala bilər — `deactivate_employee`-in `reason` parametri ilə
+        eyni əsaslandırma.
+        """
+        now = self._clock.now()
+        self._require(actor, MANAGE_EMPLOYEES_FLAG, now=now)
+
+        employee = self._load(employee_id)
+        self._assert_may_manage(actor, employee, now=now)
+        cleaned = normalise_decision_text(reason)
+        if len(cleaned) < MIN_STATUS_CHANGE_REASON_LENGTH:
+            raise UserManagementError(
+                f"Bərpa səbəbi minimum {MIN_STATUS_CHANGE_REASON_LENGTH} simvol olmalıdır",
+                user_message="Hesabın niyə bərpa olunduğunu ətraflı yazın.",
+                context={"employee_id": str(employee_id)},
+            )
+
+        if not employee.activate():
+            # İDEMPOTENT: artıq aktiv hesab XƏTA DEYİL, lakin audit sətri də
+            # YAZILMIR — heç nə dəyişmədiyi halda «bərpa edildi» sətri
+            # jurnalı yanıldardı (`Employee.activate` şərhi).
+            return employee
+
+        self._employees.save(employee)
+        self._audit.record(
+            tenant_id=tenant_id,
+            actor_id=actor.id,
+            action="EMPLOYEE_REACTIVATED",
+            entity_type="employee",
+            entity_id=employee_id,
+            before_state={"is_active": False},
+            after_state={"is_active": True},
+            reason=cleaned,
+        )
+        _security_log.info(
+            "EMPLOYEE_REACTIVATED",
+            extra={"actor_id": str(actor.id), "employee_id": str(employee_id)},
+        )
+        # ÜZ ŞABLONU BƏRPA OLUNMUR — deaktivasiyada SİLİNİB
+        # (`facecontrol.md` bənd 8) və silinmiş biometrik məlumatı geri
+        # gətirmək mümkün deyil. İşçi yenidən qeydiyyatdan keçməlidir; bu,
+        # itki deyil, bəndin MƏQSƏDİDİR.
+        self._notify_owner(
+            tenant_id=tenant_id,
+            employee_id=employee_id,
+            title="Hesabınız bərpa edildi",
+            body=(
+                f"Hesabınız yenidən aktivləşdirildi. Səbəb: {cleaned}. "
+                f"Üzlə giriş istifadə edirdinizsə, yenidən qeydiyyatdan keçməlisiniz."
+            ),
+        )
+        return employee
+
+    def deactivate_employee(
+        self, *, tenant_id: TenantId, actor: Employee, employee_id: EmployeeId, reason: str
+    ) -> OffboardingReview:
+        """İşçini deaktiv edir — SİLMİR (modul başlığına bax).
+
+        ──────────────────────────────────────────────────────────────────────
+        İMZA DƏYİŞİKLİYİ (HR-4): `Employee` ƏVƏZİNƏ `OffboardingReview`
+        ──────────────────────────────────────────────────────────────────────
+        İşçinin özü `review.employee`-dədir, yəni məlumat İTMİR. Dəyişikliyin
+        səbəbi budur: deaktivasiya altı ayrı açıq bağlantı yaradır (icazə,
+        tapşırıq, tutulmuş növbə, məzuniyyət balansı, sənəd, üz şablonu) və
+        onların HEÇ BİRİ soruşulmurdu. Nəticə real mağazada belə görünürdü —
+        işçi çıxır, onun tutduğu növbə heç kimə keçmir, gözləyən tapşırığı
+        əbədi «icrada» qalır, istifadə olunmamış məzuniyyəti son haqq-hesaba
+        düşmür.
+
+        BLOKLAMIR (bax `OffboardingReview` şərhi): siyahı göstərilir, qərar
+        insanındır.
+        """
         now = self._clock.now()
         self._require(actor, MANAGE_EMPLOYEES_FLAG, now=now)
 
@@ -401,9 +705,22 @@ class UserManagementUseCase:
         # görünən edir. BLOKLAMIR: son haqq-hesab, əl ilə HR qərarı kimi
         # meşru yollar deaktivasiyanı gözləyə bilməz.
         exposure = self._check_open_fine_exposure(employee_id)
+        # HR-4 — siqnallar MUTASİYADAN ƏVVƏL oxunur: `deactivate()`-dən sonra
+        # oxusaydıq, «açıq icazə» sorğusu artıq bağlanmış ola bilərdi (repo
+        # süzgəci `is_active`-ə baxa bilər) və siyahı boş görünərdi.
+        signals = self._read_offboarding_signals(employee_id)
         employee.deactivate()
         self._employees.save(employee)
         purged = self._purge_face_embedding(actor=actor, employee_id=employee_id, reason=reason)
+        review = OffboardingReview(
+            employee=employee,
+            # Üz şablonu ARTIQ silinibsə siyahıda görünməməlidir: `purged`
+            # `True` olanda bağlantı BAĞLANIB, açıq qalmayıb.
+            signals=(signals if not purged else replace(signals, has_face_template=False)),
+            fine_exposure=exposure,
+            deadlock=deadlock,
+        )
+        review_checklist = review.checklist_az()
 
         self._audit.record(
             tenant_id=tenant_id,
@@ -412,25 +729,42 @@ class UserManagementUseCase:
             entity_type="employee",
             entity_id=employee_id,
             before_state={"is_active": True},
+            # AF-5 — HƏR İSTƏYƏ BAĞLI YOXLAMA ÖZ NƏTİCƏSİNİ AÇIQ YAZIR.
+            # `None`/boş siyahı ARTIQ İŞLƏDİLMİR: bağlanmamış port
+            # `PORT_NOT_WIRED` markeri buraxır, yəni «yoxlandı, tapılmadı»
+            # ilə «yoxlanmadı» jurnalda ayırd edilə bilir (bax həmin sabitin
+            # şərhi).
             after_state={
                 "is_active": False,
                 # Deadlock vəziyyəti audit-də görünməlidir: sonradan "niyə
                 # override-lar təsdiqsiz qaldı" sualının cavabı budur.
-                "dual_control_approvers_left": deadlock.approver_count
-                if deadlock is not None
-                else None,
+                "dual_control_approvers_left": _audited(
+                    deadlock.approver_count if deadlock is not None else None,
+                    checked=deadlock is not None,
+                ),
                 # `facecontrol.md` bənd 8 — biometrik məlumatın silinməsi
                 # auditdə GÖRÜNMƏLİDİR: "işçi çıxarıldı, üzü nə vaxt silindi?"
-                # sualının yeganə cavabı budur. `None` = Face Control portu
-                # qoşulmayıb (modul quraşdırılmayıb).
-                "face_embedding_purged": purged,
+                # sualının yeganə cavabı budur.
+                "face_embedding_purged": _audited(purged, checked=purged is not None),
                 # DEEP-GAP D2 — "niyə bu cərimə etiraz edilə bilmədi" sualının
-                # cavabı: deaktivasiya anında NEÇƏ sətir açıq idi. `None` =
-                # `fine_exposure` portu qoşulmayıb (yoxlama aparılmayıb).
-                "open_fine_count": exposure.pending_review_fine_count
-                if exposure is not None
-                else None,
-                "open_appeal_count": exposure.open_appeal_count if exposure is not None else None,
+                # cavabı: deaktivasiya anında NEÇƏ sətir açıq idi.
+                "open_fine_count": _audited(
+                    exposure.pending_review_fine_count if exposure is not None else None,
+                    checked=exposure is not None,
+                ),
+                "open_appeal_count": _audited(
+                    exposure.open_appeal_count if exposure is not None else None,
+                    checked=exposure is not None,
+                ),
+                # HR-4 — açıq bağlantılar audit sətrində QALIR: bildiriş uçur,
+                # sətir qalır və «niyə həmin növbə boş qaldı?» sualının
+                # cavabı aylar sonra da buradan oxunur. BOŞ SİYAHI BURADA
+                # XÜSUSİLƏ YANILDICI İDİ — o, «heç nə açıq qalmayıb» kimi
+                # oxunurdu, halbuki port bağlanmayanda siyahı HƏMİŞƏ boş olur.
+                "offboarding_open_items": _audited(
+                    list(review_checklist),
+                    checked=self._offboarding_signals is not None,
+                ),
             },
             reason=reason,
         )
@@ -442,7 +776,39 @@ class UserManagementUseCase:
             self._notify_open_fine_exposure(
                 tenant_id=tenant_id, employee=employee, exposure=exposure
             )
-        return employee
+        if review.signals.has_any:
+            self._notify_offboarding_items(
+                tenant_id=tenant_id, employee=employee, checklist=review_checklist
+            )
+        return review
+
+    def _read_offboarding_signals(self, employee_id: EmployeeId) -> OffboardingSignals:
+        """`offboarding_signals` portu yoxdursa BOŞ siqnal — köhnə davranış (HR-4)."""
+        if self._offboarding_signals is None:
+            return OffboardingSignals()
+        return self._offboarding_signals.read_offboarding_signals(employee_id)
+
+    def _notify_offboarding_items(
+        self, *, tenant_id: TenantId, employee: Employee, checklist: tuple[str, ...]
+    ) -> None:
+        """Açıq bağlantılar barədə xəbərdarlıq — `_notify_open_fine_exposure` naxışı.
+
+        AYRI BİLDİRİŞDİR, cərimə sətrinə qatılmır: auditoriyaları FƏRQLİDİR.
+        Cərimə xəbərdarlığı `can_publish_fines` sahibinə gedir (yalnız o,
+        sətri bağlaya bilər), bu isə işçi idarəetməsinə — tapşırığı yenidən
+        təyin edən, növbəni dolduran və son haqq-hesabı bağlayan tərəfə.
+        """
+        if self._notifier is None or not checklist:
+            return
+        lines = "\n".join(f"• {line}" for line in checklist)
+        self._notifier.notify(
+            tenant_id=tenant_id,
+            recipient_id=None,
+            category="EMPLOYEE_DEACTIVATED_WITH_OPEN_ITEMS",
+            title_az="Deaktiv edilən işçinin açıq bağlantıları var",
+            body_az=(f"{employee.full_name} deaktiv edildi. Bağlanmamış qalan sətirlər:\n{lines}"),
+            is_critical=False,
+        )
 
     def _check_open_fine_exposure(self, employee_id: EmployeeId) -> OpenFineExposure | None:
         """`fine_exposure` portu yoxdursa (`None`) YOXLAMA APARILMIR — köhnə davranış."""
@@ -650,18 +1016,35 @@ class UserManagementUseCase:
                 self._camera_assignments.assign(employee.id, store_id, assigned_by=actor.id)
 
     def _check_deadlock(self, tenant_id: TenantId, *, subject: Employee) -> Any:
-        """Dual-Control təsdiqçisi itirilirsə XƏBƏRDARLIQ verir (bölmə 3, 56).
+        """Kritik səlahiyyətin SON daşıyıcısı itirilirsə XƏBƏRDARLIQ verir (bölmə 3, 56).
 
         BLOKLAMIR — spesifikasiya "xəbərdarlıq göstərilir" deyir, qadağa yox.
         Bloklamaq son HR_Admin-i işdən çıxaran şirkətdə istifadəçi silməyi
         tamamilə mümkünsüz edərdi; xəbərdarlıq isə problemi görünən edir.
         Bildirişi qoruyucunun özü göndərir (`Notifier` ona verilib).
+
+        ──────────────────────────────────────────────────────────────────────
+        AF-8 — NİYƏ ARTIQ ROL ADINA BAXMIR
+        ──────────────────────────────────────────────────────────────────────
+        Əvvəlki şərt `effective_system_role in (HR_ADMIN, CEO, ROOT)` idi.
+        `effective_system_role` custom rolu PRİORİTETƏ görə xəritələyir, lakin
+        nəticə həmişə həmin üç ENUM üzvündən biri OLMUR — CEO-nun yaratdığı
+        «Filial Rəhbəri» tipli custom rol prioritet-3-də qalır və şərt onu
+        GÖRMÜRDÜ. Nəticədə həmin rolda oturan YEGANƏ təsdiqçi deaktiv
+        ediləndə heç bir xəbərdarlıq çıxmırdı.
+
+        İndi sual ROL yox, SƏLAHİYYƏT üzərindən verilir: «bu şəxs hansı kritik
+        flagları HAZIRDA daşıyır?». `has_permission()` rol-defoltunu və fərdi
+        override-ı birlikdə həll etdiyi üçün custom rol da, fərdi `GRANT` da
+        düzgün sayılır — yəni cavab flag kataloqunun ÖZÜNDƏN gəlir, kodda
+        təkrarlanan rol siyahısından yox (CLAUDE.md §5: ikinci ad məkanı
+        yaradılmır).
         """
         if self._deadlock_guard is None:
             return None
-        approver_roles = (SystemRole.HR_ADMIN, SystemRole.CEO, SystemRole.ROOT)
-        removing = subject.position.effective_system_role in approver_roles
-        return self._deadlock_guard.check_before_change(tenant_id, removing_approver=removing)
+        now = self._clock.now()
+        losing = [flag for flag in DEADLOCK_CRITICAL_FLAGS if subject.has_permission(flag, now=now)]
+        return self._deadlock_guard.check_before_flag_loss(tenant_id, losing_flags=losing)
 
     @staticmethod
     def _assert_not_self(actor: Employee, employee_id: EmployeeId, *, operation: str) -> None:
@@ -796,6 +1179,7 @@ class UserManagementUseCase:
 __all__ = [
     "MANAGE_EMPLOYEES_FLAG",
     "MANAGE_ROLES_FLAG",
+    "PORT_NOT_WIRED",
     "RESET_PASSWORD_FLAG",
     "RESET_PIN_FLAG",
     "CredentialWriter",

@@ -103,6 +103,44 @@ EXPECTED_JOBS: Final = (
     # təkrar-susma müddəti GÜN vahidlidir (`DRIVE_QUOTA_WARNING_COOLDOWN_DAYS`);
     # `LIGHT`, çünki iş bir HTTP sorğusu + ən çoxu iki `UPDATE`-dir.
     ("DRIVE_QUOTA_CHECK", JobCadence.DAILY, JobWeight.LIGHT),
+    # DEEP-GAP OP-1 — ÜÇ İŞ YAZILMIŞDI, LAKİN QEYDİYYATDA YOX İDİ.
+    #
+    # `detect_absences`, `escalate_overdue` və `block_inactive_devices` use
+    # case-lərdə mövcud, testli və sənədli metodlardır (sonuncu ikisi öz modul
+    # başlığında «planlayıcı çağırır» yazır) — HEÇ BİRİ isə çağırılmırdı.
+    # Ən ağırı birincisidir: davamiyyət hesabatı `unauthorized_absence`
+    # sütununu OXUYUR, onu YAZAN yol isə yox idi, yəni qayıb heç vaxt qeydə
+    # alınmırdı.
+    #
+    # `MORNING_ABSENCE_DETECTION` — `DAILY`: qərar GÜN sonunda verilir və iş
+    # DÜNƏNKİ günü emal edir (gecə yarısından sonra «bu gün» hələ başlamayıb).
+    # `TASK_OVERDUE_ESCALATION` — `HOURLY`: son tarix saat dəqiqliyindədir,
+    # gündəlik dövrə eskalasiyanı 23 saata qədər gecikdirərdi
+    # (`FINE_EXPIRE_STALE` ilə eyni əsaslandırma).
+    # `DEVICE_INACTIVITY_BLOCK` — `DAILY`: passivlik həddi GÜN vahidlidir.
+    # Üçü də `LIGHT`: indeksli sorğu + tapılan sətir qədər yazı; `HEAVY`
+    # yalnız `pg_dump` üçün ayrılıb.
+    ("MORNING_ABSENCE_DETECTION", JobCadence.DAILY, JobWeight.LIGHT),
+    ("TASK_OVERDUE_ESCALATION", JobCadence.HOURLY, JobWeight.LIGHT),
+    ("DEVICE_INACTIVITY_BLOCK", JobCadence.DAILY, JobWeight.LIGHT),
+    # DEEP-GAP OP-4 — tarixi keçmiş açıq elanlar əbədi `OPEN` qalırdı: ekran
+    # süzgəci onları gizlədir, LAKİN «neçə açıq elan var?» sualı hesabatda
+    # ildən-ilə böyüyən yalan rəqəm verirdi. `DAILY`, çünki elanın vahidi
+    # GÜNdür; `LIGHT`: indeksli sorğu + şərtli `UPDATE`.
+    ("OPEN_SHIFT_EXPIRY", JobCadence.DAILY, JobWeight.LIGHT),
+    # DEEP-GAP OP-2 — 45 dəqiqəlik təsdiq həddi KAĞIZ ÜZƏRİNDƏ qalmışdı:
+    # `escalate_timeouts()` yazılıb, testlidir, LAKİN çağıran yol yox idi.
+    # `HOURLY`: hədd DƏQİQƏ vahidlidir (`FINE_EXPIRE_STALE` ilə eyni
+    # əsaslandırma); `LIGHT`: indeksli sorğu + tapılan sətir qədər yazı.
+    # YALNIZ QAYIDIŞ tərəfi — giriş təsdiqinin imzası `operator_id` tələb
+    # edir və planlayıcıda aktor yoxdur (bax `composition.py` başlığı).
+    ("VERIFICATION_TIMEOUT_ESCALATION", JobCadence.HOURLY, JobWeight.LIGHT),
+    # SAAS-6 — saxlama müddəti. İKİ cədvəl (sübut növbəsi + həll edilmiş
+    # sinxronizasiya konfliktləri) İNDİYƏ QƏDƏR yalnız BÖYÜYÜRDÜ. `DAILY`:
+    # müddət GÜN vahidlidir (`EVIDENCE_UPLOAD_RETENTION_DAYS`); `LIGHT`:
+    # iki indeksli `DELETE`. TƏK iş, çünki hər ikisi EYNİ sualın cavabıdır
+    # və EYNİ Root açarından oxuyur (bax `composition.py::_job_retention_purge`).
+    ("RETENTION_PURGE", JobCadence.DAILY, JobWeight.LIGHT),
     ("NIGHTLY_BACKUP", JobCadence.DAILY, JobWeight.HEAVY),
 )
 
@@ -181,6 +219,57 @@ class _LeaveVerification(_RecordingUseCase):
     def expire_pending_overrides(self, tenant_id: TenantId) -> Any:
         return self._record("leave_verification.expire_pending_overrides", tenant_id=tenant_id)
 
+    def escalate_timeouts(self, tenant_id: TenantId) -> Any:
+        """DEEP-GAP OP-2 — 45 dəqiqəlik qayıdış həddi.
+
+        İmza POZİSİYALIDIR (`escalate_timeouts(tenant_id)`) — sahtə də elə
+        qəbul edir ki, həqiqi imza dəyişəndə test sükutla keçməsin.
+        """
+        return self._record("leave_verification.escalate_timeouts", tenant_id=tenant_id)
+
+
+class _OpenShifts(_RecordingUseCase):
+    """DEEP-GAP OP-4 — tarixi keçmiş elanların gecəlik təmizliyi.
+
+    İmza POZİSİYALIDIR (`expire_stale_postings(tenant_id)`) — sahtə də elə
+    qəbul edir ki, həqiqi imza dəyişəndə test sükutla keçməsin.
+    """
+
+    def expire_stale_postings(self, tenant_id: TenantId) -> Any:
+        return self._record("open_shifts.expire_stale_postings", tenant_id=tenant_id)
+
+
+class _MorningCheckIn(_RecordingUseCase):
+    """DEEP-GAP OP-1 — «İcazəsiz Qayıb» təyinetməsi (gecəlik iş).
+
+    İmza POZİSİYALIDIR (`detect_absences(tenant_id, work_date)`), ona görə
+    sahtə də pozisiyalı qəbul edir: açar-sözlə çağırsaydıq, həqiqi imza
+    dəyişəndə test SÜKUTLA keçməyə davam edərdi.
+    """
+
+    def escalate_timeouts_for_tenant(self, tenant_id: TenantId) -> Any:
+        """DEEP-GAP OP-2 — 45 dəqiqəlik GİRİŞ həddi (aktorsuz imza).
+
+        İmza POZİSİYALIDIR və `operator_id` QƏBUL ETMİR — köhnə,
+        operator-əsaslı metodun sükutla işə düşmədiyini yalnız bu göstərir.
+        """
+        return self._record("morning_check_in.escalate_timeouts_for_tenant", tenant_id=tenant_id)
+
+    def detect_absences(self, tenant_id: TenantId, work_date: Any) -> Any:
+        return self._record(
+            "morning_check_in.detect_absences", tenant_id=tenant_id, work_date=work_date
+        )
+
+
+class _Tasks(_RecordingUseCase):
+    def escalate_overdue(self, *, tenant_id: TenantId) -> Any:
+        return self._record("tasks.escalate_overdue", tenant_id=tenant_id)
+
+
+class _Devices(_RecordingUseCase):
+    def block_inactive_devices(self, *, tenant_id: TenantId) -> Any:
+        return self._record("devices.block_inactive_devices", tenant_id=tenant_id)
+
 
 class _FieldReports(_RecordingUseCase):
     def notify_overdue_audits(self, tenant_id: TenantId) -> Any:
@@ -228,13 +317,54 @@ class _Benchmark:
         return dict(self.stores)
 
 
+class _SyncConflicts:
+    """SAAS-6 — `purge_resolved` sahtəsi (həll edilmiş konfliktlərin təmizliyi)."""
+
+    def __init__(self) -> None:
+        self.cutoffs: list[Any] = []
+
+    def purge_resolved(self, *, cutoff: Any) -> int:
+        self.cutoffs.append(cutoff)
+        return 4
+
+
+class _EvidenceQueue:
+    """SAAS-6 — `purge_uploaded` sahtəsi (yüklənmiş sətirlərin təmizliyi)."""
+
+    def __init__(self) -> None:
+        self.cutoffs: list[Any] = []
+
+    def purge_uploaded(self, *, older_than: Any) -> int:
+        self.cutoffs.append(older_than)
+        return 7
+
+
+class _SessionLimits:
+    """`session.limits.get_int` — iş saxlama müddətini ROOT-dan oxuyur.
+
+    Sahtə HƏMİŞƏ fallback-i qaytarır (`DEFAULT_LIMITS`): testin ölçdüyü şey
+    dəyərin ÖZÜ deyil, işin həmin açarı OXUMASI və kəsim anını ondan
+    hesablamasıdır.
+    """
+
+    def __init__(self) -> None:
+        self.keys: list[str] = []
+
+    def get_int(self, _tenant_id: Any, key: str, fallback: int) -> int:
+        self.keys.append(key)
+        return fallback
+
+
 class _SessionUow:
-    def __init__(self, benchmark: _Benchmark) -> None:
+    def __init__(self, benchmark: _Benchmark, sync_conflicts: _SyncConflicts) -> None:
         self._benchmark = benchmark
+        self._sync_conflicts = sync_conflicts
 
     def repository(self, name: str) -> Any:
         if name == "multi_store_benchmark":
             return self._benchmark
+        if name == "sync_conflicts":
+            return self._sync_conflicts
         raise KeyError(name)  # pragma: no cover - testdə başqa repo istənmir
 
 
@@ -257,7 +387,13 @@ class _FakeSession:
         )
         self.fine_appeals = _Appeals(calls, result=5)
         self.leave_verification = _LeaveVerification(calls, result=2)
+        # DEEP-GAP OP-4 — tarixi keçmiş elanların bağlanması.
+        self.open_shifts = _OpenShifts(calls, result=3)
         self.field_reports = _FieldReports(calls, result=_Report(checked=2, overdue_count=1))
+        # DEEP-GAP OP-1 — üç yeni iş üçün sahtələr.
+        self.morning_check_in = _MorningCheckIn(calls, result=3)
+        self.tasks = _Tasks(calls, result=_Report(escalated=2))
+        self.devices = _Devices(calls, result=[object(), object()])
         # #28 — hesabat sahələri `_job_annual_leave_rollover`-in oxuduqları:
         # il, yazılan balans sayı, köçürülən və itən gün.
         self.annual_leave = _AnnualLeave(
@@ -278,7 +414,13 @@ class _FakeSession:
         # örtüyü lazım deyil.
         self.face_exemptions = _FaceExemptions(calls, result=2)
         self.face_log_retention = _FaceLogRetention(calls, result=140)
-        self.uow = _SessionUow(_Benchmark({STORE_A: "Mağaza A", STORE_B: "Mağaza B"}))
+        # SAAS-6 — saxlama müddəti işi: limit oxusu + iki təmizləmə çağırışı.
+        self.limits = _SessionLimits()
+        self.evidence_queue = _EvidenceQueue()
+        self.sync_conflicts = _SyncConflicts()
+        self.uow = _SessionUow(
+            _Benchmark({STORE_A: "Mağaza A", STORE_B: "Mağaza B"}), self.sync_conflicts
+        )
 
     def max_upload_bytes(self) -> int:
         """Drive kvota işi fabriki ROOT həddi ilə qurur (`run_evidence_uploads` naxışı)."""
@@ -451,6 +593,9 @@ def _context(
     # Sessiya AÇIQ şəkildə əvəzlənir: işlərin hər biri ÖZ sessiyasını açır və
     # test məhz hansı use case metodunun çağırıldığını ölçür.
     context.session = _open_session  # type: ignore[method-assign, assignment]
+    # SAAS-6 — `RETENTION_PURGE` LOKAL SQLite növbəsinə də toxunur; sahtəsiz
+    # iş real faylı açmağa çalışardı (test mühitində yan təsir).
+    context.evidence_queue = lambda: fake_session.evidence_queue  # type: ignore[method-assign, assignment]
     return context, fake_session, database
 
 
@@ -536,6 +681,9 @@ def test_the_runner_is_a_single_instance_per_context() -> None:
         ("SUPPORT_STATUS_MAINTENANCE", "support_inbox.run_maintenance"),
         ("FINE_EXPIRE_STALE", "fine_appeals.expire_stale"),
         ("DUAL_CONTROL_OVERRIDE_TIMEOUT", "leave_verification.expire_pending_overrides"),
+        ("MORNING_ABSENCE_DETECTION", "morning_check_in.detect_absences"),
+        ("TASK_OVERDUE_ESCALATION", "tasks.escalate_overdue"),
+        ("DEVICE_INACTIVITY_BLOCK", "devices.block_inactive_devices"),
         ("EXECUTIVE_DIGEST_RUN", "executive_digest.run"),
     ],
 )
@@ -1065,3 +1213,30 @@ def test_the_runner_carries_the_process_instance_id() -> None:
     context, _session, _database = _context()
 
     assert context.job_runner().instance_id == process_instance_id()
+
+
+# --------------------------------------------------------------------------- #
+# SAAS-6 — saxlama müddəti işi HƏR İKİ cədvələ toxunur
+# --------------------------------------------------------------------------- #
+
+
+def test_the_retention_job_purges_both_growing_tables_with_one_cutoff() -> None:
+    """İki cədvəl, BİR kəsim anı, BİR Root açarı.
+
+    İki ayrı iş olsaydı, biri sükutla söndürüləndə digəri «hər şey
+    təmizlənir» təəssüratı yaradardı (bax `composition.py::
+    _job_retention_purge` başlığı).
+    """
+    from src.domain.policies import SystemLimitKey
+
+    context, session, database = _context()
+    runner, _runs = _runner(context, database)
+    job = runner._registry.get("RETENTION_PURGE")
+    assert job is not None
+
+    detail = job.handler(_job_context("RETENTION_PURGE"))
+
+    assert session.limits.keys == [SystemLimitKey.EVIDENCE_UPLOAD_RETENTION_DAYS.value]
+    # Kəsim HƏR İKİ çağırışda EYNİdir — «30 gün» iki cədvəl üçün bir mənadır.
+    assert session.evidence_queue.cutoffs == session.sync_conflicts.cutoffs
+    assert "7" in detail and "4" in detail

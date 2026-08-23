@@ -38,7 +38,12 @@ from typing import TYPE_CHECKING, Any
 from psycopg import errors as pg_errors
 
 from src.application.use_cases.open_shift_market import OpenShiftError
-from src.domain.entities.open_shift import OpenShiftPosting, OpenShiftSlot, OpenShiftStatus
+from src.domain.entities.open_shift import (
+    EXPIRED_CANCEL_REASON,
+    OpenShiftPosting,
+    OpenShiftSlot,
+    OpenShiftStatus,
+)
 from src.domain.value_objects.identifiers import (
     EmployeeId,
     OpenShiftPostingId,
@@ -47,9 +52,12 @@ from src.domain.value_objects.identifiers import (
     WorkModeId,
 )
 from src.infrastructure.persistence.repositories import _BaseRepository
+from src.shared.logger import get_logger
 
 if TYPE_CHECKING:
     from datetime import date, datetime
+
+_log = get_logger(__name__)
 
 
 class PostgresOpenShiftPostingRepository(_BaseRepository):
@@ -108,6 +116,69 @@ class PostgresOpenShiftPostingRepository(_BaseRepository):
 
         # `clauses` SABİT sətir siyahısındandır (kənardan gələn mətn yoxdur),
         # bütün dəyərlər `%s` ilə bağlanır — bölmə 2-nin tələbi pozulmur.
+        rows = self._fetch_all(
+            f"""{self._SELECT}
+            WHERE {" AND ".join(clauses)}
+            ORDER BY shift_date, created_at
+            LIMIT %s
+            """,
+            tuple(params),
+        )
+        return [_row_to_posting(row) for row in rows]
+
+    def list_claimed(
+        self,
+        *,
+        employee_id: EmployeeId | None = None,
+        from_date: date | None = None,
+        limit: int = 100,
+    ) -> list[OpenShiftPosting]:
+        """TUTULMUŞ elanlar — «Tutduğum növbələr» kartının oxu yolu (OP-4).
+
+        ──────────────────────────────────────────────────────────────────────
+        `tenant_id` ARQUMENTİ YOXDUR — QONŞU METODLARDAN FƏRQLİ
+        ──────────────────────────────────────────────────────────────────────
+        Süzgəc bağlantının ÖZ kontekstindən (`self._tenant`) gəlir. Qonşu
+        `list_open`/`find_open_for_slot` köhnə imza ilə (`tenant_id` +
+        `_require_matching_tenant`) qalır və onları köçürmək AYRI işdir —
+        lakin YENİ metod həmin borcu ARTIRA BİLMƏZ: sayğac
+        (`tenant_argument_audit.py`, tavan 123) yalnız aşağı düşür.
+        Nəticə eynidir (sorğu bağlantının kirayəçisi ilə gedir), FƏRQ
+        yalnız səhv `tenant_id` ötürmək İMKANININ olmamasıdır.
+
+        ──────────────────────────────────────────────────────────────────────
+        İNDEKS
+        ──────────────────────────────────────────────────────────────────────
+        `uq_open_shift_one_claim_per_employee_day` (`tenant_id, claimed_by,
+        shift_date`, `WHERE status = 'CLAIMED'`) — o, unikallıq üçün
+        yaradılıb, lakin qismən indeks olduğu üçün bu sorğunun da yoludur:
+        `employee_id` verildikdə üç sütunun hamısı, verilmədikdə isə
+        birinci sütun (`tenant_id`) işləyir. Ona görə AYRI indeks əlavə
+        EDİLMƏDİ — mövcud olanı təkrarlayardı.
+
+        `count_claims_in_month` ilə EYNİ indeksi paylaşır, lakin BİRLƏŞDİRİLMİR:
+        o, SAY qaytarır (tavan yoxlaması), bu isə SƏTİRLƏRİ (ekran siyahısı).
+
+        Args:
+            employee_id: `None` = kirayəçidəki BÜTÜN tutulmuş elanlar (admin
+                görünüşü). Doludursa yalnız həmin işçinin tutduqları.
+            from_date: `None` = tarix süzgəci YOXDUR. «Bugündən etibarən»
+                qərarını ÇAĞIRAN verir (port docstring-i: bu, repo-nun deyil,
+                iş qaydasının qərarıdır) — keçmiş növbəni geri vermək
+                mənasızdır, lakin həmin qayda use case-dədir.
+        """
+        clauses = ["tenant_id = %s", "status = 'CLAIMED'"]
+        params: list[Any] = [self._tenant]
+        if employee_id is not None:
+            clauses.append("claimed_by = %s")
+            params.append(employee_id)
+        if from_date is not None:
+            clauses.append("shift_date >= %s")
+            params.append(from_date)
+        params.append(limit)
+
+        # `clauses` SABİT sətir siyahısındandır (kənardan gələn mətn yoxdur),
+        # bütün dəyərlər `%s` ilə bağlanır — `list_open`-dakı eyni qərar.
         rows = self._fetch_all(
             f"""{self._SELECT}
             WHERE {" AND ".join(clauses)}
@@ -256,6 +327,109 @@ class PostgresOpenShiftPostingRepository(_BaseRepository):
             """,
             (cancelled_by, cancelled_at, reason, posting_id, self._tenant),
         )
+        return affected == 1
+
+    def release(
+        self,
+        *,
+        posting_id: OpenShiftPostingId,
+        released_by: EmployeeId,
+        released_at: datetime,
+    ) -> bool:
+        """ŞƏRTLİ `UPDATE ... WHERE status = 'CLAIMED'` — tutma geri alınır (OP-4).
+
+        `claim()`-in GÜZGÜSÜDÜR və eyni səbəbdən şərtlidir: geri buraxma ilə
+        ləğv YARIŞIR (işçi «geri verirəm» düyməsini basdığı anda admin elanı
+        ləğv edə bilər). Qalibi DB seçir, uduzan tərəf `False` alır.
+
+        ──────────────────────────────────────────────────────────────────────
+        `released_by` SƏTRƏ YAZILMIR
+        ──────────────────────────────────────────────────────────────────────
+        Cədvəldə belə sütun YOXDUR və əlavə edilməsi də lazım deyil: sətir
+        yenidən `OPEN` olur, `chk_open_shift_claim` isə `OPEN` sətirdə
+        sahiblik sütunlarının `NULL` olmasını TƏLƏB EDİR — yəni «kim geri
+        verdi» məlumatını ora yazmaq invariantı pozardı. Cavab audit
+        sətrindədir (`OPEN_SHIFT_RELEASED`). Parametr yalnız bu qatın öz
+        jurnalı üçün qəbul edilir (port docstring-i ilə eyni qərar).
+
+        `released_at` SƏTRƏ DƏ YAZILMIR: `updated_at` trigger-i (`set_updated_
+        at`) həmin anı onsuz da yazır və ikinci vaxt sütunu iki mənbə yaradardı.
+
+        ──────────────────────────────────────────────────────────────────────
+        DB QATI (migrations/085)
+        ──────────────────────────────────────────────────────────────────────
+        `enforce_open_shift_claim_transition()` `CLAIMED → OPEN` keçidinə məhz
+        bu metod üçün icazə verir və HƏMİN keçiddə sahiblik sütunlarının
+        `NULL`-a düşməsini TƏLƏB EDİR. «İlk basan qazanır» qadağası
+        (`CLAIMED → CLAIMED` sahib dəyişikliyi) toxunulmaz qalır.
+        """
+        affected = self._execute(
+            """
+            UPDATE open_shift_postings
+               SET status     = 'OPEN',
+                   claimed_by = NULL,
+                   claimed_at = NULL
+             WHERE id = %s
+               AND tenant_id = %s
+               AND status = 'CLAIMED'
+            """,
+            (posting_id, self._tenant),
+        )
+        _log.info(
+            "OPEN_SHIFT_RELEASE_ATTEMPTED",
+            extra={
+                "posting_id": str(posting_id),
+                "released_by": str(released_by),
+                "released_at": released_at.isoformat(),
+                "released": affected == 1,
+            },
+        )
+        return affected == 1
+
+    def expire(self, *, posting_id: OpenShiftPostingId, expired_at: datetime) -> bool:
+        """ŞƏRTLİ `UPDATE ... WHERE status = 'OPEN'` — tarixi keçmiş elanı bağlayır (OP-4).
+
+        `cancel()` ilə EYNİ şərt (`status = 'OPEN'`) və eyni yarış məntiqi:
+        planlaşdırılmış iş elanı bağlamağa çalışarkən işçi onu tuta bilər —
+        həmin halda 0 sətir toxunur və iş `False` alır. Tutulmuş növbə
+        AVTOMATİK bağlanmır: işçi artıq həmin günə söz verib.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `cancel()`-a `cancelled_by=None` ÖTÜRMÜR
+        ──────────────────────────────────────────────────────────────────────
+        Port başlığındakı qərarın davamı: `cancel()`-un imzası `cancelled_by:
+        EmployeeId` (məcburi) qalmalıdır ki, İNSAN yolunda aktoru buraxmaq
+        mümkün olmasın. Ayrı metod həmin imzanı toxunulmaz saxlayır.
+
+        `cancel_reason` domendəki `EXPIRED_CANCEL_REASON` sabitindən gəlir —
+        burada mətn TƏKRAR YAZILMIR: ekran həmin sətri oxuyub istifadəçiyə
+        göstərir və iki nüsxə bir gün fərqlənərdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        DB QATI (migrations/085)
+        ──────────────────────────────────────────────────────────────────────
+        `chk_open_shift_cancel` `cancelled_by IS NOT NULL` tələb edirdi — bu
+        `UPDATE` həmin şərtlə İŞLƏMƏZDİ. Şərt `cancelled_at`-a köklənib
+        (domendəki `_require_consistent_state()` ilə eyni formada).
+        """
+        affected = self._execute(
+            """
+            UPDATE open_shift_postings
+               SET status        = 'CANCELLED',
+                   cancelled_by  = NULL,
+                   cancelled_at  = %s,
+                   cancel_reason = %s
+             WHERE id = %s
+               AND tenant_id = %s
+               AND status = 'OPEN'
+            """,
+            (expired_at, EXPIRED_CANCEL_REASON, posting_id, self._tenant),
+        )
+        if affected == 1:
+            _log.info(
+                "OPEN_SHIFT_EXPIRED",
+                extra={"posting_id": str(posting_id), "expired_at": expired_at.isoformat()},
+            )
         return affected == 1
 
 
