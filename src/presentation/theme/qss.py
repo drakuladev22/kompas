@@ -859,13 +859,37 @@ QPushButton[variant="keypad"] {
 }
 
 /* ===================== SPLASH ===================== */
+/* AÇILIŞ EKRANI — FON TOKENİ İLƏ, MƏTN SOLĞUN (`appl.md` FAZA 3)
+   ─────────────────────────────────────────────────────────────────────────
+   İKİ SƏHV BURADA İDİ:
+
+   1. FON `--color-brand-navy` yazırdı, halbuki ekranın özü `--color-splash-bg`
+      ilə INLINE stil qoyur (`screens/group_a_entry.py`) və inline stil QSS-i
+      üstələyir. Yəni bu qayda HEÇ VAXT görünmürdü — iki fərqli fon iki yerdə
+      yazılmışdı və biri ölü idi. İndi hər ikisi EYNİ tokendir.
+
+   2. MƏTN brend amberi idi — BÜTÜN etiketlər: alt yazı, vəziyyət mətni,
+      versiya. `appl.md` qayda 3 amberin YALNIZ vurğu (aktiv element, əsas
+      CTA) üçün işlədilməsini tələb edir; burada isə o, adi köməkçi mətnin
+      rəngi idi və ekranın 100%-i markanın rəngində «yanırdı».
+
+   ƏLAVƏ FAKT: kontrast qapısı (`scripts/check_contrast.py`) açılış ekranı
+   üçün ARTIQ `--color-text-muted` / `--color-splash-bg` cütünü ölçürdü — yəni
+   ölçülən cüt ilə RENDER olunan rəng fərqli idi. İndi ikisi eynidir. */
 QWidget#SplashScreen {
-    background-color: {{--color-brand-navy}};
+    background-color: {{--color-splash-bg}};
 }
 
 QWidget#SplashScreen QLabel {
     background-color: transparent;
-    color: {{--color-brand-amber}};
+    color: {{--color-text-muted}};
+}
+
+/* Söz nişanı — lockup şəkli tapılmayanda çəkilən EHTİYAT başlıq. Solğun
+   deyil: o, ekranın adıdır. Kontrast qapısı bu cütü ARTIQ ölçür
+   («Açılış — söz nişanı», `--color-text-primary` / `--color-splash-bg`). */
+QWidget#SplashScreen QLabel#SplashWordmark {
+    color: {{--color-text-primary}};
 }
 
 /* ===================== DİGƏR ===================== */

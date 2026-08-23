@@ -193,9 +193,21 @@ def _qt_headless_env() -> None:
 def qt_app(qapp):  # type: ignore[no-untyped-def]
     """`pytest-qt`-nin `qapp` fixture-ı üzərində nazik örtük.
 
-    Faza 4-dən etibarən burada KompasOS Dizayn Sistemi (dark/light tema) tətbiq
-    olunacaq ki, E2E testlər real tema ilə işləsin.
+    ──────────────────────────────────────────────────────────────────────────
+    PAKETLƏNMİŞ ŞRİFTLƏR BURADA QEYDİYYATDAN KEÇİR — QƏSDƏN
+    ──────────────────────────────────────────────────────────────────────────
+    Tətbiq işə düşəndə Inter-i `QFontDatabase`-ə əlavə edir
+    (`presentation/app.py` → `theme/fonts.register_bundled_fonts`). Testlər onu
+    etməsəydi, render İKİ fərqli şəraitdə ölçülərdi: `offscreen` mühitində heç
+    bir şrift olmadığı üçün Qt hər hərfi «tofu» düzbucaqlısı çəkir, istehsalatda
+    isə həqiqi qlif çıxır. Piksel ölçən testlər (`test_theme_coverage`) məhz bu
+    fərqə həssasdır — yəni qapı ölçdüyü şeyi İSTEHSALATDAKI kimi görməlidir.
+
+    Qeydiyyat idempotentdir və ŞRİFT TAPILMASA da dayandırmır (bax `fonts.py`).
     """
+    from src.presentation.theme.fonts import register_bundled_fonts
+
+    register_bundled_fonts()
     return qapp
 
 

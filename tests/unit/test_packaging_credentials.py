@@ -85,8 +85,9 @@ def test_the_spec_contains_no_hardcoded_dsn() -> None:
 def test_the_datas_block_only_carries_known_assets() -> None:
     """Yeni `datas` sətri DİQQƏTDƏN yayınmamalıdır.
 
-    Siyahı qəsdən dardır: ikon + üz modelləri. Yeni sətir əlavə edən adam bu
-    testi də yeniləməyə məcbur olur — yəni əlavə QƏRARA çevrilir.
+    Siyahı qəsdən dardır: ikon, loqo, şrift, üz modelləri, sxem dəsti. Yeni
+    sətir əlavə edən adam bu testi də yeniləməyə məcbur olur — yəni əlavə
+    QƏRARA çevrilir.
     """
     block = _datas_block()
     assert "kompasos.ico" in block
@@ -104,9 +105,19 @@ def test_the_datas_block_only_carries_known_assets() -> None:
     # `vendor/` alt dəsti müştəri paketinə DÜŞMƏMƏLİDİR: o, təchizatçının
     # mərkəzi bazası üçündür (DB-3). Glob KÖK səviyyəni götürür.
     assert "'migrations', '[0-9][0-9][0-9]_*.sql'" in spec
-    # Hər `datas` elementi ya ikon, ya loqo, ya üz modeli, ya da sxem dəstidir.
+    # Inter şrifti (`appl.md` FAZA 1): interfeys onu TƏLƏB EDİR və Windows-da
+    # quraşdırılmış deyil — paketə düşməsə `.exe` ehtiyat şriftlə çıxardı,
+    # yəni mənbədən işləyən tətbiq bir cür, müştəri maşınındakı başqa cür
+    # görünərdi (loqo PNG-ləri ilə EYNİ tələ). Lisenziya faylı da daxildir:
+    # SIL OFL nüsxənin şriftlə birlikdə paylanmasını TƏLƏB edir. Bunlar da
+    # SİRR DEYİL, yəni yuxarıdakı `_FORBIDDEN` qapısı pozulmur.
+    assert "'assets', 'fonts', '*.ttf'" in spec
+    assert "LICENSE-Inter.txt" in spec
+    # Hər `datas` elementi ya ikon, ya loqo, ya şrift, ya üz modeli, ya da
+    # sxem dəstidir. Rəqəm QƏSDƏN sabitdir: yeni sətir əlavə edən adam bu
+    # testi də yeniləməyə məcbur olur, yəni əlavə QƏRARA çevrilir.
     entries = [line.strip() for line in block.splitlines() if line.strip().startswith(("(", "*"))]
-    assert len(entries) == 4, f"gözlənilməyən `datas` elementləri: {entries}"
+    assert len(entries) == 6, f"gözlənilməyən `datas` elementləri: {entries}"
 
 
 def test_the_test_tree_is_excluded() -> None:

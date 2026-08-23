@@ -61,7 +61,9 @@ SAMPLE_PLACES: Final = 3
 #:
 #: Hər redizayn addımından sonra bu iki rəqəm azaldılmalıdır. Artırmaq
 #: qadağandır: artım o deməkdir ki, dizayn bir addım da səpələnib.
-MAX_DISTINCT: Final = 66
+#: `appl.md` FAZA 3: 66 → 63. Kart doldurması 84 yerdə `20`/`24` ədədindən
+#: `metrics.CARD_PADDING` adına keçdi, yəni üç ad-hoc dəyər siyahıdan çıxdı.
+MAX_DISTINCT: Final = 63
 MAX_OFF_GRID: Final = 1
 
 #: Rol → həmin rolu daşıyan çağırışlar. Ad `metrics.py`-dakı sabitlə uyğun

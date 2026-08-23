@@ -68,6 +68,27 @@ TITLEBAR_LOGO_SIZE: Final = 16
 WINDOW_BUTTON_WIDTH: Final = 46
 
 # --------------------------------------------------------------------------- #
+# 8-PUNKTLU ŞƏBƏKƏ (`appl.md` FAZA 1)
+# --------------------------------------------------------------------------- #
+# Aşağıdakı doldurma/aralıq dəyərləri 8-in mislərinə gətirildi. ƏVVƏLKİ
+# dəyərlər `design_reference/` maketlərindən piksel-piksel götürülmüşdü (22,
+# 26, 18, 20, 14, 10) və hər biri AYRILIQDA düzgün idi; problem ONLARIN
+# BİRLİKDƏ yaratdığı ritmdə idi — kartın içindəki sətir 20-dən, header 26-dan,
+# kontent 22-dən başlayırdı, yəni ekranda ÜÇ fərqli şaquli xətt vardı və
+# ekranlar arasında keçəndə məzmun "tərpənirdi".
+#
+# ŞƏBƏKƏDƏN KƏNARDA QALAN İKİ QRUP QƏSDƏNDİR:
+#   * 12 (`SIDEBAR_PADDING_H`, `NAV_ITEM_ICON_SPACING`) — 8-in misli deyil,
+#     lakin Apple şkalasının yarım-pilləsidir; 8-ə endirilsəydi ikon ilə mətn
+#     "bir söz" kimi oxunardı (bax `NAV_ITEM_ICON_SPACING` izahı), 16-ya
+#     qaldırılsaydı panelin eni də böyüməli olardı.
+#   * 44 (`NAV_ITEM_HEIGHT`, `ROW_HEIGHT_DENSE`) — toxunma hədəfinin minimumu
+#     (`--touch-target-min`), yəni erqonomik hədd, ritm dəyəri deyil.
+#
+# Pəncərə çərçivəsinin ölçüləri (`TITLEBAR_HEIGHT`, `WINDOW_BUTTON_WIDTH`)
+# TOXUNULMUR: onlar Windows konvensiyasıdır (`appl.md` qırmızı xətti).
+
+# --------------------------------------------------------------------------- #
 # Sol naviqasiya
 # --------------------------------------------------------------------------- #
 
@@ -88,8 +109,9 @@ WINDOW_BUTTON_WIDTH: Final = 46
 SIDEBAR_WIDTH: Final = 244
 #: Daraldılmış rejim (yalnız ikonlar) — spesifikasiya "daralda bilər" deyir.
 SIDEBAR_COLLAPSED_WIDTH: Final = 64
-#: `padding: 20px 12px`.
-SIDEBAR_PADDING_V: Final = 20
+#: Maketdə `padding: 20px 12px` idi — şaquli dəyər 8-lik şəbəkəyə
+#: qaldırıldı (bax yuxarıdakı şəbəkə qeydi), üfüqi 12 QƏSDƏN qalır.
+SIDEBAR_PADDING_V: Final = 24
 SIDEBAR_PADDING_H: Final = 12
 #: Maddələr arası boşluq (əvvəl 4px — bax `SIDEBAR_WIDTH` izahı).
 SIDEBAR_ITEM_SPACING: Final = 8
@@ -103,8 +125,8 @@ NAV_ITEM_HEIGHT: Final = 44
 #: digəri layout-a gedir və fərqlənsələr ikon ilə mətn iki fərqli aralıqla
 #: düzülərdi.
 NAV_ITEM_ICON_SPACING: Final = 12
-#: Bölmə başlığının alt boşluğu.
-SIDEBAR_LABEL_BOTTOM: Final = 10
+#: Bölmə başlığının alt boşluğu (maketdə 10 → şəbəkədə 8).
+SIDEBAR_LABEL_BOTTOM: Final = 8
 #: Naviqasiya sətrinin SOL PADDING-i — `qss.py`-dakı `padding: 0 --space-md`
 #: ilə EYNİ dəyər olmalıdır.
 #:
@@ -121,12 +143,13 @@ SIDEBAR_TOGGLE_SIZE: Final = 28
 # Səhifə başlığı (header)
 # --------------------------------------------------------------------------- #
 
-#: `height: 62px`.
-HEADER_HEIGHT: Final = 62
-#: `padding: 0 26px`.
-HEADER_PADDING_H: Final = 26
-#: Başlıq ilə alt-başlıq arası `gap: 14px`.
-HEADER_SPACING: Final = 14
+#: Maketdə `height: 62px` — 64 həm 8-lik şəbəkəyə düşür, həm də 34px
+#: ikon düyməsinin üstündə/altında bərabər pay saxlayır.
+HEADER_HEIGHT: Final = 64
+#: Maketdə `padding: 0 26px` — kontentlə EYNİ şaquli xətt üçün 24.
+HEADER_PADDING_H: Final = 24
+#: Başlıq ilə alt-başlıq arası (maketdə `gap: 14px`).
+HEADER_SPACING: Final = 16
 #: Header-dəki dairəvi/kvadrat ikon düymələri `34×34`.
 HEADER_ICON_BUTTON: Final = 34
 #: İstifadəçi avatarı `32×32`.
@@ -136,22 +159,27 @@ AVATAR_SIZE: Final = 32
 # Kontent
 # --------------------------------------------------------------------------- #
 
-#: `padding: 22px 26px`.
-CONTENT_PADDING_V: Final = 22
-CONTENT_PADDING_H: Final = 26
+#: Maketdə `padding: 22px 26px` — hər ikisi 24-dür: kontentin sol kənarı
+#: indi header-in sol kənarı ilə EYNİ xətdədir.
+CONTENT_PADDING_V: Final = 24
+CONTENT_PADDING_H: Final = 24
 #: Alt boşluq — üzən dəstək düyməsi (54px) + kənar məsafəsi (28px) +
 #: nəfəs payı. Məzmun onun altında qalmasın deyə.
 CONTENT_BOTTOM_SAFE_AREA: Final = 96
-#: Kartlar arası `gap: 18px`.
-CARD_SPACING: Final = 18
+#: Kartlar arası (maketdə `gap: 18px`) — şəbəkədə 16.
+CARD_SPACING: Final = 16
 #: Kart daxili boşluq.
 #:
 #: DESIGN.MD REDİZAYNI: 18 → 20. Referansların hamısında (`dashboard.jpg`,
 #: `tasks.jpg`, `status card UI design.jpg`) kart daxili boşluq 4px şəbəkəsinə
 #: OTURUR; 18 isə şəbəkədən kənar idi və kartın içindəki hər sətir yarım
 #: piksel sürüşürdü. 20 həm şəbəkəyə düşür, həm də başlıq ilə kənar arasında
-#: referanslardakı nəfəs payını verir.
-CARD_PADDING: Final = 20
+#: referanslardakı nəfəs payını verirdi.
+#:
+#: `appl.md` FAZA 1: 20 → 24. 20 dörd-piksellik şəbəkədə idi, səkkiz-
+#: piksellikdə YOX; üstəlik Apple dizaynının ən tanınan cəhəti kartın
+#: içindəki BOL boşluqdur və 20 həmin nəfəsi vermirdi.
+CARD_PADDING: Final = 24
 
 #: Sıx cədvəl sətri (`tasks.jpg`, `status card UI design.jpg`).
 #:

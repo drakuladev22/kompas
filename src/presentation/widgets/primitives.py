@@ -64,6 +64,7 @@ from PySide6.QtWidgets import (
 
 from src.presentation.i18n.text import az_upper
 from src.presentation.theme.manager import enable_styled_background
+from src.presentation.theme.tokens import METRICS
 from src.presentation.widgets import metrics
 from src.presentation.widgets.safe_text import plain_tooltip
 
@@ -102,12 +103,18 @@ def is_activation_key(event: QKeyEvent) -> bool:
     return event.key() in ACTIVATION_KEYS
 
 
-#: Maketdəki kart kölgəsi: `0 18px 46px rgba(11,29,58,0.28)` (ekran çərçivəsi)
-#: və `0 6px 16px rgba(11,29,58,0.12)` (üzən element). Qt-də `box-shadow`
-#: yoxdur — `QGraphicsDropShadowEffect` işlədilir.
-_SHADOW_BLUR: Final = 32
-_SHADOW_OFFSET_Y: Final = 8
-_SHADOW_ALPHA: Final = 46
+#: Kölgə ölçüləri ARTIQ BURADA SEÇİLMİR — `tokens.METRICS`-dən gəlir
+#: (`appl.md` FAZA 1, qayda 5). Səbəb dizayn sisteminin öz qaydasıdır:
+#: ölçü bir mənbədən oxunur, əks halda kölgə bir yerdə zəiflədilib
+#: digərində köhnə qalır. Qt-də `box-shadow` yoxdur, ona görə dəyərlər
+#: `QGraphicsDropShadowEffect`-ə ötürülür.
+_SHADOW_BLUR: Final = int(METRICS["--shadow-blur"])
+_SHADOW_OFFSET_Y: Final = int(METRICS["--shadow-offset-y"])
+_SHADOW_ALPHA: Final = int(METRICS["--shadow-alpha"])
+#: Kölgə rəngi NEYTRAL QARADIR, brend Navy-si DEYİL: neytrallaşmış
+#: səthlərin üzərində rəngli kölgə "mavi işıq" kimi oxunurdu (bax
+#: `tokens.py` başlığındakı NEYTRAL-DOMİNANT bölməsi).
+_SHADOW_RGB: Final = (0, 0, 0)
 
 
 # --------------------------------------------------------------------------- #
@@ -294,7 +301,7 @@ class Card(QFrame):
             effect = QGraphicsDropShadowEffect(self)
             effect.setBlurRadius(_SHADOW_BLUR)
             effect.setOffset(0, _SHADOW_OFFSET_Y)
-            effect.setColor(QColor(11, 29, 58, _SHADOW_ALPHA))
+            effect.setColor(QColor(*_SHADOW_RGB, _SHADOW_ALPHA))
             self.setGraphicsEffect(effect)
 
     def body(self) -> QVBoxLayout:

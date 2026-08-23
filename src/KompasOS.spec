@@ -250,6 +250,17 @@ a = Analysis(
         # loqosuz (fallback çəkilən kvadratla) çıxardı və fərq yalnız müştəri
         # maşınında görünərdi.
         (os.path.join(SPECPATH, '..', 'assets', 'logo', '*.png'), 'assets/logo'),  # noqa: F821
+        # INTER ŞRİFTİ PAKETƏ DAXİLDİR (`appl.md` FAZA 1)
+        # ---------------------------------------------------------------------
+        # Şrift Windows-da QURAŞDIRILMIŞ DEYİL — fayl paketə düşməsə,
+        # `theme/fonts.py` onu tapmaz və interfeys ehtiyat şriftlə (Segoe UI)
+        # çıxardı. Yəni mənbədən işləyən tətbiq bir cür, müştəri maşınındakı
+        # `.exe` başqa cür görünərdi — loqo PNG-ləri ilə EYNİ tələ.
+        #
+        # `LICENSE-Inter.txt` də daxildir: SIL Open Font License lisenziya
+        # nüsxəsinin şriftlə BİRLİKDƏ paylanmasını TƏLƏB edir.
+        (os.path.join(SPECPATH, '..', 'assets', 'fonts', '*.ttf'), 'assets/fonts'),  # noqa: F821
+        (os.path.join(SPECPATH, '..', 'assets', 'fonts', 'LICENSE-Inter.txt'), 'assets/fonts'),  # noqa: F821
         *_FACE_MODEL_DATAS,
         *_DATABASE_DATAS,
     ],

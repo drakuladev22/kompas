@@ -68,10 +68,11 @@ və bu layihədə kontrast CI qapısıdır (`scripts/check_contrast.py`):
 
 Solğun mətn bir dəfə də (əlçatanlıq auditindən sonra) tündləşdirildi: əvvəlki
 `#64738D` yalnız AĞ fonda ölçülmüşdü (4.80:1) və qapıdan keçirdi, lakin eyni
-etiket ƏSLİNDƏ daha tünd səthlərin üzərində də oturur — kontent sahəsi
-(`#F4F6FA` → 4.43:1), yumşaq neytral sətir (`#EDF0F6` → 4.20:1) və çökük səth
-(`#E6EAF2` → 3.98:1). Yəni qapı "kartda" cütünü yoxlayır, istifadəçi isə mətni
-başqa fonda görürdü. İndi hər dörd fon `check_contrast.py`-dadır.
+etiket ƏSLİNDƏ daha tünd səthlərin üzərində də oturur. Yəni qapı "kartda"
+cütünü yoxlayır, istifadəçi isə mətni başqa fonda görürdü. İndi hər dörd fon
+`check_contrast.py`-dadır və neytral səthlərlə ölçü belədir: kontent
+(`#F5F5F7` → 5.18:1), neytral sətir (`#EFEFF1` → 4.91:1), çökük səth
+(`#E8E8EA` → 4.61:1).
 
 Maketin YUMŞAQ FONLARI (`--color-*-bg`) olduğu kimi saxlanılır — dəyişən
 yalnız onların ÜZƏRİNDƏKİ mətndir. Beləliklə görünüş maketlə eyni qalır,
@@ -82,6 +83,32 @@ qərarı ilə üst-üstə düşür: rəngi kalibrləmək dizaynı qorumağın yo
 "iri qrafik element"dir və 3:1 həddindən keçir (`#7B8AA3` / ağ = 3.53:1).
 
 ──────────────────────────────────────────────────────────────────────────────
+NEYTRAL-DOMİNANT SƏTHLƏR — `appl.md` FAZA 1 (istifadəçi təsdiqi ilə)
+──────────────────────────────────────────────────────────────────────────────
+Səthlər (fon, kart, sərhəd, skelet) NEYTRAL boza gətirildi; RƏNG yalnız
+məna daşıyan yerlərdə qaldı — vurğu (Amber), semantik nişanlar, brend
+elementləri. Səbəb: köçürülən dizayn dili (`appl.md`, Apple HIG —
+"Deference") interfeysin ÖZÜNÜN diqqət çəkməməsini tələb edir; soyuq-mavi
+səth tonu isə hər ekranda rəngli qalırdı və məzmunun rəngi ilə yarışırdı.
+
+İki qərar İSTİFADƏÇİ TƏSDİQİ ilə verildi və burada yazılır ki, gələcəkdə
+"niyə Navy fon getdi?" sualı cavabsız qalmasın:
+
+    * TÜND rejim NEYTRALLAŞDI, lakin Navy ailəsindən TAM ÇIXMADI: fonlarda
+      zəif mavi çalar qalır (`#12151B`, `#16191F`, `#1B1F26`). Tam neytral
+      `#1C1C1E` ailəsi RƏDD EDİLDİ, çünki o, brendin tanınmasını tünd
+      rejimdə bütünlüklə ləğv edərdi (Navy yalnız loqoda qalardı) və 80-ə
+      yaxın tokenin yenidən kalibrlənməsini tələb edərdi.
+    * İŞIQLI rejimin fonu Apple-in sistem bozuna yaxınlaşdı (`#F5F5F7`,
+      kartlar təmiz ağ). Köhnə `#F4F6FA` soyuq-mavi idi və ağ kartın kənarı
+      onun üzərində "mavi haşiyə" kimi oxunurdu.
+
+DƏYİŞMƏYƏN İKİ ŞEY: (a) brend Amberi və Navy-nin ÖZÜ (loqo, splash, başlıq
+zolağı, işıqlı rejimin əsas hərəkət düyməsi), (b) MƏTN tokenlərinin işıqlı
+rejimdəki dəyərləri — onlar kontrast qapısında kalibrlənib və səth
+dəyişikliyi onları POZMADI (ən pis hal 4.61:1, aşağıda).
+
+──────────────────────────────────────────────────────────────────────────────
 NİYƏ İKİ SƏRHƏD VƏ İKİ "SOLĞUN" TOKENİ VAR
 ──────────────────────────────────────────────────────────────────────────────
 `--color-border` maketin sərhəd tonudur və o, DOLDURULMUŞ elementlərin (düymə,
@@ -90,6 +117,8 @@ giriş sahəsi) kənarını çəkir: orada sərhəd tək əlamət deyil — fon 
 üçündür; header-dəki 34×34 ikon düyməsi belədir və onun VARLIĞINI göstərən
 yeganə şey sərhəddir. WCAG 1.4.11 məhz belə hallarda 3:1 tələb edir, maketin
 `#DCE2EC` tonu isə ağ fonda 1.30:1 verirdi — düymə praktiki olaraq görünmürdü.
+Neytrallaşmadan sonra hər ikisi Apple-in boz şkalasındadır (`#86868B` = 3.62:1,
+`#6E6E73` = 5.07:1) — rol dəyişmədi, yalnız mavi çalar getdi.
 
 Eyni məntiq `--color-text-disabled` / `--color-text-placeholder` cütündə də
 işləyir: deaktiv element WCAG-ın kontrast tələbindən RƏSMƏN azaddır (1.4.3
@@ -178,14 +207,15 @@ class ThemeMode(str, Enum):
 LIGHT_THEME: Final[dict[str, str]] = {
     # --- fonlar ---
     "--color-bg-primary": "#FFFFFF",
-    "--color-bg-surface": "#F2F4F8",
+    "--color-bg-surface": "#F2F2F4",
     "--color-bg-elevated": "#FFFFFF",
-    "--color-bg-sunken": "#E6EAF2",
+    "--color-bg-sunken": "#E8E8EA",
     # --- mətn ---
     "--color-text-primary": BRAND_NAVY,
     "--color-text-secondary": "#4A5568",
-    # Köhnə `#8A93A6` ağ fonda 2.70–3.09:1 verirdi; ton və doyğunluq saxlanıb,
-    # yalnız işıqlıq bir pillə endirilib → 3.66–4.42:1 (bax modul başlığı).
+    # Köhnə `#8A93A6` ağ fonda 2.70–3.09:1 verirdi; işıqlıq bir pillə
+    # endirilib. Neytral səthlərdə ölçü 3.61–4.42:1-dir (ən pis hal çökük
+    # səth `#E8E8EA`) — deaktiv mətn üçün tələb olunan 3:1-dən yuxarı.
     "--color-text-disabled": "#6E7890",
     # Placeholder AKTİV sahənin mətnidir → tam 4.5:1 hədəfi (4.64:1).
     "--color-text-placeholder": "#677689",
@@ -207,11 +237,11 @@ LIGHT_THEME: Final[dict[str, str]] = {
     "--color-danger": "#B3261E",
     "--color-info": "#1B5E9E",
     # --- struktur ---
-    "--color-border": "#8A93A6",
+    "--color-border": "#86868B",
     # Fonsuz idarəetmə elementinin YEGANƏ görünən kənarı (bax modul başlığı):
-    # ağ fonda 4.42:1, yəni 3:1 hədəfini marjinal deyil, aydın keçir.
-    "--color-border-strong": "#6E7890",
-    "--color-border-subtle": "#D5DAE4",
+    # ağ fonda 5.07:1, yəni 3:1 hədəfini marjinal deyil, aydın keçir.
+    "--color-border-strong": "#6E6E73",
+    "--color-border-subtle": "#DCDCE0",
     "--color-focus-ring": "#9A5F00",
     "--color-overlay": "#0B1D3A99",
     # --- PIN ekranı (AAA) ---
@@ -237,7 +267,7 @@ LIGHT_THEME: Final[dict[str, str]] = {
     # bağlayardı. Ona görə başlıq zolağının öz hover səthi var.
     "--color-titlebar-control-hover": "#1E3862",
     "--color-sidebar-bg": "#FFFFFF",
-    "--color-sidebar-border": "#DCE2EC",
+    "--color-sidebar-border": "#E5E5EA",
     "--color-nav-item-text": "#33405C",
     "--color-nav-item-icon": "#7B8AA3",
     "--color-nav-active-bg": BRAND_NAVY,
@@ -249,53 +279,61 @@ LIGHT_THEME: Final[dict[str, str]] = {
     "--color-action-hover": "#16305C",
     "--color-action-pressed": "#071426",
     "--color-header-bg": "#FFFFFF",
-    "--color-header-border": "#DCE2EC",
-    "--color-content-bg": "#F4F6FA",
+    "--color-header-border": "#E5E5EA",
+    "--color-content-bg": "#F5F5F7",
     # Açılış ekranının fonu — DƏYƏR ŞƏKLİN ÖZÜNDƏNDİR, seçim deyil.
     # Bax `--color-splash-bg` (tünd palitra) izahı.
     "--color-splash-bg": "#FFFFFF",
     "--color-card-bg": "#FFFFFF",
-    "--color-card-border": "#DCE2EC",
-    "--color-divider": "#EDF0F6",
-    # Bax modul başlığı: `#64738D` yalnız ağ fonda keçirdi, kontent/neytral/
-    # çökük səthlərdə 3.98–4.43:1-ə düşürdü. Ən TÜND fon (`--color-bg-sunken`
-    # `#E6EAF2`) hədəfi təyin etdi: 4.67:1. Ağ fonda 5.64:1 — hələ də əsas
-    # mətndən (16.79:1) açıq şəkildə solğundur, yəni rol itmir.
+    "--color-card-border": "#E5E5EA",
+    "--color-divider": "#EFEFF1",
+    # Bax modul başlığı: `#64738D` yalnız ağ fonda keçirdi, digər səthlərdə
+    # 4.5:1-dən aşağı düşürdü. Ən TÜND fon (`--color-bg-sunken` `#E8E8EA`)
+    # hədəfi təyin edir: 4.61:1. Ağ fonda 5.64:1 — hələ də əsas mətndən
+    # (16.79:1) açıq şəkildə solğundur, yəni rol itmir.
     "--color-text-muted": "#5A6880",
-    "--color-skeleton": "#E5EAF2",
-    "--color-skeleton-alt": "#EDF0F6",
+    "--color-skeleton": "#E8E8EA",
+    "--color-skeleton-alt": "#F0F0F2",
     # --- yumşaq nişan (chip) fonları ---
     "--color-success-bg": "#E4F4EC",
     "--color-warning-bg": "#FDF1DC",
     "--color-danger-bg": "#FDF1F1",
     "--color-info-bg": "#E8F2FB",
-    "--color-neutral-bg": "#EDF0F6",
+    "--color-neutral-bg": "#EFEFF1",
 }
 
 
 # --------------------------------------------------------------------------- #
 # TÜND TEMA
 # --------------------------------------------------------------------------- #
-# Tərs kontrast məntiqi (bölmə 9): Deep Navy burada MƏTN deyil, FON olur.
+# Tərs kontrast məntiqi (bölmə 9): Deep Navy burada MƏTN deyil, FON olur —
+# `appl.md` FAZA 1-dən sonra fon Navy-nin NEYTRALLAŞMIŞ ailəsidir (mavi çalar
+# qalır, doyğunluq getdi; bax modul başlığındakı "NEYTRAL-DOMİNANT" bölməsi).
 # Semantik rənglər "neon" görünməmək üçün doymuşluğu azaldılmış variantlardır
 # — məs. uğur rəngi `#4ADE80` deyil `#3FBF6E` (9.63:1 əvəzinə 7.10:1, hələ də
 # AAA), çünki tünd fonda parlaq yaşıl gözü yorur və "xəbərdarlıq" kimi oxunur.
 
 DARK_THEME: Final[dict[str, str]] = {
     # --- fonlar ---
-    "--color-bg-primary": BRAND_NAVY,
-    "--color-bg-surface": "#12294D",
-    "--color-bg-elevated": "#17325C",
-    "--color-bg-sunken": "#071426",
+    # ARTIQ `BRAND_NAVY` DEYİL (`appl.md` FAZA 1) — brend rəngi FON rolundan
+    # çıxarıldı: o, hər ekranın 100%-ni tutan səth idi və "neytral-dominant"
+    # qaydası məhz bunu qadağan edir. Navy BRENDDƏ qalır (loqo, splash,
+    # başlıq zolağı, işıqlı rejimin hərəkət düyməsi), fon isə onun
+    # neytrallaşmış törəməsidir — mavi çalar qalır, doyğunluq getdi.
+    "--color-bg-primary": "#12151B",
+    "--color-bg-surface": "#1B1F26",
+    "--color-bg-elevated": "#22262F",
+    "--color-bg-sunken": "#0C0F14",
     # --- mətn ---
     "--color-text-primary": "#F2F4F8",
-    "--color-text-secondary": "#A8B4CC",
+    "--color-text-secondary": "#ADB3BE",
     # Tünd temada istiqamət TƏRSDİR — oxunaqlığı artırmaq üçün işıqlıq
-    # QALDIRILIR. Köhnə `#6B7B99` yüksəldilmiş səthdə (`#17325C`) 2.70:1
-    # verirdi; `#8091AD` ilə ən pis hal 3.99:1-dir.
-    "--color-text-disabled": "#8091AD",
-    # Placeholder: `#0B1D3A` üzərində 4.68:1, kart fonunda 4.80:1.
-    "--color-text-placeholder": "#7488AB",
+    # QALDIRILIR. Köhnə `#6B7B99` yüksəldilmiş səthdə 2.70:1 verirdi;
+    # neytral `#868D99` ilə ən pis hal 4.48:1-dir (yumşaq neytral sətir).
+    "--color-text-disabled": "#868D99",
+    # Placeholder: əsas fonda 4.79:1, kart fonunda 4.61:1 — hər ikisi
+    # 4.5:1 hədəfindən yuxarı (placeholder AKTİV sahənin mətnidir).
+    "--color-text-placeholder": "#7C838F",
     "--color-text-on-accent": BRAND_NAVY,
     # --- vurğu (interaktiv) — tünd fonda brend amberinin ÖZÜ işləyir ---
     "--color-accent": BRAND_AMBER,
@@ -314,36 +352,39 @@ DARK_THEME: Final[dict[str, str]] = {
     "--color-danger": "#EF5A5A",
     "--color-info": "#6BA6E8",
     # --- struktur ---
-    "--color-border": "#5E76A0",
+    "--color-border": "#787F8C",
     # Header fonunda (`#0B1424`) 4.75:1, kartda 4.44:1 — `--color-card-border`
     # (`#22314D`) həmin yerlərdə cəmi 1.32–1.42:1 verirdi.
-    "--color-border-strong": "#6A82AE",
-    "--color-border-subtle": "#2A3F63",
+    "--color-border-strong": "#8A919E",
+    "--color-border-subtle": "#2B303B",
     "--color-focus-ring": BRAND_AMBER,
     "--color-overlay": "#000000AA",
     # --- PIN ekranı (AAA) ---
-    "--color-pin-bg": "#071426",
+    "--color-pin-bg": "#0C0F14",
     "--color-pin-text": "#F2F4F8",
     # --- örtük (shell) quruluşu ---
-    "--color-titlebar-bg": "#0B1424",
-    "--color-titlebar-text": "#C4D0E2",
-    "--color-titlebar-control": "#8394AE",
+    "--color-titlebar-bg": "#101319",
+    "--color-titlebar-text": "#C9CDD6",
+    "--color-titlebar-control": "#98A0AD",
     #: Tünddə hover səthi başlıq zolağından AÇILIR (işıqlıdakı ilə eyni
     #: istiqamət) — bax işıqlı temadakı izah.
-    "--color-titlebar-control-hover": "#23314F",
-    "--color-sidebar-bg": "#0F1B30",
-    "--color-sidebar-border": "#22314D",
-    "--color-nav-item-text": "#C4D0E2",
-    "--color-nav-item-icon": "#8394AE",
+    "--color-titlebar-control-hover": "#262A33",
+    "--color-sidebar-bg": "#16191F",
+    "--color-sidebar-border": "#262A33",
+    "--color-nav-item-text": "#C9CDD6",
+    "--color-nav-item-icon": "#98A0AD",
     # DESIGN.MD REDİZAYNI — AKTİV HƏB GÖRÜNMƏLİDİR.
-    # Əvvəl `#142443` idi: yan panel fonu `#0F1B30`-dur, yəni fərq gözlə
-    # seçilmirdi və aktiv maddə faktiki olaraq YALNIZ fokus halqası ilə
-    # tanınırdı — halbuki fokus halqası klaviatura vəziyyətidir, aktivlik
-    # deyil. İkisi qarışanda istifadəçi Tab basanda "səhifə dəyişdi" sanır.
-    # `design_reference/navbar.jpg` və `tasks.jpg` hər ikisi aydın görünən
-    # dolu həb göstərir. Yeni dəyər Navy ailəsində qalır, mətn kontrastı isə
-    # 10:1-dən yuxarıdır.
-    "--color-nav-active-bg": "#1E3260",
+    # Əvvəl `#142443` idi: yan panel fonu ilə fərq gözlə seçilmirdi və aktiv
+    # maddə faktiki olaraq YALNIZ fokus halqası ilə tanınırdı — halbuki fokus
+    # halqası klaviatura vəziyyətidir, aktivlik deyil. İkisi qarışanda
+    # istifadəçi Tab basanda "səhifə dəyişdi" sanır.
+    #
+    # `appl.md` FAZA 1 bu qərarı SAXLADI (istifadəçi təsdiqi: "dolu həb
+    # qalsın") — yumşaq amber tint TƏKLİF EDİLDİ və RƏDD EDİLDİ, çünki o,
+    # məhz yuxarıdakı qüsuru geri qaytarardı. Dəyişən yalnız TON-dur: həb
+    # indi neytral yüksəldilmiş səthdir (`#2E3440`), mətn kontrastı 10.62:1,
+    # fokus halqası isə onun üzərində 6.16:1 ilə ayrıca görünür.
+    "--color-nav-active-bg": "#2E3440",
     "--color-nav-active-text": "#E8EDF5",
     # --- əsas hərəkət düyməsi ---
     "--color-action-bg": BRAND_AMBER,
@@ -351,9 +392,9 @@ DARK_THEME: Final[dict[str, str]] = {
     "--color-chart-bar": "#55719F",
     "--color-action-hover": "#FFB944",
     "--color-action-pressed": "#D98E14",
-    "--color-header-bg": "#0B1424",
-    "--color-header-border": "#22314D",
-    "--color-content-bg": "#070E1C",
+    "--color-header-bg": "#101319",
+    "--color-header-border": "#262A33",
+    "--color-content-bg": "#0B0D11",
     # ──────────────────────────────────────────────────────────────────────
     # AÇILIŞ EKRANININ FONU — DƏYƏR ŞƏKİLDƏN OXUNUB, SEÇİLMƏYİB
     # ──────────────────────────────────────────────────────────────────────
@@ -371,18 +412,18 @@ DARK_THEME: Final[dict[str, str]] = {
     # fonudur və dizayn sistemində onlarla cütlə ölçülüb. Bir ekranın
     # şəklinə görə onu dartmaq bütün palitranı həmin şəklə tabe edərdi.
     "--color-splash-bg": "#0A2B29",
-    "--color-card-bg": "#0F1B30",
-    "--color-card-border": "#22314D",
-    "--color-divider": "#1B2B47",
-    "--color-text-muted": "#93A3BC",
-    "--color-skeleton": "#152744",
-    "--color-skeleton-alt": "#101E36",
+    "--color-card-bg": "#16191F",
+    "--color-card-border": "#262A33",
+    "--color-divider": "#202430",
+    "--color-text-muted": "#9BA1AC",
+    "--color-skeleton": "#1C2028",
+    "--color-skeleton-alt": "#171A21",
     # --- yumşaq nişan (chip) fonları ---
     "--color-success-bg": "#123527",
     "--color-warning-bg": "#3A2E12",
     "--color-danger-bg": "#3A1D1F",
     "--color-info-bg": "#12293F",
-    "--color-neutral-bg": "#142443",
+    "--color-neutral-bg": "#23272F",
 }
 
 
@@ -449,6 +490,21 @@ METRICS: Final[dict[str, str]] = {
     #: Nəticədə tema düyməsi pəncərə düymələrindən kiçik qalırdı.
     "--window-button-width": "46",
     "--titlebar-height": "38",
+    # --- kölgə (`appl.md` FAZA 1, qayda 5) ------------------------------- #
+    #
+    # Kölgə DƏYƏRLƏRİ `widgets/primitives.py`-də sabit idi (blur 32,
+    # offset 8, alfa 46 = 18%) və maketin `0 18px 46px` kölgəsindən
+    # gəlirdi. Yeni dizayn dili kartı SƏRT XƏTLƏ deyil, çox incə
+    # elevasiya ilə ayırır — ona görə kölgə zəiflədildi və dəyər tokenə
+    # köçürüldü ki, iki yerdə iki fərqli kölgə qalmasın.
+    #
+    # Alfa `QColor`-un 255-lik şkalasındadır: 30 ≈ 12%, yəni `appl.md`-dəki
+    # `rgba(0,0,0,0.08)` ilə eyni ailədir. Bir az yuxarı seçilib, çünki
+    # Qt-nin `QGraphicsDropShadowEffect`-i blur radiusunu CSS-dən daha
+    # geniş yayır və eyni alfa gözlə daha solğun görünür.
+    "--shadow-blur": "24",
+    "--shadow-offset-y": "4",
+    "--shadow-alpha": "30",
     "--border-width": "1",
     "--focus-ring-width": "2",
     # Kassa PC-lərində toxunma ekranı ola bilər — minimum hədəf ölçüsü.
@@ -456,7 +512,12 @@ METRICS: Final[dict[str, str]] = {
 }
 
 TYPOGRAPHY: Final[dict[str, str]] = {
-    "--font-family": "Segoe UI, Inter, Arial, sans-serif",
+    # INTER BİRİNCİDİR, ÇÜNKİ O, TƏTBİQLƏ BİRLİKDƏ GƏLİR
+    # (`theme/fonts.py` işə düşəndə onu `QFontDatabase`-ə yükləyir).
+    # Əvvəl sıra `Segoe UI, Inter, …` idi və Inter FAKTİKİ olaraq heç vaxt
+    # işlədilmirdi — Windows-da o, quraşdırılmış deyil. Ehtiyat sırası
+    # QALIR: paketlənmə pozulsa interfeys şriftsiz qalmamalıdır.
+    "--font-family": "Inter, Segoe UI, Arial, sans-serif",
     # Maket rəqəm/ID/tarix sütunlarını IBM Plex Mono ilə yazır (bax başlıq).
     # İlk ad quraşdırılıbsa işlədilir; qalanları Windows-un ÖZ şriftləridir,
     # ona görə heç nə paketlənmədən də sətir dəyişməz enli qalır.
