@@ -132,6 +132,37 @@ tapşırıq kimi yazılmalıdır — bu OQ ÖZÜ qərar deyil, YALNIZ boşluğun
 
 ---
 
+## OQ-005 — SWITCH-1 arxiv addımı CANLI onboarding-də hələ işlədilməyib
+
+**Vəziyyət:** açıq · **Təsir:** yalnız təchizatçının öz maşını, müştəri riski YOX
+
+`scripts/onboard_new_tenant.py` hər quraşdırmadan sonra konfiqurasiyanın
+nüsxəsini `configs/<slug>.config`-ə arxivləyir (SWITCH-1). Həmin addım
+BAZASIZ ölçüldü — `switch.py`-ın bütün davranışı (siyahı, aktivləşdirmə,
+tenant→tenant keçid, vendor vəziyyəti, şifrəli parolun round-trip-i, itki
+qorunması) 26 iddia ilə yoxlanıldı və GUI hər iki vəziyyətdə həqiqətən
+açılıb çəkildi.
+
+YOXLANMAYAN YEGANƏ ŞEY: arxivin HƏQİQİ onboarding axınında yazılması.
+Səbəb qəsdli qərardır — canlı sınaq üçün İKİ ayrı baza lazımdır
+(`--tenant-dsn` müştərinin ÖZ Supabase layihəsi, `--vendor-dsn` mərkəzi
+vendor bazası; skript ikisinin eyni olmasını QADAĞAN edir, TENANT-1). Saxta
+kirayəçi yaratmaq ya real müştərinin bazasını, ya da mərkəzi vendor
+reyestrini çirkləndirərdi, üstəlik seed trigger-ləri onlarla cədvələ sətir
+yazır və təmizləmə `tenant_id` üzrə çoxsaylı silmə tələb edir.
+
+**Qərar (2026-08-23):** addım NÖVBƏTİ REAL müştəri quraşdırmasında
+yoxlanılır — orada hər iki DSN onsuz da mövcuddur və arxiv təbii şəkildə
+yaranır. Yoxlanacaq: `configs/<slug>.config` yarandımı, `switch.py` onu
+siyahıda göstərirmi, aktivləşdirmədən sonra tətbiq həmin kirayəçi kimi
+qalxırmı, `switch.py vendor`-dan sonra Vendor Konsolu açılırmı.
+
+**Uğursuzluq halında nə olur:** heç nə itmir — arxivləmə quraşdırmanı
+DAYANDIRMIR (`_archive_switch_config` istisnanı udur və ekranda xəbərdarlıq
+yazır), çünki kirayəçi sətri artıq commit olunub.
+
+---
+
 ## Bağlanmış suallar
 
 | # | Sual | Qərar | Tarix |
