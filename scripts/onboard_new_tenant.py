@@ -521,34 +521,41 @@ def _write_config(args: argparse.Namespace, tenant_id: uuid.UUID, license_key: s
     daxil edilir; həmin ekran onu YERİNDƏ şifrələyir.
 
     `installation.json` isə tam hazırdır: onun içində sirr yoxdur (SEC-021).
+
+    ──────────────────────────────────────────────────────────────────────────
+    ÜÇÜNCÜ ÜNVAN — `configs/<slug>.config` ARXİVİ (SWITCH-1)
+    ──────────────────────────────────────────────────────────────────────────
+    Yuxarıdakı İKİ davranış (arxiv qovluğu, `--dev` yerləri) OLDUĞU KİMİ qalır;
+    sonda ÜÇÜNCÜSÜ ƏLAVƏ olunur: eyni konfiqurasiya `configs/<slug>.config`
+    faylına da yazılır. Səbəb `scripts/switch.py`-dadır — təchizatçının
+    maşınında yalnız BİR kirayəçi eyni anda aktiv ola bilər (fayllar sabit
+    yerlərdədir), ona görə ikinci müştəri quraşdıranda birincinin
+    konfiqurasiyası ÜZƏRİNƏ yazılırdı və geri qayıtmağın yolu quraşdırmanı
+    təkrarlamaq idi. Arxiv həmin itkini aradan qaldırır.
+
+    `--dev` halında bundle-a FAKTİKİ `connection.json` (şifrələnmiş parolla)
+    düşür, bayraqsız halda isə şablonun özü — yəni parolsuz. Fərq `switch.py`-da
+    EKRANDA deyilir; parolu bura yazmaq mümkün deyil (bax yuxarı).
     """
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
+    identity = {"tenant_id": str(tenant_id), "is_licensed": True}
     (out / "installation.json").write_text(
-        json.dumps(
-            {"tenant_id": str(tenant_id), "is_licensed": True},
-            indent=2,
-            ensure_ascii=False,
-        )
-        + "\n",
+        json.dumps(identity, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
 
     host, port, database, username = _parse_dsn(args.tenant_dsn)
+    template = {
+        "host": host,
+        "port": port,
+        "database": database,
+        "username": username,
+        "password_encrypted": "",
+    }
     (out / "connection.template.json").write_text(
-        json.dumps(
-            {
-                "host": host,
-                "port": port,
-                "database": database,
-                "username": username,
-                "password_encrypted": "",
-            },
-            indent=2,
-            ensure_ascii=False,
-        )
-        + "\n",
+        json.dumps(template, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
 
@@ -573,11 +580,51 @@ def _write_config(args: argparse.Namespace, tenant_id: uuid.UUID, license_key: s
     )
     sys.stdout.write(_indent(f"{out}/installation.json\n{out}/connection.template.json\n"))
 
-    if args.dev:
-        _deploy_dev_config(args, tenant_id)
+    deployed = _deploy_dev_config(args, tenant_id) if args.dev else None
+    _archive_switch_config(args, identity, deployed=deployed, template=template)
 
 
-def _deploy_dev_config(args: argparse.Namespace, tenant_id: uuid.UUID) -> None:
+def _archive_switch_config(
+    args: argparse.Namespace,
+    identity: dict[str, object],
+    *,
+    deployed: Path | None,
+    template: dict[str, object],
+) -> None:
+    """SWITCH-1: nüsxəni `configs/<slug>.config`-ə də yazır (bax `_write_config`).
+
+    Arxivləmə HEÇ VAXT quraşdırmanı DAYANDIRMIR: bu addıma çatanda kirayəçi
+    sətri artıq COMMIT olunub və müştəri paketi hazırdır — RAHATLIQ üçün
+    saxlanan nüsxənin alınmaması (qovluq yazıla bilmir, disk dolub, köhnə
+    bundle korlanıb) həmin işi «uğursuz» elan etməyi haqq qazandırmır. Səbəb
+    görünən yerdə — ekranda — qalır və operator `switch.py` ilə sonra da
+    arxivləyə bilər.
+    """
+    from scripts.switch import SwitchError, archive_config
+
+    try:
+        payload = _read_json_file(deployed) if deployed is not None else dict(template)
+        archived = archive_config(
+            company=args.company, installation=dict(identity), connection=payload
+        )
+    except (OSError, ValueError, SwitchError) as exc:
+        sys.stdout.write(_indent(f"XƏBƏRDARLIQ: `configs/` arxivi yazılmadı — {exc}\n"))
+        return
+    sys.stdout.write(_indent(f"{archived}\n"))
+
+
+def _read_json_file(path: Path) -> dict[str, object]:
+    """Yazılmış konfiqurasiyanı GERİ oxuyur — məzmun burada TƏKRAR qurulmur.
+
+    `connection.json`-un sahələri (`version`, `sslmode`, şifrələnmiş parol)
+    `connection_file.save_settings()`-in işidir; onları bu skriptdə yenidən
+    yığsaydıq, format dəyişən gün arxiv sükutla köhnə formada qalardı.
+    """
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _deploy_dev_config(args: argparse.Namespace, tenant_id: uuid.UUID) -> Path:
     r"""`--dev`: konfiqurasiyanı BU maşının FAKTİKİ oxu yerlərinə yazır.
 
     ──────────────────────────────────────────────────────────────────────────
@@ -610,6 +657,10 @@ def _deploy_dev_config(args: argparse.Namespace, tenant_id: uuid.UUID) -> None:
     halında isə hədəf maşın BU maşındır — yəni məhdudiyyət ARADAN QALXIR və
     parol `--tenant-dsn`-dən götürülüb yerində şifrələnə bilər. Nəticə: skript
     bitən kimi `python main.py` heç bir əlavə addım olmadan açılır.
+
+    Qaytarır: yazılmış `connection.json`-un yolu. Dəyər SWITCH-1 arxivinə
+    lazımdır (`_archive_switch_config`) — həmin fayl parolu ŞİFRƏLƏNMİŞ şəkildə
+    daşıyan YEGANƏ nüsxədir və arxiv onu geri OXUYUR, təkrar QURMUR.
     """
     from src.infrastructure.config.connection_file import (
         ConnectionSettings,
@@ -640,6 +691,7 @@ def _deploy_dev_config(args: argparse.Namespace, tenant_id: uuid.UUID) -> None:
         ) from exc
 
     sys.stdout.write(_indent(f"{identity_path}\n{connection_path}\n"))
+    return connection_path
 
 
 def _self_check(args: argparse.Namespace, tenant_id: uuid.UUID) -> None:
@@ -1042,6 +1094,11 @@ def _describe_steps(args: argparse.Namespace) -> None:
     sys.stdout.write("  3. `license_tenants` sətri → seed trigger-ləri işə düşür\n")
     sys.stdout.write("  4. Vendor `tenants` sətri (status: ODENIS_GOZLENILIR)\n")
     sys.stdout.write(f"  5. Konfiqurasiya faylları → {args.out}\n")
+    from scripts.switch import BUNDLE_SUFFIX, CONFIGS_DIR, slugify
+
+    sys.stdout.write(
+        f"     + arxiv (SWITCH-1): {CONFIGS_DIR / (slugify(args.company) + BUNDLE_SUFFIX)}\n"
+    )
     if args.dev:
         from src.infrastructure.config.connection_file import (
             connection_file_path,

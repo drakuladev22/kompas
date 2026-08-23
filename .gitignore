@@ -88,3 +88,9 @@ dbtest/
 # Region köçürməsinin dump faylı — MÜŞTƏRİ MƏLUMATI daşıyır, repozitoriyaya
 # DÜŞMƏMƏLİDİR (`scripts/migrate_region.py` onu bura yazır).
 output/
+
+# Kirayəçi konfiqurasiyalarının yerli arxivi (SWITCH-1) — `scripts/switch.py`
+# və `scripts/onboard_new_tenant.py` bura yazır. Bundle-lar müştərinin baza
+# hostunu, istifadəçi adını və BU MAŞINA bağlı şifrələnmiş parolunu daşıyır:
+# `.env` ilə eyni kateqoriyadır, repozitoriyada yeri yoxdur.
+configs/
