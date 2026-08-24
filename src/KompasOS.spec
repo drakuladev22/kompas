@@ -232,6 +232,31 @@ if not _FACE_MODEL_DATAS:
         'Face Control bölməsi).'
     )
 
+# İKON ŞRİFTLƏRİ `datas`-A ƏLAVƏ OLUNMALIDIR — BUNSUZ `.exe`-DƏ İKON YOXDUR
+# -----------------------------------------------------------------------------
+# `qtawesome` ikonları `.ttf` şrift + `.json` charmap cütləri kimi paketin
+# İÇİNDƏ daşıyır (Font Awesome, Material Design, Codicon və s.) və onlara heç
+# bir `import` sətri istinad etmir — `_FACE_MODEL_DATAS`-la EYNİ tələnin
+# forması. FƏRQ (`face_recognition_models`-dən): PyInstaller-in ÖZÜ
+# `hook-qtawesome.py` daşıyır və o da məhz `collect_data_files('qtawesome')`
+# çağırır, yəni bu blok TEXNİKİ cəhətdən artıqdır — daxili hook onsuz da
+# eyni faylları toplayacaq (`Analysis.hookspath=[]` daxili hook axtarışını
+# SÖNDÜRMÜR, yalnız ƏLAVƏ yol qoşur). Bu sətirlər QƏSDƏN buraxılıb: layihənin
+# konvensiyası "sükutla boş qalmır"dır (bax aşağı) və daxili hook-un gələcək
+# PyInstaller versiyasında dəyişməsi/silinməsi halında ERKƏN, AYDIN xəta
+# vermək üçün ikiqat müdafiə dəyərlidir. Duplikat `datas` yazıları
+# PyInstaller-in `TOC.append()`-i tərəfindən hədəf ada görə sükutla
+# sıxışdırılır (mənbə kodunda yoxlanıb, `PyInstaller.building.datastruct`) —
+# ikiqat siyahı xəbərdarlıq yaratmır.
+_ICON_FONT_DATAS = collect_data_files('qtawesome')
+if not _ICON_FONT_DATAS:
+    # SÜKUTLA BOŞ QALMIR — səbəb `_FACE_MODEL_DATAS` ilə eynidir: boş siyahı
+    # qurmanı UĞURLA bitirər, `.exe` isə mağazada ikonsuz/xətalı çıxardı.
+    raise SystemExit(
+        'qtawesome ikon şrift faylları tapılmadı. `pip install -r requirements.txt` '
+        'ilə `qtawesome` paketini quraşdırın (bax requirements.txt, İkon Dəsti bölməsi).'
+    )
+
 a = Analysis(
     [os.path.join(SPECPATH, 'main.py')],  # noqa: F821 — SPECPATH-ı PyInstaller inject edir
     pathex=[],
@@ -262,6 +287,7 @@ a = Analysis(
         (os.path.join(SPECPATH, '..', 'assets', 'fonts', '*.ttf'), 'assets/fonts'),  # noqa: F821
         (os.path.join(SPECPATH, '..', 'assets', 'fonts', 'LICENSE-Inter.txt'), 'assets/fonts'),  # noqa: F821
         *_FACE_MODEL_DATAS,
+        *_ICON_FONT_DATAS,
         *_DATABASE_DATAS,
     ],
     hiddenimports=[*_FACE_HIDDEN_IMPORTS, *_WINDOW_CHROME_HIDDEN_IMPORTS],

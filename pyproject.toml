@@ -44,6 +44,9 @@ dependencies = [
     "face_recognition_models>=0.1,<1.0",
     "setuptools>=80.10,<81.0",
     "opencv-python-headless>=4.13,<5.0",
+    # --- İkon dəsti (UI-FINAL vizual iş) ------------------------------------ #
+    # Səbəb `requirements.txt`-in eyni adlı bölməsindədir (təkrarlanmır).
+    "qtawesome>=1.4.2,<2.0",
 ]
 
 [project.optional-dependencies]
@@ -62,6 +65,9 @@ dev = [
     # alətlə qurardı (bax `requirements-dev.txt`).
     "pyinstaller>=6.22,<7.0",
     "types-openpyxl>=3.1",
+    # Səbəb `requirements-dev.txt`-in eyni adlı bölməsindədir (təkrarlanmır):
+    # build-anı QSS ixracı aləti, runtime-da idxal OLUNMUR.
+    "qt-material>=2.17,<3.0",
 ]
 
 [project.scripts]

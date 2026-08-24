@@ -92,6 +92,12 @@ def test_the_datas_block_only_carries_known_assets() -> None:
     block = _datas_block()
     assert "kompasos.ico" in block
     assert "_FACE_MODEL_DATAS" in block
+    # İkon şriftləri (UI-FINAL vizual iş): `qtawesome`-un `.ttf`/`.json`
+    # charmap faylları `collect_data_files('qtawesome')` ilə yığılır —
+    # `_FACE_MODEL_DATAS`-la EYNİ tələ (paket idxal olunanda paylanma
+    # daxilindəki fayllara İSTİNAD edir, `pip install` onları avtomatik
+    # `datas`-a KEÇİRMİR).
+    assert "_ICON_FONT_DATAS" in block
     # Loqo PNG-ləri (logo.md): başlıq zolağı və splash onları RUNTIME-da oxuyur,
     # yəni `.ico` tək başına kifayət etmir.
     assert "'assets/logo'" in block
@@ -113,11 +119,13 @@ def test_the_datas_block_only_carries_known_assets() -> None:
     # SİRR DEYİL, yəni yuxarıdakı `_FORBIDDEN` qapısı pozulmur.
     assert "'assets', 'fonts', '*.ttf'" in spec
     assert "LICENSE-Inter.txt" in spec
-    # Hər `datas` elementi ya ikon, ya loqo, ya şrift, ya üz modeli, ya da
-    # sxem dəstidir. Rəqəm QƏSDƏN sabitdir: yeni sətir əlavə edən adam bu
-    # testi də yeniləməyə məcbur olur, yəni əlavə QƏRARA çevrilir.
+    # Hər `datas` elementi ya ikon, ya loqo, ya şrift, ya üz modeli, ya ikon
+    # şrifti (`qtawesome`), ya da sxem dəstidir. Rəqəm QƏSDƏN sabitdir: yeni
+    # sətir əlavə edən adam bu testi də yeniləməyə məcbur olur, yəni əlavə
+    # QƏRARA çevrilir. YEDDİNCİ sətir `*_ICON_FONT_DATAS`-dır (UI-FINAL
+    # vizual iş, `qtawesome` ikon şriftləri — yuxarıdakı assert).
     entries = [line.strip() for line in block.splitlines() if line.strip().startswith(("(", "*"))]
-    assert len(entries) == 6, f"gözlənilməyən `datas` elementləri: {entries}"
+    assert len(entries) == 7, f"gözlənilməyən `datas` elementləri: {entries}"
 
 
 def test_the_test_tree_is_excluded() -> None:

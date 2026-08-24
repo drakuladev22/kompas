@@ -28,3 +28,15 @@ cyclonedx-bom>=7.3,<8.0
 # Hədd burada saxlanılır ki, CI onu `grep` ilə tək mənbədən götürsün.
 pyinstaller>=6.22,<7.0
 types-openpyxl>=3.1
+
+# `qt-material` — DEV asılılığıdır, İSTEHSALAT DEYİL (UI-FINAL vizual iş,
+# `finalui.md`). `qt_material.export_theme()` `dark_teal.xml`-i statik
+# `.qss`-ə ÇEVİRİR; həmin çıxış Navy/Amber palitrasına əl ilə köçürülür və
+# NƏTİCƏDƏ bu paketin İÇİNDƏN heç nə qalmır — yalnız onun QSS STRUKTURU
+# `theme/qss.py`-a keçir. Runtime-da idxal OLUNMAMALIDIR: `.exe` ölçüsünü
+# faydasız artırar, öz tema mühərriki `theme/qss.py` ilə eyni prosesdə
+# toqquşar və `scripts/check_contrast.py`-nin 162 rəng cütü qapısı bu
+# paketin palitrasını tanımır. Ona görə `src/`-də idxal QADAĞANDIR və
+# `KompasOS.spec`-ə DAXİL EDİLMİR (`qtawesome`-dan fərqli olaraq — o
+# runtime-da işlədiyi üçün `.spec`-dədir, bu isə YALNIZ build-anı alətidir).
+qt-material>=2.17,<3.0

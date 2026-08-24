@@ -124,3 +124,18 @@ setuptools>=80.10,<81.0
 #     diaqnoz edilən nasazlıqlardan biri. `headless` variantı həmin GUI
 #     backend-lərini daşımır; bizə lazım olan `VideoCapture` isə eynidir.
 opencv-python-headless>=4.13,<5.0
+
+# ──────────────────────────────────────────────────────────────────────────────
+# İKON DƏSTİ (UI-FINAL vizual iş)
+# ──────────────────────────────────────────────────────────────────────────────
+# Font Awesome/Material Design/Codicon və s. ikon şriftlərini Qt-yə bağlayır.
+# İstifadəsi `ui` sahəsindədir (`src/presentation/`); bu sətir yalnız
+# asılılığı qurur. `qtpy` (Qt bağlayıcı abstraksiyası) öz metadata-sı ilə
+# tranzitiv gəlir — `src/` onu birbaşa idxal etmir, ona görə burada AÇIQ
+# elan olunmur (eyni məntiq `pydantic`-in `requirements.txt`-də niyə
+# tranzitiv qaldığı ilə eynidir, bax `test_dependency_manifest.py`).
+#
+# `.ttf`/`.json` DATA FAYLLARI PyInstaller-in statik analizi ilə TAPILMIR —
+# bax `KompasOS.spec`-dəki `_ICON_FONT_DATAS`, səbəb Dlib model faylları ilə
+# eynidir (`collect_data_files`, yuxarı bölmə).
+qtawesome>=1.4.2,<2.0

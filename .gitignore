@@ -100,3 +100,15 @@ configs/
 # sətirlərinə yazma icazəsidir: `configs/` ilə eyni kateqoriya, hətta ondan da
 # həssas — repozitoriyada yeri yoxdur.
 .onboard_config
+
+# `qt_material.export_theme()` YAN TƏSİRİ — repo KÖKÜNDƏ `theme/` qovluğu.
+# ─────────────────────────────────────────────────────────────────────────────
+# Funksiyanın `output=` parametri DEFOLT olaraq `'theme'`-dir və o, işlədiyi
+# qovluqda 111 SVG (checkbox, ox, budaq xətti…) yaradır. Bu, bizim dizayn
+# sistemimizin hissəsi DEYİL — `qt-material` YALNIZ dev alətidir (bax
+# `requirements-dev.txt`), ondan QSS STRUKTURU öyrənilir, palitrası və
+# ikonları GÖTÜRÜLMÜR.
+#
+# Yol KÖKƏ bağlanıb (`/theme/`): `src/presentation/theme/` HƏQİQİ paketdir və
+# ona toxunulmamalıdır.
+/theme/
