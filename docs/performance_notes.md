@@ -317,6 +317,234 @@ ETMİRLƏR. Rəqəmlər burada saxlanılır ki, eyni şübhə ikinci dəfə ara�
 
 ---
 
+## PERF-6 — giriş öncəsi/sonrası GUI sapının donması (SPEED-FIX Faza 3)
+
+Tapıntılar `time.perf_counter()` ilə, real Supabase bağlantısı ilə ölçülüb
+(sinqapur pooler, gediş-gəliş ~206 ms — yuxarıdakı ölçmə mühiti ilə eyni).
+
+### 1 — `_after_splash()`: İKİ AYRI sessiya, 1724 ms
+
+`app.py::_startup_route()` (864 ms) və `face_login.py::FaceLoginController.
+available()` (860 ms, `show_login()` çağırır) hər biri ÖZ sessiyasını açırdı.
+`read_batch()` (PERF-3) buraya tətbiq olunmamışdı, çünki iki oxu fərqli
+metodlardadır və aralarında marşrut budaqlanması var — BİR yerdə açılıb
+BAĞLANMALI sərhəd yox idi.
+
+**Həll:** `_after_splash()` marşrutlaşdırmanı `_route_after_splash()`-a çıxarır
+və onu `context.read_batch()` sərhədinə salır; `show_login()`-un içindəki
+`_face_login_available()` HƏMİN sərhədin içindən çağırıldığı üçün paylaşılmış
+sessiyanı təkrar istifadə edir (`ApplicationContext.session()`-in aktor şərti:
+`user_id=None` hər ikisinə uyğun gəlir).
+
+| Ssenari | Əvvəl | Sonra (gözlənilən) |
+|---|---|---|
+| Splash bitdikdən login ekranına qədər | 1724 ms (2 sessiya) | **~860 ms** (1 sessiya) |
+
+**Canlı ölçü (`perf-startup`, 4 işə salma) BU RƏQƏMİ DÜZƏLDİR:** faktiki
+nəticə ~860 ms deyil, **1050–1160 ms** oldu — `read_batch()` yalnız SESSİYA
+QURULMASINI (BEGIN/kontekst, ~0.63 s) paylaşır, İKİ sorğunun ŞƏBƏKƏ vaxtı
+(hər biri ~206 ms+) QALIR. `MAIN_THREAD_STALL` həddi 1000 ms-dir
+(`stall_monitor.py`) — köhnə 1724 ms onu HƏMİŞƏ keçirdi, yeni 1050–1160 ms
+İSƏ sərhəddə YELLƏNİR (4 işə salmadan 1-də `stall_ms=1050` loqa düşdü).
+Yəni bu addım TƏK BAŞINA kifayət ETMƏDİ — 1a bölməsinə bax.
+
+### 1a — post-splash: qalan 1050–1160 ms-i UI sapından TAM çıxarmaq
+
+`_after_splash()`-ın 1-ci bölmədəki düzəlişi iki oxunu BİR sessiyaya yığdı,
+lakin onlar YENƏ splash BİTDİKDƏN SONRA, GUI sapında sinxron işləyirdi.
+Splash-ın ARXASINDA isə ARTIQ bir fon mərhələsi var idi
+(`_load_context_behind_splash` → `build_context()`, ~2.4–2.7 s, UI donmur) —
+məhz bu mərhələnin SONUNA, kontekst hazır olan kimi, iki oxunu da əlavə etmək
+mümkün oldu.
+
+**Həll:** `_load_context_behind_splash`-ın fon işi (`task.run(_job)`) indi
+`factory()` (`build_context()`, DƏYİŞMƏDƏN) bitdikdən SONRA `_compute_
+startup_preload(context)`-u da ÇAĞIRIR — `_resolve_startup_route()`
+(`_startup_route()`-un `self`-siz NÜVƏSİ, modul-səviyyəli funksiyaya
+çıxarılıb) + `FaceLoginController(context).available()`. Nəticə
+`application.set_startup_preload()` YAN TƏSİRİ ilə çatdırılır (`_load_
+context_behind_splash`-ın PUBLİK 4-elementli qaytarış imzası DƏYİŞMƏDİ —
+mövcud testlər onu birbaşa açır). `_after_splash()` preload varsa
+`read_batch()`-i ÜMUMİYYƏTLƏ AÇMIR; `show_login(face_login_available=...)`
+YENİ, OPSİYONAL parametr aldı ki, `_route_after_splash` dəyəri BİRBAŞA ötürə
+bilsin. Preload BİR DƏFƏLİK istifadə olunub TƏMİZLƏNİR (`self._startup_
+preload = None`) — sonrakı `show_login()` çağırışları (logout, sessiya
+bitmə) YENƏ CANLI oxuyur, köhnəlmiş dəyər əbədi keşlənmir.
+
+**Uğursuzluq halı:** `_resolve_startup_route`/`FaceLoginController.available()`
+HƏR İKİSİ ÖZ istisnalarını ARTIQ daxildə tutur (mövcud davranış) və
+təhlükəsiz dəyərə (`LOGIN`, `False`) düşür; `_job()` daxilində ƏLAVƏ
+`try/except` DƏ var ki, gözlənilməz bir səhv UĞURLU kontekst qurulmasını
+fatal başlanğıc xətasına ÇEVİRMƏSİN — `build_context()`-in ÖZÜ dəyişmədi və
+onun uğursuzluğu HƏLƏ DƏ eyni fatal-ekran yolunu işlədir.
+
+| Ölçü | Əvvəl | Sonra (gözlənilən) |
+|---|---|---|
+| Splash bitdikdən login ekranına qədər (GUI donması) | 1050–1160 ms | **~0 ms** (iki oxu artıq fon mərhələsindədir) |
+| Splash arxasındakı fon mərhələsinin müddəti | ~2.4–2.7 s | ~3.5 s (donma DEYİL, splash animasiya edir) |
+| ÜMUMİ açılış müddəti | dəyişmir (təxminən) | dəyişmir — 1.1 saniyə DONMA olmaqdan çıxır, cəmə əlavə OLUNMUR |
+
+**Yoxlama (manual skript, `tests/`-ə YAZILMADI):** preload mövcud olanda
+`read_batch()`-in ÜMUMİYYƏTLƏ çağırılmadığı, preload-un BİR DƏFƏLİK
+işləndiyi, preload yoxdursa köhnə (`read_batch()`) yolun toxunulmaz qaldığı
+VƏ `self._preview`-un qısa-dövrə davranışının (preview-də `_face_login_
+available()` ÇAĞIRILMIR) qorunduğu — dörd ssenari ilə təsdiqləndi. Ayrıca
+`_resolve_startup_route`-un `test_startup_route.py`-dəki DÖRD halın (boş
+baza/SETUP_WIZARD, dolu baza/LOGIN, sxem yox/SCHEMA_MISSING, naməlum
+xəta/LOGIN) HƏR BİRİNİ `_startup_route()` ilə EYNİ verdiyi təsdiqləndi.
+
+### 2 — `AuthController.authenticate()`: 1894 ms sinxron
+
+`app.py::_authenticate()` `self._auth.authenticate(...)`-i birbaşa GUI
+sapında çağırırdı. İzolyasiya ölçüsü: Argon2 hesablaması 34 ms (cəminin
+~2%-i) — qalan vaxt şəbəkə/sessiya gediş-gəlişidir (PERF-1/2 ARTIQ onu bir
+tranzaksiyaya salıb, lakin uzaq baza yenə uzaqdır).
+
+**Həll:** `_on_face_login_requested`/`_on_face_login_succeeded`/`_on_face_
+login_failed` üçlüyü ilə EYNİ naxış (yeni naxış icad edilmir):
+`run_job(..., executor=self._executor)` çağırışı işi fon sapına verir,
+nəticə `_on_password_login_succeeded`/`_on_password_login_failed`
+slotlarında ƏSAS SAPDA qəbul edilir (Qt widget-ə YALNIZ orada toxunulur).
+`executor=self._executor` ötürülür (`_attempt_startup` ilə eyni naxış) ki,
+mövcud Qt-siz testlər `InlineExecutor` ilə sinxron yoxlana bilsin.
+
+| Ssenari | Əvvəl | Sonra (gözlənilən) |
+|---|---|---|
+| "Daxil Ol" düyməsi → GUI sapının sərbəst qalması | 1894 ms bloklanma | **~0 ms** (iş fon sapında) |
+
+**Test təsiri (qeyd, düzəldilməli deyil — `tests/` bu agentin sahəsi
+deyil):** `_authenticate()` artıq DƏRHAL qayıdır, nəticəni gözləmir. Üç
+mövcud test bunu sinxron fərz edirdi və `self._executor` təyin etmədən
+`object.__new__(KompasApplication)` üzərində çağırırdı —
+`test_login_and_startup_recovery.py::test_a_successful_login_reaches_the_
+shell_instead_of_raising`, `::test_a_non_employee_result_is_reported_not_
+crashed`, `test_busy_feedback.py::test_the_login_path_repaints_before_
+authenticating`. Üçü də `_attempt_startup`-ın öz testlərindəki İLƏ EYNİ
+bir sətirlə düzəlir: `application._executor = InlineExecutor()` (çağırışdan
+ƏVVƏL, bax `test_login_and_startup_recovery.py::_application_with_
+recorders`).
+
+### 3 — `show_admin()`: 3.2–13.1 s, İKİ çağırış yerində (`app.py:1079`, `:950`)
+
+**Bu tapıntı FON SAPINA köçürülmədi — aşağıdakı SƏBƏBLƏ.**
+
+`show_admin()` → `_build_admin_shell()` artıq `read_batch()` (PERF-3) və
+`_refresh_context_subtitles`/`_refresh_support_badges`-in uow-paylaşımı
+(PERF-5) ilə optimallaşdırılıb (13 sessiya → 4), lakin qalan vaxt İKİ
+növ işin SIX INTERLEAVED ardıcıllığıdır: (a) DB oxuları (tema, aktiv
+modullar, plugin səthi, kontekst altyazıları, dəstək nişanları, İLK
+ekranın `ScreenDataBinder.populate()`-i) VƏ (b) Qt widget qurulması
+(`AdminShell(...)`, ekran qeydiyyatı, siqnal bağlantıları). Bu ikisi
+metodun HƏR SƏTRİNDƏ növbələşir — sabit "əvvəlcə bütün oxular, sonra
+bütün widget-lər" sərhədi YOXDUR.
+
+`background_task.py` modulunun ÖZ qaydası («Fon işi Qt widget-inə
+TOXUNMAMALIDIR») və CLAUDE.md bölmə 6-nın sessiya qaydası («sessiya sap
+sərhədini keçmir») BİRLİKDƏ bunu literal mənada qeyri-mümkün edir: `AdminShell`
+və 41 ekran Qt obyektidir, fon sapından qurula BİLMƏZ (Qt widget-ləri
+sap-təhlükəsiz deyil — çağırış çöksəydi və ya sükutla pozulsaydı, səbəbi
+tapmaq çətin olardı). Doğru həll `ScreenDataBinder.populate()`-in (bax
+`screen_data.py`) İMZASINI "fetch (fon) + tətbiq (əsas sap)" iki mərhələyə
+bölməkdir — bu, 41 ekranın hamısına toxunan, `screen_data.py`-nın ÖZ
+müqaviləsini dəyişən genişhəcmli dəyişiklikdir və "minimal düzəliş" +
+"mövcud işləyən ekranı YENİDƏN YAZMA" qaydalarını aşır.
+
+Sənəddəki "Hələ ölçülməmiş / gələcək addımlar" siyahısında bu artıq
+qeyd olunub: **"Sorğuların fon sapına köçürülməsi — Doğru ümumi həll
+budur"** — yəni bu, YENİ tapıntı deyil, ƏVVƏLCƏDƏN tanınan, hələ
+edilməmiş iş kimi qalır. SPEED-FIX Faza 3 çərçivəsində TOXUNULMADI;
+ayrıca, `screen_data.py` səviyyəsində planlaşdırılmalıdır.
+
+Mövcud müvəqqəti tədbir DƏYİŞMİR: `set_busy(True)` + `flush_ui()` bloklamadan
+ƏVVƏL çağırılır (UX-1) və `_notify_slow_admin_load()` `read_batch()` geri
+düşəndə (fallback) istifadəçini AÇIQ xəbərdar edir (UI-1) — bunlar artıq
+koddadır, YENİ əlavə edilmədi.
+
+### 5 — `internal_requests` (4.4 s / 3 sessiya) və `technical_support` (5.4 s / 4 sessiya)
+
+`app.py::_attach_support_inbox()` `SupportInboxController.attach()`-i
+çağırırdı, o da İKİ ardıcıl sessiya açırdı (`_load_options` + `refresh`);
+`refresh()`-in `_on_counts_changed` geri çağırışı (`app.py::_refresh_support_
+badges`) ÜÇÜNCÜ sessiyanı `refresh()`-in ÖZ sessiyası BAĞLANDIQDAN SONRA
+açırdı. `technical_support`-da `_build_telegram_poller()` (bot ayarlarını
+oxuyur) DÖRDÜNCÜ sessiyanı, `attach()`-dən DAHA ƏVVƏL açırdı.
+
+**Həll:** `_attach_support_inbox()`-un bədəni `context.read_batch(user_id=
+self._current_employee.id)` sərhədinə salındı (1-ci PERF-6 tapıntısı ilə
+EYNİ naxış). Bütün dörd oxu EYNİ aktorla işlədiyi üçün (yazı yolu YOXDUR:
+`attach()` daxilində heç bir `session.commit()` çağırılmır) paylaşılmış
+sessiyanı avtomatik təkrar istifadə edir.
+
+| Ekran | Əvvəl | Sonra (gözlənilən) |
+|---|---|---|
+| `internal_requests` | 4.4 s / 3 sessiya | **~1 sessiya** |
+| `technical_support` | 5.4 s / 4 sessiya | **~1 sessiya** |
+
+### 6 — `permissions` (4.1 s / 2 sessiya)
+
+`controllers/permission_matrix.py::refresh()` rol siyahısını oxuyub
+`screen.select_role(active)` çağırırdı → bu, `role_selected` siqnalını
+SİNXRON yayırdı → `_on_role_selected` DƏRHAL İKİNCİ sessiya açıb aktiv rolun
+flag qruplarını oxuyurdu. İlk açılışda bu, ARTIQ MƏLUM olan (siyahının
+BİRİNCİSİ) rolun təkrar sorğusu idi.
+
+**Həll:** `first_open` (`self._active is None`) halında ilk rolun flag
+qrupları `list_roles` İLƏ EYNİ sessiyada oxunur; `PermissionMatrixScreen`-ə
+YENİ `set_active_role()` setter-i əlavə olundu (`group_c.py`) — `select_role()`-
+un SİQNALSIZ forması, YALNIZ vizual vurğunu qurur. `refresh()` bu YENİ
+setter-i (varsa) çağırıb matrisi BİRBAŞA `set_matrix()` ilə doldurur —
+`_on_role_selected` təkrar sorğu göndərmir. `getattr` naxışı (`_set_busy`,
+`face_control.py`, ilə EYNİ) köhnə setter-i daşımayan ekran/test sahtələrini
+qoruyur: onlar köhnə (siqnallı, iki sessiyalı) yolda qalır.
+
+SONRAKI `refresh()` çağırışları (yadda saxladıqdan/rol yaratdıqdan sonra) BU
+YOLU İŞLƏTMİR: `self._active` ARTIQ dolu olduğu üçün `first_open` `False`-dur
+və `select_role()` köhnə (siqnallı) yolla işləyir — flag-lər məhz belə
+hallarda dəyişmiş ola bilər və TƏZƏ oxu doğru davranışdır. İstifadəçinin ƏL
+İLƏ rol dəyişməsi TOXUNULMADI: düymə kliki `select_role()`-u birbaşa çağırır.
+
+| Ssenari | Əvvəl | Sonra (gözlənilən) |
+|---|---|---|
+| `permissions` İLK açılış | 4.1 s / 2 sessiya | **~1 sessiya** |
+| Rolun ƏL İLƏ dəyişməsi | 1 sessiya (dəyişməz) | 1 sessiya (dəyişməz) |
+
+### 7 — `face_enrollment` (4.4 s, CƏMİ 1 sessiya — DB SƏBƏB DEYİLDİ)
+
+`controllers/face_control.py::FaceEnrollmentController._camera_row()`
+`camera.is_available()` — HƏQİQİ KAMERA APARAT PROBU — AÇIQ DB sessiyasının
+(`refresh()`-in `with self._context.session(...)` bloku) İÇİNDƏ, GUI sapında
+sinxron çağırılırdı. İKİ ayrı zərəri var idi: (a) GUI donurdu, (b)
+`employees` sətrini oxuyan tranzaksiya probun BÜTÜN müddəti boyu AÇIQ
+qalırdı — CLAUDE.md §6-nın «kontroller uzun-ömürlü tranzaksiya saxlamır»
+qaydasının pozulması (HOG üz-aşkarlaması BUNUN SƏBƏBİ DEYİL — o, ayrıca
+ölçülüb, 102 ms, problemsizdir).
+
+**Həll:** `refresh()` indi YALNIZ siyahı + kadr sayını sessiya İÇİNDƏ oxuyur
+və sessiyanı BAĞLAYIR; kamera probu `_refresh_camera_state()` ilə, sessiyadan
+KƏNARDA, `run_job` ilə FON SAPINDA aparılır (`_camera_task`, `_task`-dan AYRI
+sahə — qeydiyyat yazısı ilə paralel qaça bilər). Prob bitənə qədər ekran
+`"available": "0"`, `"Kamera yoxlanılır…"` göstərir — bu, TƏHLÜKƏSİZ
+defoltdur, çünki `[Çək]` düyməsi YALNIZ `available=1`-də aktivləşir.
+
+| Ölçü | Əvvəl | Sonra (gözlənilən) |
+|---|---|---|
+| DB sessiya sayı | 1 | 1 (dəyişməz) |
+| GUI sapının kamera probu boyu bloklanması | ~4.4 s-ə qədər (sürücüdən asılı) | **0 ms** (fon sapında) |
+| Açıq tranzaksiyanın kamera probu boyu davam etməsi | BƏLİ (qayda pozğunluğu) | **XEYR** |
+
+**Test təsiri (`tests/`-ə TOXUNMADIM, sizə bildirirəm):** iki test kamera
+probunun İNDİ ASİNXRON olduğunu nəzərə almır —
+`test_face_control_screen.py::test_an_unavailable_camera_is_explained_not_
+hidden` (çağırışa `executor=InlineExecutor()` çatışmır — sibling testlərdəki
+İLƏ EYNİ bir sətir) və `test_face_enrollment_screen_e2e.py::test_a_second_
+click_while_the_first_capture_is_still_running_is_rejected`
+(`_DeferredExecutor` ilə: `[Çək]` düyməsi kamera probu HƏLƏ bitmədiyi üçün
+BAŞLANĞICDA deaktivdir — testin klikləri `executor.flush()`-dan ƏVVƏL, düymə
+deaktivkən gedir; test kamera-probu jobunu ƏVVƏLCƏ `flush()` etməli, sonra
+klikləməlidir).
+
+---
+
 ## Hələ ölçülməmiş / gələcək addımlar
 
 | Mövzu | Ölçülmüş dəyər | Qeyd |
@@ -325,4 +553,4 @@ ETMİRLƏR. Rəqəmlər burada saxlanılır ki, eyni şübhə ikinci dəfə ara�
 | `_build_session()` (use case qrafı) | ~45 ms | Hər sessiyada. Şəbəkə yanında kiçikdir, lakin sıfır deyil. |
 | Ekranların canlı məlumatı | ölçülüb | 41 ekran, 0.7–5.9 s, hamısı ~%100 baza gözləməsi (yuxarıdakı cədvəl). |
 | `dashboard` ekranının sorğu sayı | ~28 sorğu / 1 sessiya | Tək sessiyada çox sorğu — birləşdirmək (JOIN / tək sorğu) növbəti addımdır. |
-| Sorğuların fon sapına köçürülməsi | — | Doğru ümumi həll budur; `BackgroundTask` infrastrukturu artıq mövcuddur. |
+| Sorğuların fon sapına köçürülməsi | — | `_authenticate()` (PERF-6 #2) və `_after_splash()` (PERF-6 #1) ARTIQ köçürülüb. `show_admin()` (PERF-6 #3) HƏLƏ QALIR — səbəb: `ScreenDataBinder.populate()` fetch+widget-tətbiqini AYIRMIR, `BackgroundTask` isə Qt widget-ə fon sapından toxunmağı qadağan edir. |

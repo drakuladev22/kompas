@@ -62,17 +62,42 @@ BINDER_SCREENS: Final[dict[str, tuple[str, str]]] = {
 #: çağırışı statik yoxlamadan kənarda qalar.
 DELEGATED_BINDERS: Final[dict[str, tuple[str, ...]]] = {
     "_dashboard": (
-        "_dashboard_summary",
-        "_dashboard_fines",
-        "_dashboard_leave",
-        "_dashboard_leaders",
-        "_dashboard_health",
+        "_dashboard_summary_apply",
+        "_dashboard_fines_apply",
+        "_dashboard_leave_apply",
+        "_dashboard_leaders_apply",
+        "_dashboard_health_apply",
+        "_dashboard_network_apply",
+        # `_dashboard_benchmark` ÖZÜ heç bir setter çağırmır — icazə
+        # yoxlamasından sonra dörd setteri (`set_ranking_table`, `set_store_
+        # vs_network`, `set_metric_trend`, `set_outliers`) çağıran BU
+        # metoda delegə edir (`refresh_dashboard_benchmark` da EYNİsini
+        # paylaşır). DOĞRU AD BUDUR — QƏSDƏN QIRMIZI qalır:
+        # `_dashboard_benchmark_apply`-ın `screen.set_store_vs_network(**
+        # data.comparison)` çağırışı `test_screen_data_forbids_kwargs_
+        # unpacking_calls`-ı pozur (`screen_data.py:1193`, TƏK kök səbəb).
+        # Köhnə/səhv addan (`_populate_benchmark_sections`) İSTİFADƏ ETMİRİK
+        # — o, qırmızını YANLIŞ səbəblə («funksiya tapılmadı») göstərərdi.
+        "_dashboard_benchmark_apply",
+        "_dashboard_break_overuse_apply",
     ),
     # #13 — tarixi nümunə kartı Növbə Matrisinin İKİNCİ, müstəqil bölməsidir
     # (matris + məsləhət). Ayrı köməkçi olması onun heç nə təyin etmədiyini
     # struktur olaraq göstərir; imza yoxlaması isə burada elan edildiyi üçün
     # onu da əhatə edir.
-    "_shift_planning": ("_shift_staffing_pattern",),
+    "_shift_planning": ("_render_shift_matrix_apply", "_shift_staffing_pattern_apply"),
+    "_fines": ("_fines_apply",),
+    "_help": ("_help_apply",),
+    "_shift_swaps": ("_shift_swaps_apply",),
+    "_fine_appeals": ("_fine_appeals_apply",),
+    "_tasks": ("_tasks_apply",),
+    "_sales_points": ("_sales_points_apply",),
+    "_reports": ("_reports_apply",),
+    "_audit": ("_audit_apply",),
+    "_live_queue": ("_live_queue_apply",),
+    "_users": ("_users_apply",),
+    "_health": ("_health_apply",),
+    "_daily_roster": ("_daily_roster_apply",),
 }
 
 
@@ -83,28 +108,39 @@ def _screen_class(module_name: str, class_name: str) -> type:
     return getattr(module, class_name)  # type: ignore[no-any-return]
 
 
-def _setter_calls(binder_name: str) -> list[ast.Call]:
-    """Doldurucunun (və elan edilmiş köməkçilərinin) `screen.<setter>(…)` çağırışları."""
+def _setter_calls_by_source(binder_name: str) -> dict[str, list[ast.Call]]:
+    """Doldurucunun (və elan edilmiş köməkçilərinin) `screen.<setter>(…)` çağırışları.
+
+    Nəticə AD ÜZRƏ ayrıdır (`binder_name` özü + hər `DELEGATED_BINDERS` girişi
+    üçün AYRI siyahı) — `test_every_delegate_contributes_a_setter_call`-a
+    lazımdır: yekun (bütün adları birləşdirilmiş) siyahının boş OLMAMASI
+    kifayət etmir, çünki bir delegat SIFIR çağırış versə, digərlərinin
+    çağırışları onu SÜKUTLA örtür (bax modul başlığı — `_dashboard_benchmark`
+    məhz bu vəziyyətdə tapıldı).
+    """
     wanted = {binder_name, *DELEGATED_BINDERS.get(binder_name, ())}
     tree = ast.parse(SCREEN_DATA.read_text(encoding="utf-8"))
-    found: set[str] = set()
-    calls: list[ast.Call] = []
+    by_source: dict[str, list[ast.Call]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef) or node.name not in wanted:
             continue
-        found.add(node.name)
-        calls.extend(
+        by_source[node.name] = [
             call
             for call in ast.walk(node)
             if isinstance(call, ast.Call)
             and isinstance(call.func, ast.Attribute)
             and isinstance(call.func.value, ast.Name)
             and call.func.value.id == "screen"
-        )
-    missing = wanted - found
+        ]
+    missing = wanted - by_source.keys()
     if missing:
         pytest.fail(f"`screen_data.py`-da tapılmadı: {sorted(missing)}")
-    return calls
+    return by_source
+
+
+def _setter_calls(binder_name: str) -> list[ast.Call]:
+    """`_setter_calls_by_source`-un YEKUN (bütün mənbələr birləşdirilmiş) forması."""
+    return [call for calls in _setter_calls_by_source(binder_name).values() for call in calls]
 
 
 def test_every_registered_binder_is_covered_here() -> None:
@@ -167,6 +203,95 @@ def test_binder_calls_match_screen_setter_signatures(binder_name: str) -> None:
             pytest.fail(
                 f"{class_name}.{setter_name}{signature} — `{binder_name}` yanlış çağırır: {error}"
             )
+
+
+@pytest.mark.parametrize("binder_name", sorted(BINDER_SCREENS))
+def test_every_delegate_contributes_a_setter_call(binder_name: str) -> None:
+    """`DELEGATED_BINDERS`-də AÇIQ elan edilmiş HƏR ad ƏN AZI BİR çağırış verməlidir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `test_binder_calls_match_screen_setter_signatures` BUNU TUTMUR
+    ──────────────────────────────────────────────────────────────────────────
+    O test yalnız YEKUN (bütün delegatlar birləşdirilmiş) siyahının boş
+    OLMAMASINI tələb edir. Bir delegat adı KÖHNƏLSƏ (funksiya adı dəyişib
+    və ya başqa yerə köçübsə) — `missing` yoxlaması `screen_data.py`-da HEÇ
+    BİR funksiya bu adı daşımadıqda tutur, LAKİN funksiya HƏLƏ MÖVCUDDURSA,
+    sadəcə artıq `screen.set_*` ÇAĞIRMIRSA (məs. daha da dərin bir köməkçiyə
+    delegə edibsə) — bu SÜKUTLA keçir, çünki digər delegatların çağırışları
+    yekun siyahını onsuz da boş qoymur.
+
+    Məhz bu formada tapıldı: `_dashboard_benchmark` DELEGATED_BINDERS-də idi,
+    LAKİN özü heç bir setter çağırmırdı (`_populate_benchmark_sections`-a
+    delegə edirdi) — test digər yeddi bölmənin çağırışları sayəsində YAŞIL
+    qalırdı və dörd setterin (`set_ranking_table`, `set_store_vs_network`,
+    `set_metric_trend`, `set_outliers`) İMZASI heç vaxt yoxlanılmırdı.
+
+    Əsas binder-in (`binder_name`) ÖZÜNÜN sıfır çağırış verməsi NORMALDIR —
+    bu, doldurucunun bütün işini köməkçilərə həvalə etdiyi (delegasiya) hal
+    üçün gözlənilir. Yoxlama YALNIZ `DELEGATED_BINDERS`-də AÇIQ sadalanmış
+    adlara aiddir.
+    """
+    by_source = _setter_calls_by_source(binder_name)
+    for delegate_name in DELEGATED_BINDERS.get(binder_name, ()):
+        assert by_source.get(delegate_name), (
+            f"`DELEGATED_BINDERS['{binder_name}']` içindəki `{delegate_name}` heç bir "
+            f"setter çağırmır — ad köhnəlib, ya da funksiya başqa (daha dərin) "
+            f"bir köməkçiyə delegə edir"
+        )
+
+
+def test_screen_data_forbids_kwargs_unpacking_calls() -> None:
+    """`screen.<setter>(**mapping)` QADAĞANDIR — açıq açar-arqumentlər tələb olunur.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ
+    ──────────────────────────────────────────────────────────────────────────
+    `**` açılışı imza yoxlamasını YAN KEÇİR: nə bu fayldakı AST testi
+    (`ast.keyword.arg` belə çağırışlarda HƏMİŞƏ `None`-dur, real açar adları
+    YALNIZ İCRA ZAMANI, dict-in məzmunu ilə məlumdur), nə mypy (`dict[str,
+    Any]` açılışının açarlarını setter imzası ilə tutuşdurmur) bunu tuta
+    bilir. Uyğunsuzluğun nəticəsi udulan `TypeError` və BOŞ ekrandır —
+    `_audit_apply`-ın öz şərhi məhz bu qüsur sinfini izah edir (səhv açar
+    `TypeError` atırdı, `populate()` onu udurdu, cədvəl canlı rejimdə
+    HƏMİŞƏ boş qalırdı).
+
+    ──────────────────────────────────────────────────────────────────────────
+    YAZILDIĞI GÜN QIRMIZI İDİ — İNDİ HƏLL OLUNUB
+    ──────────────────────────────────────────────────────────────────────────
+    Yazılanda `screen_data.py`-də bütün faylda YEGANƏ pozuntu `_dashboard_
+    benchmark_apply`-dakı `screen.set_store_vs_network(**data.comparison)`
+    idi. `ui-speed` sətri açıq açar-arqumentlərə keçirdi VƏ `_DashboardBench
+    markData.comparison`-ı `dict[str, Any] | None`-dan `_BenchmarkComparison
+    | None` (frozen dataclass) etdi — indi mypy sahə adlarını, bu test isə
+    setter imzasını yoxlayır. `test_binder_calls_match_screen_setter_
+    signatures`-dəki müvəqqəti `**` güzəşti bu səbəbdən SİLİNİB (geri
+    qaytarılmamalıdır — o, məhz bu testin YEGANƏ, dəqiq siqnal olması üçün
+    var idi).
+
+    Qəsdən `xfail` İŞLƏDİLMƏDİ: xfail bu qadağanı GÖRÜNMƏZ edərdi — qırmızı
+    sətir problemi dəqiq bildirən SİQNAL idi, indi isə testin ÖZÜ qaydanın
+    gələcəkdə sükutla pozulmasının qarşısını alır.
+    """
+    tree = ast.parse(SCREEN_DATA.read_text(encoding="utf-8"))
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "screen"
+            and any(keyword.arg is None for keyword in node.keywords)
+        ):
+            continue
+        violations.append(
+            f"{SCREEN_DATA.name}:{node.lineno} — screen.{node.func.attr}(**...) qadağandır: "
+            f"`**` açılışı imza yoxlamasını yan keçir (nə bu AST testi, nə mypy açarların "
+            f"setter imzasına uyğunluğunu yoxlaya bilir; uyğunsuzluğun nəticəsi udulan "
+            f"`TypeError` və BOŞ ekrandır — bax `_audit_apply` şərhi). Açıq açar-"
+            f"arqumentlərə keçirin."
+        )
+
+    assert not violations, "\n".join(violations)
 
 
 # --------------------------------------------------------------------------- #

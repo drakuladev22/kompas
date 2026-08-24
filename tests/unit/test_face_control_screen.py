@@ -828,6 +828,7 @@ def test_an_unavailable_camera_is_explained_not_hidden() -> None:
     controller = FaceEnrollmentController(
         _FaceContext(session, camera_available=False),  # type: ignore[arg-type]
         _hr_admin(),
+        executor=InlineExecutor(),
     )
     screen = _EnrollmentScreen()
 

@@ -37,13 +37,19 @@ def test_a_successful_login_reaches_the_shell_instead_of_raising() -> None:
     """Qüsurun ÖZÜ: `isinstance(..., Employee)` `NameError` atırdı.
 
     Test Qt TƏLƏB ETMİR: `_authenticate` yalnız `self._login` və `self._auth`
-    ilə işləyir, hər ikisi sahtələnir. Ölçülən — uğurlu nəticədə istisna
-    ATILMAMASI və axının davam etməsidir.
+    ilə işləyir, hər ikisi sahtələnir. `_authenticate` PERF-6-dan sonra işi
+    `self._executor` ilə fon sapına verir (bax `app.py::_authenticate`
+    başlığı) — testdə `InlineExecutor` işlədilir ki, nəticə hadisə dövrəsi
+    olmadan DƏRHAL çatdırılsın (`_application_with_recorders`-dəki eyni
+    naxış). Ölçülən — uğurlu nəticədə istisna ATILMAMASI və axının davam
+    etməsidir.
     """
     from src.domain.entities.employee import Employee
     from src.presentation.app import KompasApplication
+    from src.presentation.background_task import InlineExecutor
 
     application = object.__new__(KompasApplication)
+    application._executor = InlineExecutor()  # type: ignore[attr-defined]
 
     class _Login:
         def __init__(self) -> None:
@@ -93,8 +99,10 @@ def test_a_successful_login_reaches_the_shell_instead_of_raising() -> None:
 def test_a_non_employee_result_is_reported_not_crashed() -> None:
     """Tip qoruyucusunun ÖZÜ hələ də işləyir — sadəcə artıq çökmür."""
     from src.presentation.app import KompasApplication
+    from src.presentation.background_task import InlineExecutor
 
     application = object.__new__(KompasApplication)
+    application._executor = InlineExecutor()  # type: ignore[attr-defined]
 
     class _Login:
         def __init__(self) -> None:

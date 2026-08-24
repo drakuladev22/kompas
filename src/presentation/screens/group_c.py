@@ -895,13 +895,30 @@ class PermissionMatrixScreen(Screen):
             button.setVisible(needle in button.text().lower())
 
     def select_role(self, key: str) -> None:
+        self._apply_active_role_style(key)
+        self.role_selected.emit(key)
+
+    def set_active_role(self, key: str) -> None:
+        """`select_role()`-un SİQNALSIZ forması (PERF-6 #6).
+
+        Kontroller ARTIQ eyni sessiyada matris məlumatını oxumuşsa (ilk
+        açılışdakı təkrar-oxu düzəlişi, bax `permission_matrix.py::refresh`),
+        `select_role()`-un yaydığı `role_selected` siqnalı `_on_role_selected`-i
+        TƏKRAR çağırıb İKİNCİ sessiya açardı. Bu metod YALNIZ vizual vəziyyəti
+        (aktiv düymə vurğusu, `_active_role`) qurur — matrisi çağıran `set_
+        matrix()`-i ÖZÜ ayrıca çağırır. İstifadəçinin ƏL İLƏ rol dəyişməsi
+        (düymə kliki) HƏLƏ DƏ `select_role()`-dan keçir və siqnal yayır —
+        bura YENİ davranış ƏLAVƏ ETMİR, mövcud `select_role()`-u parçalayır.
+        """
+        self._apply_active_role_style(key)
+
+    def _apply_active_role_style(self, key: str) -> None:
         self._active_role = key
         for role_key, button in self._role_buttons.items():
             button.setProperty("active", "true" if role_key == key else "false")
             style = button.style()
             style.unpolish(button)
             style.polish(button)
-        self.role_selected.emit(key)
 
     # ------------------------------ sağ panel -------------------------------- #
 

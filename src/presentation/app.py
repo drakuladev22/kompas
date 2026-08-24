@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import sys
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -108,6 +109,30 @@ class StartupRoute(str, Enum):
     LOGIN = "LOGIN"
     SETUP_WIZARD = "SETUP_WIZARD"
     SCHEMA_MISSING = "SCHEMA_MISSING"
+
+
+@dataclass(frozen=True, slots=True)
+class _StartupPreload:
+    """`_route_after_splash`/`_face_login_available`-in İKİ oxusunun NƏTİCƏSİ.
+
+    ──────────────────────────────────────────────────────────────────────────
+    PERF-6 — POST-SPLASH DONMA (1050–1160 ms)
+    ──────────────────────────────────────────────────────────────────────────
+    `_after_splash()` (PERF-6-nın əvvəlki addımı) iki oxunu (`_startup_route`/
+    `_face_login_available`) BİR `read_batch()`-ə yığdı, lakin onlar YENƏ splash
+    BİTDİKDƏN SONRA, GUI sapında sinxron işləyirdi (~860→1050-1160 ms, ölçülüb —
+    `read_batch()` yalnız SESSİYA QURULMASINI paylaşır, ŞƏBƏKƏ vaxtını yox).
+
+    Bu tip həmin iki oxunu splash-ın ARXASINDA ARTIQ işləyən fon mərhələsinə
+    (`_load_context_behind_splash` → `_compute_startup_preload`) daşıyır.
+    `KompasApplication.set_startup_preload()` onu QOŞUR, `_route_after_splash`
+    isə BİR DƏFƏLİK İSTİFADƏ edir (bax onun şərhi) — sonrakı `show_login()`
+    çağırışları (logout, sessiya bitmə) YENƏ CANLI oxuyur, köhnəlmiş dəyər
+    əbədi keşlənmir.
+    """
+
+    route: StartupRoute
+    face_login_available: bool
 
 
 #: Splash ekranının minimum görünmə müddəti.
@@ -320,6 +345,12 @@ class KompasApplication:
         register_bundled_fonts()
         #: Canlı obyekt qrafı (Faza 5/6). `None` -> önizləmə/dizayn rejimi.
         self._context = context
+        #: PERF-6 (post-splash) — `_startup_route`/`_face_login_available`-in
+        #: splash arxasında, FON SAPINDA HESABLANMIŞ NƏTİCƏSİ. `set_startup_
+        #: preload()` ilə qoşulur, `_after_splash()` BİR DƏFƏLİK istifadə edib
+        #: TƏMİZLƏYİR — bax `_StartupPreload` başlığı. `None` = köhnə (canlı
+        #: oxuyan) yol işə düşür.
+        self._startup_preload: _StartupPreload | None = None
         #: Başlanğıc uğursuzluğunun NÖVÜ (SEC-2) — `_context is None` olanda
         #: SƏBƏBİ ayırır (`recovery_console.may_open`-un bypass qərarı buna
         #: söykənir). Kontekst uğurla qurulubsa `None` qalır.
@@ -428,6 +459,10 @@ class KompasApplication:
         #: `_touch_task` ilə EYNİ səbəbdən saxlanılır: nəticə gəlməmiş
         #: toplanmasın.
         self._face_login_task: Any = None
+        #: PERF-6 — şifrə ilə giriş (`_authenticate`) DA fon sapına köçüb.
+        #: `_face_login_task` ilə EYNİ səbəbdən saxlanılır: nəticə gəlməmiş
+        #: Python obyekti toplanmasın.
+        self._login_task: Any = None
         #: DÖVRƏ 5 audit tapıntısı — kiosk `on_face_login` (`start_kiosk`)
         #: EYNİ səbəbdən fon sapına köçüb. `_face_login_task`-dan AYRIDIR:
         #: panel və kiosk eyni anda AÇIQ ekranlar deyil, lakin iki müstəqil
@@ -549,12 +584,80 @@ class KompasApplication:
         self._startup_failure_kind = startup_failure_kind
         self._startup_failure_reason = startup_failure_reason
 
+    def set_startup_preload(self, preload: _StartupPreload | None) -> None:
+        """`_load_context_behind_splash`-ın fon sapında hesabladığı marşrutu qoşur.
+
+        `set_context()` İLƏ EYNİ ÇAĞIRIŞ ZƏNCİRİNDƏDİR (`run()`), lakin AYRICA
+        metoddur: kontekstin ÖZÜ ilə ondan HESABLANAN marşrut fərqli suallara
+        cavab verir və `set_context()`-i çağıran hər yer (məs. testlər) bu
+        əlavə hesablamanı MƏCBURİ etməməlidir. `preload=None` — fon mərhələsi
+        onu hesablaya BİLMƏYİB (bax `_StartupPreload` başlığı) və ya kontekst
+        heç qurulmayıb; `_after_splash()` bu halda köhnə (canlı oxuyan) yola
+        qayıdır.
+        """
+        self._startup_preload = preload
+
     def _after_splash(self) -> None:
-        """Splash bitdi — lisenziya qapısı, sonra quraşdırma və ya giriş."""
+        """Splash bitdi — lisenziya qapısı, sonra quraşdırma və ya giriş.
+
+        ──────────────────────────────────────────────────────────────────────
+        PERF-6 — GİRİŞ EKRANINDAN ƏVVƏL 1724 MS DONMA
+        ──────────────────────────────────────────────────────────────────────
+        `_startup_route()` (bir sessiya) və giriş yolunda `_face_login_
+        available()` (`show_login()` çağırır, İKİNCİ sessiya) hər biri uzaq
+        bazada ~860 ms çəkir — ölçülüb. `read_batch()` (PERF-3) buraya
+        TƏTBİQ OLUNMAMIŞDI, çünki iki oxu fərqli metodlardadır və aralarında
+        marşrut budaqlanması var: BİR yerdə açılıb BAĞLANMALI sərhəd yox idi.
+
+        Sərhəd BURADADIR indi, çünki «splash bitdi, giriş ekranı görünənə
+        qədər» sualının cavabını yalnız bu metod bilir — `read_batch()`
+        sapa görə ayrıdır (`composition.py`) və bu metod həmişə GUI sapında
+        işlədiyi üçün nəticə həmin sapın bağlantısını təhlükəsiz paylaşır.
+        Toplu YALNIZ OXU aparır (`_startup_route`/`_face_login_available`
+        heç nə yazmır), ona görə `read_batch()`-in "yazı yolu topludan
+        kənarda qalır" qaydası pozulmur.
+
+        ──────────────────────────────────────────────────────────────────────
+        PERF-6 (POST-SPLASH) — `_startup_preload` VARSA, `read_batch()`
+        ÜMUMİYYƏTLƏ AÇILMIR
+        ──────────────────────────────────────────────────────────────────────
+        Yuxarıdakı `read_batch()` HƏLƏ DƏ mövcuddur (fallback naxışı) — lakin
+        adi axında ikisi (`_startup_route`/`_face_login_available`) ARTIQ
+        splash-ın ARXASINDA, fon sapında hesablanıb (bax `_StartupPreload`,
+        `_load_context_behind_splash`). O halda `self._startup_preload`
+        DOLUDUR və `_route_after_splash`-a ötürülür — GUI sapında HEÇ BİR DB
+        sorğusu qalmır. `read_batch()` yolu YALNIZ preload YOXDURSA (önizləmə,
+        ya da fon mərhələsində gözlənilməz uğursuzluq — bax `_StartupPreload`
+        şərhi) işə düşür və KÖHNƏ (bir qədər yavaş, amma dayanıqlı) davranışı
+        saxlayır.
+        """
         if self._context is not None and self._context.license_blocked():
             self.show_license_blocked()
             return
-        route = self._startup_route()
+        # BİR DƏFƏLİK İSTİFADƏ: sonrakı `show_login()` çağırışları (logout,
+        # sessiya bitmə) preload-u YENİDƏN İSTİFADƏ ETMİR — canlı oxuyur, əks
+        # halda kamera modulu işə düşən/söndürülən istifadəçi köhnəlmiş
+        # dəyəri əbədi görərdi.
+        preload = self._startup_preload
+        self._startup_preload = None
+        if preload is not None:
+            self._route_after_splash(preload=preload)
+            return
+        if self._context is None:
+            self._route_after_splash(preload=None)
+            return
+        with self._context.read_batch():
+            self._route_after_splash(preload=None)
+
+    def _route_after_splash(self, *, preload: _StartupPreload | None) -> None:
+        """`_after_splash()`-ın marşrut budaqlanması (PERF-6 üçün ayrılıb).
+
+        `show_login()` içindəki `_face_login_available()` DA bu metodun
+        çağırış zəncirindədir — ikisinin AYNI `read_batch()` sərhədində
+        qalması üçün ayrı funksiyaya çıxarıldı (bax `_after_splash`).
+        `preload` DOLUDURSA HEÇ BİR oxu getmir (bax çağıran metodun şərhi).
+        """
+        route = preload.route if preload is not None else self._startup_route()
         if route is StartupRoute.SCHEMA_MISSING:
             self.show_fatal_error(
                 "Baza sxemi tətbiq olunmayıb: cədvəllər tapılmadı. "
@@ -565,7 +668,9 @@ class KompasApplication:
         if route is StartupRoute.SETUP_WIZARD:
             self.show_setup_wizard()
             return
-        self.show_login()
+        self.show_login(
+            face_login_available=preload.face_login_available if preload is not None else None
+        )
 
     def _startup_route(self) -> StartupRoute:
         """Splash-dan sonra HANSI ekranın açılacağını BİR sorğu ilə həll edir.
@@ -593,19 +698,17 @@ class KompasApplication:
         quraşdırmanı "boş" göstərər və ilk `CEO` hesabı üzərinə yazmağa
         çalışardı; giriş ekranı isə ən pis halda "giriş alınmadı" deyir və
         geri qaytarıla bilən vəziyyətdir.
+
+        NÜVƏ MƏNTİQİ `_resolve_startup_route()`-dadır (PERF-6 post-splash) —
+        modul-səviyyəli funksiya kimi çıxarılıb ki, splash arxasındakı fon
+        mərhələsi (`_compute_startup_preload`) ONU `self`-siz, hələ
+        `KompasApplication`-a QOŞULMAMIŞ bir kontekstlə DƏ çağıra bilsin. Bu
+        metod YALNIZ `self._context is None` şərtini (önizləmə/dizayn rejimi)
+        əlavə edir.
         """
         if self._context is None:
             return StartupRoute.LOGIN
-        try:
-            with self._context.session() as session:
-                required = bool(session.setup.is_required(self._context.tenant_id))
-        except Exception as exc:
-            if getattr(exc, "sqlstate", None) == _UNDEFINED_TABLE:
-                _log.error("DATABASE_SCHEMA_MISSING", extra={"sqlstate": _UNDEFINED_TABLE})
-                return StartupRoute.SCHEMA_MISSING
-            _log.exception("SETUP_CHECK_FAILED")
-            return StartupRoute.LOGIN
-        return StartupRoute.SETUP_WIZARD if required else StartupRoute.LOGIN
+        return _resolve_startup_route(self._context)
 
     def show_license_blocked(self) -> None:
         """Bölmə 8: səbəb + borc tarixi + əlaqə vasitəsi AÇIQ göstərilir."""
@@ -835,7 +938,14 @@ class KompasApplication:
 
     # -------------------------------- giriş ---------------------------------- #
 
-    def show_login(self) -> None:
+    def show_login(self, *, face_login_available: bool | None = None) -> None:
+        """Giriş ekranını açır.
+
+        Args:
+            face_login_available: PRELOADED dəyər (PERF-6, bax `_StartupPreload`)
+                — verilibsə YENİDƏN DB-yə getmir. `None` (bütün DİGƏR çağırış
+                yerləri — logout, sessiya bitmə) → köhnə kimi CANLI oxunur.
+        """
         from src.presentation.screens.group_a_entry import AdminLoginScreen  # noqa: PLC0415
 
         login = AdminLoginScreen(self._theme)
@@ -844,7 +954,21 @@ class KompasApplication:
         # DÜYMƏ YALNIZ İŞLƏYƏCƏYİ HALDA GÖRÜNÜR (kioskdakı ilə eyni qayda).
         # Önizləmədə həmişə göstərilir ki, dizayn baxışı ekranın tam formasını
         # görsün — orada kamera və baza onsuz da yoxdur.
-        login.set_face_login_available(self._preview or self._face_login_available())
+        #
+        # QISA-DÖVRƏ QORUNUR: `self._preview` `True`-dursa `_face_login_
+        # available()` ÜMUMİYYƏTLƏ ÇAĞIRILMIR (əvvəlki `self._preview or
+        # self._face_login_available()` ifadəsinin EYNİ semantikası) — `if/
+        # else`-ə keçəndə bunu itirmək preload-suz DA lazımsız çağırış
+        # yaradardı.
+        if self._preview:
+            login.set_face_login_available(True)
+        else:
+            available = (
+                face_login_available
+                if face_login_available is not None
+                else self._face_login_available()
+            )
+            login.set_face_login_available(available)
         self._window.set_content(login)
         self._login = login
 
@@ -1005,14 +1129,34 @@ class KompasApplication:
         self.show_admin(preview_data.build_admin(), now=preview_data.PREVIEW_NOW)
 
     def _authenticate(self, username: str, password: str) -> None:
-        """Real giriş axını.
+        """Real giriş axını — İŞ FON SAPINDA (PERF-6).
 
-        Kontroller istisna ATMIR — nəticə həmişə `AuthOutcome`-dur, ona görə
-        burada `try/except` yoxdur (bax `controllers/auth.py` başlığı).
+        ──────────────────────────────────────────────────────────────────────
+        ƏVVƏL SİNXRON İDİ — ÖLÇÜLMÜŞ 1894 MS DONMA
+        ──────────────────────────────────────────────────────────────────────
+        `AuthController.authenticate()` PERF-1/PERF-2-nin nəticəsi olaraq ARTIQ
+        BİR tranzaksiyadadır (`AttemptScope`), lakin həmin tranzaksiya yenə
+        UZAQ bazaya gedir və izolyasiya ölçüsü göstərir ki, Argon2 hesablaması
+        bunun səbəbi DEYİL (34 ms, cəminin ~2%-i — `DUAL_CONTROL_THRESHOLD_
+        MINUTES` tipli sabitlərdə olduğu kimi burada da parametrə TOXUNULMUR,
+        CLAUDE.md §5). Qalan vaxt şəbəkə/sessiya gediş-gəlişidir və o, GUI
+        sapında sinxron çağırılırdı — "Daxil Ol" düyməsi basılandan sonra
+        pəncərə ~1.9 saniyə HEÇ nəyə cavab vermirdi (sürüşdürülə, bağlana
+        bilmirdi), sadəcə "Yoxlanılır…" yazısı ilə donurdu.
+
+        Naxış `_on_face_login_requested`/`_on_face_login_succeeded`/`_on_
+        face_login_failed` ÜÇLÜYÜ İLƏ EYNİDİR — YENİ naxış İCAD EDİLMİR, üz
+        yolu ilə bir sıra sinxronlaşdırılır: nəticə qəbulu (`_on_password_
+        login_succeeded`) və Qt widget-ə TOXUNAN hər şey ƏSAS SAPDA qalır,
+        FON SAPINDA isə YALNIZ `AuthController.authenticate()` (Qt-dən
+        asılı olmayan, saf çağırış) icra olunur.
+
+        Kontroller istisna ATMIR — nəticə həmişə `AuthOutcome`-dur (bax
+        `controllers/auth.py` başlığı), ona görə fon işinin `on_failure`
+        yolu son qoruyucudur, gözlənilən axın deyil.
         """
-        from datetime import UTC, datetime  # noqa: PLC0415
-
         from src.domain.value_objects.credentials import Username  # noqa: PLC0415
+        from src.presentation.background_task import run_job  # noqa: PLC0415
 
         assert self._auth is not None
 
@@ -1021,23 +1165,48 @@ class KompasApplication:
         # DÜYMƏNİN VƏZİYYƏTİ SORĞUDAN ƏVVƏL GÖRÜNMƏLİDİR (UX-1)
         # ──────────────────────────────────────────────────────────────────
         # `set_busy(True)` düyməni söndürür və mətnini dəyişir, lakin Qt onu
-        # yalnız hadisə dövrəsinə qayıdanda çəkir — bloklayan giriş sorğusu
-        # isə həmin qayıdışdan ƏVVƏL başlayır. Nəticədə istifadəçi bir neçə
-        # saniyə HEÇ BİR dəyişiklik görmürdü və proqram «cavab vermir» kimi
-        # görünürdü (bildirilən «button late reply»).
+        # yalnız hadisə dövrəsinə qayıdanda çəkir — fon işi buraxılmazdan
+        # ƏVVƏL bu dəyişiklik çəkilməlidir, əks halda istifadəçi bir neçə
+        # saniyə HEÇ BİR dəyişiklik görmür və proqram «cavab vermir» kimi
+        # görünür (bildirilən «button late reply»).
         flush_ui()
-        try:
-            outcome = self._auth.authenticate(Username(username), password)
-        finally:
-            # Düymə HƏR halda açılır — xəta olsa da istifadəçi yenidən
-            # cəhd edə bilməlidir.
-            self._login.set_busy(False)
 
-        if not outcome.succeeded:
-            self._login.set_error(outcome.message)
+        auth = self._auth
+        self._login_task = run_job(
+            lambda: auth.authenticate(Username(username), password),
+            on_success=self._on_password_login_succeeded,
+            on_failure=self._on_password_login_failed,
+            owner=self._login,
+            name="PASSWORD_LOGIN",
+            # `_attempt_startup`/`_on_setup_completed` ilə EYNİ naxış: testlərdə
+            # `self._executor` `InlineExecutor`-a təyin edilə bilər ki, Qt hadisə
+            # dövrəsi olmadan sinxron yoxlanılsın (bax `test_login_and_startup_
+            # recovery.py`). `_on_face_login_requested` bunu ötürmür, çünki onun
+            # testi real `qt_app` sap hovuzu ilə işləyir — burada isə mövcud
+            # testlər Qt-siz idi, davranışı SAXLAMAQ üçün eyni imkan verilir.
+            executor=self._executor,
+        )
+
+    def _on_password_login_succeeded(self, outcome: object) -> None:
+        """Nəticə ƏSAS SAPDA qəbul edilir — burada Qt widget-ə TOXUNULA bilər.
+
+        `_on_face_login_succeeded` ilə EYNİ struktur (bax `_authenticate`
+        başlığı).
+        """
+        from datetime import UTC, datetime  # noqa: PLC0415
+
+        from src.presentation.controllers.auth import AuthOutcome  # noqa: PLC0415
+
+        # Düymə HƏR halda açılır — xəta olsa da istifadəçi yenidən cəhd
+        # edə bilməlidir.
+        self._login.set_busy(False)
+        result: AuthOutcome = outcome  # type: ignore[assignment]
+
+        if not result.succeeded:
+            self._login.set_error(result.message)
             return
 
-        if outcome.must_change_password:
+        if result.must_change_password:
             # Bölmə 2: şifrə dəyişdirilməmiş sessiya açılmır.
             self._login.set_error("Şifrəniz dəyişdirilməlidir. Admininizlə əlaqə saxlayın.")
             return
@@ -1059,7 +1228,7 @@ class KompasApplication:
         # ilə. Halbuki o, HƏR girişdə icra olunur.
         from src.domain.entities.employee import Employee  # noqa: PLC0415
 
-        employee = outcome.employee
+        employee = result.employee
         if not isinstance(employee, Employee):
             self._login.set_error("Giriş nəticəsi oxuna bilmədi.")
             return
@@ -1070,15 +1239,27 @@ class KompasApplication:
             employee, on_continue=lambda: self.show_admin(employee, now=datetime.now(UTC))
         ):
             return
-        # `show_admin()` DA bloklayan əməliyyatdır — bax `_on_face_login_requested`-
-        # dəki EYNİ blokun izahı (UI-1): göstərici bura qədər ARTIQ sönüb
-        # (`finally`, yuxarı), `read_batch()` isə YENİDƏN bloklaya bilər.
+        # `show_admin()` DA bloklayan əməliyyatdır — bax `_on_face_login_
+        # succeeded`-dəki EYNİ blokun izahı (UI-1): göstərici bura qədər ARTIQ
+        # sönüb (yuxarı), `read_batch()` isə YENİDƏN bloklaya bilər.
         self._login.set_busy(True)
         flush_ui()
         try:
             self.show_admin(employee, now=datetime.now(UTC))
         finally:
             self._login.set_busy(False)
+
+    def _on_password_login_failed(self, error: BaseException) -> None:
+        """Fon işində qalan istisna — SÜKUTLA UDULMUR.
+
+        `AuthController.authenticate()` özü istisna ATMIR (bütün hallar
+        `AuthOutcome.succeeded=False`-a çevrilir, bax onun başlığı), ona görə
+        bura NORMALDA düşmür — son qoruyucudur (`_on_face_login_failed` ilə
+        eyni məntiq).
+        """
+        self._login.set_busy(False)
+        _log.error("PASSWORD_LOGIN_TASK_FAILED", exc_info=error)
+        self._login.set_error("Giriş yoxlanıla bilmədi. Yenidən cəhd edin.")
 
     def _show_face_setup_if_required(
         self,
@@ -2772,6 +2953,22 @@ class KompasApplication:
         bot qurulubsa. Səbəb `infrastructure/notifications/telegram.py`
         başlığındadır: `getUpdates` bir yeniliyi TƏK dəfə verir, yəni sorğunu
         birdən çox yerdə aparmaq cavabların bir hissəsini itirərdi.
+
+        ──────────────────────────────────────────────────────────────────────
+        PERF-6 #5 — DÖRD SESSİYAYA QƏDƏR AÇILIRDI
+        ──────────────────────────────────────────────────────────────────────
+        Ölçüldü: `internal_requests` 3 sessiya (`_load_options`, `refresh`,
+        `refresh`-in `_on_counts_changed` geri çağırışı → `_refresh_support_
+        badges`), `technical_support` isə ƏLAVƏ olaraq `_build_telegram_
+        poller()`-in oxusu ilə 4 — sessiya başına ~0.6–0.8 s (PERF-1). Hamısı
+        EYNİ aktorla (`self._current_employee`) OXUDUR (yazı yolu YOXDUR:
+        `attach()`-in daxilində `session.commit()` çağırılmır), ona görə
+        `read_batch()` (PERF-3) sərhədini BURAYA çəkmək təhlükəsizdir — sərhəd
+        BURADADIR, çünki "bölmə nə vaxt açılır" sualının cavabını yalnız bu
+        metod bilir; `refresh()`, `_load_options()`, `_refresh_support_
+        badges()` özləri dəyişmədi, hər biri `self._context.session(user_id=
+        ...)` çağırışını EYNİ aktorla etdiyi üçün paylaşılmış sessiyanı
+        avtomatik təkrar istifadə edir.
         """
         from src.presentation.controllers.support_inbox import (  # noqa: PLC0415
             SupportInboxController,
@@ -2785,20 +2982,21 @@ class KompasApplication:
         if not isinstance(screen, SupportInboxScreen):  # pragma: no cover - tip qoruyucusu
             return
 
-        poller = None
-        interval_ms = 0
-        if screen.channel.notifies_telegram:
-            poller, interval_ms = self._build_telegram_poller()
-        shell = self._shell
-        SupportInboxController(
-            self._context,
-            self._current_employee,
-            poller=poller,
-            poll_interval_ms=interval_ms,
-            on_counts_changed=(
-                (lambda: self._refresh_support_badges(shell)) if shell is not None else None
-            ),
-        ).attach(screen)
+        with self._context.read_batch(user_id=self._current_employee.id):
+            poller = None
+            interval_ms = 0
+            if screen.channel.notifies_telegram:
+                poller, interval_ms = self._build_telegram_poller()
+            shell = self._shell
+            SupportInboxController(
+                self._context,
+                self._current_employee,
+                poller=poller,
+                poll_interval_ms=interval_ms,
+                on_counts_changed=(
+                    (lambda: self._refresh_support_badges(shell)) if shell is not None else None
+                ),
+            ).attach(screen)
 
     def _build_telegram_poller(self) -> tuple[object, int]:
         """Telegram sorğu obyektini və intervalını qurur.
@@ -4682,6 +4880,59 @@ def _describe_startup_failure(error: StartupError) -> str:
     return f"{_FAILURE_REASON_PREFIX}{detail}"
 
 
+def _resolve_startup_route(context: ApplicationContext) -> StartupRoute:
+    """`KompasApplication._startup_route()`-un NÜVƏ MƏNTİQİ — `self`-siz.
+
+    Modul-səviyyəli funksiya kimi çıxarılıb ki, `_compute_startup_preload()`
+    (splash arxasında, FON SAPINDA) onu hələ `KompasApplication`-a
+    QOŞULMAMIŞ, TƏZƏCƏ qurulmuş bir kontekstlə çağıra bilsin — `self.
+    _context` ARDINCA gedən metod versiyası (`_startup_route`) bu zaman hələ
+    `None`-dur (bax `run()`-dakı sıra: `_load_context_behind_splash` →
+    `set_context`).
+
+    Qalan izah (SQLSTATE ilə üç-hallı marşrut) `_startup_route`-un ÖZÜNDƏDİR
+    — burada TƏKRARLANMIR.
+    """
+    try:
+        with context.session() as session:
+            required = bool(session.setup.is_required(context.tenant_id))
+    except Exception as exc:
+        if getattr(exc, "sqlstate", None) == _UNDEFINED_TABLE:
+            _log.error("DATABASE_SCHEMA_MISSING", extra={"sqlstate": _UNDEFINED_TABLE})
+            return StartupRoute.SCHEMA_MISSING
+        _log.exception("SETUP_CHECK_FAILED")
+        return StartupRoute.LOGIN
+    return StartupRoute.SETUP_WIZARD if required else StartupRoute.LOGIN
+
+
+def _compute_startup_preload(context: ApplicationContext) -> _StartupPreload:
+    """`_startup_route`/`_face_login_available`-in İKİ oxusu — FON SAPINDA (PERF-6).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ HƏR İKİSİ BURADA, TƏK YERDƏ
+    ──────────────────────────────────────────────────────────────────────────
+    Hər ikisi `context` HAZIR olmadan mümkün deyil (sıra MƏCBURİDİR: `factory()`
+    → bu funksiya) və hər ikisi YALNIZ OXUDUR — `_load_context_behind_splash`-ın
+    ARTIQ fon sapında olan `factory()` çağırışına QOŞULUR, YENİ sap AÇMIR.
+
+    ──────────────────────────────────────────────────────────────────────────
+    UĞURSUZLUQ HALI — TƏTBİQ YENƏ QALXMALIDIR
+    ──────────────────────────────────────────────────────────────────────────
+    Bu funksiya İSTİSNA ATMIR: `_resolve_startup_route` VƏ `FaceLoginController.
+    available()` HƏR İKİSİ ÖZ istisnalarını daxildə tutur (mövcud davranış,
+    bax onların tərifləri) və müvafiq TƏHLÜKƏSİZ dəyərə (`LOGIN`, `False`)
+    düşür. Çağıran (`_load_context_behind_splash`) YENƏ DƏ əlavə `try/except`
+    ilə əhatə edir — gözlənilməz bir SƏHV BURADA (məs. gələcək dəyişiklik)
+    UĞURLU kontekst qurulmasını FATAL başlanğıc xətasına ÇEVİRMƏMƏLİDİR.
+    """
+    from src.presentation.controllers.face_login import FaceLoginController  # noqa: PLC0415
+
+    return _StartupPreload(
+        route=_resolve_startup_route(context),
+        face_login_available=FaceLoginController(context).available(),
+    )
+
+
 def _load_context_behind_splash(
     app: QApplication,
     application: KompasApplication,
@@ -4718,6 +4969,14 @@ def _load_context_behind_splash(
         hər iki mesaj boşdur. Dördüncü element İSTİFADƏÇİ mesajından AYRIDIR
         və yalnız `Ctrl+Shift+K` konsoluna gedir — səbəbi bax
         `_describe_startup_failure`.
+
+        İMZA DƏYİŞMİR (PERF-6, post-splash): `_compute_startup_preload()`-un
+        nəticəsi qaytarılan DƏYƏRDƏ DEYİL, `application.set_startup_preload()`
+        YAN TƏSİRİ ilə çatdırılır (`application.show_loading_splash()` ilə
+        EYNİ naxış — bu funksiya artıq `application`-a yan təsir edir).
+        Səbəb: mövcud çağıranlar (bax `test_startup_splash_loading.py`) DÖRD
+        DƏYƏRİ birbaşa açır — beşinci elementin ƏLAVƏ olunması onların
+        HAMISINI sındırardı, halbuki onlar preload-u YOXLAMIR.
     """
     from PySide6.QtCore import QEventLoop  # noqa: PLC0415
 
@@ -4732,8 +4991,25 @@ def _load_context_behind_splash(
     loop = QEventLoop()
     task = BackgroundTask(name="STARTUP_CONTEXT")
 
+    def _job() -> tuple[ApplicationContext, _StartupPreload | None]:
+        # FON SAPINDA icra olunur. `factory()` (`build_context()`) ÖZÜ
+        # DƏYİŞMİR — sıra MƏCBURİDİR: kontekst ƏVVƏL, preload SONRA.
+        context = factory()
+        try:
+            preload = _compute_startup_preload(context)
+        except Exception:
+            # SON QORUYUCU (bax `_compute_startup_preload` başlığı): preload
+            # hesablaması ÖZÜ artıq istisna udur, bura NORMALDA düşmür.
+            # Düşsə belə, UĞURLA qurulmuş kontekst FATAL xəta SAYILMAMALIDIR
+            # — `None` qaytarılır, `_after_splash()` köhnə (canlı) yola qayıdır.
+            _log.exception("STARTUP_PRELOAD_FAILED")
+            preload = None
+        return context, preload
+
     def _succeeded(value: object) -> None:
-        outcome["context"] = value
+        context, preload = cast("tuple[ApplicationContext, _StartupPreload | None]", value)
+        outcome["context"] = context
+        outcome["preload"] = preload
         loop.quit()
 
     def _failed(error: object) -> None:
@@ -4742,11 +5018,12 @@ def _load_context_behind_splash(
 
     task.succeeded.connect(_succeeded)
     task.failed.connect(_failed)
-    task.run(factory)
+    task.run(_job)
     loop.exec()
 
     error = outcome.get("error")
     if error is None:
+        application.set_startup_preload(cast("_StartupPreload | None", outcome.get("preload")))
         return cast("ApplicationContext", outcome.get("context")), "", None, ""
 
     if isinstance(error, StartupError):

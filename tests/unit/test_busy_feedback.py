@@ -61,8 +61,15 @@ def test_the_connection_screen_repaints_before_probing(monkeypatch: pytest.Monke
 
 
 def test_the_login_path_repaints_before_authenticating(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Giriş yolu ən uzun bloklayandır (~1.7 s) — ona görə ən çox görünəndir."""
+    """Giriş yolu ən uzun bloklayandır (~1.7 s) — ona görə ən çox görünəndir.
+
+    PERF-6-dan sonra `authenticate()` özü fon sapında icra olunur
+    (`app.py::_authenticate` başlığı), lakin `InlineExecutor` işi ÇAĞIRAN
+    sapda DƏRHAL yerinə yetirir — yəni sıra iddiası (`busy=True` → `flush` →
+    `authenticate`) hadisə dövrəsi olmadan da eyni qaydada yoxlanıla bilir.
+    """
     from src.presentation import app as module
+    from src.presentation.background_task import InlineExecutor
 
     trace: list[str] = []
 
@@ -83,6 +90,7 @@ def test_the_login_path_repaints_before_authenticating(monkeypatch: pytest.Monke
     application = module.KompasApplication.__new__(module.KompasApplication)
     application._login = _Login()  # type: ignore[assignment]
     application._auth = _Auth()  # type: ignore[assignment]
+    application._executor = InlineExecutor()  # type: ignore[assignment]
 
     application._authenticate("m.bayramov", "Uzun-Sifre-123")
 

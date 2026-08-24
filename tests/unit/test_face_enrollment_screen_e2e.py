@@ -410,6 +410,14 @@ def test_a_second_click_while_the_first_capture_is_still_running_is_rejected(qtb
     FaceEnrollmentController(context, _hr_admin(), executor=executor).attach(screen)
     screen._subject.setCurrentIndex(0)
 
+    # `attach()` → `refresh()` kamera probunu FON İŞİ kimi növbəyə qoyub (PERF-6
+    # #7, `face_control.py::_refresh_camera_state`) — prob bitənə qədər `[Çək]`
+    # TƏHLÜKƏSİZ DEFOLT olaraq deaktivdir. Əvvəlki (sinxron prob) versiyada
+    # düymə `attach()` qayıdanda ARTIQ aktiv idi; indi onu AÇIQ aktivləşdirmək
+    # lazımdır ki, aşağıdakı iki klik REAL düymə kliki olsun (deaktiv düyməyə
+    # klik heç nə etməzdi və test sükutla mənasız keçərdi).
+    executor.flush()
+
     _click(screen, "Çək")  # BİRİNCİ klik — iş hələ QAÇIR (`_DeferredExecutor`)
     _click(screen, "Çək")  # İKİNCİ klik — birinci HƏLƏ BİTMƏYİB, düymə hələ aktivdir
     executor.flush()

@@ -54,8 +54,9 @@ qalır, örtük çökmür), lakin qüsur ölçülə bilən hala gəlir.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar
 
 from src.domain.policies import DEFAULT_LIMITS, FeatureModule, SystemLimitKey
 from src.domain.value_objects.identifiers import StoreId
@@ -198,8 +199,417 @@ HELP_TOPIC_MODULES: Final[dict[str, str | None]] = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class SectionFailure:
+    """Bir bölmənin `fetch` mərhələsində uğursuz olduğunu bildirir (PERF-6 Qərar 2).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ VAR — `report_section_error(screen, …)` FETCH-İN DAXİLİNDƏN ÇAĞIRILMIR
+    ──────────────────────────────────────────────────────────────────────────
+    `fetch` fon sapına köçürüləcək (FAZA D) və Qt-yə TOXUNA BİLMƏZ
+    (`background_task.py`-nın qaydası). Əvvəl `_health`in beş köməkçisi
+    (`_health_metrics`, `_offline_pending`, `_open_conflicts_or_none`,
+    `_health_alerts`, `_critical_notifications`) HƏRƏSİ ÖZ uğursuzluğunda
+    BİRBAŞA `report_section_error(screen, label)` çağırırdı. Bu tip onun
+    ƏVƏZİNƏ qayıdır: `fetch` `SectionFailure(section=SECTION_X)` qaytarır,
+    `apply` (ƏSAS SAPDA) bunu görüb `report_section_error`-u ÖZÜ çağırır.
+
+    ÜÇ YERDƏ İSTİFADƏ ÜÇÜN NƏZƏRDƏ TUTULUB (SƏNƏDLƏŞDİRİLİB, HAMISI EYNİ
+    ANDA KÖÇMƏYİB): `_health`in beş köməkçisi (indi), `_live_queue::
+    _low_confidence_faces` (hazırda öz sadə `bool` bayrağı ilə işləyir —
+    BU FORMAYA MƏCBURİ keçmir, işləyən kod dəyişdirilmədi) və FAZA D-də
+    `_fill_section` (dashboard-ın səpələnmiş bölmə banner-lərini EYNİ
+    mexanizmə yığmaq üçün).
+
+    `section` `SECTION_*` sabitlərindən biridir — `report_section_error`-un
+    GÖZLƏDİYİ eyni etiket (məs. `SECTION_HEALTH_OFFLINE`).
+    """
+
+    section: str
+
+
+_SectionT = TypeVar("_SectionT")
+
+
+@dataclass(frozen=True, slots=True)
+class SectionResult(Generic[_SectionT]):
+    """Bir bölmənin `fetch` NƏTİCƏSİ — `data` YA `failure`, HEÇ VAXT İKİSİ BİRLİKDƏ (FAZA D).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ VAR — `_fill_section`-un FETCH/APPLY-A BÖLÜNMƏSİ (Qərar 2, variant b)
+    ──────────────────────────────────────────────────────────────────────────
+    Köhnə `_fill_section(screen, *, label, event, fill)` `fill: Callable[[],
+    None]`-u try/except-ə salırdı və Qt çağırışını (`report_section_error`)
+    İÇƏRİDƏ edirdi — `fetch`-in Qt-yə TOXUNMAMASI tələbini pozurdu. `Screen
+    DataBinder._fill()` bunun ƏVƏZİNƏ bu tipi qaytarır: `fetch()` sınarsa
+    `failure` dolur, uğurlu olsa (`None` daxil — bax aşağı) `data` dolur.
+    `ScreenDataBinder._apply_section()` bunu görüb YA `apply(data)`, YA
+    `report_section_error(screen, failure.section)` çağırır — ƏSAS SAPDA.
+
+    `data=None, failure=None` DA MÜMKÜNDÜR (məs. `_dashboard_benchmark`-ın
+    icazə-əsaslı gizlənməsi): bölmə sadəcə HEÇ NƏ göstərmir — nə xəta, nə
+    məzmun, `_fill_section`-un "icazə yoxdursa `set_*` çağırılmır" köhnə
+    davranışının DƏQİQ TƏKRARI.
+
+    ÜÇ yerdə istifadə üçün nəzərdə tutulub (bax `SectionFailure` başlığı):
+    `_dashboard`-ın SƏKKİZ bölməsi (indi), `_health` (öz `*_failure`
+    sahələrini artıq işlədir — BURAYA KEÇMƏDİ, çünki banner sırası ÜÇ AYRI
+    sahə ilə DAHA AYDIN ifadə olunur), `_live_queue` (öz sadə bayrağını
+    saxlayır, MƏCBURİ deyil).
+    """
+
+    data: _SectionT | None = None
+    failure: SectionFailure | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _NoInputs:
+    """`inputs` mərhələsinin BOŞ nəticəsi — PERF-6 FAZA B (bax `ScreenDataBinder`).
+
+    `None` ƏVƏZİNƏ İŞLƏDİLİR: `strict` mypy `-> None` elan edən funksiyanın
+    nəticəsini dəyişənə mənimsətməyi `func-returns-value` kimi işarələyir (adətən
+    unudulmuş `return` əlamətidir) — `_fines_inputs`/`_help_inputs` bu xəbərdarlığı
+    real verdi. `_NoInputs()` HƏMİŞƏ eyni, yüngül instansiyadır: "bu binder-in
+    inputs-u YOXDUR" faktını tip sistemində AÇIQ saxlayır, mypy-ı çaşdırmadan.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class _LiveQueueData:
+    """`_live_queue_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat.
+
+    `entries` `list[Any]`-dir (`QueueEntry`-lərin siyahısı), çünki `QueueEntry`
+    sinfi ekran modulundan (`screens/group_b.py`) yalnız `_live_queue_fetch`-in
+    DAXİLİNDƏ, tənbəl idxal olunur (bax `ScreenDataBinder`-in mövcud üslubu) —
+    modul səviyyəsində idxal etmək bu faylı ekran qatına ƏLAVƏ bağlayardı.
+    """
+
+    entries: list[Any]
+    low_confidence_failed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _FinesData:
+    """`_fines_fetch`-in nəticəsi (PERF-6 FAZA B) — saf məlumat, Qt OBYEKTİ DEYİL.
+
+    `screen.set_fines(...)`-in üç arqumentini BİR YERDƏ daşıyır ki, `_fines_
+    fetch`/`_fines_apply` arasında sap sərhədini keçəndə (FAZA D) heç nə
+    unudulmasın — üç ayrı dəyişən ötürülsəydi biri sükutla düşə bilərdi.
+    """
+
+    rows: list[dict[str, str]]
+    period_text: str
+    total_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ShiftSwapsData:
+    """`_shift_swaps_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat."""
+
+    pending_count: int
+    rows: list[dict[str, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class _ShiftStaffingPatternData:
+    """`_shift_staffing_pattern_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat."""
+
+    rows: list[tuple[str, str]]
+    store_name: str
+    based_on_weeks: int
+    calculated_label: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ShiftPlanningData:
+    """`_render_shift_matrix_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat.
+
+    `staffing` iç-içədir: köhnə kodda `_render_shift_matrix` sonunda
+    `_shift_staffing_pattern`-i BİRBAŞA çağırırdı (İKİ ARDICIL bölmə, TƏK
+    `fill()` daxilində) — indi eyni ardıcıllıq `fetch`-in ÖZÜNDƏ saxlanılır.
+    """
+
+    window_label: str
+    days: list[tuple[int, str]]
+    rows: list[tuple[str, list[str]]]
+    staffing: _ShiftStaffingPatternData
+
+
+@dataclass(frozen=True, slots=True)
+class _TasksData:
+    """`_tasks_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat."""
+
+    summary: str
+    review: list[dict[str, str]]
+    open_column: list[dict[str, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class _SalesPointsData:
+    """`_sales_points_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat.
+
+    `screen.set_balance`/`set_history`/`set_catalog`-un ÜÇ ayrı çağırışını
+    BİR yerdə daşıyır — bax `_FinesData`-dakı EYNİ əsaslandırma.
+    """
+
+    available: int
+    monthly_delta: int
+    to_next_reward: int
+    next_reward_cost: int
+    rank_text: str
+    history: list[dict[str, str]]
+    history_period: str
+    catalog: list[dict[str, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class _AuditData:
+    """`_audit_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat."""
+
+    entries: list[dict[str, str]]
+    result_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ReportsData:
+    """`_reports_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat."""
+
+    period_text: str
+    deferred_fine_count: int
+    already_exported: int
+    overlap_notice: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardNetworkData:
+    """`_dashboard_network_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat.
+
+    `None` = sətir gəlmədi (`pragma: no cover` — `count(*)` həmişə sətir
+    qaytarır, bax fetch-in şərhi) — `apply` bu halda HEÇ NƏ çağırmır.
+    """
+
+    employees: int | None
+    stores: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardSummaryData:
+    """`_dashboard_summary_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat."""
+
+    in_store: int
+    planned: int
+    pending: int
+    longest_wait: str
+    fines_total: str
+    fines_delta: str
+    open_tasks: int
+    overdue_tasks: int
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardFinesData:
+    """`_dashboard_fines_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat."""
+
+    rows: list[tuple[str, float, str]]
+    period: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardLeaveData:
+    """`_dashboard_leave_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat."""
+
+    used: float
+    budget: float
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardLeadersData:
+    """`_dashboard_leaders_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat."""
+
+    leaders: list[tuple[str, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardHealthData:
+    """`_dashboard_health_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat."""
+
+    rows: list[tuple[str, str, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class _BenchmarkComparison:
+    """`screen.set_store_vs_network(...)`-un YEDDİ arqumenti — saf məlumat.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `dict[str, Any]` DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl bura `dict[str, Any]` idi və `apply` onu `screen.set_store_vs_
+    network(**data.comparison)` ilə açırdı — layihədə `**` ilə setter çağıran
+    YEGANƏ yer idi (qadağan edilib). Səbəb: açar adı sürüşsə heç bir qapı
+    tutmur — AST testi `**`-i GÖRMÜR (`keyword.arg` `None` olur), mypy isə
+    `dict[str, Any]` açılışını YOXLAMIR. Nəticə udulan `TypeError` + boş
+    ekran olardı (`_audit_apply`-ın şərhindəki EYNİ qüsur sinfi). Frozen
+    dataclass-a keçəndə HƏR İKİ qapı işə düşür: mypy sahə adlarını, AST
+    testi isə açıq `screen.set_store_vs_network(metric_label=..., …)`
+    çağırışının setter imzasına uyğunluğunu yoxlayır.
+    """
+
+    metric_label: str
+    store_label: str
+    store_value: float
+    store_display: str
+    network_label: str
+    network_value: float
+    network_display: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardBenchmarkData:
+    """`_dashboard_benchmark_fetch`-in nəticəsi (PERF-6 FAZA C, ORTA) — saf məlumat.
+
+    Köhnə kodda DÖRD bölmə ARDICIL fetch+apply cütü idi (`_populate_
+    benchmark_sections`) — indi hamısı BİR fetch-də toplanır. `comparison`
+    `None`-dur, əgər `ranking` BOŞDURSA (bax fetch-in şərhi: defolt müqayisə
+    YALNIZ sıralama boş olmayanda hesablanır) — `apply` bu halda `set_store_
+    vs_network`-i ÇAĞIRMIR, köhnə davranışla EYNİ.
+    """
+
+    ranking: list[Any]
+    metric_options: list[tuple[str, str]]
+    selected_metric: str
+    comparison: _BenchmarkComparison | None
+    metric_label: str
+    trend_points: list[tuple[str, float, str]]
+    outliers_summary: str
+    outliers_rows: list[tuple[str, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardData:
+    """`_dashboard_fetch`-in nəticəsi (PERF-6 FAZA D) — SƏKKİZ bölmənin HƏR
+    BİRİ MÜSTƏQİL `SectionResult`-dur.
+
+    Sahə SIRASI `_dashboard_apply`-ın çağırış sırası ilə EYNİDİR (bax onun
+    şərhi) — köhnə `_fill_section` çağırışlarının sırasının DƏQİQ TƏKRARI,
+    banner sırasının qorunması buna görədir.
+    """
+
+    summary: SectionResult[_DashboardSummaryData]
+    network: SectionResult[_DashboardNetworkData]
+    fines: SectionResult[_DashboardFinesData]
+    leave: SectionResult[_DashboardLeaveData]
+    leaders: SectionResult[_DashboardLeadersData]
+    health: SectionResult[_DashboardHealthData]
+    benchmark: SectionResult[_DashboardBenchmarkData]
+    breaks: SectionResult[list[tuple[str, str]]]
+
+
+@dataclass(frozen=True, slots=True)
+class _UsersInputs:
+    """`_users_inputs`-in nəticəsi (PERF-6 FAZA C) — ƏSAS SAPDA Qt-dən oxunub.
+
+    `status_filter` `UsersScreen.status_filter()`-in XAM qaytardığı sətirdir —
+    SQL-ə birbaşa getmir, `_users_fetch` onu SABİT `WHERE` siyahısından
+    (CLAUDE.md §4) birinə uyğunlaşdırır. Bu, `_NoInputs` OLMAYAN İLK binder-dir
+    (bax `_users` başlığı) — naxışın ÜÇÜNCÜ mərhələsinin mövcudluq səbəbi.
+    """
+
+    status_filter: str
+
+
+@dataclass(frozen=True, slots=True)
+class _UsersData:
+    """`_users_fetch`-in nəticəsi (PERF-6 FAZA C) — saf məlumat."""
+
+    permitted_actions: frozenset[str]
+    rows: list[dict[str, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class _HealthData:
+    """`_health_fetch`-in nəticəsi (PERF-6 FAZA C, RİSKLİ) — saf məlumat.
+
+    Uğursuzluq sahələri (`*_failure`) AYRI-AYRI saxlanılır, TƏK siyahıya
+    yığılmır — `_health_apply`-ın banner ÇAĞIRIŞLARINI köhnə kodla EYNİ SIRADA
+    (müvafiq `screen.set_*`-dən DƏRHAL ƏVVƏL) verə bilməsi üçün (bax `_health`
+    başlığı: "banner sırası qorunur").
+    """
+
+    last_check_text: str
+    conflicts_failure: SectionFailure | None
+    metrics: list[tuple[str, str, str, str]]
+    offline_failure: SectionFailure | None
+    latencies: list[tuple[str, str, str]]
+    alerts: list[tuple[str, str, str]]
+    notifications_failure: SectionFailure | None
+    conflict_action: int
+
+
+@dataclass(frozen=True, slots=True)
+class _DailyRosterData:
+    """`_daily_roster_fetch`/`_daily_roster_for_store_fetch`-in nəticəsi
+    (PERF-6 FAZA C, RİSKLİ) — saf məlumat.
+
+    `failure` YALNIZ `populate_daily_roster_for_store`-da işlədilir (bax onun
+    başlığı) — `_daily_roster` (binder) istisnanı ÖZÜ TUTMUR, `populate()`-un
+    ümumi `SECTION_SCREEN` yoluna buraxır, ona görə HƏMİŞƏ `None`-dur.
+    `rows`/`mismatch_text` `failure` `None` OLMAYANDA mənasızdır (boş qalır).
+    """
+
+    rows: list[dict[str, str]]
+    mismatch_text: str | None
+    failure: SectionFailure | None = None
+
+
 class ScreenDataBinder:
-    """Ekran açarına görə canlı məlumat yazır."""
+    """Ekran açarına görə canlı məlumat yazır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    PERF-6 FAZA B — İNPUTS/FETCH/APPLY NAXIŞI (bütün binder-lər buna keçir)
+    ──────────────────────────────────────────────────────────────────────────
+    Səbəb: `show_admin()`-in açılışı DB gözləməsinə görə 3.2–13.1 saniyə
+    bloklayır (`docs/performance_notes.md`, PERF-6 #3), lakin bu metodların
+    ÖZÜ Qt widget-ə TOXUNUR (`screen.set_...`) — `background_task.py`-nın
+    «fon işi Qt widget-inə toxunmur» qaydası bir binder-i BÜTÖV halda fon
+    sapına verməyi qadağan edir. Naxış sərhədi YARADIR:
+
+        inputs(screen) -> Params       # ƏSAS SAP, YALNIZ Qt OXUYUR (yazmır)
+        fetch(session, params) -> Data # FON SAPI, YALNIZ DB (Qt-yə TOXUNMUR)
+        apply(screen, data) -> None    # ƏSAS SAP, YALNIZ Qt (DB-yə TOXUNMUR)
+
+    ÜÇ MƏRHƏLƏ, İKİ YOX: `_users` (PERF-6 FAZA A tapıntısı) DB sorğusunun
+    WHERE şərtini qurmaq üçün `screen.status_filter()` (Qt getter) çağırır —
+    bu, İSTİSNA deyil, naxışın ÇATIŞMAYAN hissəsi idi. `inputs` əksər binder-
+    lərdə BOŞ (`None`) qayıdır (bax `_fines_inputs`/`_help_inputs`) — bu,
+    problemsiz sabitlikdir, hər binder üçün "iki-mərhələlidirmi, üç-
+    mərhələlidirmi?" sualının YENİDƏN verilməsinin qarşısını alır.
+
+    HƏLƏLİK ÜÇÜ DƏ EYNİ (ƏSAS) SAPDA, ARDICIL ÇAĞIRILIR — bu FAZA (B/C)
+    `populate()`-un çağırış yerini DƏYİŞMİR, YALNIZ hər binder-in DAXİLİNİ
+    üç mərhələyə ayırır. Sap sərhədi (FAZA D) YALNIZ `show_admin()`-in
+    açdığı İLK ekran üçün, `app.py`-da qurulacaq: `fetch` `run_job`-a
+    veriləcək, `apply` isə ƏSAS SAPDA qalacaq. Digər ekranlar (menyudan
+    klik) BU FAZANIN ƏHATƏSİNDƏN KƏNARDADIR — onlar artıq sürətlidir
+    (bax `docs/performance_notes.md`, "Panellərin canlı ölçüsü": çəkiliş
+    praktik olaraq sıfırdır, YALNIZ İLK ekran örtük qurulmasının ARDINCA
+    gəldiyi üçün DONMA yaradır).
+
+    BÖLMƏ XƏTALARI MƏLUMATDIR, ÇAĞIRIŞ DEYİL: `report_section_error(screen,
+    …)` `fetch`-in DAXİLİNDƏN ÇAĞIRILMIR (`_health`in köməkçiləri və
+    `_live_queue::_low_confidence_faces` bunu FAZA C-də DƏYİŞDİRƏCƏK) — `fetch`
+    saf məlumat (məs. "hansı bölmə sınıb" siyahısı) qaytarır, `apply` onu
+    bannerə çevirir. Zəmanət DƏYİŞMİR (bir bölmənin sınması qalanlarını
+    dayandırmır), yalnız MƏSULİYYƏT yeri dəyişir.
+
+    GİZLİ YAZI QALIR, AMMA ADI ÇƏKİLİR: `_daily_roster`, `populate_daily_
+    roster_for_store` və `_audit` `session.commit()` çağırır (gündəlik tabel
+    "avtomatik status" YARADIR, audit sorğusunun ÖZÜ audit-lənir — §5-in
+    qəsdli zəmanəti). Bu üçü OXU-YALNIZ DEYİL: yazı `fetch` mərhələsində
+    QALIR (fon sapında yazı problemsizdir — `_run_scheduled_jobs` da belə
+    edir), `apply` isə YENƏ YALNIZ Qt olur. CLAUDE.md-nin "yalnız oxuyan
+    ekran `screen_data.py`-a bağlanır" cümləsi ilə bu üç binder arasındakı
+    uyğunsuzluq QƏSDƏN saxlanılır (CLAUDE.md-yə bu tapşırıqda TOXUNULMUR).
+    """
 
     def __init__(self, context: ApplicationContext, actor: Employee) -> None:
         self._context = context
@@ -270,31 +680,51 @@ class ScreenDataBinder:
             _error_log.exception("SCREEN_BIND_FAILED", extra={"screen": key})
             report_section_error(screen, SECTION_SCREEN)
 
-    def _fill_section(
-        self, screen: Any, *, label: str, event: str, fill: Callable[[], None]
-    ) -> bool:
-        """Bir bölməni doldurur — sınarsa QALAN bölmələr işləməyə davam edir.
+    def _fill(
+        self, *, label: str, event: str, fetch: Callable[[], _SectionT | None]
+    ) -> SectionResult[_SectionT]:
+        """Bir bölmənin FETCH mərhələsi — sınarsa SAF `SectionFailure` qaytarır.
 
         ──────────────────────────────────────────────────────────────────────
-        NİYƏ HƏR BÖLMƏ AYRICA TUTULUR
+        FAZA D (PERF-6) — `_fill_section`-un ƏVƏZİ, Qərar 2 (variant b)
         ──────────────────────────────────────────────────────────────────────
-        `populate()`-dakı tək `try` bloku ilə İdarə Panelinin ilk sınan bölməsi
-        QALAN ALTISINI da dayandırırdı: sorğular ardıcıl işləyir, ilk istisna
-        funksiyadan çıxır. Nəticədə bir sütunun adı səhv olanda istifadəçi
-        yeddi boş bölmə görürdü və heç biri səbəb göstərmirdi.
+        Köhnə `_fill_section` `fill()`-i (fetch+apply BİRLİKDƏ) try/except-ə
+        salır və uğursuzluqda BİRBAŞA `report_section_error(screen, label)`
+        çağırırdı — Qt çağırışı FETCH-in daxilində idi. Bu metod YALNIZ
+        `fetch`-i çağırır, Qt-yə HEÇ TOXUNMUR — nəticəni `SectionResult`
+        (bax onun tərifi) kimi qaytarır, banner çağırışını `_apply_section`
+        (ƏSAS SAPDA) edir.
 
-        Returns:
-            Bölmə doldurulubsa `True`. Çağıran tərəf bunu ARDICIL bölmələr
-            üçün istifadə edə bilər (məs. reytinq cədvəli sınıbsa onun
-            drill-down hissəsi də mənasızdır).
+        NİYƏ HƏR BÖLMƏ AYRICA TUTULUR (dəyişməyib): `populate()`-dakı tək
+        `try` bloku ilə İdarə Panelinin ilk sınan bölməsi QALAN ALTISINI da
+        dayandırırdı — sorğular ardıcıl işləyir, ilk istisna funksiyadan
+        çıxır. Nəticədə bir sütunun adı səhv olanda istifadəçi yeddi boş
+        bölmə görürdü və heç biri səbəb göstərmirdi.
         """
         try:
-            fill()
+            return SectionResult(data=fetch())
         except Exception:
             _error_log.exception(event, extra={"section": label})
-            report_section_error(screen, label)
-            return False
-        return True
+            return SectionResult(failure=SectionFailure(section=label))
+
+    def _apply_section(
+        self,
+        screen: Any,
+        result: SectionResult[_SectionT],
+        apply: Callable[[_SectionT], None],
+    ) -> None:
+        """Bir bölmənin APPLY mərhələsi — ƏSAS SAPDA, YALNIZ Qt.
+
+        `result.failure` DOLUDURSA banner göstərilir (`_fill`-in sınadığı
+        bölmə), `result.data` DOLUDURSA setter çağırılır. İkisi də boşdursa
+        (icazə-əsaslı gizlənmə, bax `SectionResult` başlığı) HEÇ NƏ olmur —
+        bölmə köhnə davranışdakı kimi sükutla GİZLİ qalır.
+        """
+        if result.failure is not None:
+            report_section_error(screen, result.failure.section)
+            return
+        if result.data is not None:
+            apply(result.data)
 
     def _binders(self) -> dict[str, Callable[[Session, Any], None]]:
         return {
@@ -354,81 +784,113 @@ class ScreenDataBinder:
         funksiyadan çıxırdı və qalan bölmələr HEÇ VAXT doldurulmurdu — yəni
         bir sorğunun qüsuru bütün paneli səbəbsiz boşaldırdı. İndi sınan bölmə
         bannerdə adı ilə görünür, qalanları isə düzgün rəqəm göstərir.
+
+        ──────────────────────────────────────────────────────────────────────
+        FAZA D (PERF-6) — TAM FETCH/APPLY SƏRHƏDİ (`_fill_section` silindi)
+        ──────────────────────────────────────────────────────────────────────
+        FAZA C bölmələrin HƏR BİRİNİ `_X_fetch`/`_X_apply` cütünə ayırmışdı,
+        LAKİN `_dashboard`-ın ÖZÜNDƏ hər bölmə öz `fill()`-i daxilində
+        ARDICIL fetch+apply edirdi — `_fill_section` bunu BİR sətirlik
+        try/except-lə əhatə edirdi. İndi `_dashboard_fetch()` SƏKKİZ
+        bölmənin HAMISINI (`SectionResult`, bax onun tərifi) yığır — DB-yə
+        toxunan YEGANƏ mərhələ budur; `_dashboard_apply()` isə eyni sıra ilə
+        ya `apply`, ya `report_section_error` çağırır — Qt-yə toxunan
+        YEGANƏ mərhələ budur. Bölmə izolyasiyası VƏ banner sırası
+        DƏYİŞMƏDİ: hər bölmə `_fill()`-lə AYRICA sınanır (biri sınsa
+        qalanları göstərilir), `_dashboard_apply` isə onları FETCH-dəki İLƏ
+        EYNİ ardıcıllıqla tətbiq edir.
         """
+        inputs = self._dashboard_inputs(screen)
+        data = self._dashboard_fetch(session, inputs)
+        self._dashboard_apply(screen, data)
+
+    def _dashboard_inputs(self, screen: Any) -> _NoInputs:
+        return _NoInputs()
+
+    def _dashboard_fetch(self, session: Session, _inputs: _NoInputs) -> _DashboardData:
         today = datetime.now(UTC).date()
         month_start = today.replace(day=1)
         next_month = _next_month(month_start)
         previous_month = _previous_month(month_start)
 
-        def fill_summary() -> None:
-            # Aylıq cəm rəqəm KARTININ bir hissəsidir — onunla EYNİ bölmədə
-            # qalır ki, sınması yalnız həmin kartı işarələsin.
-            totals = _fine_month_totals(
-                session,
-                month_start=month_start,
-                next_month=next_month,
-                previous_month=previous_month,
-            )
-            self._dashboard_summary(session, screen, today=today, fine_totals=totals)
-
-        self._fill_section(
-            screen,
-            label=SECTION_DASHBOARD_SUMMARY,
-            event="DASHBOARD_SUMMARY_FAILED",
-            fill=fill_summary,
-        )
-        # «Neçə işçi, neçə filial» — AYRICA bölmə, çünki mənbəyi də ayrıdır:
-        # xülasə kartları günün/ayın əməliyyat rəqəmləridir, bu isə şirkətin
-        # ölçüsü. Ayrı bölmə həm də ayrı sınır: cərimə sorğusu pozulsa, say
-        # yenə görünür.
-        self._fill_section(
-            screen,
-            label=SECTION_DASHBOARD_NETWORK,
-            event="DASHBOARD_NETWORK_FAILED",
-            fill=lambda: self._dashboard_network(session, screen),
-        )
-        self._fill_section(
-            screen,
-            label=SECTION_DASHBOARD_FINES,
-            event="DASHBOARD_FINES_FAILED",
-            fill=lambda: self._dashboard_fines(
-                session, screen, month_start=month_start, next_month=next_month
+        return _DashboardData(
+            summary=self._fill(
+                label=SECTION_DASHBOARD_SUMMARY,
+                event="DASHBOARD_SUMMARY_FAILED",
+                fetch=lambda: self._dashboard_summary_fetch(
+                    session,
+                    today=today,
+                    month_start=month_start,
+                    next_month=next_month,
+                    previous_month=previous_month,
+                ),
+            ),
+            # «Neçə işçi, neçə filial» — AYRICA bölmə, çünki mənbəyi də
+            # ayrıdır: xülasə kartları günün/ayın əməliyyat rəqəmləridir,
+            # bu isə şirkətin ölçüsü. Ayrı bölmə həm də ayrı sınır: cərimə
+            # sorğusu pozulsa, say yenə görünür.
+            network=self._fill(
+                label=SECTION_DASHBOARD_NETWORK,
+                event="DASHBOARD_NETWORK_FAILED",
+                fetch=lambda: self._dashboard_network_fetch(session),
+            ),
+            fines=self._fill(
+                label=SECTION_DASHBOARD_FINES,
+                event="DASHBOARD_FINES_FAILED",
+                fetch=lambda: self._dashboard_fines_fetch(
+                    session, month_start=month_start, next_month=next_month
+                ),
+            ),
+            leave=self._fill(
+                label=SECTION_DASHBOARD_LEAVE,
+                event="DASHBOARD_LEAVE_FAILED",
+                fetch=lambda: self._dashboard_leave_fetch(
+                    session, month_start=month_start, next_month=next_month
+                ),
+            ),
+            leaders=self._fill(
+                label=SECTION_DASHBOARD_LEADERS,
+                event="DASHBOARD_LEADERS_FAILED",
+                fetch=lambda: self._dashboard_leaders_fetch(session, today=today),
+            ),
+            health=self._fill(
+                label=SECTION_DASHBOARD_HEALTH,
+                event="DASHBOARD_HEALTH_FAILED",
+                fetch=lambda: self._dashboard_health_fetch(session),
+            ),
+            benchmark=self._fill(
+                label=SECTION_DASHBOARD_BENCHMARK,
+                event="DASHBOARD_BENCHMARK_FAILED",
+                fetch=lambda: self._dashboard_benchmark_gated_fetch(session),
+            ),
+            breaks=self._fill(
+                label=SECTION_DASHBOARD_BREAKS,
+                event="DASHBOARD_BREAK_OVERUSE_FAILED",
+                fetch=lambda: self._dashboard_break_overuse_fetch(session, today=today),
             ),
         )
-        self._fill_section(
-            screen,
-            label=SECTION_DASHBOARD_LEAVE,
-            event="DASHBOARD_LEAVE_FAILED",
-            fill=lambda: self._dashboard_leave(
-                session, screen, month_start=month_start, next_month=next_month
-            ),
+
+    def _dashboard_apply(self, screen: Any, data: _DashboardData) -> None:
+        self._apply_section(
+            screen, data.summary, lambda d: self._dashboard_summary_apply(screen, d)
         )
-        self._fill_section(
-            screen,
-            label=SECTION_DASHBOARD_LEADERS,
-            event="DASHBOARD_LEADERS_FAILED",
-            fill=lambda: self._dashboard_leaders(session, screen, today=today),
+        self._apply_section(
+            screen, data.network, lambda d: self._dashboard_network_apply(screen, d)
         )
-        self._fill_section(
-            screen,
-            label=SECTION_DASHBOARD_HEALTH,
-            event="DASHBOARD_HEALTH_FAILED",
-            fill=lambda: self._dashboard_health(session, screen),
+        self._apply_section(screen, data.fines, lambda d: self._dashboard_fines_apply(screen, d))
+        self._apply_section(screen, data.leave, lambda d: self._dashboard_leave_apply(screen, d))
+        self._apply_section(
+            screen, data.leaders, lambda d: self._dashboard_leaders_apply(screen, d)
         )
-        self._fill_section(
-            screen,
-            label=SECTION_DASHBOARD_BENCHMARK,
-            event="DASHBOARD_BENCHMARK_FAILED",
-            fill=lambda: self._dashboard_benchmark(session, screen),
+        self._apply_section(screen, data.health, lambda d: self._dashboard_health_apply(screen, d))
+        self._apply_section(
+            screen, data.benchmark, lambda d: self._dashboard_benchmark_apply(screen, d)
         )
-        self._fill_section(
-            screen,
-            label=SECTION_DASHBOARD_BREAKS,
-            event="DASHBOARD_BREAK_OVERUSE_FAILED",
-            fill=lambda: self._dashboard_break_overuse(session, screen, today=today),
+        self._apply_section(
+            screen, data.breaks, lambda d: self._dashboard_break_overuse_apply(screen, d)
         )
 
-    def _dashboard_network(self, session: Session, screen: Any) -> None:
+    def _dashboard_network_fetch(self, session: Session) -> _DashboardNetworkData:
         """Aktiv işçi və filial sayı — «yaratdıqca artan» rəqəmlər.
 
         ──────────────────────────────────────────────────────────────────────
@@ -453,16 +915,40 @@ class ScreenDataBinder:
             (str(session.tenant_id), str(session.tenant_id)),
         ).fetchone()
         if row is None:  # pragma: no cover - `count(*)` həmişə sətir qaytarır
-            return
-        screen.set_network_size(
-            employees=int(row["employee_count"]),
-            stores=int(row["store_count"]),
+            return _DashboardNetworkData(employees=None, stores=None)
+        return _DashboardNetworkData(
+            employees=int(row["employee_count"]), stores=int(row["store_count"])
         )
 
-    def _dashboard_summary(
-        self, session: Session, screen: Any, *, today: date, fine_totals: tuple[str, str]
-    ) -> None:
-        """Dörd rəqəm kartı — bir sorğu, səkkiz sayğac."""
+    def _dashboard_network_apply(self, screen: Any, data: _DashboardNetworkData) -> None:
+        if data.employees is None or data.stores is None:  # pragma: no cover - bax fetch
+            return
+        screen.set_network_size(employees=data.employees, stores=data.stores)
+
+    def _dashboard_summary_fetch(
+        self,
+        session: Session,
+        *,
+        today: date,
+        month_start: date,
+        next_month: date,
+        previous_month: date,
+    ) -> _DashboardSummaryData:
+        """Dörd rəqəm kartı — bir sorğu, səkkiz sayğac.
+
+        Aylıq cərimə cəmi (`_fine_month_totals`) DA burada oxunur — köhnə
+        kodda bu, `_dashboard()`-un `fill_summary` closure-ında AYRI idi
+        (eyni bölmə üçün, sadəcə iki yerə bölünmüşdü); indi TƏK `fetch`
+        funksiyasında birləşir, bölmənin sərhədi DƏYİŞMİR.
+        """
+        # Aylıq cəm rəqəm KARTININ bir hissəsidir — onunla EYNİ bölmədə
+        # qalır ki, sınması yalnız həmin kartı işarələsin.
+        fine_totals = _fine_month_totals(
+            session,
+            month_start=month_start,
+            next_month=next_month,
+            previous_month=previous_month,
+        )
         row = session.uow.connection.execute(
             """
             SELECT
@@ -513,7 +999,7 @@ class ScreenDataBinder:
         oldest = _earliest(counts.get("oldest_entry"), counts.get("oldest_return"))
         pending = int(counts.get("pending_entry") or 0) + int(counts.get("pending_return") or 0)
 
-        screen.set_summary(
+        return _DashboardSummaryData(
             in_store=int(counts.get("in_store") or 0),
             planned=int(counts.get("planned") or 0),
             pending=pending,
@@ -524,9 +1010,21 @@ class ScreenDataBinder:
             overdue_tasks=int(counts.get("overdue_tasks") or 0),
         )
 
-    def _dashboard_fines(
-        self, session: Session, screen: Any, *, month_start: date, next_month: date
-    ) -> None:
+    def _dashboard_summary_apply(self, screen: Any, data: _DashboardSummaryData) -> None:
+        screen.set_summary(
+            in_store=data.in_store,
+            planned=data.planned,
+            pending=data.pending,
+            longest_wait=data.longest_wait,
+            fines_total=data.fines_total,
+            fines_delta=data.fines_delta,
+            open_tasks=data.open_tasks,
+            overdue_tasks=data.overdue_tasks,
+        )
+
+    def _dashboard_fines_fetch(
+        self, session: Session, *, month_start: date, next_month: date
+    ) -> _DashboardFinesData:
         """Filial üzrə cərimə sütunları — bu ayın BÜTÜN statusları.
 
         `PENDING_REVIEW` sətirlər DƏ daxildir və bu, qəsdəndir: dashboard
@@ -547,17 +1045,20 @@ class ScreenDataBinder:
             """,
             (session.tenant_id, month_start, next_month),
         ).fetchall()
-        screen.set_fines_by_branch(
-            [
+        return _DashboardFinesData(
+            rows=[
                 (str(row["store_name"]), float(row["total"] or 0), f"{row['total'] or 0} ₼")
                 for row in rows
             ],
             period=_month_text(),
         )
 
-    def _dashboard_leave(
-        self, session: Session, screen: Any, *, month_start: date, next_month: date
-    ) -> None:
+    def _dashboard_fines_apply(self, screen: Any, data: _DashboardFinesData) -> None:
+        screen.set_fines_by_branch(data.rows, period=data.period)
+
+    def _dashboard_leave_fetch(
+        self, session: Session, *, month_start: date, next_month: date
+    ) -> _DashboardLeaveData:
         """İcazə ölçəni — istifadə / tenant büdcəsi.
 
         Büdcə = `MONTHLY_LEAVE_MINUTES_LIMIT` × aktiv işçi sayı. Limit
@@ -583,9 +1084,12 @@ class ScreenDataBinder:
         ).fetchone()
         used = float((row or {}).get("used_minutes") or 0)
         headcount = int((row or {}).get("active_employees") or 0)
-        screen.set_leave_usage(used, float(per_employee * headcount))
+        return _DashboardLeaveData(used=used, budget=float(per_employee * headcount))
 
-    def _dashboard_leaders(self, session: Session, screen: Any, *, today: date) -> None:
+    def _dashboard_leave_apply(self, screen: Any, data: _DashboardLeaveData) -> None:
+        screen.set_leave_usage(data.used, data.budget)
+
+    def _dashboard_leaders_fetch(self, session: Session, *, today: date) -> _DashboardLeadersData:
         """Xal liderləri — CARİ 6 aylıq dövr (`PointsPeriod`, bölmə 6).
 
         Dövr sərhədi domendən götürülür, "son 30 gün" kimi bir kəsim
@@ -608,9 +1112,14 @@ class ScreenDataBinder:
             """,
             (session.tenant_id, period.start),
         ).fetchall()
-        screen.set_leaders([(_full_name(row), _points_text(row["total"])) for row in rows])
+        return _DashboardLeadersData(
+            leaders=[(_full_name(row), _points_text(row["total"])) for row in rows]
+        )
 
-    def _dashboard_health(self, session: Session, screen: Any) -> None:
+    def _dashboard_leaders_apply(self, screen: Any, data: _DashboardLeadersData) -> None:
+        screen.set_leaders(data.leaders)
+
+    def _dashboard_health_fetch(self, session: Session) -> _DashboardHealthData:
         """1C serverlərinin vəziyyəti — `v_erp_server_health` görünüşündən.
 
         `INACTIVE` sətirlər GÖSTƏRİLMİR: `ServerHealth.needs_attention` onları
@@ -632,8 +1141,8 @@ class ScreenDataBinder:
             # səhvi bütün tenant-ların serverlərini bir dashboard-a tökərdi.
             (session.tenant_id,),
         ).fetchall()
-        screen.set_server_health(
-            [
+        return _DashboardHealthData(
+            rows=[
                 (
                     str(row["server_name"]),
                     _sync_delay_text(row["sync_delay_seconds"]),
@@ -643,7 +1152,12 @@ class ScreenDataBinder:
             ]
         )
 
-    def _dashboard_break_overuse(self, session: Session, screen: Any, *, today: date) -> None:
+    def _dashboard_health_apply(self, screen: Any, data: _DashboardHealthData) -> None:
+        screen.set_server_health(data.rows)
+
+    def _dashboard_break_overuse_fetch(
+        self, session: Session, *, today: date
+    ) -> list[tuple[str, str]]:
         """Nahar/Çay gündəlik həddini aşanlar (nahar.md GUI, bənd 2).
 
         ──────────────────────────────────────────────────────────────────────
@@ -663,24 +1177,23 @@ class ScreenDataBinder:
         Siyahı AD-BAAD işçi göstərir, yəni aqreqat deyil, fərdi məlumatdır.
         `_dashboard_benchmark`-dakı eyni qısa-dövrə: flag yoxdursa bölmə
         doldurulmur və ekranda GÖRÜNMÜR (bölmə 3: "GÖRMƏK = SƏLAHİYYƏTİN
-        OLMASI"). `set_break_overuse([])` AÇIQ çağırılır — əvvəlki dolu
-        vəziyyət ekranda qalmasın deyə (panel yenidən oxunanda rol dəyişmiş
-        ola bilər).
+        OLMASI"). BOŞ siyahı AÇIQ qaytarılır — əvvəlki dolu vəziyyət
+        ekranda qalmasın deyə (panel yenidən oxunanda rol dəyişmiş ola
+        bilər); `apply` mərhələsi bunu heç bir şərtsiz `set_break_overuse`-a
+        ötürür (bax `_dashboard_break_overuse_apply`).
         """
         from src.application.use_cases.employee_profile import (  # noqa: PLC0415
             VIEW_EMPLOYEE_REPORTS_FLAG,
         )
 
         if not self._actor.has_permission(VIEW_EMPLOYEE_REPORTS_FLAG, now=datetime.now(UTC)):
-            screen.set_break_overuse([])
-            return
+            return []
 
         usages = session.leave_verification.break_overuse_for_day(
             tenant_id=session.tenant_id, on_date=today
         )
         if not usages:
-            screen.set_break_overuse([])
-            return
+            return []
 
         # ADLAR BİR SORĞUDA: sətir başına `employees.get()` çağırmaq 21
         # filialın həddi aşan işçiləri üçün onlarla gediş-gəliş demək olardı.
@@ -694,17 +1207,15 @@ class ScreenDataBinder:
         ).fetchall()
         names = {row["id"]: _full_name(row) for row in rows}
 
-        screen.set_break_overuse(
-            [
-                (
-                    names.get(usage.employee_id, "Naməlum işçi"),
-                    usage.allowance.warning_az(),
-                )
-                for usage in usages
-            ]
-        )
+        return [
+            (names.get(usage.employee_id, "Naməlum işçi"), usage.allowance.warning_az())
+            for usage in usages
+        ]
 
-    def _dashboard_benchmark(self, session: Session, screen: Any) -> None:
+    def _dashboard_break_overuse_apply(self, screen: Any, rows: list[tuple[str, str]]) -> None:
+        screen.set_break_overuse(rows)
+
+    def _dashboard_benchmark_gated_fetch(self, session: Session) -> _DashboardBenchmarkData | None:
         """#24 Çox-Mağaza Benchmark — dörd yeni widget, YALNIZ `can_export_reports`.
 
         ──────────────────────────────────────────────────────────────────────
@@ -715,6 +1226,15 @@ class ScreenDataBinder:
         QAYDASI DEYİL, sadəcə lazımsız sorğunun qarşısını alan QISA-DÖVRƏDİR:
         flag yoxdursa `set_*` heç çağırılmır, ekranın dörd bölməsi (bax
         `group_c.DashboardScreen` sinif başlığı) defolt GİZLİ qalır.
+
+        FAZA D (PERF-6) — `None` QAYTARMAQ "İCAZƏ YOXDUR" DEMƏKDİR, "UĞURSUZ
+        OLDU" DEYİL: `_dashboard_fetch`-də `self._fill(...)` bunu `SectionResult
+        (data=None, failure=None)`-a çevirir (bax onun tərifi) — `_dashboard_
+        apply` heç bir banner, heç bir setter çağırmır, bölmə köhnə davranışdakı
+        kimi sükutla GİZLİ qalır. Bu metod `_dashboard`-ın SƏKKİZ bölməsindən
+        BİRİDİR; `refresh_dashboard_benchmark` (dropdown dəyişəndə, AYRI giriş
+        nöqtəsi) EYNİ icazə yoxlamasını ÖZÜ aparır, bura DELEGƏ ETMİR — ikisinin
+        sərhədi FƏRQLİDİR (bax onun başlığı).
         """
         from src.application.use_cases.multi_store_benchmark import (  # noqa: PLC0415
             VIEW_BENCHMARK_FLAG,
@@ -723,10 +1243,10 @@ class ScreenDataBinder:
 
         now = datetime.now(UTC)
         if not self._actor.has_permission(VIEW_BENCHMARK_FLAG, now=now):
-            return
+            return None
         # İLK açılışdakı defolt metrik — dropdown dəyişəndə `refresh_dashboard_
         # benchmark` YENİ metriklə TƏKRAR çağırır (bax o metodun başlığı).
-        self._populate_benchmark_sections(session, screen, metric=BenchmarkMetric.FINE_COUNT)
+        return self._dashboard_benchmark_fetch(session, metric=BenchmarkMetric.FINE_COUNT)
 
     def refresh_dashboard_benchmark(self, screen: Any, *, metric_key: str) -> None:
         """Reytinq dropdown-u dəyişəndə dörd bölməni YENİ metriklə yeniləyir.
@@ -756,15 +1276,17 @@ class ScreenDataBinder:
 
         try:
             with self._context.session(user_id=self._actor.id) as session:
-                self._populate_benchmark_sections(session, screen, metric=metric)
+                data = self._dashboard_benchmark_fetch(session, metric=metric)
         except Exception:
             _error_log.exception("BENCHMARK_REFRESH_FAILED", extra={"metric_key": metric_key})
             report_section_error(screen, SECTION_DASHBOARD_BENCHMARK)
+            return
+        self._dashboard_benchmark_apply(screen, data)
 
-    def _populate_benchmark_sections(
-        self, session: Session, screen: Any, *, metric: BenchmarkMetric
-    ) -> None:
-        """Dörd bölmənin ORTAQ doldurma məntiqi (`_dashboard_benchmark` +
+    def _dashboard_benchmark_fetch(
+        self, session: Session, *, metric: BenchmarkMetric
+    ) -> _DashboardBenchmarkData:
+        """Dörd bölmənin ORTAQ oxuma məntiqi (`_dashboard_benchmark` +
         `refresh_dashboard_benchmark` EYNİ kodu paylaşır)."""
         from src.application.use_cases.multi_store_benchmark import (  # noqa: PLC0415
             BenchmarkMetric,
@@ -777,58 +1299,58 @@ class ScreenDataBinder:
         rows = session.multi_store_benchmark.ranking(
             tenant_id=session.tenant_id, actor=self._actor, metric=metric
         )
-        screen.set_ranking_table(
-            [
-                RankingEntry(
-                    store_id=str(row.store_id),
-                    store_name=row.store_name,
-                    value_display=row.display_value,
-                    trend_arrow=row.trend.arrow,
-                    trend_label=row.trend.label_az,
-                )
-                for row in rows
-            ],
-            metric_options=metric_options,
-            selected_metric=metric.value,
-        )
+        ranking = [
+            RankingEntry(
+                store_id=str(row.store_id),
+                store_name=row.store_name,
+                value_display=row.display_value,
+                trend_arrow=row.trend.arrow,
+                trend_label=row.trend.label_az,
+            )
+            for row in rows
+        ]
 
+        comparison: _BenchmarkComparison | None = None
         if rows:
             # Defolt müqayisə ƏN YAXŞI sıralanan mağaza üçündür — istifadəçi
             # sətrə klikləyəndə (drill-down) fərqli bir kontekstə keçir,
             # bura toxunmur (bax `AdminShell.screen_for` şərhi).
-            comparison = session.multi_store_benchmark.store_vs_network(
+            store_vs_network = session.multi_store_benchmark.store_vs_network(
                 tenant_id=session.tenant_id,
                 actor=self._actor,
                 metric=metric,
                 store_id=rows[0].store_id,
             )
-            screen.set_store_vs_network(
+            comparison = _BenchmarkComparison(
                 metric_label=metric.label_az,
-                store_label=comparison.store_name,
-                store_value=comparison.store_value or 0.0,
-                store_display=format_metric_value(comparison.store_value, metric),
+                store_label=store_vs_network.store_name,
+                store_value=store_vs_network.store_value or 0.0,
+                store_display=format_metric_value(store_vs_network.store_value, metric),
                 network_label="Şəbəkə ortalaması",
-                network_value=comparison.network_average or 0.0,
-                network_display=format_metric_value(comparison.network_average, metric),
+                network_value=store_vs_network.network_average or 0.0,
+                network_display=format_metric_value(store_vs_network.network_average, metric),
             )
 
         trend_points = session.multi_store_benchmark.trend(
             tenant_id=session.tenant_id, actor=self._actor, metric=metric
         )
-        screen.set_metric_trend(
-            metric_label=metric.label_az,
-            points=[
-                (point.period_label, point.value or 0.0, format_metric_value(point.value, metric))
-                for point in trend_points
-            ],
-        )
 
         outliers = session.multi_store_benchmark.outliers(
             tenant_id=session.tenant_id, actor=self._actor, metric=metric
         )
-        screen.set_outliers(
-            summary_text=outliers.summary_text_az,
-            rows=[
+
+        return _DashboardBenchmarkData(
+            ranking=ranking,
+            metric_options=metric_options,
+            selected_metric=metric.value,
+            comparison=comparison,
+            metric_label=metric.label_az,
+            trend_points=[
+                (point.period_label, point.value or 0.0, format_metric_value(point.value, metric))
+                for point in trend_points
+            ],
+            outliers_summary=outliers.summary_text_az,
+            outliers_rows=[
                 (
                     outlier.store_name,
                     f"{outlier.deviation_sigma:.1f}σ "
@@ -837,6 +1359,23 @@ class ScreenDataBinder:
                 for outlier in outliers.outliers
             ],
         )
+
+    def _dashboard_benchmark_apply(self, screen: Any, data: _DashboardBenchmarkData) -> None:
+        screen.set_ranking_table(
+            data.ranking, metric_options=data.metric_options, selected_metric=data.selected_metric
+        )
+        if data.comparison is not None:
+            screen.set_store_vs_network(
+                metric_label=data.comparison.metric_label,
+                store_label=data.comparison.store_label,
+                store_value=data.comparison.store_value,
+                store_display=data.comparison.store_display,
+                network_label=data.comparison.network_label,
+                network_value=data.comparison.network_value,
+                network_display=data.comparison.network_display,
+            )
+        screen.set_metric_trend(metric_label=data.metric_label, points=data.trend_points)
+        screen.set_outliers(summary_text=data.outliers_summary, rows=data.outliers_rows)
 
     def populate_daily_roster_for_store(self, store_id: StoreId, screen: Any) -> None:
         """Reytinq Cədvəlindəki DRILL-DOWN-un yazı yolu (#24, Faza 9A).
@@ -848,13 +1387,38 @@ class ScreenDataBinder:
         arqumentdir, `_require_store_access` `can_view_employee_reports`
         sahibini istənilən mağazaya buraxır), ona görə YENİ use case metodu
         YOX, sadəcə bu kontroller bir yeni AÇAR yolu əlavə edir.
+
+        ──────────────────────────────────────────────────────────────────────
+        FAZA C (PERF-6, RİSKLİ) — GİZLİ YAZI + XÜSUSİ BANNER, EYNİ FORMA
+        ──────────────────────────────────────────────────────────────────────
+        `_daily_roster`-in başlığındakı EYNİ "gizli yazı" izahı burada da
+        keçərlidir: `open_sheet()` gündəlik tabeli YARADIR, yazı `fetch`
+        mərhələsində qalır. FƏRQ: bu metodun ÖZÜNÜN try/except-i var (SPESİFİK
+        `SECTION_DAILY_ROSTER` banneri) — `_health`-dəki Qərar-2 mexanizmi
+        (bax `SectionFailure`) BURADA da işlədilir: `fetch` uğursuzluqda SAF
+        `_DailyRosterData(failure=...)` qaytarır, `apply` bunu bannerə çevirir.
+
+        `_context.session(...)` BURADA açılır (`_daily_roster`-dən fərqli
+        olaraq bu metod `populate()`-dən keçmir, ÖZ sessiyasını özü qurur) —
+        bu, DƏYİŞMİR, çünki `perform_ranking_drill_down` bu metodu birbaşa,
+        artıq açılmış sessiyasız çağırır.
         """
+        inputs = self._daily_roster_for_store_inputs(screen)
+        data = self._daily_roster_for_store_fetch(store_id, inputs)
+        self._daily_roster_for_store_apply(screen, data)
+
+    def _daily_roster_for_store_inputs(self, screen: Any) -> _NoInputs:
+        return _NoInputs()
+
+    def _daily_roster_for_store_fetch(
+        self, store_id: StoreId, _inputs: _NoInputs
+    ) -> _DailyRosterData:
         try:
             with self._context.session(user_id=self._actor.id) as session:
                 view = session.daily_attendance.open_sheet(
                     tenant_id=session.tenant_id, actor=self._actor, store_id=store_id
                 )
-                session.commit()
+                session.commit()  # gündəlik tabel YARADIR — bax bu metodun başlığı
                 rows = [
                     {
                         "employee": _employee_name(session, line.employee_id),
@@ -871,14 +1435,24 @@ class ScreenDataBinder:
             _error_log.exception(
                 "BENCHMARK_DRILL_DOWN_ROSTER_FAILED", extra={"store_id": str(store_id)}
             )
-            report_section_error(screen, SECTION_DAILY_ROSTER)
-            return
-
-        screen.set_rows(rows)
-        if view.mismatch_count:
-            screen.set_mismatch(
-                f"{view.mismatch_count} sətir HR planı ilə uyğun gəlmir — nəzərdən keçirin."
+            return _DailyRosterData(
+                rows=[], mismatch_text=None, failure=SectionFailure(section=SECTION_DAILY_ROSTER)
             )
+
+        mismatch_text = (
+            f"{view.mismatch_count} sətir HR planı ilə uyğun gəlmir — nəzərdən keçirin."
+            if view.mismatch_count
+            else None
+        )
+        return _DailyRosterData(rows=rows, mismatch_text=mismatch_text)
+
+    def _daily_roster_for_store_apply(self, screen: Any, data: _DailyRosterData) -> None:
+        if data.failure is not None:
+            report_section_error(screen, data.failure.section)
+            return
+        screen.set_rows(data.rows)
+        if data.mismatch_text is not None:
+            screen.set_mismatch(data.mismatch_text)
 
     # ------------------------------ Qrup B ----------------------------------- #
 
@@ -887,14 +1461,27 @@ class ScreenDataBinder:
 
         İki mənbə bir siyahıda göstərilir və tip-badge ilə fərqləndirilir —
         spesifikasiya açıq şəkildə "iki ayrı tab/ekran əvəzinə" deyir.
+
+        FAZA C (PERF-6) — naxış izahı `ScreenDataBinder` başlığındadır. Bu,
+        kateqoriya-3 (səpələnmiş `report_section_error`) daşıyan İKİNCİ
+        binder-dir (`_health`-in köməkçiləri birincidir) — `_low_confidence_
+        faces` artıq `screen`-i ÇAĞIRMIR, uğursuzluğu SAF `bool` kimi
+        qaytarır (bax onun tərifi).
         """
+        inputs = self._live_queue_inputs(screen)
+        data = self._live_queue_fetch(session, inputs)
+        self._live_queue_apply(screen, data)
+
+    def _live_queue_inputs(self, screen: Any) -> _NoInputs:
+        return _NoInputs()
+
+    def _live_queue_fetch(self, session: Session, _inputs: _NoInputs) -> _LiveQueueData:
         from src.presentation.screens.group_b import QueueEntry  # noqa: PLC0415
 
         stores = session.uow.repository("camera_assignments").stores_for_operator(self._actor.id)
         if not stores:
             # FAIL-SAFE (bölmə 4): təyinatsız operator HEÇ NƏ görmür.
-            screen.set_entries([])
-            return
+            return _LiveQueueData(entries=[], low_confidence_failed=False)
 
         # Xəbərdarlıq həddi CANLI limitdən hesablanır: Root timeout-u 45-dən
         # 20 dəqiqəyə endirsə, sabit 22 ilə operator xəbərdarlığı ESKALASİYADAN
@@ -905,7 +1492,7 @@ class ScreenDataBinder:
         # AŞAĞI-ETİBARLI ÜZ TƏSDİQİ (facecontrol.md bənd 12) — nişan üçün
         # lazım olan dəst BİR sorğu ilə oxunur; sətir-sətir sorğu 40 sətirlik
         # növbədə 40 gediş-gəliş demək olardı.
-        low_confidence = _low_confidence_faces(session, stores, screen)
+        low_confidence, low_confidence_failed = _low_confidence_faces(session, stores)
 
         # `(gözləmə dəqiqəsi, sətir)` cütü ilə yığılır: `QueueEntry` gözləməni
         # MƏTN kimi saxlayır ("18 dəq") və mətnə görə sıralamaq "9 dəq"-i
@@ -953,12 +1540,40 @@ class ScreenDataBinder:
         # Ən çox gözləyən ƏVVƏLDƏ: operator növbəni yuxarıdan aşağı emal edir
         # və 45 dəqiqəlik timeout-a ən yaxın olan birinci görünməlidir.
         pending.sort(key=lambda item: item[0], reverse=True)
-        screen.set_entries([entry for _, entry in pending])
+        return _LiveQueueData(
+            entries=[entry for _, entry in pending],
+            low_confidence_failed=low_confidence_failed,
+        )
+
+    def _live_queue_apply(self, screen: Any, data: _LiveQueueData) -> None:
+        screen.set_entries(data.entries)
+        if data.low_confidence_failed:
+            report_section_error(screen, SECTION_QUEUE_FACE_BADGES)
 
     # ------------------------------ Qrup C ----------------------------------- #
 
     def _shift_planning(self, session: Session, screen: Any) -> None:
-        self._render_shift_matrix(session, screen, day_offset=self._shift_offset_days)
+        """FAZA C (PERF-6) — naxış izahı `ScreenDataBinder` başlığındadır.
+
+        `fetch`-in atdığı `KompasOSError` BURADA TUTULMUR — `shift_window.py::
+        _on_month_changed` `populate(..., reraise=True)` ilə çağırır və onu
+        gözləyir (bax `populate()` başlığı, `_fine_appeals` ilə EYNİ qayda).
+        """
+        inputs = self._shift_planning_inputs(screen)
+        data = self._shift_planning_fetch(session, inputs)
+        self._shift_planning_apply(screen, data)
+
+    def _shift_planning_inputs(self, screen: Any) -> _NoInputs:
+        """Widget-dən oxunan YOXDUR: sürüşmə (`day_offset`) ARTIQ kontroller
+        vəziyyətindədir (`self._shift_offset_days`, `set_shift_offset` ilə
+        qurulur) — Qt-dən YENİDƏN oxunmur."""
+        return _NoInputs()
+
+    def _shift_planning_fetch(self, session: Session, _inputs: _NoInputs) -> _ShiftPlanningData:
+        return self._render_shift_matrix_fetch(session, day_offset=self._shift_offset_days)
+
+    def _shift_planning_apply(self, screen: Any, data: _ShiftPlanningData) -> None:
+        self._render_shift_matrix_apply(screen, data)
 
     def shift_window_days(self, session: Session) -> int:
         """Matris pəncərəsinin uzunluğu — kontroller sürüşmə addımını bilməlidir."""
@@ -979,7 +1594,9 @@ class ScreenDataBinder:
         """
         self._shift_offset_days = day_offset
 
-    def _render_shift_matrix(self, session: Session, screen: Any, *, day_offset: int) -> None:
+    def _render_shift_matrix_fetch(
+        self, session: Session, *, day_offset: int
+    ) -> _ShiftPlanningData:
         today = date.today() + timedelta(days=day_offset)  # noqa: DTZ011
         window_days = matrix_window_days(session)
         end = today + timedelta(days=window_days)
@@ -1000,7 +1617,7 @@ class ScreenDataBinder:
         # hansı tarix aralığına baxdığını görmürdü. Dar setter işlədilir, çünki
         # `set_month()` iş rejimi nişanını da yazır və onu `shift_matrix.py`
         # ARTIQ doldurub (bax `set_window_label` başlığı).
-        screen.set_window_label(f"{window[0]:%d.%m.%Y} – {window[-1]:%d.%m.%Y}")
+        window_label = f"{window[0]:%d.%m.%Y} – {window[-1]:%d.%m.%Y}"
 
         by_employee: dict[str, dict[date, str]] = {}
         for item in assignments:
@@ -1011,10 +1628,19 @@ class ScreenDataBinder:
             (name, [marks.get(day, "") for day in window])
             for name, marks in sorted(by_employee.items())
         ]
-        screen.set_matrix(days, rows)
-        self._shift_staffing_pattern(session, screen)
+        return _ShiftPlanningData(
+            window_label=window_label,
+            days=days,
+            rows=rows,
+            staffing=self._shift_staffing_pattern_fetch(session),
+        )
 
-    def _shift_staffing_pattern(self, session: Session, screen: Any) -> None:
+    def _render_shift_matrix_apply(self, screen: Any, data: _ShiftPlanningData) -> None:
+        screen.set_window_label(data.window_label)
+        screen.set_matrix(data.days, data.rows)
+        self._shift_staffing_pattern_apply(screen, data.staffing)
+
+    def _shift_staffing_pattern_fetch(self, session: Session) -> _ShiftStaffingPatternData:
         """#13 — Növbə Matrisinin QEYRİ-MƏCBURİ tarixi nümunə kartı.
 
         MAĞAZA SEÇİMİ: aktorun öz filialı, o yoxdursa (Root/CEO şəbəkə
@@ -1041,8 +1667,8 @@ class ScreenDataBinder:
             if suggestions
             else "hələ hesablanmayıb"
         )
-        screen.set_staffing_pattern(
-            [
+        return _ShiftStaffingPatternData(
+            rows=[
                 (suggestion.weekday_label_az, suggestion.headcount_label_az())
                 for suggestion in suggestions
             ],
@@ -1051,54 +1677,101 @@ class ScreenDataBinder:
             calculated_label=calculated,
         )
 
+    def _shift_staffing_pattern_apply(self, screen: Any, data: _ShiftStaffingPatternData) -> None:
+        screen.set_staffing_pattern(
+            data.rows,
+            store_name=data.store_name,
+            based_on_weeks=data.based_on_weeks,
+            calculated_label=data.calculated_label,
+        )
+
     def _shift_swaps(self, session: Session, screen: Any) -> None:
+        """FAZA C (PERF-6) — naxış izahı `ScreenDataBinder` başlığındadır."""
+        inputs = self._shift_swaps_inputs(screen)
+        data = self._shift_swaps_fetch(session, inputs)
+        self._shift_swaps_apply(screen, data)
+
+    def _shift_swaps_inputs(self, screen: Any) -> _NoInputs:
+        return _NoInputs()
+
+    def _shift_swaps_fetch(self, session: Session, _inputs: _NoInputs) -> _ShiftSwapsData:
         requests = session.shift_swaps.pending_inbox(tenant_id=session.tenant_id, actor=self._actor)
-        screen.set_counts({"pending": len(requests)})
         # Açarlar ekranın FAKTİKİ gözlədikləridir: `id`, `from_name`, `to_name`,
         # `shift`, `store`, `status`, `note`. Əvvəl `employee`/`date` göndərilirdi
         # və kart `KeyError` ilə çökürdü — `populate()` isə istisnanı udurdu,
         # ona görə Növbə Dəyişmə inbox-u canlı rejimdə HƏMİŞƏ boş idi.
-        screen.set_requests(
-            [
-                {
-                    "id": str(item.id),
-                    "from_name": _employee_name(session, item.employee_id),
-                    # Sorğuda hədəf işçi YOXDUR — spesifikasiya (sətir 106)
-                    # yalnız "istədiyi tarix + səbəb" deyir; qərarı HR verir.
-                    "to_name": item.target_date.strftime("%d.%m.%Y"),
-                    "shift": item.target_date.strftime("%d.%m.%Y"),
-                    "store": _store_name(session, item.store_id) if item.store_id else "—",
-                    "status": _SWAP_STATUS_TEXT.get(item.status.value, item.status.value),
-                    "note": item.reason,
-                }
-                for item in requests
-            ]
-        )
+        rows = [
+            {
+                "id": str(item.id),
+                "from_name": _employee_name(session, item.employee_id),
+                # Sorğuda hədəf işçi YOXDUR — spesifikasiya (sətir 106)
+                # yalnız "istədiyi tarix + səbəb" deyir; qərarı HR verir.
+                "to_name": item.target_date.strftime("%d.%m.%Y"),
+                "shift": item.target_date.strftime("%d.%m.%Y"),
+                "store": _store_name(session, item.store_id) if item.store_id else "—",
+                "status": _SWAP_STATUS_TEXT.get(item.status.value, item.status.value),
+                "note": item.reason,
+            }
+            for item in requests
+        ]
+        return _ShiftSwapsData(pending_count=len(requests), rows=rows)
+
+    def _shift_swaps_apply(self, screen: Any, data: _ShiftSwapsData) -> None:
+        screen.set_counts({"pending": data.pending_count})
+        screen.set_requests(data.rows)
 
     def _daily_roster(self, session: Session, screen: Any) -> None:
+        """FAZA C (PERF-6, RİSKLİ) — naxış izahı `ScreenDataBinder` başlığındadır.
+
+        ──────────────────────────────────────────────────────────────────────
+        BU BİNDER OXU-YALNIZ DEYİL — `fetch` `session.commit()` ÇAĞIRIR
+        ──────────────────────────────────────────────────────────────────────
+        `open_sheet()` gündəlik tabeli AVTOMATİK statuslarla YARADIR (gizli
+        yazı) — `_audit`/`populate_daily_roster_for_store` ilə EYNİ forma:
+        CLAUDE.md-nin "yalnız oxuyan ekran `screen_data.py`-a bağlanır"
+        cümləsi ilə uyğunsuzluq QƏSDƏN saxlanılır. Yazı `fetch` mərhələsində
+        QALIR (fon sapında yazı problemsizdir), `apply` YENƏ YALNIZ Qt olur.
+
+        `fetch`-in atdığı istisna BURADA TUTULMUR — `populate()`-un ÜMUMİ
+        `SECTION_SCREEN` yoluna (bax onun başlığı) buraxılır, `_fine_appeals`/
+        `_shift_planning`-dən FƏRQLİ olaraq `reraise=True` YOXDUR, çünki bu
+        binder-i xüsusi `reraise` ilə çağıran YOXDUR.
+        """
+        inputs = self._daily_roster_inputs(screen)
+        data = self._daily_roster_fetch(session, inputs)
+        self._daily_roster_apply(screen, data)
+
+    def _daily_roster_inputs(self, screen: Any) -> _NoInputs:
+        return _NoInputs()
+
+    def _daily_roster_fetch(self, session: Session, _inputs: _NoInputs) -> _DailyRosterData:
         store_id = self._actor.store_id
         if store_id is None:
-            screen.set_rows([])
-            return
+            return _DailyRosterData(rows=[], mismatch_text=None)
 
         view = session.daily_attendance.open_sheet(
             tenant_id=session.tenant_id, actor=self._actor, store_id=store_id
         )
-        session.commit()
-        screen.set_rows(
-            [
-                {
-                    "employee": _employee_name(session, line.employee_id),
-                    "status": line.auto_status.label_az,
-                    "note": line.manager_note or "",
-                }
-                for line in view.sheet.lines
-            ]
+        session.commit()  # gündəlik tabel YARADIR — bax bu metodun başlığı
+        rows = [
+            {
+                "employee": _employee_name(session, line.employee_id),
+                "status": line.auto_status.label_az,
+                "note": line.manager_note or "",
+            }
+            for line in view.sheet.lines
+        ]
+        mismatch_text = (
+            f"{view.mismatch_count} sətir HR planı ilə uyğun gəlmir — nəzərdən keçirin."
+            if view.mismatch_count
+            else None
         )
-        if view.mismatch_count:
-            screen.set_mismatch(
-                f"{view.mismatch_count} sətir HR planı ilə uyğun gəlmir — nəzərdən keçirin."
-            )
+        return _DailyRosterData(rows=rows, mismatch_text=mismatch_text)
+
+    def _daily_roster_apply(self, screen: Any, data: _DailyRosterData) -> None:
+        screen.set_rows(data.rows)
+        if data.mismatch_text is not None:
+            screen.set_mismatch(data.mismatch_text)
 
     def _users(self, session: Session, screen: Any) -> None:
         """ "İstifadəçilər" cədvəli — QA-FULL Faza 3: "···" menyusunun görünürlüyü DƏ BURADA.
@@ -1134,13 +1807,32 @@ class ScreenDataBinder:
         DƏ risklidir. `is_active` süzgəci bu riski AZALDIR (deaktivlər artıq
         yer tutmur), amma LƏĞV ETMİR — səhifələmə/`OFFSET` ayrıca iş kimi
         qalır.
+
+        ──────────────────────────────────────────────────────────────────────
+        FAZA C (PERF-6) — `INPUTS` MƏRHƏLƏSİNİN İLK HƏQİQİ NÜMUNƏSİ
+        ──────────────────────────────────────────────────────────────────────
+        `screen.status_filter()` Qt-dən OXUYUR — `_fines`/`_help`-dəki `_NoInputs`
+        BURADA İŞLƏMİR. `inputs` (`_users_inputs`) bu dəyəri ƏSAS SAPDA oxuyub
+        `_UsersInputs`-a qoyur; `fetch` (`_users_fetch`) onu YALNIZ PARAMETR
+        kimi alır, Qt-yə ÜMUMİYYƏTLƏ TOXUNMUR — FAZA D-də `fetch` fon sapına
+        keçəndə Qt-dən sinxronlaşdırılmamış oxu (yazmaq qədər təhlükəli) baş
+        VERMİR. Xam sətir → SQL şərti çevrilməsi (SABİT siyahıdan, CLAUDE.md
+        §4) `fetch`-də QALIR — sorğu qurmaq DB narahatlığıdır, `inputs`-un işi
+        deyil.
         """
-        status_filter = screen.status_filter()
-        if status_filter == "inactive":
+        inputs = self._users_inputs(screen)
+        data = self._users_fetch(session, inputs)
+        self._users_apply(screen, data)
+
+    def _users_inputs(self, screen: Any) -> _UsersInputs:
+        return _UsersInputs(status_filter=screen.status_filter())
+
+    def _users_fetch(self, session: Session, inputs: _UsersInputs) -> _UsersData:
+        if inputs.status_filter == "inactive":
             status_clause = "NOT e.is_active"
-        elif status_filter == "all":
+        elif inputs.status_filter == "all":
             status_clause = "TRUE"
-        else:  # "active" — DEFOLT (bax yuxarıdakı izah)
+        else:  # "active" — DEFOLT (bax `_users` başlığı)
             status_clause = "e.is_active"
         rows = session.uow.connection.execute(
             f"""
@@ -1156,9 +1848,9 @@ class ScreenDataBinder:
             """,  # noqa: S608 — şərtlər sabit siyahıdandır, dəyər %s ilə bağlanır
             (session.tenant_id,),
         ).fetchall()
-        screen.set_permitted_actions(_permitted_user_actions(self._actor))
-        screen.set_users(
-            [
+        return _UsersData(
+            permitted_actions=_permitted_user_actions(self._actor),
+            rows=[
                 {
                     # Açarlar ekranın FAKTİKİ gözlədikləridir (`user["full_name"]`,
                     # `user["username"]`) — əvvəl `name` göndərilirdi və sətir
@@ -1170,21 +1862,48 @@ class ScreenDataBinder:
                     "status": "Aktiv" if row["is_active"] else "Deaktiv",
                 }
                 for row in rows
-            ]
+            ],
         )
+
+    def _users_apply(self, screen: Any, data: _UsersData) -> None:
+        screen.set_permitted_actions(data.permitted_actions)
+        screen.set_users(data.rows)
 
     def _fines(self, session: Session, screen: Any) -> None:
         """Operatorun izlədiyi filiallarda BU AYIN cərimələri.
+
+        ──────────────────────────────────────────────────────────────────────
+        PERF-6 FAZA B — İNPUTS/FETCH/APPLY NÜMUNƏSİ (Şell #1)
+        ──────────────────────────────────────────────────────────────────────
+        Bu, ÜÇ-MƏRHƏLƏLİ naxışın İKİ nümunəsindən BİRİDİR (`_help` digəridir) —
+        naxışın ÖZÜ `_binders()`-in başlığındakı ÜMUMİ izahdadır. `_fines`-in
+        `inputs` mərhələsi BOŞDUR (ekrandan oxunan HEÇ NƏ yoxdur) — bu, NAXIŞIN
+        NORMAL halıdır (`_users`, PERF-6 FAZA A tapıntısı, boş OLMAYAN nümunədir).
 
         Siyahı `fines` cədvəlindən BİRBAŞA oxunur, use case-dən yox: burada
         biznes qərarı yoxdur, sadəcə göstəriş var və `ManualFineUseCase`-də
         "mağazaya görə aylıq siyahı" metodu mövcud deyil — onu yalnız bu ekran
         üçün əlavə etmək use case-i hesabat vasitəsinə çevirərdi.
         """
+        inputs = self._fines_inputs(screen)
+        data = self._fines_fetch(session, inputs)
+        self._fines_apply(screen, data)
+
+    def _fines_inputs(self, screen: Any) -> _NoInputs:
+        """`inputs` mərhələsi — ƏSAS SAPDA, YALNIZ Qt OXUYUR.
+
+        `_fines` heç bir widget dəyərindən ASILI DEYİL, ona görə `_NoInputs()`
+        qaytarır (bax onun tərifi — `None` DEYİL, mypy səbəbi ilə). İmza YENƏ
+        DƏ `screen`-i alır ki, ekrandan asılı olan bir binder (`_users` kimi)
+        İNPUTS-u BURAYA əlavə edəndə çağırış yeri (`_fines`-in özü) DƏYİŞMƏSİN.
+        """
+        return _NoInputs()
+
+    def _fines_fetch(self, session: Session, _inputs: _NoInputs) -> _FinesData:
+        """`fetch` mərhələsi — FON SAPINA köçürüləcək hissə, Qt-yə TOXUNMUR."""
         stores = session.uow.repository("camera_assignments").stores_for_operator(self._actor.id)
         if not stores:
-            screen.set_fines([], period_text=_month_text(), total_text="0 ₼")
-            return
+            return _FinesData(rows=[], period_text=_month_text(), total_text="0 ₼")
 
         today = datetime.now(UTC).date()
         rows = session.uow.connection.execute(
@@ -1211,8 +1930,8 @@ class ScreenDataBinder:
         ).fetchall()
 
         total = sum(row["amount"] or 0 for row in rows)
-        screen.set_fines(
-            [
+        return _FinesData(
+            rows=[
                 {
                     "employee": _full_name(row),
                     "type": row["type_name"],
@@ -1226,9 +1945,28 @@ class ScreenDataBinder:
             total_text=f"{total} ₼",
         )
 
+    def _fines_apply(self, screen: Any, data: _FinesData) -> None:
+        """`apply` mərhələsi — ƏSAS SAPDA, YALNIZ Qt, DB-yə TOXUNMUR."""
+        screen.set_fines(data.rows, period_text=data.period_text, total_text=data.total_text)
+
     # ------------------------------ Qrup F ----------------------------------- #
 
     def _fine_appeals(self, session: Session, screen: Any) -> None:
+        """FAZA C (PERF-6) — naxış izahı `ScreenDataBinder` başlığındadır.
+
+        `fetch`-in atdığı `KompasOSError` BURADA TUTULMUR — `populate()`-un
+        `reraise=True` yolu (`fine_appeals.py::refresh`) onu gözləyir (bax
+        `populate()` başlığı). Üç-mərhələli çağırış zənciri istisnanı OLDUĞU
+        KİMİ yuxarı ötürür, tutmaq DAVRANIŞI dəyişərdi.
+        """
+        inputs = self._fine_appeals_inputs(screen)
+        data = self._fine_appeals_fetch(session, inputs)
+        self._fine_appeals_apply(screen, data)
+
+    def _fine_appeals_inputs(self, screen: Any) -> _NoInputs:
+        return _NoInputs()
+
+    def _fine_appeals_fetch(self, session: Session, _inputs: _NoInputs) -> list[dict[str, str]]:
         appeals = session.fine_appeals.inbox(tenant_id=session.tenant_id, actor=self._actor)
         now = datetime.now(UTC)
         # SLA həddi ROOT İdarə Mərkəzindən gəlir (bölmə 3) — burada sabit
@@ -1240,51 +1978,59 @@ class ScreenDataBinder:
         # `reason`/`age`/`overdue` göndərilirdi — kartlar boş sahələrlə
         # qurulurdu və `[Qəbul Et]` düyməsi BOŞ `id` yayırdı, yəni qərar
         # heç bir etiraza aid olmurdu.
-        screen.set_appeals(
-            [
-                {
-                    "id": str(appeal.id),
-                    "employee": _employee_name(session, appeal.employee_id),
-                    "fine_type": _fine_type_name(session, appeal.fine_id),
-                    "amount": _fine_amount(session, appeal.fine_id),
-                    "meta": (
-                        f"{appeal.age_hours(now=now):.0f} saatdır gözləyir"
-                        + (
-                            " · SLA aşılıb"
-                            if appeal.is_overdue(now=now, sla_hours=sla_hours)
-                            else ""
-                        )
-                    ),
-                    "explanation": appeal.reason,
-                }
-                for appeal in appeals
-            ]
-        )
+        return [
+            {
+                "id": str(appeal.id),
+                "employee": _employee_name(session, appeal.employee_id),
+                "fine_type": _fine_type_name(session, appeal.fine_id),
+                "amount": _fine_amount(session, appeal.fine_id),
+                "meta": (
+                    f"{appeal.age_hours(now=now):.0f} saatdır gözləyir"
+                    + (" · SLA aşılıb" if appeal.is_overdue(now=now, sla_hours=sla_hours) else "")
+                ),
+                "explanation": appeal.reason,
+            }
+            for appeal in appeals
+        ]
+
+    def _fine_appeals_apply(self, screen: Any, rows: list[dict[str, str]]) -> None:
+        screen.set_appeals(rows)
 
     def _tasks(self, session: Session, screen: Any) -> None:
+        """FAZA C (PERF-6) — naxış izahı `ScreenDataBinder` başlığındadır."""
+        inputs = self._tasks_inputs(screen)
+        data = self._tasks_fetch(session, inputs)
+        self._tasks_apply(screen, data)
+
+    def _tasks_inputs(self, screen: Any) -> _NoInputs:
+        return _NoInputs()
+
+    def _tasks_fetch(self, session: Session, _inputs: _NoInputs) -> _TasksData:
         awaiting = session.uow.repository("tasks").list_awaiting_review(session.tenant_id)
         overdue = session.uow.repository("tasks").list_overdue(
             session.tenant_id, now=datetime.now(UTC)
         )
-        screen.set_summary(f"{len(awaiting)} təsdiq gözləyir · {len(overdue)} gecikib")
-        screen.set_tasks(
-            "review",
-            [
+        return _TasksData(
+            summary=f"{len(awaiting)} təsdiq gözləyir · {len(overdue)} gecikib",
+            review=[
                 {"title": task.title, "assignee": _employee_name(session, task.assignee_id)}
                 for task in awaiting
             ],
-        )
-        # Sütun açarları `TasksScreen._COLUMNS`-dandır: `open`/`review`/`done`.
-        # Əvvəl "overdue" göndərilirdi — belə sütun YOXDUR və `KeyError`
-        # udulurdu. Gecikmiş tapşırıq hələ AÇIQ tapşırıqdır; neçəsinin
-        # gecikdiyi yuxarıdakı xülasə sətrindədir.
-        screen.set_tasks(
-            "open",
-            [
+            # Sütun açarları `TasksScreen._COLUMNS`-dandır: `open`/`review`/`done`.
+            # Əvvəl "overdue" göndərilirdi — belə sütun YOXDUR və `KeyError`
+            # udulurdu. Gecikmiş tapşırıq hələ AÇIQ tapşırıqdır; neçəsinin
+            # gecikdiyi yuxarıdakı xülasə sətrindədir. Sahə adı `open_column`-
+            # dur, `open` DEYİL — Python builtin-i kölgələməmək üçün.
+            open_column=[
                 {"title": task.title, "assignee": _employee_name(session, task.assignee_id)}
                 for task in overdue
             ],
         )
+
+    def _tasks_apply(self, screen: Any, data: _TasksData) -> None:
+        screen.set_summary(data.summary)
+        screen.set_tasks("review", data.review)
+        screen.set_tasks("open", data.open_column)
 
     def _sales_points(self, session: Session, screen: Any) -> None:
         """Satış Xalları — İŞÇİNİN ÖZ balansı, tarixçəsi və kataloqu (bölmə 6).
@@ -1300,7 +2046,22 @@ class ScreenDataBinder:
         YAZI yolu (`appeal_requested`, `reward_requested`) burada QOŞULMUR:
         onlar `points_ledger`-ə yazır və hər yazıdan sonra siyahı yenidən
         oxunmalıdır, yəni öz kontrollerini tələb edir (CLAUDE.md bölmə 6).
+
+        FAZA C (PERF-6) — naxış izahı `ScreenDataBinder` başlığındadır. Köhnə
+        kodda ÜÇ `screen.set_*` çağırışı fetch-lərin ARASINDA idi (balans →
+        tarixçə sorğusu → tarixçə → kataloq); indi HAMISI `_sales_points_
+        fetch`-də TOPLANIR, `_sales_points_apply`-da isə ARDICILLIQLA
+        çağırılır — nəticə eynidir, çünki heç bir `apply` özündən SONRAKI
+        fetch-in NƏTİCƏSİNDƏN asılı deyildi.
         """
+        inputs = self._sales_points_inputs(screen)
+        data = self._sales_points_fetch(session, inputs)
+        self._sales_points_apply(screen, data)
+
+    def _sales_points_inputs(self, screen: Any) -> _NoInputs:
+        return _NoInputs()
+
+    def _sales_points_fetch(self, session: Session, _inputs: _NoInputs) -> _SalesPointsData:
         balance = session.sales_points.balance_for(self._actor.id, tenant_id=session.tenant_id)
         available = int(balance.available)
         # Kataloq BİR DƏFƏ oxunur və İKİ yerə gedir: «növbəti mükafat»
@@ -1310,13 +2071,8 @@ class ScreenDataBinder:
         to_next_reward, next_reward_cost = _next_reward_gap(
             session, session.tenant_id, available, rewards=[item for _reward_id, item in catalog]
         )
-        screen.set_balance(
-            available,
-            monthly_delta=_monthly_points_delta(session, self._actor.id),
-            to_next_reward=to_next_reward,
-            next_reward_cost=next_reward_cost,
-            rank_text=_points_rank_text(session, self._actor.id, period_start=balance.period.start),
-        )
+        monthly_delta = _monthly_points_delta(session, self._actor.id)
+        rank_text = _points_rank_text(session, self._actor.id, period_start=balance.period.start)
 
         # Tarixçə `points_ledger`-dən BİRBAŞA oxunur: `PointsEntry` aqreqatı
         # `reason` MƏTNİNİ daşımır (o, yalnız "nə qədər xal qüvvədədir"
@@ -1333,43 +2089,69 @@ class ScreenDataBinder:
             """,
             (session.tenant_id, self._actor.id, balance.period.start),
         ).fetchall()
-        screen.set_history(
-            [
-                {
-                    "entry_id": str(row["id"]),
-                    "date": f"{row['created_at']:%d.%m}" if row["created_at"] else "—",
-                    "reason": str(row["reason"] or "—"),
-                    "status": _points_status_text(row),
-                    "points": _points_text(row["delta_points"], reversed_=_is_reversed(row)),
-                    # ETİRAZ PƏNCƏRƏSİNİ DOMEN HESABLAYIR: ekran 72 saatı
-                    # TƏKRAR hesablamır (iki mənbə sükutla ayrılardı) —
-                    # burada yalnız mövcud etirazın OLMAMASI yoxlanılır,
-                    # qalan şərti `open_dispute` özü tətbiq edir.
-                    "can_appeal": "0" if row["appeal_status"] else "1",
-                }
-                for row in rows
-            ],
-            # `period=` — `SalesPointsScreen.set_history`-nin FAKTİKİ açar
-            # adıdır (`_fines`-dəki `period_text=` BAŞQA ekrandır). Səhv ad
-            # `TypeError` verərdi və `populate()` onu udardı: tarixçə canlı
-            # rejimdə həmişə boş qalardı.
-            period=_month_text(),
-        )
-        # AÇARLAR MAKET YOLU İLƏ EYNİDİR (`preview_screens._sales_points`):
-        # `id` mükafat sorğusunun YEGANƏ etibarlı açarıdır — ad təkrarlana
-        # bilər, `request_reward` isə `reward_id` tələb edir.
-        screen.set_catalog(
-            [
+        history = [
+            {
+                "entry_id": str(row["id"]),
+                "date": f"{row['created_at']:%d.%m}" if row["created_at"] else "—",
+                "reason": str(row["reason"] or "—"),
+                "status": _points_status_text(row),
+                "points": _points_text(row["delta_points"], reversed_=_is_reversed(row)),
+                # ETİRAZ PƏNCƏRƏSİNİ DOMEN HESABLAYIR: ekran 72 saatı TƏKRAR
+                # hesablamır (iki mənbə sükutla ayrılardı) — burada yalnız
+                # mövcud etirazın OLMAMASI yoxlanılır, qalan şərti
+                # `open_dispute` özü tətbiq edir.
+                "can_appeal": "0" if row["appeal_status"] else "1",
+            }
+            for row in rows
+        ]
+
+        return _SalesPointsData(
+            available=available,
+            monthly_delta=monthly_delta,
+            to_next_reward=to_next_reward,
+            next_reward_cost=next_reward_cost,
+            rank_text=rank_text,
+            history=history,
+            history_period=_month_text(),
+            # AÇARLAR MAKET YOLU İLƏ EYNİDİR (`preview_screens._sales_points`):
+            # `id` mükafat sorğusunun YEGANƏ etibarlı açarıdır — ad təkrarlana
+            # bilər, `request_reward` isə `reward_id` tələb edir.
+            catalog=[
                 {"id": str(reward_id), "name": item.name, "cost": str(item.cost_points)}
                 for reward_id, item in catalog
             ],
-            balance=available,
         )
+
+    def _sales_points_apply(self, screen: Any, data: _SalesPointsData) -> None:
+        screen.set_balance(
+            data.available,
+            monthly_delta=data.monthly_delta,
+            to_next_reward=data.to_next_reward,
+            next_reward_cost=data.next_reward_cost,
+            rank_text=data.rank_text,
+        )
+        # `period=` — `SalesPointsScreen.set_history`-nin FAKTİKİ açar adıdır
+        # (`_fines`-dəki `period_text=` BAŞQA ekrandır). Səhv ad `TypeError`
+        # verərdi və `populate()` onu udardı: tarixçə canlı rejimdə həmişə
+        # boş qalardı.
+        screen.set_history(data.history, period=data.history_period)
+        screen.set_catalog(data.catalog, balance=data.available)
 
     # ------------------------------ Qrup D/H --------------------------------- #
 
     def _help(self, session: Session, screen: Any) -> None:
         """Yardım Mərkəzi — mövzular GÖRÜNƏN modullara görə süzülür.
+
+        ──────────────────────────────────────────────────────────────────────
+        PERF-6 FAZA B — İNPUTS/FETCH/APPLY NÜMUNƏSİ (Şell #2)
+        ──────────────────────────────────────────────────────────────────────
+        `_fines`-in şərhindəki İZAHA bax — naxışın ÖZÜ ORADA yazılıb, təkrar
+        edilmir. `_help`-in FƏRQİ: köhnə kodda fail-open budağı `except`
+        İÇİNDƏN BİRBAŞA `screen.set_visible_topics(None)` çağırırdı — yəni
+        Qt çağırışı `fetch`-in daxilində idi. İndi `fetch` `None`-u DATA kimi
+        QAYTARIR, `apply` isə onu OLDUĞU KİMİ ötürür — `HelpCenterScreen.
+        set_visible_topics(None)`-un ÖZÜ fail-open MƏNASINI daşıyır (bax
+        aşağı), ona görə `apply`-da əlavə şərt LAZIM DEYİL.
 
         ──────────────────────────────────────────────────────────────────────
         AÇARLAR TOGGLE CƏDVƏLİ İLƏ EYNİDİR
@@ -1385,6 +2167,16 @@ class ScreenDataBinder:
         `HelpCenterScreen` başlığı) — bu, naviqasiyadakı `_enabled_modules`
         ilə eyni istiqamətdir.
         """
+        inputs = self._help_inputs(screen)
+        data = self._help_fetch(session, inputs)
+        self._help_apply(screen, data)
+
+    def _help_inputs(self, screen: Any) -> _NoInputs:
+        """`_fines_inputs` ilə EYNİ səbəb: `_help` widget dəyərindən ASILI DEYİL."""
+        return _NoInputs()
+
+    def _help_fetch(self, session: Session, _inputs: _NoInputs) -> frozenset[str] | None:
+        """`fetch` — FON SAPINA köçürüləcək hissə. `None` = fail-open (bax başlıq)."""
         try:
             enabled = frozenset(session.toggles.enabled_modules(session.tenant_id))
         except Exception:
@@ -1392,17 +2184,19 @@ class ScreenDataBinder:
             # deyil, DAHA ÇOX mövzu göstərir — yəni burada nə boş ekran, nə də
             # yalan rəqəm var. «Yüklənə bilmədi» xəbərdarlığı yardım mətnini
             # oxuyan adamı əsassız narahat edərdi; səbəb `error.log`-dadır.
+            # Loglamaq Qt ÇAĞIRIŞI DEYİL — fon sapında qalması TƏHLÜKƏSİZDİR.
             _error_log.exception("HELP_TOGGLES_LOAD_FAILED")
-            screen.set_visible_topics(None)
-            return
+            return None
 
-        screen.set_visible_topics(
-            frozenset(
-                topic
-                for topic, module in HELP_TOPIC_MODULES.items()
-                if module is None or module in enabled
-            )
+        return frozenset(
+            topic
+            for topic, module in HELP_TOPIC_MODULES.items()
+            if module is None or module in enabled
         )
+
+    def _help_apply(self, screen: Any, visible_topics: frozenset[str] | None) -> None:
+        """`apply` — ƏSAS SAPDA, YALNIZ Qt, DB-yə TOXUNMUR."""
+        screen.set_visible_topics(visible_topics)
 
     def _health(self, session: Session, screen: Any) -> None:
         """Sistem Sağlamlığı — YALNIZ FAKTİKİ ölçülən göstəricilər (bölmə 6).
@@ -1423,7 +2217,33 @@ class ScreenDataBinder:
         ekranının ƏSAS məqsədini pozardı: burada göstərilən hər rəqəm etibarlı
         olmalıdır. NTP sürüşməsi də ölçülməyibsə (`_NullNtp`) kart
         ÜMUMİYYƏTLƏ qurulmur — `0.0 san` "saat dəqiqdir" kimi oxunardı.
+
+        ──────────────────────────────────────────────────────────────────────
+        FAZA C (PERF-6) — QƏRAR 2: BEŞ KÖMƏKÇİ ARTIQ `screen` ALMIR
+        ──────────────────────────────────────────────────────────────────────
+        `_health_metrics`, `_offline_pending`, `_open_conflicts_or_none`,
+        `_health_alerts`, `_critical_notifications` əvvəl HƏRƏSİ ÖZ
+        uğursuzluğunda birbaşa `report_section_error(screen, …)` çağırırdı —
+        Qt çağırışı fetch-in daxilində idi. İndi hər biri uğursuzluğu SAF
+        `SectionFailure` (bax onun tərifi) kimi QAYTARIR, `_health_apply`
+        isə onları bannerə çevirir. `SectionFailure` `_health`-ə XAS DEYİL —
+        FAZA D-də `_fill_section` EYNİ tipi işlədəcək (dashboard-ın
+        səpələnmiş bölmə banner-lərini bir mexanizmə yığmaq üçün).
+
+        BANNER SIRASI QORUNUR: köhnə kodda banner çağırışları müvafiq
+        `screen.set_*` çağırışından DƏRHAL ƏVVƏL gəlirdi (arqument
+        qiymətləndirilməsi setter-dən əvvəl baş verdiyi üçün) — `_health_
+        apply` bu sıranı AÇIQ təkrarlayır (aşağı bax), tək fərq banner
+        çağırışının artıq FETCH-dən deyil, APPLY-dan getməsidir.
         """
+        inputs = self._health_inputs(screen)
+        data = self._health_fetch(session, inputs)
+        self._health_apply(screen, data)
+
+    def _health_inputs(self, screen: Any) -> _NoInputs:
+        return _NoInputs()
+
+    def _health_fetch(self, session: Session, _inputs: _NoInputs) -> _HealthData:
         # Sayğac BİR dəfə oxunur və ÜÇ yerə gedir: rəqəm kartına, xəbərdarlıq
         # mətninə və «… konflikti həll et» keçidinə. Ayrı-ayrı `SELECT
         # count(*)` eyni rəqəmi verərdi, lakin oxunuşlar arasında paralel həll
@@ -1431,42 +2251,91 @@ class ScreenDataBinder:
         # ƏVVƏLƏ çəkilib ki, hər üç istifadəçi eyni dəyəri alsın.
         #
         # `None` = OXUNA BİLMƏDİ (sıfır DEYİL) — bax `_open_conflicts_or_none`.
-        conflicts = _open_conflicts_or_none(session, screen)
+        conflicts, conflicts_failure = _open_conflicts_or_none(session)
 
-        screen.set_last_check(f"Son yoxlama: {_hhmm(datetime.now(UTC))}")
-        screen.set_metrics(
-            _health_metrics(session, self._context, open_conflicts=conflicts, screen=screen)
+        metrics, offline_failure = _health_metrics(session, self._context, open_conflicts=conflicts)
+        latencies = _health_latencies(session)
+        alerts, notifications_failure = _health_alerts(
+            session, self._actor, open_conflicts=conflicts or 0
         )
-        screen.set_latencies(_health_latencies(session))
 
-        screen.set_alerts(
-            _health_alerts(session, self._actor, open_conflicts=conflicts or 0, screen=screen)
+        return _HealthData(
+            last_check_text=f"Son yoxlama: {_hhmm(datetime.now(UTC))}",
+            conflicts_failure=conflicts_failure,
+            metrics=metrics,
+            offline_failure=offline_failure,
+            latencies=latencies,
+            alerts=alerts,
+            notifications_failure=notifications_failure,
+            # OXUNA BİLMƏYƏN SAYĞAC KEÇİD QURMUR: «0 konflikti həll et» keçidi
+            # istifadəçini boş ekrana aparardı və sayğacın etibarlı olduğunu
+            # təsdiqləyərdi. Xəbərdarlıq bannerdədir.
+            conflict_action=conflicts if conflicts and self._may_resolve_conflicts() else 0,
         )
-        # OXUNA BİLMƏYƏN SAYĞAC KEÇİD QURMUR: «0 konflikti həll et» keçidi
-        # istifadəçini boş ekrana aparardı və sayğacın etibarlı olduğunu
-        # təsdiqləyərdi. Xəbərdarlıq bannerdədir.
-        screen.set_conflict_action(conflicts if conflicts and self._may_resolve_conflicts() else 0)
+
+    def _health_apply(self, screen: Any, data: _HealthData) -> None:
+        if data.conflicts_failure is not None:
+            report_section_error(screen, data.conflicts_failure.section)
+        screen.set_last_check(data.last_check_text)
+        if data.offline_failure is not None:
+            report_section_error(screen, data.offline_failure.section)
+        screen.set_metrics(data.metrics)
+        screen.set_latencies(data.latencies)
+        if data.notifications_failure is not None:
+            report_section_error(screen, data.notifications_failure.section)
+        screen.set_alerts(data.alerts)
+        screen.set_conflict_action(data.conflict_action)
 
     def _audit(self, session: Session, screen: Any) -> None:
+        """FAZA C (PERF-6) — naxış izahı `ScreenDataBinder` başlığındadır.
+
+        ──────────────────────────────────────────────────────────────────────
+        BU BİNDER OXU-YALNIZ DEYİL — `fetch` `session.commit()` ÇAĞIRIR
+        ──────────────────────────────────────────────────────────────────────
+        Audit sorğusunun ÖZÜ audit-lənir (`audit_query`-nin öz qərarı, §5-in
+        qəsdli zəmanətinin nəticəsi: "baxış faktı" da jurnala düşür). Bu, CLAUDE.
+        md-nin "yalnız oxuyan ekran `screen_data.py`-a bağlanır" cümləsi ilə
+        UYĞUN GƏLMİR — uyğunsuzluq QƏSDƏN saxlanılır (PERF-6 FAZA A/B qərarı).
+        Yazı `fetch` mərhələsində QALIR (fon sapında yazı problemsizdir, `app.
+        py::_run_scheduled_jobs` da belə edir), `apply` isə YENƏ YALNIZ Qt olur.
+        """
+        inputs = self._audit_inputs(screen)
+        data = self._audit_fetch(session, inputs)
+        self._audit_apply(screen, data)
+
+    def _audit_inputs(self, screen: Any) -> _NoInputs:
+        return _NoInputs()
+
+    def _audit_fetch(self, session: Session, _inputs: _NoInputs) -> _AuditData:
         page = session.audit_query.search(tenant_id=session.tenant_id, actor=self._actor)
-        session.commit()  # baxış faktı da audit-lənir (bax `audit_query`)
-        # `result_text` MƏCBURİ açar-arqumentdir — onsuz `TypeError` atılırdı
-        # və audit ekranı canlı rejimdə boş qalırdı (istisna udulurdu).
-        #
+        session.commit()  # baxış faktı da audit-lənir (bax `audit_query`) — YAZI, bax başlıq
         # AÇARLAR `controllers/audit_log.entry_row`-DAN GƏLİR: burada əvvəllər
         # `actor`/`entity`/`reason` yazılırdı, halbuki `AuditScreen.set_entries`
         # `user`/`module`/`detail` oxuyur — nəticədə canlı rejimdə cədvəlin üç
         # sütunu BOŞ qalırdı, maketdə isə dolu görünürdü. Bu, CLAUDE.md bölmə
         # 6-dakı "maket və canlı yol EYNİ AÇARLARI işlətməlidir" qaydasının
         # pozulmasının dəqiq nümunəsidir; ona görə forma indi tək funksiyadadır.
-        screen.set_entries(
-            [entry_row(entry) for entry in page.entries],
+        return _AuditData(
+            entries=[entry_row(entry) for entry in page.entries],
             result_text=f"{len(page.entries)} nəticə",
         )
 
+    def _audit_apply(self, screen: Any, data: _AuditData) -> None:
+        # `result_text` MƏCBURİ açar-arqumentdir — onsuz `TypeError` atılırdı
+        # və audit ekranı canlı rejimdə boş qalırdı (istisna udulurdu).
+        screen.set_entries(data.entries, result_text=data.result_text)
+
     def _reports(self, session: Session, screen: Any) -> None:
+        """FAZA C (PERF-6) — naxış izahı `ScreenDataBinder` başlığındadır."""
+        inputs = self._reports_inputs(screen)
+        data = self._reports_fetch(session, inputs)
+        self._reports_apply(screen, data)
+
+    def _reports_inputs(self, screen: Any) -> _NoInputs:
+        return _NoInputs()
+
+    def _reports_fetch(self, session: Session, _inputs: _NoInputs) -> _ReportsData:
         today = date.today()  # noqa: DTZ011
-        screen.set_period(f"{today:%m.%Y}")
 
         # Bölmə 6 LOCK MEXANİZMİ: pəncərəsi hələ açıq cərimələr bu ayın
         # export-una DÜŞMÜR — ekran bunu AÇIQ göstərməlidir.
@@ -1486,10 +2355,19 @@ class ScreenDataBinder:
             fines=fines,
             now=datetime.now(UTC),
         )
-        screen.set_lock_summary(
-            selection.deferred_fine_count,
+        return _ReportsData(
+            period_text=f"{today:%m.%Y}",
+            deferred_fine_count=selection.deferred_fine_count,
             already_exported=selection.already_exported_count,
             overlap_notice=selection.overlap_notice_az() or "",
+        )
+
+    def _reports_apply(self, screen: Any, data: _ReportsData) -> None:
+        screen.set_period(data.period_text)
+        screen.set_lock_summary(
+            data.deferred_fine_count,
+            already_exported=data.already_exported,
+            overlap_notice=data.overlap_notice,
         )
 
 
@@ -1530,6 +2408,20 @@ def perform_ranking_drill_down(
         hələ qurulmamış instansiya SƏSSİZCƏ `False` qaytarır — çağıran tərəf
         bunu jurnala yaza bilər, lakin bu funksiya İSTİSNA ATMIR (klik hadisə
         idarəedicisidir, çökmə istifadəçini bütün paneldən məhrum edərdi).
+
+    ──────────────────────────────────────────────────────────────────────────
+    FAZA C (PERF-6, RİSKLİ) — SƏRHƏD BURADA DEYİL, `populate`-İN İÇİNDƏDİR
+    ──────────────────────────────────────────────────────────────────────────
+    Bu funksiyanın ÖZÜ nə DB, nə Qt widget-inə TOXUNUR — o, `show_screen`/
+    `screen_for` (Qt naviqasiya) ilə `populate` (indi ÖZÜ inputs/fetch/apply
+    üçlüyünə bölünmüş `populate_daily_roster_for_store`) arasında SADƏ
+    körpüdür. Fetch/apply sərhədi artıq `populate`-in DAXİLİNDƏDİR (bax onun
+    başlığı) — bura ƏLAVƏ struktur ƏLAVƏ ETMƏK YALNIZ eyni şeyi iki yerdə
+    ifadə edərdi. FAZA D-də `show_screen(DAILY_ROSTER_SCREEN_KEY)` (Qt,
+    ƏSAS SAPDA QALMALI) ilə `populate`-in fetch hissəsi (fon sapına köçə
+    bilər) arasındakı sıra BURADA qorunmalıdır: naviqasiya ƏVVƏL, fetch
+    SONRA — çünki `screen_for()` yalnız `show_screen()`-dən SONRA doğru
+    instansiyanı qaytarır.
     """
     try:
         store_id = StoreId(uuid.UUID(store_id_text))
@@ -1848,8 +2740,7 @@ def _health_metrics(
     context: Any,
     *,
     open_conflicts: int | None,
-    screen: Any = None,
-) -> list[tuple[str, str, str, str]]:
+) -> tuple[list[tuple[str, str, str, str]], SectionFailure | None]:
     """Rəqəm kartları — `(ad, dəyər, izah, ton)`.
 
     Siyahı DİNAMİKDİR: ölçülə bilməyən göstərici sadəcə əlavə olunmur (bax
@@ -1860,8 +2751,11 @@ def _health_metrics(
             MƏCBURİDİR (defolt yoxdur) və bu, qəsdəndir: dəyər `_health`-dəki
             TƏK oxunuşdan gəlməlidir, əks halda kart ilə xəbərdarlıq mətni
             fərqli rəqəm göstərə bilər.
-        screen: Sınmış bölmənin bannerdə görünməsi üçün (bax
-            `report_section_error`). `None` → yalnız jurnal.
+
+    Returns:
+        `(kartlar, uğursuzluq)` — PERF-6 Qərar 2: `screen` artıq ALINMIR,
+        offline bufer sayğacının uğursuzluğu SAF `SectionFailure` kimi
+        qaytarılır (bax `_health` başlığı).
     """
     metrics: list[tuple[str, str, str, str]] = []
     metrics.append(_db_ping_metric(session))
@@ -1884,10 +2778,10 @@ def _health_metrics(
             )
         )
 
-    pending = _offline_pending(session, context, screen)
+    pending, offline_failure = _offline_pending(session, context)
     metrics.append(_counter_card("Sinxronlaşmamış yazı", pending, caption="Offline bufer növbəsi"))
     metrics.append(_counter_card("Sync konflikti", open_conflicts, caption="Həll gözləyən sətir"))
-    return metrics
+    return metrics, offline_failure
 
 
 def _counter_card(name: str, value: int | None, *, caption: str) -> tuple[str, str, str, str]:
@@ -1935,23 +2829,26 @@ def _db_ping_metric(session: Session) -> tuple[str, str, str, str]:
     return ("Baza (DB Ping)", f"{elapsed_ms} ms", f"Norma: < {DB_PING_WARNING_MS} ms", tone)
 
 
-def _offline_pending(session: Session, context: Any, screen: Any = None) -> int | None:
+def _offline_pending(session: Session, context: Any) -> tuple[int | None, SectionFailure | None]:
     """Offline buferdəki gözləyən yazı sayı — bufer açıla bilmirsə `None`.
 
     `0` HEÇ VAXT qaytarılmır: o, "hər şey sinxrondur" demək olardı, halbuki
     əsl vəziyyət "oxuya bilmədim"dir (bax `_LazyBufferDrain`). `None` isə
     kartda «—» kimi göstərilir (bax `_counter_card`) və bölmə bannerdə
     işarələnir — əvvəl kart sadəcə YOX olurdu və istifadəçi fərqi görmürdü.
+
+    PERF-6 Qərar 2: `screen` artıq ALINMIR — uğursuzluq `SectionFailure`
+    kimi qaytarılır, banner çağırışını çağıran (`_health_metrics`, sonra
+    `_health_apply`) edir.
     """
     try:
-        return int(context.offline_drain().pending_count(session.tenant_id))
+        return int(context.offline_drain().pending_count(session.tenant_id)), None
     except Exception:
         _error_log.warning("HEALTH_OFFLINE_BUFFER_UNREADABLE")
-        report_section_error(screen, SECTION_HEALTH_OFFLINE)
-        return None
+        return None, SectionFailure(section=SECTION_HEALTH_OFFLINE)
 
 
-def _open_conflicts_or_none(session: Session, screen: Any = None) -> int | None:
+def _open_conflicts_or_none(session: Session) -> tuple[int | None, SectionFailure | None]:
     """Həll gözləyən sinxronizasiya konfliktləri — oxuna bilməsə `None`.
 
     Use case-in `open_count()` metodu `can_view_employee_reports` tələb edir;
@@ -1967,13 +2864,15 @@ def _open_conflicts_or_none(session: Session, screen: Any = None) -> int | None:
     nasazlıq ekranda «hər şey qaydasındadır» kimi görünürdü. Bu, bütün
     modulun ən bahalı sükutu idi — sinxronizasiya konflikti həll edilmədikcə
     iki yerdə fərqli dəyişdirilmiş qeyd yaşayır və heç kim ona baxmır.
+
+    PERF-6 Qərar 2: `screen` artıq ALINMIR (bax `_offline_pending`-in EYNİ
+    izahı).
     """
     try:
-        return int(session.uow.repository("sync_conflicts").open_count(session.tenant_id))
+        return int(session.uow.repository("sync_conflicts").open_count(session.tenant_id)), None
     except Exception:
         _error_log.exception("HEALTH_CONFLICT_COUNT_FAILED")
-        report_section_error(screen, SECTION_HEALTH_CONFLICTS)
-        return None
+        return None, SectionFailure(section=SECTION_HEALTH_CONFLICTS)
 
 
 def _open_conflicts(session: Session) -> int:
@@ -1983,8 +2882,14 @@ def _open_conflicts(session: Session) -> int:
     yoxdur: xəbərdarlıq sətri ya var, ya yox. Sıfır burada "xəbərdarlıq
     əlavə etmə" deməkdir — vəziyyəti İDDİA etmir, çünki həqiqi göstərici
     kartdadır («—») və bölmə bannerdə işarələnib.
+
+    UĞURSUZLUQ BURADA BANNERƏ ÇEVRİLMİR (dəyişməyib): bu yol yalnız `_health_
+    alerts` MÜSTƏQİL (pre-supplied conflicts olmadan) çağırılanda işə düşür —
+    cari `_health` axınında HEÇ VAXT baş vermir, çünki sayğac ORADA ARTIQ
+    oxunub ötürülür (bax `_health_fetch`).
     """
-    return _open_conflicts_or_none(session) or 0
+    count, _failure = _open_conflicts_or_none(session)
+    return count or 0
 
 
 def _health_latencies(session: Session) -> list[tuple[str, str, str]]:
@@ -2017,8 +2922,8 @@ def _health_latencies(session: Session) -> list[tuple[str, str, str]]:
 
 
 def _health_alerts(
-    session: Session, actor: Any, *, open_conflicts: int | None = None, screen: Any = None
-) -> list[tuple[str, str, str]]:
+    session: Session, actor: Any, *, open_conflicts: int | None = None
+) -> tuple[list[tuple[str, str, str]], SectionFailure | None]:
     """Aktiv xəbərdarlıqlar — `(mətn, vaxt, ton)`.
 
     Üç REAL mənbə birləşdirilir: problemli 1C serverləri (diaqnoz mətni
@@ -2030,8 +2935,11 @@ def _health_alerts(
             `SELECT count(*)` edilmir və xəbərdarlıq mətni ilə kartın altındakı
             keçid EYNİ rəqəmi göstərir (bax `ScreenDataBinder._health`).
             `None` → funksiya özü oxuyur (mövcud çağırış yerləri üçün).
-        screen: Sınmış bölmə bannerdə görünsün deyə (bax
-            `report_section_error`). `None` → yalnız jurnal.
+
+    Returns:
+        `(xəbərdarlıqlar, uğursuzluq)` — PERF-6 Qərar 2: `screen` artıq
+        ALINMIR, kritik bildirişlərin uğursuzluğu SAF `SectionFailure` kimi
+        qaytarılır.
     """
     alerts: list[tuple[str, str, str]] = []
     now = datetime.now(UTC)
@@ -2055,7 +2963,8 @@ def _health_alerts(
             )
         )
 
-    for notification in _critical_notifications(session, actor, screen):
+    notifications, notifications_failure = _critical_notifications(session, actor)
+    for notification in notifications:
         alerts.append(
             (
                 notification.title_az,
@@ -2074,7 +2983,7 @@ def _health_alerts(
                 "warning",
             )
         )
-    return alerts
+    return alerts, notifications_failure
 
 
 def _erp_diagnosis(row: Any) -> str:
@@ -2098,12 +3007,18 @@ def _erp_diagnosis(row: Any) -> str:
     ).diagnosis
 
 
-def _critical_notifications(session: Session, actor: Any, screen: Any = None) -> list[Any]:
+def _critical_notifications(
+    session: Session, actor: Any
+) -> tuple[list[Any], SectionFailure | None]:
     """Oxunmamış KRİTİK bildirişlər — sistem hadisələrinin izi (bölmə 7).
 
     Auditoriya süzgəci zəng panelindəki ilə EYNİ funksiyadan gəlir: İdarə
     Panelindəki kritik siyahı zəng nişanından geniş olsaydı, istifadəçi
     paneldə tapa bilmədiyi bir sətri burada görərdi.
+
+    PERF-6 Qərar 2: `screen` artıq ALINMIR — uğursuzluq `SectionFailure`
+    kimi qaytarılır, banner çağırışını çağıran (`_health_alerts`, sonra
+    `_health_apply`) edir.
     """
     from src.presentation.controllers.notifications import (  # noqa: PLC0415
         hidden_categories_for,
@@ -2118,9 +3033,8 @@ def _critical_notifications(session: Session, actor: Any, screen: Any = None) ->
         # mənbədə məhz KRİTİK sətirlər gözləyə bilər. Ekran «Aktiv xəbərdarlıq
         # yoxdur» yazacaq, banner isə bu iddianın natamam olduğunu deyəcək.
         _error_log.exception("HEALTH_NOTIFICATIONS_FAILED")
-        report_section_error(screen, SECTION_HEALTH_ALERTS)
-        return []
-    return [row for row in rows if row.is_critical and row.is_unread][:5]
+        return [], SectionFailure(section=SECTION_HEALTH_ALERTS)
+    return [row for row in rows if row.is_critical and row.is_unread][:5], None
 
 
 def _employee_name(session: Session, employee_id: Any) -> str:
@@ -2202,10 +3116,21 @@ def _minutes_since(moment: datetime | None) -> int:
     return max(0, int((datetime.now(UTC) - moment).total_seconds() // 60))
 
 
-def _low_confidence_faces(
-    session: Session, stores: list[Any], screen: Any = None
-) -> set[tuple[str, str]]:
+def _low_confidence_faces(session: Session, stores: list[Any]) -> tuple[set[tuple[str, str]], bool]:
     """AŞAĞI-ETİBARLI üz təsdiqi olan (işçi, addım) cütləri (facecontrol.md bənd 12).
+
+    ──────────────────────────────────────────────────────────────────────────
+    PERF-6 FAZA C — QƏRAR 2: BANNER ÇAĞIRIŞI ARTIQ BURADA DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl bu funksiya `screen` alır və uğursuzluqda BİRBAŞA `report_section_
+    error(...)` çağırırdı — Qt çağırışı `fetch`-in (`_live_queue_fetch`)
+    daxilində olurdu. İndi uğursuzluq İKİNCİ qaytarılan dəyər kimi (`bool`)
+    ötürülür, banner çağırışını isə `_live_queue_apply` edir. Zəmanət
+    DƏYİŞMİR: uğursuzluqda dəst BOŞ qalır, banner YENƏ görünür — sadəcə
+    MƏSULİYYƏT yeri dəyişib.
+
+    Returns:
+        `(aşağı-etibarlı cüt dəsti, uğursuz oldumu)`.
 
     ──────────────────────────────────────────────────────────────────────────
     NİYƏ USE CASE DEYİL, BİRBAŞA SQL
@@ -2237,7 +3162,7 @@ def _low_confidence_faces(
     ucbatından — yolverilməz olardı.
     """
     if not stores:
-        return set()
+        return set(), False
     try:
         rows = session.uow.connection.execute(
             """
@@ -2260,13 +3185,12 @@ def _low_confidence_faces(
         # tanınmış təsdiqi fərqləndirə bilmir. Növbənin ÖZÜ işləməyə davam
         # edir (fail-soft), lakin nişanların əskik olduğu AÇIQ deyilir.
         _error_log.exception("FACE_LOW_CONFIDENCE_LOOKUP_FAILED")
-        report_section_error(screen, SECTION_QUEUE_FACE_BADGES)
-        return set()
+        return set(), True
     return {
         (str(row["employee_id"]), str(row["trigger_context"]))
         for row in rows
         if row["is_low_confidence"]
-    }
+    }, False
 
 
 def _store_name(session: Session, store_id: Any) -> str:

@@ -96,13 +96,51 @@ class PermissionMatrixController:
         self.refresh(screen)
 
     def refresh(self, screen: PermissionMatrixScreen) -> None:
-        """Rol siyahısını yenidən oxuyur və seçili rolun matrisini çəkir."""
+        """Rol siyahısını yenidən oxuyur və seçili rolun matrisini çəkir.
+
+        ──────────────────────────────────────────────────────────────────────
+        PERF-6 #6 — İLK AÇILIŞDA İKİ ARDICIL SESSİYA İDİ (4.1 s)
+        ──────────────────────────────────────────────────────────────────────
+        Aşağıdakı `screen.select_role(active)` `role_selected` siqnalını
+        SİNXRON yayır → `_on_role_selected` DƏRHAL İKİNCİ sessiya açıb aktiv
+        rolun flag qruplarını oxuyurdu — ilk açılışda bu, ARTIQ MƏLUM olan
+        rolun (siyahının BİRİNCİSİ) təkrar sorğusu idi.
+
+        `first_open` YALNIZ `attach()`-dən gələn İLK çağırışda `True`-dur
+        (`self._active` hələ `None`-dur). O halda ilk rolun flag qrupları
+        `list_roles` İLƏ EYNİ sessiyada oxunur və `screen.set_active_role()`
+        (siqnalsız, bax `group_c.py`) + `screen.set_matrix()` BİRBAŞA
+        çağırılır — `_on_role_selected` TƏKRAR sorğu göndərmir.
+
+        SONRAKI `refresh()` çağırışları (yadda saxladıqdan/rol yaratdıqdan
+        sonra) BU YOLU İŞLƏTMİR: `self._active` ARTIQ dolu olduğu üçün
+        `first_open` `False`-dur və `select_role()` KÖHNƏ yolla (siqnalla)
+        işləyir — flag-lər məhz belə hallarda DƏYİŞMİŞ ola bilər və TƏZƏ oxu
+        DOĞRU davranışdır. İSTİFADƏÇİNİN ƏL İLƏ rol dəyişməsi də TOXUNULMADI:
+        o, düymə klikindən `select_role()`-u birbaşa çağırır, `refresh()`-dən
+        keçmir.
+        """
+        first_open = self._active is None
+        preselected: tuple[str, list[tuple[str, list[tuple[str, str, bool, bool, bool]]]]] | None
+        preselected = None
         try:
             with self._context.session(user_id=self._actor.id) as session:
                 summaries = session.positions.list_roles(
                     tenant_id=session.tenant_id, actor=self._actor
                 )
                 counts = _employee_counts(session)
+                roles = {summary.position.code: summary.position for summary in summaries}
+                # Sıra pilləyə görədir: matris iyerarxik bir qərar sahəsidir və
+                # rolları əlifba sırası ilə düzmək «Root» ilə «Satıcı»-nı
+                # yan-yana salardı.
+                ordered = sorted(
+                    summaries, key=lambda item: (int(item.position.priority), item.position.code)
+                )
+                active = self._active if self._active in roles else None
+                if active is None and ordered:
+                    active = ordered[0].position.code
+                if first_open and active is not None:
+                    preselected = (active, _flag_groups(session, roles[active], actor=self._actor))
         except KompasOSError as error:
             # Səlahiyyət yoxdursa ekran BOŞ deyil, SƏBƏBLƏ göstərilir — boş
             # matris "heç bir icazə yoxdur" kimi oxunardı və bu, yanlışdır.
@@ -116,12 +154,7 @@ class PermissionMatrixController:
             )
             return
 
-        self._roles = {summary.position.code: summary.position for summary in summaries}
-        # Sıra pilləyə görədir: matris iyerarxik bir qərar sahəsidir və rolları
-        # əlifba sırası ilə düzmək «Root» ilə «Satıcı»-nı yan-yana salardı.
-        ordered = sorted(
-            summaries, key=lambda item: (int(item.position.priority), item.position.code)
-        )
+        self._roles = roles
         screen.set_roles(
             [
                 (
@@ -133,14 +166,22 @@ class PermissionMatrixController:
             ]
         )
 
-        active = self._active if self._active in self._roles else None
-        if active is None and ordered:
-            active = ordered[0].position.code
         if active is not None:
-            # `select_role` `role_selected` siqnalını yayır və matris həmin
-            # yolla dolur — ikinci bir doldurma yolu qursaydıq, siyahıdan
-            # klikləmə ilə proqram seçimi fərqli davranardı.
-            screen.select_role(active)
+            # `getattr` naxışı `face_control.py::_set_busy` ilə EYNİDİR: yeni
+            # `set_active_role()` setter-i köhnə ekran/test sahtələrinin
+            # (`role_selected`-i sadə siyahıya yazan duck-type-lar) HAMISINI
+            # yenidən yazmağı tələb etmir — daşımırsa, YALNIZ optimallaşdırma
+            # keçilir, davranış köhnə (siqnallı) yola qayıdır.
+            set_active_role = getattr(screen, "set_active_role", None)
+            if preselected is not None and preselected[0] == active and callable(set_active_role):
+                self._active = active
+                set_active_role(active)
+                screen.set_matrix(roles[active].name_az, preselected[1])
+            else:
+                # `select_role` `role_selected` siqnalını yayır və matris həmin
+                # yolla dolur — ikinci bir doldurma yolu qursaydıq, siyahıdan
+                # klikləmə ilə proqram seçimi fərqli davranardı.
+                screen.select_role(active)
 
     # -------------------------------- matris --------------------------------- #
 

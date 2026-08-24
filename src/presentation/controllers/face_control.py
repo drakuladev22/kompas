@@ -171,6 +171,12 @@ class FaceEnrollmentController:
         self._executor = executor
         #: Qaçan işə istinad: nəticə gəlməmiş toplanarsa siqnal itərdi.
         self._task: Any = None
+        #: PERF-6 #7 — kamera aparat probunun fon işçisinə İSTİNAD.
+        #: `_task`-DAN AYRIDIR: qeydiyyat yazı əməliyyatı ilə kamera probu
+        #: paralel qaça bilər (ekran açılanda probu gözləmədən vəziyyət
+        #: göstərilir), ona görə eyni `is_running` sahəsini paylaşsaydılar
+        #: biri digərinin "hələ qaçır?" yoxlamasını SƏHV oxuyardı.
+        self._camera_task: Any = None
 
     # ------------------------------- qoşulma --------------------------------- #
 
@@ -184,19 +190,99 @@ class FaceEnrollmentController:
         self.refresh(screen)
 
     def refresh(self, screen: FaceEnrollmentScreen) -> None:
-        """İşçi siyahısını, kamera vəziyyətini və kadr sayını yenidən oxuyur."""
+        """İşçi siyahısını yenidən oxuyur; kamera vəziyyəti AYRICA yenilənir.
+
+        ──────────────────────────────────────────────────────────────────────
+        PERF-6 #7 — KAMERA PROBU AÇIQ DB SESSİYASININ İÇİNDƏN ÇIXARILDI
+        ──────────────────────────────────────────────────────────────────────
+        Ölçüldü: bu ekran 4.4 s çəkir, LAKİN DB tərəfi CƏMİ 1 sessiyadır —
+        yəni yavaşlığın səbəbi baza DEYİL. Səbəb `camera.is_available()`
+        idi: HƏQİQİ aparat probu (sürücü cavab verməyəndə saniyələr çəkə
+        bilər) `with self._context.session(...)` bloku İÇİNDƏ, GUI sapında
+        sinxron çağırılırdı. İKİ ayrı zərəri var idi: (a) GUI donurdu, (b)
+        `employees` sətrini oxuyan tranzaksiya probun BÜTÜN müddəti boyu AÇIQ
+        qalırdı — CLAUDE.md §6-nın «kontroller uzun-ömürlü tranzaksiya
+        saxlamır» qaydasının pozulması.
+
+        İndi sessiya YALNIZ siyahı + kadr sayı üçün açılır (məzmunu dəyişmir,
+        sadəcə qısalır) və BAĞLANIR; kamera probu ONDAN SONRA, `_refresh_
+        camera_state()` ilə FON SAPINDA aparılır.
+        """
         try:
             with self._context.session(user_id=self._actor.id) as session:
                 screen.set_employees(_enrollment_rows(session, self._actor))
-                screen.set_camera(self._camera_row(session))
+                frame_count = _limit_int(session, SystemLimitKey.FACE_ENROLLMENT_FRAME_COUNT)
         except KompasOSError as error:
             screen.show_error(title="Ekran açıla bilmədi", message=error.user_message)
+            return
         except Exception:
             _error_log.exception("FACE_ENROLLMENT_LOAD_FAILED")
             screen.show_error(
                 title="Ekran açıla bilmədi",
                 message="İşçi siyahısı oxuna bilmədi. Yenidən cəhd edin.",
             )
+            return
+        self._refresh_camera_state(screen, frame_count)
+
+    def _refresh_camera_state(self, screen: FaceEnrollmentScreen, frame_count: int) -> None:
+        """Kamera aparatının varlığını FON SAPINDA yoxlayır (bax `refresh` başlığı).
+
+        Kadr sayı ARTIQ oxunub və DƏRHAL göstərilir; `available` isə probun
+        nəticəsi gələnə qədər `"0"` (yoxlanılır) qalır — bu, TƏHLÜKƏSİZ
+        defoltdur, çünki `[Çək]` düyməsi YALNIZ `available=1`-də aktivləşir
+        (bax `FaceEnrollmentScreen.set_camera`/`_apply_mode`) və istifadəçi
+        prob bitmədən kamerası yoxmuş kimi bir kadr göndərə bilməz.
+        """
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        screen.set_camera(
+            {
+                "available": "0",
+                "message": "Kamera yoxlanılır…",
+                "frame_count": str(frame_count),
+            }
+        )
+
+        context = self._context
+
+        def probe() -> bool:
+            # FON SAPINDA icra olunur — DB sessiyası YOXDUR (bax `refresh`
+            # başlığı: sessiyanı probla birgə saxlamaq məhz pozulan qayda idi).
+            camera, _ = context.face_engine()
+            try:
+                return bool(camera.is_available())
+            except Exception:
+                _error_log.exception("FACE_CAMERA_PROBE_FAILED")
+                return False
+
+        def succeeded(available: object) -> None:
+            screen.set_camera(
+                {
+                    "available": "1" if available else "0",
+                    "message": CAMERA_READY if available else CAMERA_UNAVAILABLE,
+                    "frame_count": str(frame_count),
+                }
+            )
+
+        def failed(error: BaseException) -> None:
+            # `probe()` ÖZÜ istisna udur (yuxarı) — bura son qoruyucudur.
+            _error_log.error("FACE_CAMERA_PROBE_TASK_FAILED", exc_info=error)
+            screen.set_camera(
+                {
+                    "available": "0",
+                    "message": CAMERA_UNAVAILABLE,
+                    "frame_count": str(frame_count),
+                }
+            )
+
+        self._camera_task = run_job(
+            probe,
+            on_success=succeeded,
+            on_failure=failed,
+            owner=screen,
+            name="FACE_CAMERA_PROBE",
+            executor=self._executor,
+        )
 
     # ------------------------------ yazı yolu -------------------------------- #
 
@@ -332,27 +418,6 @@ class FaceEnrollmentController:
         """
         screen.set_result({"accepted": "0", "message": message})
         screen.set_frames([])
-
-    # ------------------------------ köməkçilər ------------------------------- #
-
-    def _camera_row(self, session: Session) -> dict[str, str]:
-        """Kameranın vəziyyəti + ROOT-dan gələn kadr sayı.
-
-        NASAZLIQ İSTİSNA ATMIR: `is_available()` `False` qaytaranda ekran
-        səbəbi göstərir və düymələr sönür. Bu, «səssiz keçid» DEYİL — bənd 5
-        məhz gizli davranış dəyişikliyini qadağan edir, açıq xəbərdarlığı yox.
-        """
-        camera, _ = self._context.face_engine()
-        try:
-            available = bool(camera.is_available())
-        except Exception:
-            _error_log.exception("FACE_CAMERA_PROBE_FAILED")
-            available = False
-        return {
-            "available": "1" if available else "0",
-            "message": CAMERA_READY if available else CAMERA_UNAVAILABLE,
-            "frame_count": str(_limit_int(session, SystemLimitKey.FACE_ENROLLMENT_FRAME_COUNT)),
-        }
 
 
 # --------------------------------------------------------------------------- #
