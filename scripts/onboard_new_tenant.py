@@ -33,8 +33,25 @@ bazaya yığmaq — yəni TENANT-1-in qəti qərarını pozmaq — olardı. Skri
 bərabərliyi AÇIQ yoxlayır və dayanır.
 
 ──────────────────────────────────────────────────────────────────────────────
-İSTİFADƏ
+İSTİFADƏ — DEFOLT REJİM SİHİRBAZDIR (ONBOARD-FINAL)
 ──────────────────────────────────────────────────────────────────────────────
+    .venv/Scripts/python.exe scripts/onboard_new_tenant.py
+
+Arqumentsiz çağırış `scripts/onboard_wizard.py`-i işə salır: şirkət adı,
+əlaqə e-poçtu, vendor Project Ref + parol (YALNIZ İLK DƏFƏ), tenant Project
+Ref + parol + `anon` açarı soruşulur, DSN-lər ÖZÜ qurulur (BİRBAŞA format —
+səbəb sihirbazın başlığındadır) və `--dev` avtomatik qalxır, yəni skript
+bitən kimi `python -m src.main` heç bir əlavə addım olmadan açılır.
+
+──────────────────────────────────────────────────────────────────────────────
+BAYRAQLI YOL QALIR — SİLİNMƏSİ NƏYİ POZARDI
+──────────────────────────────────────────────────────────────────────────────
+Aşağıdakı forma GERİDƏ-UYUMLU olaraq saxlanılır və bir halda YEGANƏ çıxışdır:
+`db.<ref>.supabase.co` bəzi layihələrdə yalnız IPv6 elan edir və IPv4 şəbəkədə
+sihirbazın qurduğu DSN çatmır. Həmin halda operator Supabase-in «Connection
+pooling» sətrini `--tenant-dsn` ilə əl ilə verir (sihirbaz bunu xəta mesajında
+AÇIQ deyir — bax `onboard_wizard._humanise`).
+
     .venv/Scripts/python.exe scripts/onboard_new_tenant.py \
         --company "Embawood" \
         --tenant-dsn "postgresql://kompasos_app....@aws-0-eu.pooler.supabase.com:5432/postgres" \
@@ -113,6 +130,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import secrets
 import subprocess
 import sys
@@ -120,7 +138,7 @@ import uuid
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import Final
+from typing import Final, NamedTuple
 
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
 # `--dev` və öz-özünü yoxlama `src.`-dən konfiqurasiya YOLLARINI oxuyur (yolu
@@ -151,6 +169,22 @@ VENDOR_ROW_STEP: Final[int] = 4
 #: ekranda GÖRMƏLİDİR — birincinin uğuru ikincisini ZƏMANƏT ETMİR (məs. fayl
 #: yazılır, lakin şifrələmə açarı olmadığı üçün geri oxuna bilmir).
 TOTAL_STEPS: Final[int] = 6
+
+#: `--out`-un defoltu. SABİT kimi ayrıldı, çünki İKİ yerdə oxunur: `argparse`
+#: defoltunda və `_run_wizard_into`-da (operator dəyəri DƏYİŞDİRİBmi sualında).
+#: İki nüsxə olsaydı, defolt dəyişən gün sihirbaz operatorun `--out`-unu
+#: sükutla əzərdi.
+DEFAULT_OUT_DIR: Final[str] = "./onboarding"
+
+
+#: Dublikat aşkarlananda `--allow-duplicate` verilməyibsə qaytarılan kod.
+#: `1` (addım uğursuzluğu) və `2` (istifadə səhvi) DEYİL: bu, nə xəta, nə də
+#: səhv əmrdir — skript SORUŞA BİLMƏDİYİ üçün TƏHLÜKƏSİZ tərəfə keçib
+#: dayanıb. Örtük skript üç halı bir-birindən ayıra bilməlidir.
+DUPLICATE_EXIT_CODE: Final[int] = 3
+
+#: DSN-in parol hissəsini tapan naxış — `_redact_dsn`.
+_DSN_PASSWORD: Final[re.Pattern[str]] = re.compile(r"(?<=://)([^:/@\s]+):([^@\s]+)(?=@)")
 
 
 class OnboardingError(RuntimeError):
@@ -191,6 +225,22 @@ def _reject_invalid_arguments(args: argparse.Namespace) -> int | None:
         sys.stderr.write("XƏTA: `--company` MƏCBURİDİR (yalnız `--verify` onsuz işləyir).\n")
         return 2
 
+    # ONBOARD-FINAL: `argparse`-dən köçən məcburilik. Şərt REJİMƏ bağlıdır —
+    # bura çatan çağırış YA sihirbazdan gəlir (hər iki DSN doludur), YA da
+    # bayraqlıdır. Deməli yeganə səhv hal YARIMÇIQ bayraq dəstidir: birini
+    # verib digərini unutmaq. Bu, aşağıdakı «ikisi eynidir» yoxlamasından
+    # ƏVVƏL tutulmalıdır, əks halda iki BOŞ sətir «eynidir» kimi görünər və
+    # operator tamamilə yanlış səbəb oxuyardı.
+    if not args.tenant_dsn or not args.vendor_dsn:
+        missing = "--tenant-dsn" if not args.tenant_dsn else "--vendor-dsn"
+        sys.stderr.write(
+            f"XƏTA: `{missing}` verilməyib. İkisi YALNIZ BİRLİKDƏ mənalıdır — "
+            "quraşdırma HƏM müştəri, HƏM vendor bazasına yazır (DB-3).\n"
+            "Bayraqları tamamlayın, ya da HEÇ BİRİNİ verməyib sihirbazı işə "
+            "salın: `python scripts/onboard_new_tenant.py`\n"
+        )
+        return 2
+
     if args.tenant_dsn == args.vendor_dsn:
         sys.stderr.write(
             "XƏTA: `--tenant-dsn` ilə `--vendor-dsn` eynidir. Hər müştəri AYRI "
@@ -227,15 +277,143 @@ def _reject_invalid_arguments(args: argparse.Namespace) -> int | None:
 
 
 def _verify_mode(args: argparse.Namespace) -> int | None:
-    """`--verify` verilibsə yoxlamanı icra edir; verilməyibsə `None` qaytarır."""
+    """`--verify` verilibsə yoxlamanı icra edir; verilməyibsə `None` qaytarır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    İKİ FORMA, BİR YOXLAMA (ONBOARD-FINAL Faza 4)
+    ──────────────────────────────────────────────────────────────────────────
+    `--verify <UUID>` — KÖHNƏ forma, DƏYİŞMƏYİB: hər iki DSN bayraqla verilir.
+    O, YEGANƏ işləyən yoldur, əgər kirayəçi BU maşında quraşdırılmayıbsa
+    (başqa təchizatçı maşınından, ya da müştərinin öz maşınında).
+
+    `--verify <ad>` — YENİ forma: DSN-lər soruşulmur, çünki onlar ONSUZ DA
+    bu maşındadır — tenant `configs/<slug>.config` arxivində, vendor isə
+    `.onboard_config` yaddaşında. Dəstək zəngi zamanı operatorun əlində
+    olan YEGANƏ şey müştərinin ADIdır; DSN-i axtarmağa göndərmək yoxlamanı
+    məhz ən lazım olan anda işlətməz edərdi.
+
+    Ad forması UUID-i ƏVƏZLƏMİR, ona ƏLAVƏDİR: aşağıdakı budaq əvvəlcə UUID
+    sınayır və uğurlu olarsa köhnə yola HEÇ NƏ dəyişmədən keçir.
+    """
     if not args.verify:
         return None
     try:
         verify_id = uuid.UUID(args.verify)
     except ValueError:
-        sys.stderr.write(f"XƏTA: `--verify` keçərli UUID deyil: {args.verify!r}\n")
-        return 2
+        resolved = _resolve_verify_by_name(args)
+        if isinstance(resolved, int):
+            return resolved
+        verify_id = resolved
     return _verify(args, verify_id)
+
+
+def _resolve_verify_by_name(args: argparse.Namespace) -> uuid.UUID | int:
+    """`--verify <ad>` — arxivdən kimliyi və hər iki DSN-i qurur.
+
+    Qaytarır: `tenant_id`, ya da proses kodu (səbəb ARTIQ çap olunub).
+
+    ──────────────────────────────────────────────────────────────────────────
+    PAROL MÜVƏQQƏTİ FAYLA YAZILMIR
+    ──────────────────────────────────────────────────────────────────────────
+    Arxivin `connection` bloku `connection.json`-un məzmununun EYNİSİDİR, lakin
+    FAYL deyil. `load_settings()` fayl gözlədiyi üçün ilk baxışda «bloku
+    müvəqqəti fayla yaz» həlli görünür — o isə ŞİFRƏLƏNMİŞ parolu diskdə
+    ÜÇÜNCÜ nüsxəyə çıxarardı və silinməsi `finally` blokunun düzgünlüyündən
+    asılı olardı. Ona görə `connection_file.settings_from_payload()` əlavə
+    edildi: blok BİRBAŞA, diskə toxunmadan oxunur.
+
+    ──────────────────────────────────────────────────────────────────────────
+    `--dev` AVTOMATİK TƏYİN OLUNUR — VƏ BU, MƏNALI FƏRQDİR
+    ──────────────────────────────────────────────────────────────────────────
+    `_verify_local_config` «yerli konfiqurasiya» halqasını YALNIZ `--dev`-də
+    yoxlayır (səbəbi onun başlığındadır: yalançı-qırmızı). Ad forması bu
+    sualın cavabını ÖZÜ bilir: yoxlanan kirayəçi HAZIRDA AKTİVdirsə, yerli
+    fayllar MƏHZ onundur və halqa mənalıdır; aktiv deyilsə, diskdəki fayllar
+    BAŞQA kirayəçinindir və halqa yalançı-qırmızı verərdi.
+    """
+    from scripts.switch import ACTIVE_MARKER, CONFIGS_DIR, SwitchError, load_bundle
+
+    try:
+        bundle = load_bundle(args.verify)
+    except SwitchError as exc:
+        sys.stderr.write(f"XƏTA: {exc}\n")
+        return 2
+
+    installation = bundle.get("installation")
+    tenant_id = str(installation.get("tenant_id", "")) if isinstance(installation, dict) else ""
+    try:
+        verify_id = uuid.UUID(tenant_id)
+    except ValueError:
+        sys.stderr.write(
+            f"XƏTA: «{bundle.get('slug')}» arxivində keçərli `tenant_id` yoxdur "
+            "— arxiv korlanıb və ya köhnə formatdadır.\n"
+        )
+        return 2
+
+    tenant_dsn = _tenant_dsn_from_bundle(bundle)
+    if not tenant_dsn:
+        return 2
+    args.tenant_dsn = tenant_dsn
+
+    from scripts.onboard_wizard import load_vendor
+
+    stored_vendor = load_vendor()
+    if stored_vendor is None:
+        sys.stderr.write(
+            "XƏTA: vendor bağlantısı yaddaşda yoxdur (`.onboard_config`). Sihirbazı "
+            "bir dəfə işə salın, ya da `--verify <UUID>` + `--vendor-dsn` işlədin.\n"
+        )
+        return 2
+    args.vendor_dsn = stored_vendor.dsn
+
+    marker = CONFIGS_DIR / ACTIVE_MARKER
+    active = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
+    args.dev = active == str(bundle.get("slug"))
+
+    sys.stdout.write(f"Arxiv: configs/{bundle.get('slug')}.config")
+    sys.stdout.write(" (HAZIRDA AKTİV)\n" if args.dev else " (aktiv deyil)\n")
+    return verify_id
+
+
+def _tenant_dsn_from_bundle(bundle: dict[str, object]) -> str:
+    """Arxivin `connection` blokundan tenant DSN-i; alınmasa BOŞ sətir.
+
+    Səbəb HƏR halda EKRANDA deyilir — boş qayıdış «naməlum xəta» demək
+    deyil, «səbəb artıq çap olundu» deməkdir. `_resolve_verify_by_name`-dən
+    AYRILDI, çünki orada beş müstəqil dayanma səbəbi toplanmışdı və hər
+    birinin öz mesajı var; bir funksiyada onlar bir-birini gizlədirdi.
+    """
+    from src.infrastructure.config.connection_file import (
+        ConnectionFileError,
+        settings_from_payload,
+    )
+
+    slug = bundle.get("slug")
+    connection = bundle.get("connection")
+    if not isinstance(connection, dict):
+        sys.stderr.write(
+            f"XƏTA: «{slug}» arxivində `connection` bloku yoxdur — tenant bazasına "
+            "qoşulmaq mümkün deyil. `--verify <UUID>` formasını işlədib "
+            "`--tenant-dsn`/`--vendor-dsn` verin.\n"
+        )
+        return ""
+
+    try:
+        settings = settings_from_payload(connection, source=f"configs/{slug}.config")
+    except ConnectionFileError as exc:
+        sys.stderr.write(f"XƏTA: arxivdəki parol açıla bilmədi — {exc}\n")
+        return ""
+
+    if not settings.password:
+        # Bayraqsız («real müştəri») onboarding parolu QƏSDƏN yazmır — bax
+        # `_write_config`. Belə arxivlə yoxlama mümkün deyil və bunu SÜKUTLA
+        # «bağlantı sınıb» kimi göstərmək səbəbi gizlətmək olardı.
+        sys.stderr.write(
+            f"XƏTA: «{slug}» arxivində PAROL yoxdur (bayraqsız onboarding belə "
+            "yazır). `--verify <UUID>` + `--tenant-dsn` işlədin.\n"
+        )
+        return ""
+    return settings.dsn()
 
 
 def _resolve_identity(args: argparse.Namespace) -> tuple[uuid.UUID, bool] | None:
@@ -286,11 +464,343 @@ def _run_steps(args: argparse.Namespace, tenant_id: uuid.UUID, license_key: str)
         last_ok = 5
         _step(6, "Öz-özünü yoxlama", lambda: _self_check(args, tenant_id))
     except OnboardingError as exc:
-        sys.stderr.write(f"\nDAYANDI: {exc}\n")
+        # `_redact_dsn` BURADA da tətbiq olunur, `_apply_migrations`-dakına
+        # ƏLAVƏ: istisna mətni alt prosesdən KƏNAR mənbədən də gələ bilər
+        # (məs. `psycopg`-nin öz bağlantı xətası, `_create_tenant_row`).
+        # Bir qat buraxılsa parol məhz həmin yoldan ekrana düşərdi.
+        sys.stderr.write(f"\nDAYANDI: {_redact_dsn(str(exc))}\n")
+        sys.stderr.write(_partial_state_report(last_ok, args, tenant_id))
         if last_ok >= VENDOR_ROW_STEP:
             sys.stderr.write(_resume_hint(tenant_id, license_key))
         return 1
     return 0
+
+
+class ExistingTenant(NamedTuple):
+    """Vendor bazasında ARTIQ mövcud olan kirayəçi sətri.
+
+    Attributes:
+        tenant_id: Mövcud kimlik — davam edilərsə `--tenant-id` kimi işlənir.
+        company_name: Yazıldığı kimi (böyük/kiçik hərf saxlanılır).
+        license_key: Plaintext açar — vendor bazasında ONSUZ DA belə saxlanılır
+            (`_create_vendor_row` başlığı), yəni burada oxumaq yeni sızma
+            yaratmır və `--license-key` bərpasını ƏL İLƏ SQL-siz mümkün edir.
+        status: `AKTIV` / `ODENIS_GOZLENILIR` / `DEAKTIV`.
+        supabase_ref: Müştəri layihəsinin ref-i; boş ola bilər.
+    """
+
+    tenant_id: str
+    company_name: str
+    license_key: str
+    status: str
+    supabase_ref: str
+
+
+def _detect_existing_tenant(args: argparse.Namespace) -> list[ExistingTenant]:
+    """Vendor bazasında EYNİ şirkət adı və ya EYNİ Supabase ref-i axtarır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ VENDOR BAZASI — YERLİ `configs/` ARXİVİ DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    `configs/<slug>.config` yalnız BU maşında quraşdırılmışları bilir. Eyni
+    müştərini ikinci bir təchizatçı maşınından quraşdıran adam yerli arxivdə
+    HEÇ NƏ tapmazdı və dublikat sükutla yaranardı. Vendor bazası isə TƏK
+    mərkəzdir (DB-3) — sual məhz orada mənalıdır.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ İKİ MEYAR — AD **VƏ** `supabase_ref`
+    ──────────────────────────────────────────────────────────────────────────
+    Ad İNSANIN yazdığıdır: «Yataş» ilə «Yatas MMC» eyni müştəri ola bilər və
+    ad meyarı onları TUTMUR. `supabase_ref` isə MAŞININ dəyəridir və bir
+    Supabase layihəsi bir kirayəçidir — yəni eyni ref ilə ikinci sətir
+    YARATMAQ hər halda səhvdir, adı nə olursa olsun. İki meyar bir-birinin
+    kor nöqtəsini örtür.
+
+    ──────────────────────────────────────────────────────────────────────────
+    CƏDVƏL YOXDURSA — «DUBLİKAT YOXDUR», XƏTA DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Bu yoxlama addım 2-dən (vendor miqrasiyaları) ƏVVƏL işləyir, yəni TƏMİZ
+    vendor bazasında `tenants` cədvəli hələ MÖVCUD OLMAYA bilər. Belə halda
+    cavab aydındır: dublikat ola bilməz, çünki heç bir sətir yoxdur.
+    """
+    import psycopg
+
+    query = """
+        SELECT tenant_id, company_name, license_key, status, COALESCE(supabase_ref, '')
+        FROM tenants
+        WHERE lower(company_name) = lower(%s)
+           OR (%s <> '' AND supabase_ref = %s)
+        ORDER BY installed_at
+    """
+    try:
+        with psycopg.connect(args.vendor_dsn, connect_timeout=30) as conn, conn.cursor() as cur:
+            cur.execute(query, (args.company, args.supabase_ref, args.supabase_ref))
+            rows = cur.fetchall()
+    except psycopg.errors.UndefinedTable:
+        return []
+    except psycopg.Error as exc:
+        # Yoxlama APARILA BİLMƏDİ — bu, «dublikat yoxdur» DEMƏK DEYİL, ona
+        # görə sükutla keçilmir. Lakin DAYANDIRMIR da: vendor bazasına
+        # qoşulmaq mümkün deyilsə addım 2 onsuz da dayanacaq və vendor
+        # bazasına HEÇ NƏ yazılmayacaq — yəni yetim sətir yarana bilməz.
+        sys.stdout.write(
+            f"  XƏBƏRDARLIQ: dublikat yoxlaması aparıla bilmədi — "
+            f"{_redact_dsn(str(exc).splitlines()[0])}\n"
+        )
+        return []
+    return [ExistingTenant(str(row[0]), row[1], row[2], row[3], row[4]) for row in rows]
+
+
+def _apply_duplicate_policy(args: argparse.Namespace) -> int | None:
+    """İdempotentlik qapısı. Qaytarır: proses kodu, ya da `None` (davam).
+
+    Davam qərarı verilərsə `args.tenant_id`/`args.license_key` DOLDURULUR —
+    yəni qərar MÖVCUD D4 bərpa mexanizminə çevrilir və `_resolve_identity`
+    ondan sonra heç nə bilmədən işini görür. Yeni bir «davam rejimi» yazmaq
+    eyni davranışın İKİNCİ nüsxəsini yaradardı.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ SORUŞULUR, NİYƏ ÖZBAŞINA QƏRAR VERİLMİR
+    ──────────────────────────────────────────────────────────────────────────
+    İki qərarın hər ikisi MƏNALIDIR və fərqi YALNIZ operator bilir:
+    «Yataş» adını təkrar yazmaq ya EYNİ müştərinin təkrar quraşdırmasıdır
+    (davam), ya da eyni adlı İKİNCİ filial/şirkətdir (yeni). Skript birini
+    seçsəydi, digər halda ya mövcud müştərinin konfiqurasiyası əzilər, ya da
+    ödənişi izlənməyən YETİM sətir yaranardı.
+    """
+    if args.tenant_id:
+        # AÇIQ bərpa (`--tenant-id`): operator qərarı ARTIQ verib, sual
+        # təkrarı mənasızdır və bu yolda dublikat GÖZLƏNİLƏNDİR.
+        return None
+
+    matches = _detect_existing_tenant(args)
+    if not matches:
+        return None
+
+    sys.stdout.write("\n  ⚠ Bu müştəri vendor bazasında ARTIQ mövcuddur:\n")
+    for row in matches:
+        ref = row.supabase_ref or "(ref yoxdur)"
+        sys.stdout.write(f"      «{row.company_name}» — {row.tenant_id}, {row.status}, {ref}\n")
+
+    if args.dry_run:
+        # `--dry-run` NƏ SORUŞUR, NƏ DAYANIR — yalnız XƏBƏRDARLIQ edir.
+        # ──────────────────────────────────────────────────────────────────
+        # Bu rejimin müqaviləsi «heç nə yazma, nə olacağını göstər»dir. Qapının
+        # məqsədi isə YETİM KİRAYƏÇİ yaranmasının qarşısını almaqdır — dry-run
+        # heç nə yazmadığına görə orada yetim sətir MÜMKÜN DEYİL, yəni
+        # dayanmağın qoruyucu faydası SIFIRDIR, zərəri isə realdır: operator
+        # addım siyahısını görə bilmir (qeyri-interaktiv mühitdə exit 3) və ya
+        # sadəcə baxmaq istəyərkən qərar verməyə məcbur edilir.
+        #
+        # Xəbərdarlıq isə SAXLANILIR: «bu ad artıq mövcuddur» məlumatı məhz
+        # əvvəlcədən-görmə rejimində ƏN faydalıdır.
+        sys.stdout.write(
+            "  --dry-run: qərar SORUŞULMUR. Həqiqi çağırışda seçim təklif "
+            "ediləcək (davam / yeni / ləğv).\n\n"
+        )
+        return None
+
+    decision = _decide_duplicate(args)
+    if decision == _DUPLICATE_CONTINUE:
+        chosen = matches[0]
+        args.tenant_id = chosen.tenant_id
+        args.license_key = chosen.license_key
+        sys.stdout.write(f"  Mövcud kirayəçi davam etdirilir: {chosen.tenant_id}\n\n")
+    return _DUPLICATE_EXITS.get(decision)
+
+
+#: `_decide_duplicate`-in qaytardığı qərarlar. Sətir sabitləri kimi ayrıldı ki,
+#: qərar ilə ONUN NƏTİCƏSİ (proses kodu) bir-birindən ayrı qalsın — əks halda
+#: «yeni kirayəçi yarat» qərarı ilə «davam et» qərarı hər ikisi `None`
+#: qaytardığı üçün eyni budağa düşər və hansının seçildiyi görünməzdi.
+_DUPLICATE_CONTINUE: Final[str] = "davam"
+_DUPLICATE_NEW: Final[str] = "yeni"
+_DUPLICATE_ABORT: Final[str] = "legv"
+_DUPLICATE_BLOCKED: Final[str] = "blok"
+_DUPLICATE_CANCELLED: Final[str] = "imtina"
+
+#: Qərar → proses kodu. `None` — davam et (yazı başlayır).
+_DUPLICATE_EXITS: Final[dict[str, int | None]] = {
+    _DUPLICATE_CONTINUE: None,
+    _DUPLICATE_NEW: None,
+    _DUPLICATE_ABORT: 0,
+    _DUPLICATE_BLOCKED: DUPLICATE_EXIT_CODE,
+    _DUPLICATE_CANCELLED: 130,
+}
+
+
+def _decide_duplicate(args: argparse.Namespace) -> str:
+    """Dublikat halında NƏ ediləcəyini müəyyən edir — mesajları ÖZÜ çap edir.
+
+    Qərar `_apply_duplicate_policy`-dən AYRILDI, çünki orada iki müstəqil
+    məsuliyyət toplanmışdı: «hansı qərar verilir» və «qərar `args`-a necə
+    tətbiq olunur». Ayrılıq həm də qərar dəstini SİYAHI kimi görünən edir —
+    yeni bir hal əlavə edən `_DUPLICATE_EXITS`-i yeniləməyi UNUTMAZ, çünki
+    naməlum açar `dict.get` ilə `None` qaytarardı və bu, testdə dərhal
+    görünür.
+    """
+    from scripts.onboard_wizard import WizardCancelledError, choose, is_interactive
+
+    if not is_interactive():
+        # Sual soruşula bilməyən mühitdə (CI, boru, `.bat`) sükutla YENİ
+        # kirayəçi yaratmaq ƏN PİS seçimdir: yetim sətir heç bir ekranda
+        # görünmür və yalnız ödəniş hesabatında üzə çıxır. `--allow-duplicate`
+        # BU budaqda da hörmət olunur — orada niyyət AÇIQ yazılıb.
+        if args.allow_duplicate:
+            sys.stdout.write("  `--allow-duplicate` verilib — AYRICA yeni kirayəçi yaradılır.\n\n")
+            return _DUPLICATE_NEW
+        sys.stderr.write(
+            "\nDAYANDI: dublikat aşkarlandı, sual soruşula bilmədi (interaktiv "
+            "terminal deyil).\n"
+            "  • Mövcud kirayəçini DAVAM etdirmək üçün yuxarıdakı sətrin "
+            "`--tenant-id` və `--license-key` dəyərlərini verin.\n"
+            "  • Həqiqətən AYRI, yeni kirayəçi lazımdırsa `--allow-duplicate` "
+            "əlavə edin.\n"
+        )
+        return _DUPLICATE_BLOCKED
+
+    if args.allow_duplicate:
+        sys.stdout.write("  `--allow-duplicate` verilib — AYRICA yeni kirayəçi yaradılır.\n\n")
+        return _DUPLICATE_NEW
+
+    try:
+        decision = choose(
+            "Nə edilsin?",
+            [
+                (
+                    _DUPLICATE_CONTINUE,
+                    "Mövcud kirayəçini DAVAM etdir (heç nə silinmir, təkrar yazılmır)",
+                ),
+                (_DUPLICATE_NEW, "AYRICA yeni kirayəçi yarat (eyni adlı FƏRQLİ şirkət/filial)"),
+                (_DUPLICATE_ABORT, "Dayan, heç nə etmə"),
+            ],
+        )
+    except WizardCancelledError:
+        sys.stderr.write("\nDAYANDIRILDI: heç nə yazılmadı.\n")
+        return _DUPLICATE_CANCELLED
+
+    if decision == _DUPLICATE_ABORT:
+        sys.stdout.write("  Dayandırıldı — heç nə yazılmadı.\n")
+    elif decision == _DUPLICATE_NEW:
+        sys.stdout.write("  AYRICA yeni kirayəçi yaradılır.\n\n")
+    return decision
+
+
+def _wizard_requested(args: argparse.Namespace) -> bool:
+    """Sihirbaz işə düşsünmü — MEYAR «HEÇ BİR DSN VERİLMƏYİB»dir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `not argv`, YƏNİ «ÜMUMİYYƏTLƏ ARQUMENT YOXDUR» DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    `--dry-run`, `--out`, `--dev` sihirbazla ZİDD DEYİL: onlar quraşdırmanın
+    NECƏ aparılacağını deyir, GİRİŞLƏRİ vermir. `not argv` meyarı ilə
+    `onboard_new_tenant.py --dry-run` sihirbaza DÜŞMƏZ, əvəzində «--tenant-dsn
+    verilməyib» xətası verərdi — halbuki operatorun niyyəti aydındır.
+
+    Meyar MƏHZ DSN-lərdir, çünki sihirbazın YEGANƏ işi onları qurmaqdır.
+    Biri verilibsə niyyət bayraqlı yoldur və yarımçıqlığı
+    `_reject_invalid_arguments` AÇIQ mesajla deyir — sükutla sihirbaza
+    keçmək operatorun ARTIQ yazdığı DSN-i görməzdən gəlmək olardı.
+    """
+    return not args.tenant_dsn and not args.vendor_dsn
+
+
+def _run_wizard_into(args: argparse.Namespace) -> int | None:
+    """Sihirbazı işə salır və cavabları `args`-a köçürür. Qaytarır: kod, ya `None`.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `Namespace`-Ə KÖÇÜRÜLÜR, AYRICA AXIN YAZILMIR
+    ──────────────────────────────────────────────────────────────────────────
+    Altı addımın hamısı (`_run_steps` və altındakılar) `args`-dan oxuyur.
+    Sihirbaz üçün paralel bir axın yazsaydıq, hər gələcək dəyişiklik İKİ yerdə
+    təkrarlanmalı olardı və biri unudulan gün fərq YALNIZ istehsalatda —
+    müştəri quraşdırmasında — görünərdi. Sərhəd DARDIR: sihirbaz yalnız
+    dəyərləri doldurur, məntiqə TOXUNMUR.
+
+    `--dev` MƏCBURİ olaraq qalxır: sihirbazın verdiyi söz «bitən kimi
+    `python -m src.main` açılır»dır, bu isə konfiqurasiyanın tətbiqin FAKTİKİ
+    oxu yerlərinə yazılması deməkdir (bax `_deploy_dev_config`). Bayraqsız
+    rejim yalnız arxiv qovluğuna yazır — həmin sözü tuta bilməzdi.
+    """
+    from scripts.onboard_wizard import WizardCancelledError, is_interactive, run_wizard
+
+    if not is_interactive():
+        # TERMİNAL YOXDURSA SİHİRBAZ ÜMUMİYYƏTLƏ BAŞLAMIR.
+        # ──────────────────────────────────────────────────────────────────
+        # Bu yoxlama olmasa nəticə İKİ fərqli, hər ikisi PİS haldır:
+        #
+        #   * Boru ilə (`echo … | script`) çağırışda `input()` sətirləri
+        #     OXUYUR, lakin Windows-da `getpass.getpass` stdin-i DEYİL,
+        #     KONSOLU oxuyur — proses parol sualında ASILIR və heç bir mesaj
+        #     çıxmır. Bu, ölçülmüş haldır (2 dəqiqəlik timeout ilə müşahidə
+        #     edildi).
+        #   * Axın tamamilə bağlıdırsa (CI) `input()` `EOFError` atır və
+        #     operator «DAYANDIRILDI: heç nə yazılmadı» görür — mesaj DOĞRU,
+        #     lakin SƏBƏBİ yanlış göstərir: heç kim imtina etməyib, sadəcə
+        #     terminal yoxdur.
+        #
+        # Ona görə səbəb BURADA, sual soruşulmazdan ƏVVƏL deyilir və çıxış
+        # yolu (bayraqlı forma) göstərilir.
+        sys.stderr.write(
+            "XƏTA: sihirbaz interaktiv terminal tələb edir (bu mühitdə `stdin` "
+            "terminal deyil).\n"
+            "Boru/CI mühitində bayraqlı formanı işlədin:\n"
+            "  scripts/onboard_new_tenant.py --company «…» --tenant-dsn «…» "
+            "--vendor-dsn «…» --contact-email «…»\n"
+        )
+        return 2
+
+    try:
+        answers = run_wizard()
+    except WizardCancelledError:
+        sys.stderr.write("\nDAYANDIRILDI: heç nə yazılmadı.\n")
+        # 130 = 128 + SIGINT. Qəsdən 1 DEYİL: CI və ya örtük skript «xəta»
+        # ilə «istifadəçi imtina etdi» arasındakı fərqi proses kodundan
+        # oxuya bilməlidir.
+        return 130
+
+    args.company = answers.company
+    args.contact_email = answers.contact_email
+    args.tenant_dsn = answers.tenant_dsn
+    args.vendor_dsn = answers.vendor_dsn
+    args.supabase_ref = answers.supabase_ref
+    args.anon_key = answers.anon_key
+    args.dev = True
+
+    # Arxiv qovluğu kirayəçiyə görə AYRILIR. Defolt `./onboarding` sabit
+    # olsaydı, ikinci müştərinin `OXU-MƏNİ.txt`-i birincinin ÜZƏRİNƏ yazılardı
+    # və orada `license_key` var — yəni itən şey bərpa oluna bilməyən dəyərdir.
+    # Şərt `== parser defoltu`-dur: operator `--out` verib sihirbaza düşə bilər
+    # (bax `_wizard_requested`) və onun seçimi əzilməməlidir.
+    from scripts.switch import slugify
+
+    if args.out == DEFAULT_OUT_DIR:
+        args.out = str(Path(DEFAULT_OUT_DIR) / (slugify(answers.company) or "tenant"))
+    return None
+
+
+def _prepare_arguments(args: argparse.Namespace) -> int | None:
+    """Yazı axınının GİRİŞLƏRİNİ hazırlayır: sihirbaz + yoxlamalar.
+
+    Qaytarır: proses kodu (dayanılmalıdır) və ya `None` (davam).
+
+    İki addım BİR funksiyada birləşdi, çünki onlar EYNİ sualın iki yarısıdır —
+    «`args` yazı üçün hazırdırmı?». Ayrı qalsaydılar `main()` yeddi çıxış
+    nöqtəsi daşıyardı və hansı yoxlamanın hansı rejimə aid olduğu çağırış
+    yerindən görünməzdi; burada isə SIRA aşkardır: əvvəl BOŞLUQLAR doldurulur,
+    sonra NƏTİCƏ yoxlanılır.
+    """
+    if _wizard_requested(args):
+        cancelled = _run_wizard_into(args)
+        if cancelled is not None:
+            return cancelled
+    invalid = _reject_invalid_arguments(args)
+    if invalid is not None:
+        return invalid
+    # Dublikat qapısı YOXLAMALARDAN SONRA gəlir və bu, sıra məsələsidir:
+    # o, vendor bazasına QOŞULUR, yəni yarımçıq/səhv arqument dəstində
+    # şəbəkə gözləməsi yaradardı. Əvvəl ucuz yoxlamalar, sonra bahalı.
+    return _apply_duplicate_policy(args)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -304,9 +814,9 @@ def main(argv: list[str] | None = None) -> int:
     if verified is not None:
         return verified
 
-    invalid = _reject_invalid_arguments(args)
-    if invalid is not None:
-        return invalid
+    prepared = _prepare_arguments(args)
+    if prepared is not None:
+        return prepared
 
     identity = _resolve_identity(args)
     if identity is None:
@@ -336,8 +846,13 @@ def main(argv: list[str] | None = None) -> int:
     sys.stdout.write("\nBİTDİ. ")
     if args.dev:
         sys.stdout.write("Konfiqurasiya bu maşında hazırdır:\n")
-        sys.stdout.write("  1. `python main.py` — əlavə addım LAZIM DEYİL.\n")
+        # Giriş nöqtəsi `python main.py` DEYİL: repozitoriya kökündə belə bir
+        # fayl YOXDUR, tətbiq `src/main.py`-dır və PAKET kimi işə düşür
+        # (`python src/main.py` nisbi idxalları qırır). Əvvəlki mətn səhv idi
+        # və operatoru mövcud olmayan faylı axtarmağa göndərirdi.
+        sys.stdout.write("  1. `python -m src.main` — əlavə addım LAZIM DEYİL.\n")
         sys.stdout.write(f"  2. Arxiv nüsxəsi «{args.out}» qovluğundadır.\n")
+        sys.stdout.write("     Başqa kirayəçiyə keçmək: `python scripts/switch.py`\n")
     else:
         sys.stdout.write("Növbəti addımlar:\n")
         sys.stdout.write(f"  1. «{args.out}» qovluğundakı faylları müştəri maşınına köçürün.\n")
@@ -355,6 +870,105 @@ def _step(number: int, title: str, action: object) -> None:
     sys.stdout.write(f"[{number}/{TOTAL_STEPS}] {title} …\n")
     action()  # type: ignore[operator]
     sys.stdout.write(f"[{number}/{TOTAL_STEPS}] {title} — OK\n")
+
+
+def _redact_dsn(text: str) -> str:
+    """Mətndəki hər DSN-in PAROLUNU maskalayır — istifadəçi adı QALIR.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ LAZIMDIR — «PAROL ONSUZ DA ÇAP OLUNMUR» KİFAYƏT DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Bu skript DSN-i heç yerdə BİLƏRƏKDƏN çap etmir, lakin ÜÇ yol onu ekrana
+    ÇIXARA bilər və üçü də bizim nəzarətimizdən KƏNARDADIR:
+
+      1. `_apply_migrations` ALT PROSESİN `stdout`/`stderr`-ini olduğu kimi
+         yazır — orada `apply_migrations.py`-ın gələcək bir sətri, ya da
+         `psycopg`-nin öz mesajı DSN daşıya bilər;
+      2. `psycopg` bağlantı xətalarında bəzən tam bağlantı sətrini əks etdirir;
+      3. operator ekranı dəstək üçün SKRİNŞOT edir — və məhz o an parol
+         başqasının ekranına düşür.
+
+    Maskalama ODUR ki, yuxarıdakı üç yolun HƏR BİRİ bir yerdə — çap
+    nöqtəsində — bağlansın. İstifadəçi adı QƏSDƏN qalır: diaqnostikanın
+    yarısı «hansı rol ilə qoşulur» sualıdır (`postgres` ilə `kompasos_app`
+    fərqi) və onu da gizlətsək, mesaj faydasız olardı.
+
+    Naxış DAR saxlanılır (`://user:parol@`): sərbəst mətndə iki nöqtə ilə
+    ayrılmış hər cütü maskalasaydıq, `[3/6] Kirayəçi sətri: OK` kimi normal
+    sətirlər də korlanardı.
+    """
+    return _DSN_PASSWORD.sub(r"\1:***", text)
+
+
+#: `--verify`-in beş halqası ilə EYNİ NİYYƏT, lakin BAŞQA sual: burada
+#: «quraşdırma nə qədər irəlilədi» deyilir. Mətnlər `_run_steps`-dəki addım
+#: adları ilə üst-üstə düşür — operator ekranda gördüyü sətri hesabatda EYNİ
+#: adla tapmalıdır, əks halda iki siyahını zehnində uyğunlaşdırmalı olur.
+_STEP_TITLES: Final[tuple[str, ...]] = (
+    "Tenant bazasına miqrasiyalar",
+    "Vendor bazasına miqrasiyalar",
+    "Kirayəçi sətri (tenant bazası)",
+    "Abunə sətri (vendor bazası)",
+    "Konfiqurasiya faylları",
+    "Öz-özünü yoxlama",
+)
+
+#: Hər addımın ƏL İLƏ necə yoxlanacağı. Yarımçıq halda operatorun ilk sualı
+#: «indi nə edim» olur — cavab HESABATIN İÇİNDƏ olmalıdır, sənəddə deyil.
+_STEP_CHECKS: Final[tuple[str, ...]] = (
+    "`scripts/apply_migrations.py --dry-run` — gözləyən miqrasiya qalıbmı",
+    "`scripts/apply_migrations.py --vendor --dry-run`",
+    "tenant bazası: SELECT * FROM kompasos.license_tenants WHERE tenant_id = …",
+    "vendor bazası: SELECT * FROM tenants WHERE tenant_id = …",
+    "`--out` qovluğu və `configs/` arxivi yarandımı",
+    "`--verify <tenant_id>` ilə beş halqanı yoxlayın",
+)
+
+
+def _partial_state_report(last_ok: int, args: argparse.Namespace, tenant_id: uuid.UUID) -> str:
+    """«Yarımçıq qaldı, bunları əl ilə yoxla» siyahısı — ATOMİKLİK ƏVƏZİ.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ HESABAT, NİYƏ GERİ-QAYTARMA (ROLLBACK)
+    ──────────────────────────────────────────────────────────────────────────
+    Altı addım ALTI FƏRQLİ yerə toxunur: iki AYRI baza (tenant, vendor), yerli
+    fayl sistemi və `%PROGRAMDATA%`. Bunları əhatə edən BİR tranzaksiya
+    mövcud deyil — iki müstəqil PostgreSQL serveri arasında iki-fazalı commit
+    qurmaq bu skriptin həll etməyə çalışdığı problemdən qat-qat böyük bir
+    problemdir və nasazlıq halında ÖZÜ yarımçıq qala bilər.
+
+    «Hamısını geri qaytar» daha pisdir: addım 1/2 MİQRASİYADIR — tətbiq
+    olunmuş sxemi geri qaytarmaq (DOWN blokları) İŞLƏK ola biləcək bir bazanı
+    boşaltmaq deməkdir və uğursuzluq başqa müştərinin işini kəsə bilər.
+
+    Ona görə seçim ŞÜURLUDUR: skript geri qaytarmır, LAKİN vəziyyəti GİZLƏTMİR
+    də. Hər addım üç haldan birində göstərilir (OK / UĞURSUZ / EDİLMƏDİ) və
+    hər birinin yanında ƏL İLƏ yoxlama üsulu yazılır. Sükutla «xəta oldu»
+    demək — operatoru altı yerin hansının toxunulduğunu təxmin etməyə məcbur
+    etmək olardı.
+
+    Addımların 1-4-ü ONSUZ DA idempotentdir (fayl başlığı, "D4"), yəni doğru
+    davranış geri qaytarmaq YOX, EYNİ kimliklə təkrar çağırmaqdır.
+    """
+    lines = ["\nYARIMÇIQ QALDI — vəziyyət aşağıdakı kimidir:\n"]
+    for index, (title, check) in enumerate(zip(_STEP_TITLES, _STEP_CHECKS, strict=True), start=1):
+        if index <= last_ok:
+            mark = "OK      "
+        elif index == last_ok + 1:
+            mark = "UĞURSUZ "
+        else:
+            mark = "EDİLMƏDİ"
+        lines.append(f"  [{mark}] {index}. {title}\n")
+        if index > last_ok:
+            lines.append(f"              yoxlama: {check}\n")
+    lines.append(f"\n  tenant_id : {tenant_id}\n")
+    lines.append(f"  arxiv     : {args.out}\n")
+    lines.append(
+        "\nHEÇ NƏ GERİ QAYTARILMADI (bu, qəsdlidir — bax `_partial_state_report`).\n"
+        "Addım 1-4 idempotentdir: eyni kimliklə təkrar çağırış tamamlanmış "
+        "addımları sükutla keçir və yarımçıq qalandan davam edir.\n"
+    )
+    return "".join(lines)
 
 
 def _resume_hint(tenant_id: uuid.UUID, license_key: str) -> str:
@@ -417,9 +1031,13 @@ def _apply_migrations(dsn: str, *, vendor: bool = False) -> None:
         check=False,
         cwd=str(_REPO_ROOT),
     )
-    sys.stdout.write(_indent(result.stdout))
+    # ALT PROSESİN ÇIXIŞI OLDUĞU KİMİ YAZILMIR — bax `_redact_dsn`. DSN ora
+    # mühit dəyişəni ilə düşür, yəni məzmununa bu skript nəzarət ETMİR.
+    sys.stdout.write(_indent(_redact_dsn(result.stdout)))
     if result.returncode != 0:
-        raise OnboardingError(f"miqrasiya icraçısı {result.returncode} qaytardı:\n{result.stderr}")
+        raise OnboardingError(
+            f"miqrasiya icraçısı {result.returncode} qaytardı:\n{_redact_dsn(result.stderr)}"
+        )
 
 
 def _create_tenant_row(args: argparse.Namespace, tenant_id: uuid.UUID, license_key: str) -> None:
@@ -575,13 +1193,48 @@ def _write_config(args: argparse.Namespace, tenant_id: uuid.UUID, license_key: s
         "4. Bağlantı uğurlu olduqdan sonra İlk Quraşdırma Sihirbazı Root\n"
         "   hesabını yaradacaq.\n\n"
         "QEYD: lisenziya statusu `ODENIS_GOZLENILIR`-dir. Ödəniş alındıqdan\n"
-        "sonra Vendor Konsolundan `AKTIV` edilməlidir.\n",
+        "sonra Vendor Konsolundan `AKTIV` edilməlidir.\n" + _anon_key_note(args),
         encoding="utf-8",
     )
     sys.stdout.write(_indent(f"{out}/installation.json\n{out}/connection.template.json\n"))
 
     deployed = _deploy_dev_config(args, tenant_id) if args.dev else None
     _archive_switch_config(args, identity, deployed=deployed, template=template)
+
+
+def _anon_key_note(args: argparse.Namespace) -> str:
+    """`OXU-MƏNİ.txt`-in `anon` açarı bölməsi — açar verilməyibsə BOŞ sətir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ FAYLA YAZILIR, KONFİQURASİYAYA DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Tətbiq `anon` açarını YALNIZ mühit dəyişənindən oxuyur
+    (`KOMPASOS_SUPABASE_ANON_KEY` — `realtime/supabase_transport.py`,
+    `updates/catalog.py`) və `.env` faylını QƏSDƏN oxumur (`src/main.py::
+    _check_dotenv` istehsalatda `.env`-in MÖVCUDLUĞUNU xəbərdarlıq sayır).
+    Yəni açarı `connection.json`-a yazmaq onu heç bir yolla İŞLƏK etməzdi —
+    yalnız faylı bir sirr də ağır edərdi.
+
+    Ona görə açar quraşdırıcıya GÖSTƏRİLİR: dəyəri hara qoyacağını bilən
+    yeganə tərəf odur. Nüsxə həm də `configs/<slug>.config` arxivindədir
+    (`_archive_switch_config`) — orada o, «bu kirayəçinin açarı hansı idi»
+    sualının cavabıdır, çünki Supabase paneli açarı yalnız layihə səhifəsində
+    saxlayır və dəstək zəngində ora çıxış həmişə olmur.
+
+    Açar SİRR SAYILMIR: `anon` açarı brauzer tərəfinə göndərilmək üçün
+    nəzərdə tutulub və RLS ilə məhdudlaşır — `service_role` açarı isə bu
+    skriptə HEÇ VAXT verilmir (bax fayl başlığı).
+    """
+    anon_key = getattr(args, "anon_key", "")
+    if not anon_key:
+        return ""
+    return (
+        "\nSupabase `anon` açarı (realtime və auto-update üçün):\n"
+        f"  KOMPASOS_SUPABASE_ANON_KEY={anon_key}\n"
+        f"  KOMPASOS_SUPABASE_URL=https://{args.supabase_ref}.supabase.co\n"
+        "Bu iki sətir MÜHİT DƏYİŞƏNİ kimi təyin edilməlidir — tətbiq `.env`\n"
+        "faylını oxumur.\n"
+    )
 
 
 def _archive_switch_config(
@@ -605,12 +1258,33 @@ def _archive_switch_config(
     try:
         payload = _read_json_file(deployed) if deployed is not None else dict(template)
         archived = archive_config(
-            company=args.company, installation=dict(identity), connection=payload
+            company=args.company,
+            installation=dict(identity),
+            connection=payload,
+            supabase=_supabase_block(args),
         )
     except (OSError, ValueError, SwitchError) as exc:
         sys.stdout.write(_indent(f"XƏBƏRDARLIQ: `configs/` arxivi yazılmadı — {exc}\n"))
         return
     sys.stdout.write(_indent(f"{archived}\n"))
+
+
+def _supabase_block(args: argparse.Namespace) -> dict[str, object] | None:
+    """Arxiv bundle-ının `supabase` bloku — heç nə bilinmirsə `None`.
+
+    `None` qaytarmaq MƏNALIDIR: `switch.archive_config` onu «dəyişmə» kimi
+    oxuyur və mövcud bundle-dakı köhnə açarı SAXLAYIR
+    (`_keep_previous_supabase`). Boş sözlük qaytarsaydıq, bayraqlı yol ilə
+    edilən hər təkrar quraşdırma sihirbazın topladığı açarı sükutla silərdi.
+    """
+    anon_key = getattr(args, "anon_key", "")
+    if not anon_key and not args.supabase_ref:
+        return None
+    return {
+        "project_ref": args.supabase_ref,
+        "url": f"https://{args.supabase_ref}.supabase.co" if args.supabase_ref else "",
+        "anon_key": anon_key,
+    }
 
 
 def _read_json_file(path: Path) -> dict[str, object]:
@@ -768,7 +1442,141 @@ def _self_check(args: argparse.Namespace, tenant_id: uuid.UUID) -> None:
             f"bazada `license_tenants` sətri TAPILMADI (tenant_id={tenant_id}) — "
             "addım 3 uğurlu görünsə də sətir yerində deyil."
         )
+    _assert_no_plaintext_secrets(args)
     sys.stdout.write(_indent(f"kirayəçi «{row[0]}» oxundu, konfiqurasiya işləkdir\n"))
+
+
+#: Konfiqurasiya JSON-unda parol OLMAYAN, lakin parolla ÜST-ÜSTƏ DÜŞƏ BİLƏN
+#: sahələr. `username` xüsusilə təhlükəlidir: sihirbaz DSN-i HƏMİŞƏ `postgres`
+#: istifadəçi adı ilə qurur, yəni parolu «postgres» olan test layihəsi bu
+#: yoxlamanı YALANÇI-POZİTİV etdirərdi — və qiymət yüksəkdir: dayanma 6-cı
+#: addımda, kirayəçi sətri ARTIQ COMMIT olunduqdan SONRA baş verir.
+_NON_SECRET_JSON_KEYS: Final[frozenset[str]] = frozenset(
+    {"username", "host", "database", "sslmode", "version", "slug", "company", "tenant_id"}
+)
+
+
+def _leaks_secret(content: str, secrets_to_find: set[str]) -> bool:
+    """Faylın məzmununda AÇIQ parol varmı — JSON-da SAHƏYƏ görə, mətndə xam.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ XAM `in` YOXLAMASI KİFAYƏT ETMİR — ÖLÇÜLƏ BİLƏN YALANÇI-POZİTİV
+    ──────────────────────────────────────────────────────────────────────────
+    `connection.json` içində `"username": "postgres"` sahəsi VAR və sihirbazın
+    qurduğu DSN-in istifadəçi adı HƏMİŞƏ `postgres`-dir. Parolu təsadüfən
+    «postgres» olan (test layihələrində tamamilə real hal) müştəri üçün xam
+    `secret in content` yoxlaması DOĞRU faylı «sızmış» elan edərdi. Eyni tələ
+    host və baza adında da var: qısa parol («db», ref-in bir hissəsi) həmin
+    sahələrdə rast gələ bilər.
+
+    Yalançı-pozitivin qiyməti burada XÜSUSİLƏ yüksəkdir: yoxlama 6-cı addımda,
+    kirayəçi sətri ARTIQ COMMIT olunduqdan SONRA işləyir — yəni səhv həyəcan
+    quraşdırmanı «tamamlanmamış» elan edir və operatoru olmayan sızmanı
+    axtarmağa göndərir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    ZƏMANƏT ZƏİFLƏMİR — `password_encrypted` YOXLAMADAN ÇIXARILMIR
+    ──────────────────────────────────────────────────────────────────────────
+    İstisna siyahısı (`_NON_SECRET_JSON_KEYS`) YALNIZ parol DAŞIMAYAN sahələri
+    əhatə edir. Parolun yazıla biləcəyi hər sahə — `password_encrypted` daxil
+    olmaqla — yoxlanır: şifrələmə sükutla düşüb ora plaintext yazsa, o, MƏHZ
+    tutulmalı olan haldır və tutulur.
+
+    JSON olmayan fayllarda (`OXU-MƏNİ.txt`) xam yoxlama qalır — orada sahə
+    anlayışı yoxdur və hər hansı rastlaşma araşdırılmalıdır.
+    """
+    try:
+        payload = json.loads(content)
+    except ValueError:
+        return any(secret in content for secret in secrets_to_find)
+    return _json_leaks_secret(payload, secrets_to_find)
+
+
+def _json_leaks_secret(node: object, secrets_to_find: set[str], *, key: str = "") -> bool:
+    """JSON ağacını gəzir; `_NON_SECRET_JSON_KEYS` açarlarının DƏYƏRİ atlanır.
+
+    Rekursiya lazımdır, çünki `configs/<slug>.config` bundle-ı `connection` və
+    `installation` bloklarını İÇ-İÇƏ saxlayır — düz (bir səviyyəli) gəzinti
+    həmin blokların içindəki parolu GÖRMƏZDİ.
+    """
+    if isinstance(node, dict):
+        return any(
+            _json_leaks_secret(value, secrets_to_find, key=str(name))
+            for name, value in node.items()
+        )
+    if isinstance(node, list):
+        return any(_json_leaks_secret(item, secrets_to_find, key=key) for item in node)
+    if isinstance(node, str) and key not in _NON_SECRET_JSON_KEYS:
+        return any(secret in node for secret in secrets_to_find)
+    return False
+
+
+def _assert_no_plaintext_secrets(args: argparse.Namespace) -> None:
+    """Yazılan HƏR faylı oxuyub AÇIQ parol axtarır — tapılsa DAYANIR.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ YOXLAMA, NİYƏ «ONSUZ DA YAZMIRIQ»
+    ──────────────────────────────────────────────────────────────────────────
+    «Parol config-ə yazılmır» İDDİADIR və iddia kodun oxusu ilə qorunur —
+    yəni növbəti dəyişiklik onu SÜKUTLA poza bilər. Konkret üç yol var:
+    `_write_config`-in şablonuna sahə əlavə etmək, `_deploy_dev_config`-in
+    şifrələməsinin sükutla düşməsi (`save_settings` gələcəkdə boş açarla
+    plaintext yazsa), və `switch.archive_config`-in bundle formatının
+    genişlənməsi. Üçü də AYRI fayldadır, yəni bir baxışla qorunmur.
+
+    Bu yoxlama iddianı ZƏMANƏTƏ çevirir: fayllar GERİ OXUNUR və içində
+    parolun ÖZÜ axtarılır. `AuditTrail.record()`-un naxışı ilə eynidir —
+    məcburi olan bir şeyin sükutla buraxılması onu məcburi olmaqdan çıxarır,
+    ona görə uğursuzluq DAYANDIRIR (`OnboardingError`), xəbərdarlıq deyil.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NƏ AXTARILIR, NƏ AXTARILMIR
+    ──────────────────────────────────────────────────────────────────────────
+    Axtarılan: TENANT və VENDOR baza parolları (DSN-dən çıxarılır).
+    Axtarılmayan: `license_key`. O, `OXU-MƏNİ.txt`-ə BİLƏRƏKDƏN yazılır —
+    quraşdırıcı onu müştəriyə verməlidir və faylın bütün mövcudluq səbəbi
+    budur. `service_role` açarı isə bu skriptə HEÇ VAXT verilmir, yəni
+    axtarılacaq dəyər də yoxdur.
+    """
+    from urllib.parse import unquote, urlparse
+
+    from scripts.switch import BUNDLE_SUFFIX, CONFIGS_DIR, slugify
+
+    secrets_to_find = {
+        unquote(urlparse(dsn).password or "") for dsn in (args.tenant_dsn, args.vendor_dsn)
+    }
+    # Boş parol axtarmaq HƏR faylı «sızmış» elan edərdi (`"" in text` həmişə
+    # doğrudur) — parolsuz DSN isə real haldır (məs. `.pgpass` ilə).
+    secrets_to_find.discard("")
+    if not secrets_to_find:
+        return
+
+    targets = [path for path in Path(args.out).glob("*") if path.is_file()]
+    bundle = CONFIGS_DIR / f"{slugify(args.company)}{BUNDLE_SUFFIX}"
+    if bundle.is_file():
+        targets.append(bundle)
+    if args.dev:
+        from src.infrastructure.config.connection_file import connection_file_path
+        from src.shared.installation import installation_file
+
+        targets.extend(
+            path for path in (connection_file_path(), installation_file()) if path.is_file()
+        )
+
+    for path in targets:
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            # Oxuna bilməyən fayl yoxlanmamış sayılır, LAKİN quraşdırmanı
+            # dayandırmır: bu addıma çatanda kirayəçi sətri artıq COMMIT
+            # olunub və oxu icazəsi problemi sızma DEYİL.
+            continue
+        if _leaks_secret(content, secrets_to_find):
+            raise OnboardingError(
+                f"AÇIQ PAROL AŞKARLANDI: «{path}» faylı baza parolunu şifrələnməmiş "
+                "saxlayır. Fayl SİLİNMƏDİ (əl ilə yoxlayın), lakin quraşdırma "
+                "TAMAMLANMIŞ sayılmır — bax `_assert_no_plaintext_secrets`."
+            )
 
 
 #: `--verify`-in "əsas cədvəllər" halqası. TAM SİYAHI DEYİL və olmamalıdır:
@@ -1047,16 +1855,30 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     # yalnız YAZI addımlarında işlənir) — ona görə `required=True` DEYİL və
     # məcburiliyi `main()` rejimə görə yoxlayır.
     parser.add_argument("--company", default="", help="şirkət adı, məs. «Embawood»")
-    parser.add_argument("--tenant-dsn", required=True, help="MÜŞTƏRİNİN öz Supabase DSN-i")
-    parser.add_argument("--vendor-dsn", required=True, help="MƏRKƏZİ vendor bazasının DSN-i")
+    # ONBOARD-FINAL: `required=True` GÖTÜRÜLDÜ. Səbəb defolt rejimin
+    # dəyişməsidir — arqumentsiz çağırış artıq «istifadə səhvi» deyil,
+    # SİHİRBAZDIR (bax `_wizard_requested`). `argparse` məcburiliyi
+    # saxlasaydı, sihirbaz heç vaxt işə düşməzdi: parser ondan ƏVVƏL
+    # `SystemExit(2)` ilə dayanardı. Bayraqlı yolun məcburiliyi İTMİR —
+    # o, `_reject_invalid_arguments`-ə köçdü, çünki şərt artıq sadə
+    # «verilib/verilməyib» deyil, REJİMDƏN asılıdır.
+    parser.add_argument(
+        "--tenant-dsn", default="", help="MÜŞTƏRİNİN öz Supabase DSN-i (boş = sihirbaz)"
+    )
+    parser.add_argument(
+        "--vendor-dsn", default="", help="MƏRKƏZİ vendor bazasının DSN-i (boş = sihirbaz)"
+    )
     parser.add_argument("--supabase-ref", default="", help="müştəri layihəsinin ref-i")
+    parser.add_argument(
+        "--anon-key", default="", help="müştəri layihəsinin `anon` açarı (istəyə bağlı)"
+    )
     # MƏCBURİDİR (bax `_create_tenant_row`), lakin `required=True` DEYİL:
     # `--dry-run` yolunun onsuz da işləməsi lazımdır ki, quraşdırıcı
     # addımları əvvəlcədən görə bilsin.
     parser.add_argument(
         "--contact-email", default="", help="şirkət əlaqə ünvanı (yazma üçün MƏCBURİ)"
     )
-    parser.add_argument("--out", default="./onboarding", help="konfiqurasiya qovluğu")
+    parser.add_argument("--out", default=DEFAULT_OUT_DIR, help="konfiqurasiya qovluğu")
     parser.add_argument("--dry-run", action="store_true", help="heç nə yazma, addımları göstər")
     # `--dev`: bax `_deploy_dev_config`. Defolt YOXDUR (prod) — bayraq
     # BU maşına yazır, yəni səhvən müştəri quraşdırmasında verilsə
@@ -1069,8 +1891,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--verify",
         default="",
-        metavar="TENANT_ID",
-        help="mövcud kirayəçini YOXLA (heç nə yazılmır) — bax `_verify`",
+        metavar="AD|TENANT_ID",
+        help=(
+            "mövcud kirayəçini YOXLA (heç nə yazılmır). AD verilsə DSN-lər "
+            "`configs/` arxivindən və `.onboard_config`-dən qurulur; UUID verilsə "
+            "`--tenant-dsn`/`--vendor-dsn` MƏCBURİDİR — bax `_verify_mode`"
+        ),
     )
     # D4: yarımçıq çökmədən sonra DAVAM ETMƏ — bax fayl başlığı. Verilməzsə
     # köhnə davranış (təsadüfi `uuid4()`/`token_urlsafe()`) DƏYİŞMİR.
@@ -1083,6 +1909,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--license-key",
         default="",
         help="əvvəlki çağırışın DAYANDI mesajında çap olunan tam açar — verilsə YENİSİ yaranmır",
+    )
+    # ONBOARD-FINAL Faza 2 (idempotentlik): dublikat aşkarlananda skript
+    # DAYANIR. Bu bayraq həmin qapını AÇIQ şəkildə yan keçir — «eyni adlı
+    # FƏRQLİ şirkət» halı realdır (filiallar), lakin o qərar ADAMINDIR,
+    # skriptin defoltu deyil.
+    parser.add_argument(
+        "--allow-duplicate",
+        action="store_true",
+        help="eyni adlı/ref-li kirayəçi olsa belə AYRICA yenisini yarat",
     )
     return parser.parse_args(argv)
 

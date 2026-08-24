@@ -94,3 +94,9 @@ output/
 # hostunu, istifadəçi adını və BU MAŞINA bağlı şifrələnmiş parolunu daşıyır:
 # `.env` ilə eyni kateqoriyadır, repozitoriyada yeri yoxdur.
 configs/
+
+# Vendor (mərkəzi lisenziya) bazasının ŞİFRƏLİ açarı — `scripts/onboard_wizard.py`
+# onu BİR DƏFƏ soruşub bura yazır. İçindəki parol BÜTÜN müştərilərin abunə
+# sətirlərinə yazma icazəsidir: `configs/` ilə eyni kateqoriya, hətta ondan da
+# həssas — repozitoriyada yeri yoxdur.
+.onboard_config

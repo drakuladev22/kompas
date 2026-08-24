@@ -307,9 +307,27 @@ def test_verify_flags_a_tenant_whose_seed_never_ran(
 
 
 def test_verify_rejects_a_malformed_tenant_id(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """UUID olmayan dəyər bazaya ÇATMADAN rədd edilir."""
+    """UUID olmayan dəyər bazaya ÇATMADAN rədd edilir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    MESAJ DƏYİŞDİ, ZƏMANƏT DEYİL (ONBOARD-FINAL Faza 4)
+    ──────────────────────────────────────────────────────────────────────────
+    Əvvəl `--verify` YALNIZ UUID qəbul edirdi, ona görə UUID olmayan hər şey
+    «keçərli UUID deyil» ilə dayanırdı. İndi UUID olmayan dəyər AD sayılır və
+    `configs/` arxivində axtarılır (`_resolve_verify_by_name`) — yəni səhv
+    yazılmış dəyər «belə ad yoxdur, mövcud adlar bunlardır» ilə dayanır.
+
+    Testin QORUDUĞU şey dəyişmədi: zibil dəyər proses kodu 2 ilə rədd edilir
+    və HEÇ BİR baza bağlantısı qurulmur. Yalnız mesaj daha faydalı oldu.
+    """
+    from scripts import switch
+
+    # Arxiv qovluğu BOŞ olmalıdır: təchizatçının real `configs/` qovluğu bu
+    # testin nəticəsinə təsir etməməlidir.
+    monkeypatch.setattr(switch, "CONFIGS_DIR", tmp_path)
+
     code = onboard.main(
         [
             "--tenant-dsn",
@@ -321,4 +339,6 @@ def test_verify_rejects_a_malformed_tenant_id(
         ]
     )
     assert code == 2
-    assert "keçərli UUID deyil" in capsys.readouterr().err
+    error = capsys.readouterr().err
+    assert "arxiv tapılmadı" in error
+    assert "belə-bir-uuid-yoxdur" in error

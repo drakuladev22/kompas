@@ -253,11 +253,41 @@ def _target_bundle(slug: str, tenant_id: str) -> Path:
     return candidate
 
 
+def bundle_names() -> list[str]:
+    """Arxivlənmiş kirayəçilərin adları (slug), ada görə sıralı.
+
+    `_bundle_paths()`-ın PUBLİK üzü. Kənar çağıran (`onboard_new_tenant
+    --verify <ad>`) «hansı adlar var» sualına cavab verməlidir — ad səhv
+    yazılanda mövcud siyahını göstərmək operatoru `configs/` qovluğunu əl ilə
+    açmaqdan xilas edir.
+    """
+    return [path.stem for path in _bundle_paths()]
+
+
+def load_bundle(name: str) -> dict[str, Any]:
+    """Ada (və ya slug-a) görə arxivi oxuyur; tapılmasa `SwitchError`.
+
+    Ad həlli `cmd_activate` ilə EYNİ qaydadadır və qəsdən: əvvəlcə verilən
+    sətir OLDUĞU KİMİ fayl adı kimi sınanır, sonra `slugify` tətbiq olunur.
+    İki fərqli həll qaydası olsaydı, `switch.py yatas` işləyər, `--verify
+    yatas` işləməzdi — və fərqin səbəbi heç yerdə yazılmazdı.
+    """
+    slug = name if _bundle_path(name).is_file() else slugify(name)
+    bundle = _bundle_path(slug)
+    if not bundle.is_file():
+        available = ", ".join(bundle_names()) or "(arxiv boşdur)"
+        raise SwitchError(f"«{name}» üçün arxiv tapılmadı. Mövcud adlar: {available}")
+    stored = _read_json(bundle)
+    stored.setdefault("slug", slug)
+    return stored
+
+
 def archive_config(
     *,
     company: str,
     installation: dict[str, Any],
     connection: dict[str, Any] | None,
+    supabase: dict[str, Any] | None = None,
 ) -> Path:
     """Konfiqurasiyanı `configs/<slug>.config`-ə arxivləyir və yolu qaytarır.
 
@@ -270,6 +300,20 @@ def archive_config(
     başqa maşında açılmır (`onboard_new_tenant._write_config`). Belə bundle yenə
     arxivlənir — host/port/baza/istifadəçi adı ONDA var və aktivləşdirən tərəf
     parolun çatmadığını EKRANDA görür.
+
+    ──────────────────────────────────────────────────────────────────────────
+    `supabase` BLOKU — ARXİVDƏ VAR, AKTİVLƏŞDİRMƏDƏ İŞLƏNMİR
+    ──────────────────────────────────────────────────────────────────────────
+    Blok kirayəçinin `anon` açarını və layihə ünvanını daşıyır (ONBOARD-FINAL
+    sihirbazı toplayır). O, `activate()` tərəfindən HEÇ BİR fayla YAZILMIR və
+    bu, unudulmuş hissə deyil: tətbiq həmin dəyərləri YALNIZ mühit
+    dəyişənindən oxuyur (`KOMPASOS_SUPABASE_ANON_KEY`), yəni onları
+    `connection.json`-a köçürmək heç bir davranışı dəyişməzdi. Blokun rolu
+    QEYD saxlamaqdır: «bu kirayəçinin açarı hansı idi» sualının cavabı Supabase
+    panelindən kənarda başqa yerdə qalmır.
+
+    Sirr kateqoriyası: `anon` açarı brauzerə göndərilmək üçündür və RLS ilə
+    məhdudlaşır — `service_role` bura HEÇ VAXT düşmür.
     """
     tenant_id = str(installation.get("tenant_id", ""))
     slug = slugify(company) or f"tenant-{tenant_id[:8]}".strip("-") or "tenant"
@@ -287,9 +331,31 @@ def archive_config(
             "archived_at": datetime.now(UTC).isoformat(),
             "installation": installation,
             "connection": _keep_previous_connection(target, tenant_id, connection),
+            "supabase": _keep_previous_supabase(target, tenant_id, supabase),
         },
     )
     return target
+
+
+def _keep_previous_supabase(
+    target: Path, tenant_id: str, supabase: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """`supabase` YOXDURSA köhnə bundle-dakı bloku SAXLAYIR.
+
+    `_keep_previous_connection` ilə EYNİ qayda və eyni səbəb, lakin fərqli
+    itki: `switch.py`-ın öz arxivləmə yolu (`_archive_active`) bu bloku
+    ÜMUMİYYƏTLƏ bilmir — o, yalnız diskdəki iki JSON faylını oxuyur, `anon`
+    açarı isə orada YOXDUR (bax `archive_config` başlığı). Qoruma olmasaydı,
+    sihirbazla qurulmuş kirayəçiyə BİR DƏFƏ `switch.py` ilə keçmək açarı
+    arxivdən həmişəlik silərdi.
+    """
+    if supabase is not None or not target.is_file():
+        return supabase
+    stored = _read_json(target)
+    if str(stored.get("tenant_id", "")) != tenant_id:
+        return supabase
+    previous = stored.get("supabase")
+    return previous if isinstance(previous, dict) else None
 
 
 def _keep_previous_connection(

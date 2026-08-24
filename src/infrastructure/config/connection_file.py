@@ -65,7 +65,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 from urllib.parse import quote, unquote, urlparse
 
 from src.infrastructure.security.encryption import EncryptionService
@@ -233,6 +233,37 @@ def load_settings(path: Path | None = None) -> ConnectionSettings | None:
             context={"path": str(target), "error": str(exc)},
         ) from exc
 
+    return settings_from_payload(payload, source=str(target))
+
+
+def settings_from_payload(payload: dict[str, Any], *, source: str = "") -> ConnectionSettings:
+    """`connection.json` MƏZMUNUNDAN ayarları qurur — fayl OXUMADAN.
+
+    Args:
+        payload: Faylın (və ya ona bərabər blokun) məzmunu.
+        source: Diaqnostika üçün mənbənin adı — xəta mesajında görünür.
+
+    Raises:
+        ConnectionFileError: parol deşifrələnmir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AYRICA FUNKSİYA — `load_settings`-DƏN ÇIXARILDI
+    ──────────────────────────────────────────────────────────────────────────
+    Eyni məzmun artıq İKİ yerdə yaşayır: diskdəki `connection.json` və
+    `configs/<slug>.config` arxivinin `connection` BLOKU (`scripts/switch.py`).
+    İkincisini oxumaq istəyən tərəfin (`onboard_new_tenant --verify <ad>`)
+    yeganə alternativi bloku MÜVƏQQƏTİ FAYLA yazıb `load_settings`-ə vermək
+    olardı — yəni ŞİFRƏLƏNMİŞ parolu diskdə üçüncü bir nüsxəyə çıxarmaq və
+    onu silməyi unutmaq riskini yaratmaq.
+
+    Deşifrələmə məntiqini ORADA təkrar yazmaq isə daha pisdir: `_CONTEXT`
+    (AAD) və açar zənciri dəyişən gün nüsxə sükutla köhnə qalar və xəta
+    «parol səhvdir» kimi görünərdi.
+
+    Ona görə oxu İKİYƏ bölündü: HARADAN gəldiyi (`load_settings`) və NƏ
+    olduğu (bu funksiya). Davranış DƏYİŞMƏYİB — `load_settings` indi bunu
+    çağırır.
+    """
     secret = str(payload.get("password_encrypted", ""))
     try:
         password = _decrypt(secret) if secret else ""
@@ -243,7 +274,7 @@ def load_settings(path: Path | None = None) -> ConnectionSettings | None:
                 "Saxlanmış parol açıla bilmədi — açar bu kompüterdə dəyişib. "
                 "Parolu yenidən daxil edin."
             ),
-            context={"path": str(target), "error": str(exc)},
+            context={"path": source, "error": str(exc)},
         ) from exc
 
     return ConnectionSettings(
@@ -359,4 +390,5 @@ __all__ = [
     "find_connection_file",
     "load_settings",
     "save_settings",
+    "settings_from_payload",
 ]
