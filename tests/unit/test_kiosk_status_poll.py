@@ -63,6 +63,22 @@ def _application(qt_app: Any) -> Any:
     return KompasApplication(qt_app, preview=False, theme_preference=ThemeMode.LIGHT, context=None)
 
 
+def _stop_timers(owner: Any) -> None:
+    """Testdən SONRA taymer DAYANDIRILIR — sızma başqa testi qırır.
+
+    Taymerin intervalı 30 saniyədir və tam dəst ~38 dəqiqə işləyir: widget
+    canlı qalsa, tıqqıltı SONRAKI testin ortasında baş verir və (uğursuz
+    yolda) jurnala sətir yazır. `test_logger.py` isə jurnalda MƏHZ BİR sətir
+    gözləyir — yəni sızma orada qırmızı verir və səbəbi bu faylda olur.
+    Qt widget-i `deleteLater()` ilə silinsə də taymer hadisə dövrəsi işləyənə
+    qədər yaşayır, ona görə AÇIQ `stop()` çağırılır.
+    """
+    from PySide6.QtCore import QTimer
+
+    for timer in owner.findChildren(QTimer):
+        timer.stop()
+
+
 def _home(qt_app: Any) -> Any:
     from PySide6.QtWidgets import QWidget
 
@@ -94,6 +110,7 @@ def test_a_pending_status_is_polled_and_the_screen_follows(qt_app) -> None:  # t
     assert controller.calls == 1
     assert home.statuses == [WorkerStatus.VERIFIED]
     assert last_status[-1] is WorkerStatus.VERIFIED
+    _stop_timers(home)
 
 
 @requires_qt
@@ -114,6 +131,7 @@ def test_an_actionable_status_never_touches_the_database(qt_app) -> None:  # typ
 
     assert controller.calls == 0
     assert home.statuses == []
+    _stop_timers(home)
 
 
 @requires_qt
@@ -131,6 +149,7 @@ def test_an_unchanged_status_does_not_redraw_the_screen(qt_app) -> None:  # type
 
     assert controller.calls == 1
     assert home.statuses == []
+    _stop_timers(home)
 
 
 @requires_qt
@@ -158,3 +177,4 @@ def test_a_failing_query_keeps_the_timer_alive(qt_app) -> None:  # type: ignore[
 
     timer.timeout.emit()
     assert home.statuses == [WorkerStatus.VERIFIED]
+    _stop_timers(home)

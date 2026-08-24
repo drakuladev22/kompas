@@ -96,6 +96,48 @@ class RedemptionNotFoundError(SalesPointsError):
     user_message = "Mükafat sorğusu tapılmadı."
 
 
+@dataclass(frozen=True)
+class PointsDisputeView:
+    """İdarəçinin etiraz gələnlər qutusundakı BİR sətir.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ AQREQAT BİRBAŞA EKRANA VERİLMİR
+    ──────────────────────────────────────────────────────────────────────────
+    `OpenShiftView` ilə EYNİ qərar: `PointsEntry` aqreqatdır və onun
+    metodları (`correct`, `reverse`, `reject_dispute`, `expire_dispute`)
+    təsadüfən GUI kodundan çağırıla bilərdi. Görünüş obyekti yalnız oxunur —
+    qərar YEGANƏ qapıdan, `decide_dispute()`-dan keçir.
+
+    İŞÇİNİN ADI BURADA YOXDUR: bu use case `EmployeeRepository` asılılığı
+    GÖTÜRMÜR (bax modul başlığı) və adı çağıran tərəf onsuz da əlində
+    saxlayır. Ad üçün asılılıq əlavə etmək xal axınını istifadəçi
+    idarəetməsinə bağlayardı.
+    """
+
+    entry_id: PointsEntryId
+    employee_id: EmployeeId
+    #: CARİ xal dəyəri — idarəçi qərar verərkən məhz bunu görür.
+    points: int
+    #: İşçinin yazdığı etiraz mətni.
+    dispute_reason: str
+    #: Etirazın GÖNDƏRİLMƏ anı — «neçə gündür gözləyir?» sualının əsası.
+    #: Ad `created_at` DEYİL, çünki aqreqatda sahə məhz `disputed_at`-dır və
+    #: ikinci ad məkanı yaratmaq `menu.py` başlığındakı qüsurun təkrarı olardı.
+    disputed_at: datetime
+    #: `PENDING` və ya `EXPIRED` (`PointsAppealStatus`). `EXPIRED` sətir
+    #: siyahıdan ÇIXMIR — «vaxt bitdi» ≠ «qərar verildi» (M-6).
+    appeal_status: str
+    #: Ledger sətrinin statusu (`ACTIVE`) — qərardan sonra dəyişir.
+    entry_status: str
+    #: Pəncərənin bağlandığı an — ekran «vaxtı bitib» nişanını buradan qurur.
+    window_closes_at: datetime
+
+    @property
+    def is_expired(self) -> bool:
+        """Pəncərə qərarsız bağlanıbmı — ekranın nişan şərti."""
+        return self.appeal_status == PointsAppealStatus.EXPIRED.value
+
+
 @dataclass
 class ResetNoticeResult:
     """14 günlük bildiriş dövrünün nəticəsi."""
@@ -299,6 +341,67 @@ class SalesPointsUseCase:
             body=f"Nəticə: {entry.status.value}. Səbəb: {entry.decision_reason}",
         )
         return entry
+
+    def list_undecided_disputes(
+        self, *, tenant_id: TenantId, actor: Employee
+    ) -> list[PointsDisputeView]:
+        """İdarəçinin etiraz gələnlər qutusu — `PENDING` + `EXPIRED` (M-6).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ AYRICA OXU YOLU LAZIM İDİ
+        ──────────────────────────────────────────────────────────────────────
+        `decide_dispute()` mövcud idi, lakin onu çağıracaq bir SƏTİR heç bir
+        ekranda görünmürdü: `list_disputes` yalnız `PENDING` qaytarır və o da
+        yalnız `expire_stale_disputes` planlaşdırılmış işində işlədilirdi.
+        Nəticədə müddəti bitən etiraz — məhz həmin işin YARATDIĞI vəziyyət —
+        heç kimin siyahısına düşmürdü və `has_undecided_dispute` ilə açıq
+        saxlanılan qərar imkanı praktikada çatılmaz qalırdı.
+
+        SƏLAHİYYƏT `decide_dispute` İLƏ EYNİDİR (`can_manage_sales_points`):
+        bu, İDARƏÇİ siyahısıdır, işçinin öz ekranı deyil. Siyahı başqa
+        işçilərin xal sətirlərini və etiraz mətnlərini açır, yəni qərar
+        qapısından ZƏİF bir qapı arxasında dayana bilməz («görmək =
+        səlahiyyətin olması», bölmə 3).
+
+        `EXPIRED` SƏTİRLƏR SİYAHIDA QALIR: «vaxt bitdi» ≠ «qərar verildi»
+        (M-6). Ekran onları nişanla göstərir (`PointsDisputeView.is_expired`),
+        LAKİN gizlətmir — gizlətsəydi, `expire_dispute()` bir ölü-sonu
+        digəri ilə əvəz etmiş olardı.
+
+        Returns:
+            Ən çox gözləyən sətir BAŞDA (repo `points_appeals.created_at`
+            üzrə sıralayır) — idarəçi gecikməni siyahının yuxarısından görür.
+        """
+        self._require(actor, now=self._clock.now())
+        views: list[PointsDisputeView] = []
+        for entry in self._points.list_undecided_disputes(tenant_id):
+            if not entry.has_undecided_dispute or entry.disputed_at is None:
+                # MÜDAFİƏNİN İKİNCİ QATI: repo şərti (`status IN
+                # ('PENDING','EXPIRED')`) onsuz da süzür, lakin qərar
+                # ALINMIŞ və ya yarımçıq sətir buraya düşsəydi, idarəçi onu
+                # «cavab gözləyir» sanıb ikinci dəfə qərar verməyə çalışardı
+                # və `_require_decidable` onu ancaq DÜYMƏ BASILDIQDAN sonra
+                # kəsərdi. Sətir SÜKUTLA atılmır — jurnala düşür.
+                _app_log.warning(
+                    "POINTS_DISPUTE_ROW_NOT_UNDECIDED",
+                    extra={"entry_id": str(entry.id), "appeal_status": entry.appeal_status},
+                )
+                continue
+            views.append(
+                PointsDisputeView(
+                    entry_id=entry.id,
+                    employee_id=entry.employee_id,
+                    points=entry.points,
+                    dispute_reason=entry.dispute_reason or "",
+                    disputed_at=entry.disputed_at,
+                    appeal_status=(
+                        entry.appeal_status.value if entry.appeal_status is not None else ""
+                    ),
+                    entry_status=entry.status.value,
+                    window_closes_at=entry.dispute_window_closes_at,
+                )
+            )
+        return views
 
     # ------------------------------ planlanmış ------------------------------- #
 
@@ -744,6 +847,7 @@ class SalesPointsUseCase:
 
 __all__ = [
     "MANAGE_POINTS_FLAG",
+    "PointsDisputeView",
     "PointsEntryNotFoundError",
     "RedemptionNotFoundError",
     "ResetNoticeResult",

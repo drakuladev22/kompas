@@ -374,6 +374,29 @@ def _sales_points(screen: group_f.SalesPointsScreen) -> None:
         ],
         balance=1240,
     )
+    # MENECER BÖLMƏSİ MAKETDƏ DƏ GÖRÜNÜR: bölmə yalnız sətir olduqda çəkilir,
+    # yəni nümunə verilməsəydi dizayn baxışında HEÇ VAXT görünməzdi. Açarlar
+    # canlı yolla EYNİDİR (bax `controllers/points_disputes.py::_to_row`).
+    # İKİ SƏTİR QƏSDƏN: biri gözləyən, biri VAXTI BİTMİŞ — «vaxt bitdi ≠
+    # qərar verildi» (M-6) məhz nişanların yan-yana görünməsi ilə anlaşılır.
+    screen.set_disputes(
+        [
+            {
+                "id": "preview-dispute-1",
+                "employee": "Aygün Məmmədova",
+                "points": "+60 xal",
+                "reason": "Çek 4471 mənim satışımdır, kassa səhv işçiyə yazıb.",
+                "status": "Gözləyir",
+            },
+            {
+                "id": "preview-dispute-2",
+                "employee": "Rəşad Məmmədli",
+                "points": "−30 xal",
+                "reason": "Geri qaytarma müştəri qərarıdır, satış səhvi deyil.",
+                "status": "Vaxtı bitib",
+            },
+        ]
+    )
 
 
 def _unassigned_sales(screen: group_f.UnassignedSalesScreen) -> None:

@@ -72,6 +72,22 @@ def _screen(qt_app: Any) -> Any:
     return screen
 
 
+def _stop_timers(owner: Any) -> None:
+    """Testdən SONRA taymer DAYANDIRILIR — sızma başqa testi qırır.
+
+    Taymerin intervalı 30 saniyədir və tam dəst ~38 dəqiqə işləyir: widget
+    canlı qalsa, tıqqıltı SONRAKI testin ortasında baş verir və (uğursuz
+    yolda) jurnala sətir yazır. `test_logger.py` isə jurnalda MƏHZ BİR sətir
+    gözləyir — yəni sızma orada qırmızı verir və səbəbi bu faylda olur.
+    Qt widget-i `deleteLater()` ilə silinsə də taymer hadisə dövrəsi işləyənə
+    qədər yaşayır, ona görə AÇIQ `stop()` çağırılır.
+    """
+    from PySide6.QtCore import QTimer
+
+    for timer in owner.findChildren(QTimer):
+        timer.stop()
+
+
 def _tick(screen: Any) -> None:
     from PySide6.QtCore import QTimer
 
@@ -91,6 +107,7 @@ def test_the_queue_is_refreshed_in_the_background(qt_app) -> None:  # type: igno
     _tick(screen)
 
     assert binder.populated == ["live_queue"]
+    _stop_timers(screen)
 
 
 @requires_qt
@@ -117,6 +134,7 @@ def test_an_active_bulk_selection_postpones_the_refresh(qt_app) -> None:  # type
     _tick(screen)
 
     assert binder.populated == ["live_queue"], "seçim bitəndə dövrə davam etməlidir"
+    _stop_timers(screen)
 
 
 @requires_qt
@@ -135,3 +153,4 @@ def test_a_failing_refresh_keeps_the_timer_alive(qt_app) -> None:  # type: ignor
     _tick(screen)
 
     assert binder.populated == ["live_queue"]
+    _stop_timers(screen)

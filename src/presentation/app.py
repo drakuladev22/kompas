@@ -2487,6 +2487,36 @@ class KompasApplication:
             return
         SalesPointsController(self._context, self._current_employee).attach(screen)
 
+        # ──────────────────────────────────────────────────────────────────
+        # MENECER BÖLMƏSİ — «GÖRMƏK = SƏLAHİYYƏTİN OLMASI» QAPISI BURADADIR
+        # ──────────────────────────────────────────────────────────────────
+        # Ekran FLAG-SIZDIR (hər işçi öz balansını görür, bax `menu.py`), etiraz
+        # NÖVBƏSİ isə menecer işidir. Kontroller flagı olmayan aktorda
+        # ÜMUMİYYƏTLƏ qoşulmur — bölmə render olunmur, «niyə mən bunu edə
+        # bilmirəm?» sualı yaranmır. Həqiqi qapı isə `decide_dispute()`-dədir.
+        if self._may_manage_sales_points():
+            from src.presentation.controllers.points_disputes import (  # noqa: PLC0415
+                PointsDisputeController,
+            )
+
+            PointsDisputeController(self._context, self._current_employee).attach(screen)
+
+    def _may_manage_sales_points(self) -> bool:
+        """`can_manage_sales_points` — etiraz növbəsinin GÖRÜNMƏSİ üçün.
+
+        `_may_override_return_time` ilə EYNİ naxış (bax onun başlığı):
+        önizləmə rejimində HƏMİŞƏ `True`, çünki maket ekranlarının hamısı
+        göstərilməlidir və orada real istifadəçi konteksti yoxdur.
+        """
+        if self._preview:
+            return True
+        employee = self._current_employee
+        if employee is None:
+            return False
+        from datetime import UTC, datetime  # noqa: PLC0415
+
+        return bool(employee.has_permission("can_manage_sales_points", now=datetime.now(UTC)))
+
     def _attach_fine_appeals(self, screen: QWidget) -> None:
         """Cərimə etirazının qərarı — `FineAppealUseCase`-ə bağlayır.
 

@@ -412,20 +412,40 @@ class TasksScreen(Screen):
 
 
 class SalesPointsScreen(Screen):
-    """Xal balansı, tarixçə və mükafat kataloqu.
+    """Xal balansı, tarixçə, mükafat kataloqu — VƏ menecerin etiraz növbəsi.
 
     Signals:
         appeal_requested: Etiraz edilən xal sətrinin `entry_id`-si.
         reward_requested: Mükafatın `reward_id`-si.
+        dispute_decided: (`entry_id`, rədd edilirmi) — MENECER qərarı.
+
+    ──────────────────────────────────────────────────────────────────────────
+    MENECER BÖLMƏSİ NİYƏ BU EKRANDADIR, AYRICA MENYU MADDƏSİ DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    `menu.py`-nin `sales_points` maddəsi açıq yazır: «Menecer tərəfi
+    (korreksiya/təsdiq) hələ ayrıca ekran deyil». Yeni menyu maddəsi eyni
+    anlayışı (xal) İKİ yerə bölərdi; bölmə isə mövcud ekranın SONUNA düşür və
+    YALNIZ `can_manage_sales_points` sahibində render olunur («görmək =
+    səlahiyyətin olması», `kompasos-ui` bölmə 3) — flagsız işçi onu görmür,
+    yəni «niyə mən bunu edə bilmirəm?» sualı YARANMIR.
     """
 
     appeal_requested = Signal(str)
     reward_requested = Signal(str)
+    dispute_decided = Signal(str, bool)
 
     _HISTORY_TONES: Final[dict[str, ChipTone]] = {
         "Təsdiqli": "success",
         "Gözləyir": "warning",
         "Geri alınıb": "danger",
+    }
+
+    #: Etiraz sətrinin nişan tonu. «Vaxtı bitib» `danger` DEYİL: pəncərənin
+    #: bağlanması pozuntu deyil, GECİKMƏ siqnalıdır — qırmızı ton onu
+    #: fırıldaq siqnalları ilə eyni səviyyəyə qaldırardı.
+    _DISPUTE_TONES: Final[dict[str, ChipTone]] = {
+        "Gözləyir": "warning",
+        "Vaxtı bitib": "warning",
     }
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
@@ -507,7 +527,87 @@ class SalesPointsScreen(Screen):
         self._catalog_layout.setContentsMargins(0, 0, 0, 0)
         self._catalog_layout.setSpacing(metrics.CARD_SPACING)
         self.add(self._catalog)
+
+        # ------------------- etiraz növbəsi (MENECER) ----------------------- #
+        #
+        # BOŞLUQ NƏ İDİ: `SalesPointsUseCase.decide_dispute()` yazılıb və
+        # testlidir, LAKİN onu çağıran heç bir ekran yox idi — işçi etiraz
+        # edirdi, etiraz `PENDING` (sonra `EXPIRED`) qalırdı və heç kimin
+        # siyahısına düşmürdü. Bu, layihənin öz qırmızı xəttidir: «yazılıb,
+        # çağırılmır».
+        #
+        # Bölmə sətirsiz GİZLİDİR (`set_disputes`): etirazı olmayan mağazada
+        # boş başlıq «burada nəsə olmalıydı» sualı yaradardı.
+        self._dispute_section = QWidget()
+        dispute_layout = QVBoxLayout(self._dispute_section)
+        dispute_layout.setContentsMargins(0, 0, 0, 0)
+        dispute_layout.setSpacing(metrics.CARD_CONTENT_SPACING)
+        dispute_layout.addWidget(title_label("Xal etirazları", size=15))
+        dispute_layout.addWidget(
+            muted_label(
+                "«Vaxtı bitib» nişanı qərar VERİLDİYİNİ bildirmir — pəncərə "
+                "cavabsız bağlanıb və qərar HƏLƏ SİZDƏDİR."
+            )
+        )
+        self._dispute_rows = QVBoxLayout()
+        self._dispute_rows.setSpacing(12)
+        dispute_holder = QWidget()
+        dispute_holder.setLayout(self._dispute_rows)
+        dispute_layout.addWidget(dispute_holder)
+        self._dispute_section.setVisible(False)
+        self.add(self._dispute_section)
+
         self.body().addStretch(1)
+
+    def set_disputes(self, rows: list[dict[str, str]]) -> None:
+        """Qərar GÖZLƏYƏN etirazlar — YALNIZ menecer yolu (bax sinif başlığı).
+
+        Args:
+            rows: `id`, `employee`, `points`, `reason`, `status` açarları.
+                `status` mətni birbaşa nişana düşür — ekran onu YENİDƏN
+                adlandırmır (bir mesajın iki mənbəyi olmamalıdır).
+
+        Boş siyahı bölməni GİZLƏDİR; siyahını YALNIZ kontroller doldurur və o,
+        flagı olmayan aktorda ÜMUMİYYƏTLƏ çağırılmır.
+        """
+        clear_layout(self._dispute_rows)
+        self._dispute_section.setVisible(bool(rows))
+        for row in rows:
+            self._dispute_rows.addWidget(self._build_dispute_row(row))
+
+    def _build_dispute_row(self, row: dict[str, str]) -> QWidget:
+        card = Card(padding=16, spacing=8)
+
+        head = QWidget()
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(0, 0, 0, 0)
+        head_layout.setSpacing(12)
+        head_layout.addWidget(body_label(row.get("employee", ""), size=13, wrap=False))
+        head_layout.addWidget(mono_label(row.get("points", "")))
+        status = row.get("status", "")
+        if status:
+            head_layout.addWidget(Chip(status, self._DISPUTE_TONES.get(status, "neutral")))
+        head_layout.addWidget(stretch())
+
+        entry_id = row["id"]
+        # İKİ DÜYMƏ, İKİ FƏRQLİ NƏTİCƏ (`decide_dispute`-in üç qolundan ikisi):
+        # «Rədd Et» sətri QÜVVƏDƏ saxlayır, «Ləğv Et» isə xalı sıfırlayır
+        # (`corrected_points=None` → `reverse()`). Qismən korreksiya BURADA
+        # YOXDUR: o, məbləğ soruşan ayrıca formadır və bu bölmənin sualı
+        # «etiraz haqlıdırmı?» sualıdır.
+        reject = secondary_button("Etirazı Rədd Et")
+        reject.clicked.connect(lambda _=False, key=entry_id: self.dispute_decided.emit(key, True))
+        head_layout.addWidget(reject)
+
+        reverse = action_button("Xalı Ləğv Et")
+        reverse.clicked.connect(lambda _=False, key=entry_id: self.dispute_decided.emit(key, False))
+        head_layout.addWidget(reverse)
+        card.add(head)
+
+        reason = row.get("reason", "")
+        if reason:
+            card.add(muted_label(reason))
+        return card
 
     def set_balance(
         self,

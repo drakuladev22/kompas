@@ -1181,7 +1181,27 @@ class SalesPointsRepository(Protocol):
         ...
 
     def list_disputes(self, tenant_id: TenantId) -> list[PointsEntry]:
-        """`can_manage_sales_points` sahibinin etiraz inbox-u."""
+        """YALNIZ `PENDING` etirazlar — MÜDDƏT-BİTMƏ işinin giriş siyahısı.
+
+        `expire_stale_disputes` məhz bunu oxuyur: müddəti bitirmək YALNIZ hələ
+        bağlanmamış sətirlərə aiddir. İDARƏÇİ İNBOX-U ÜÇÜN İSƏ BU METOD
+        KİFAYƏT ETMİR — bax `list_undecided_disputes`.
+        """
+        ...
+
+    def list_undecided_disputes(self, tenant_id: TenantId) -> list[PointsEntry]:
+        """QƏRAR VERİLMƏMİŞ etirazlar — `PENDING` **və** `EXPIRED` (M-6).
+
+        `FineAppealRepository.list_undecided()` ilə EYNİ naxış və EYNİ səbəb:
+        `expire_stale_disputes` yalnız `PENDING` sətirləri axtarır, idarəçinin
+        gələnlər qutusu isə müddəti bitmiş, LAKİN cavabsız qalmış sətirləri də
+        GÖRMƏLİDİR. Əks halda `EXPIRED` sətir heç bir ekranda görünməzdi və
+        `PointsEntry.has_undecided_dispute` ilə açıq saxlanılan qərar imkanı
+        praktikada çatılmaz olardı — yəni bir ölü-son digəri ilə əvəzlənərdi.
+
+        Sıra `points_appeals.created_at` üzrədir: ən çox gözləyən sətir
+        siyahının BAŞINDA olmalıdır.
+        """
         ...
 
     def save(self, entry: PointsEntry) -> None: ...
