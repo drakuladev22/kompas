@@ -12,8 +12,8 @@ Versiya **iki** yerdədir və uyğunsuzluq «Proqramlar» siyahısında bir, pro
 
 | Fayl | Sətir |
 |---|---|
-| `src/__init__.py` | `__version__ = "0.1.0"` |
-| `installer/KompasOS.iss` | `#define MyAppVersion "0.1.0"` |
+| `src/__init__.py` | `__version__ = "0.2.0"` |
+| `installer/KompasOS.iss` | `#define MyAppVersion "0.2.0"` |
 
 ---
 

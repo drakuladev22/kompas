@@ -31,7 +31,7 @@
 #define MyAppName "KompasOS"
 ; Versiya `src/__init__.py`-dakı `__version__` ilə EYNİ olmalıdır — uyğunsuzluq
 ; «Proqramlar» siyahısında bir, proqramın özündə başqa nömrə göstərərdi.
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.2.0"
 ; Buraxılışdan ƏVVƏL şirkətin rəsmi adı ilə əvəzlənir; kod imzalama
 ; sertifikatındakı ad ilə eyni olmalıdır (SEC-027), əks halda müştəri
 ; «Naşir: KompasOS» ilə «İmzalayan: <şirkət>» arasındakı fərqi görər.
