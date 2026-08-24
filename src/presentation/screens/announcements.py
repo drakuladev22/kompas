@@ -84,7 +84,7 @@ class AnnouncementsScreen(Screen):
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_layout.setSpacing(12)
+        toolbar_layout.setSpacing(metrics.SPACE_MS)
         self._summary = muted_label("")
         toolbar_layout.addWidget(self._summary)
         toolbar_layout.addWidget(stretch())
@@ -189,7 +189,9 @@ class AnnouncementComposeDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — dialoqun BÜTÖV məzmun kartı, BİR dəfə (dialoq
+        # açılanda) qurulur, loop-da DEYİL.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         layout.addWidget(card)
         card.add(title_label("Yeni Elan", size=19))
 
@@ -240,7 +242,7 @@ class AnnouncementComposeDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")

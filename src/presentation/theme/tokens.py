@@ -313,7 +313,17 @@ LIGHT_THEME: Final[dict[str, str]] = {
     # Bax `--color-splash-bg` (tünd palitra) izahı.
     "--color-splash-bg": "#FFFFFF",
     "--color-card-bg": "#FFFFFF",
-    "--color-card-border": "#E5E5EA",
+    # VİZUAL FAZA #1 — kart sərhədi YUMŞALDILIR (`#E5E5EA` → `#EDEEF2`).
+    # Audit tapıntısı: `Card()` 137 dəfə qurulur, cəmi 7-si `shadow=True` —
+    # səthlərin böyük əksəriyyəti YALNIZ 1px sərhədlə ayrılır. Kölgə hər kart
+    # üçün `QGraphicsDropShadowEffect` (raster, performans xərci) tələb edir,
+    # sərhədi yumşaltmaq isə TƏK token dəyişikliyi ilə HAMISINA tətbiq olunur.
+    # `--color-sidebar-border`/`--color-header-border` (sətir yuxarıda, EYNİ
+    # köhnə dəyər) QƏSDƏN TOXUNULMUR — onlar struktur xromu, kart DEYİL, fərqli
+    # rol daşıyır. `--color-card-border` `scripts/check_contrast.py`-ın
+    # `REQUIRED_PAIRS`-ində YOXDUR (yalnız QeyriMƏTN sərhəddir, WCAG 1.4.1
+    # mətn kontrastı ona aid deyil) — dəyər dəyişikliyi YENİ cüt tələb ETMİR.
+    "--color-card-border": "#EDEEF2",
     "--color-divider": "#EFEFF1",
     # Bax modul başlığı: `#64738D` yalnız ağ fonda keçirdi, digər səthlərdə
     # 4.5:1-dən aşağı düşürdü. Ən TÜND fon (`--color-bg-sunken` `#E8E8EA`)
@@ -445,7 +455,8 @@ DARK_THEME: Final[dict[str, str]] = {
     # şəklinə görə onu dartmaq bütün palitranı həmin şəklə tabe edərdi.
     "--color-splash-bg": "#0A2B29",
     "--color-card-bg": "#16191F",
-    "--color-card-border": "#262A33",
+    # VİZUAL FAZA #1 — işıqlı palitranın EYNİ dəyişikliyi (bax onun şərhi).
+    "--color-card-border": "#1E222B",
     "--color-divider": "#202430",
     "--color-text-muted": "#9BA1AC",
     "--color-skeleton": "#1C2028",
@@ -468,6 +479,19 @@ DARK_THEME: Final[dict[str, str]] = {
 METRICS: Final[dict[str, str]] = {
     "--space-xs": "4",
     "--space-sm": "8",
+    # VİZUAL FAZA #5 — `sm`(8) ilə `md`(16) ARASINDAKI addım.
+    #
+    # Bu, YENİ dəyər DEYİL: `setSpacing(12)` kod bazasında 174 yerdə ARTIQ
+    # işlədilirdi (`widgets/metrics.py`-dakı `NAV_ITEM_ICON_SPACING`/
+    # `SIDEBAR_PADDING_H` ilə EYNİ, "Apple şkalasının yarım-pilləsi" — bax
+    # onların şərhi), lakin heç bir ADI yox idi: hər çağırış öz hərfi "12"-
+    # sini yazırdı. `check_symmetry.py` bunu TƏK, adsız dəyər kimi sayırdı —
+    # 174 çağırış "tərtibat aralığı" rolunda BİR (ADSIZ) dəyər kimi
+    # görünürdü. Ad verilməsi səpələnməni ARTIRMIR (dəyər onsuz da var idi),
+    # YALNIZ onu `widgets/metrics.py::SPACE_MS`-ə bağlayır ki, `metrics.X`
+    # kimi adlı istinadlar `check_symmetry.py`-ın ÖZ qaydasına görə (bax onun
+    # başlığı) artıq SAYILMASIN.
+    "--space-ms": "12",
     "--space-md": "16",
     "--space-lg": "24",
     "--space-xl": "32",
@@ -564,6 +588,19 @@ TYPOGRAPHY: Final[dict[str, str]] = {
     "--font-weight-normal": "400",
     "--font-weight-medium": "600",
     "--font-weight-bold": "700",
+    # STATİK PLACEHOLDER — `--font-family-mono` İLƏ EYNİ naxış
+    # (`theme/manager.py::resolve_mono_family`/`resolve_caret_down_icon`):
+    # faktiki dəyər `ThemeManager.stylesheet()`-də RUNTIME-da yazılır, çünki
+    # ikon faylı DİSKƏ yazılmalıdır — Qt-dən asılı əməliyyatdır, saf tokendən
+    # DEYİL. `LIGHT_THEME`/`DARK_THEME`-DƏ DEYİL — `test_every_colour_token_
+    # is_a_hex_string` o iki lüğəti YALNIZ hex rəng gözləyərək skan edir, bu
+    # isə CSS bəyanatıdır (`"image: url(...);"` YA DA boş sətir). Rəng
+    # (`--color-text-secondary`) DİNAMİK oxunur, ona görə TƏK, TEMADAN
+    # ASILI OLMAYAN placeholder kifayətdir — iki nüsxə lazım deyil.
+    "--icon-caret-down-rule": "",
+    #: `QSpinBox`/`QDateEdit`/`QTimeEdit`/`QDateTimeEdit`-in yuxarı addım
+    #: düyməsi — yuxarıdakı `--icon-caret-down-rule` şərhinin EYNİSİ.
+    "--icon-caret-up-rule": "",
 }
 
 

@@ -112,7 +112,17 @@ class RecoveryConsoleScreen(Screen):
         # girişdən ƏVVƏL açılan kartdır və istifadəçi onlar arasında keçir —
         # fərqli doldurma kartın «tərpənməsi» kimi görünərdi
         # (`test_design_symmetry.py` səpələnməni ölçür).
-        card = Card(padding=40, spacing=metrics.CARD_CONTENT_SPACING, surface="modal", shadow=True)
+        #
+        # KÖLGƏ YOXDUR (VİZUAL FAZA #1, 4-cü bənd) — SƏBƏB UX-DİR, PERFORMANS
+        # DEYİL: `QProgressBar.setValue()` baza quruluşu boyu təkrar-təkrar
+        # çağırılır (aşağıda) və ölçüldü ki, İSTƏNİLƏN uşaq yeniləməsi
+        # kölgəli kartın TAM yenidən rasterizəsini tətikləyir (hətta məzmun
+        # dəyişməyən boş `update()` belə). Kart 916,560 px² sahədə 8.73 ms
+        # rasterizə xərci daşıyır — 8.73 ms × 20–50 addım = 175–436 ms sırf
+        # kölgəyə gedir. Bu ekranın BÜTÜN işi hamar tərəqqi göstərməkdir —
+        # kölgə məhz yeganə geri-bildirimi kəkələdir. Nadir admin əməliyyatı
+        # olması bunu dəyişmir: qərar YENƏ DƏ çıxarmaqdır.
+        card = Card(padding=40, spacing=metrics.CARD_CONTENT_SPACING, surface="modal")
         card.setFixedWidth(CARD_WIDTH)
 
         heading = plain_label("Bərpa Konsolu")
@@ -173,7 +183,7 @@ class RecoveryConsoleScreen(Screen):
         actions = QWidget()
         actions_layout = QHBoxLayout(actions)
         actions_layout.setContentsMargins(0, 0, 0, 0)
-        actions_layout.setSpacing(12)
+        actions_layout.setSpacing(metrics.SPACE_MS)
         self._test = secondary_button("Bağlantını Test Et")
         self._test.clicked.connect(lambda: self.test_requested.emit(self.values()))
         actions_layout.addWidget(self._test)
@@ -221,7 +231,7 @@ class RecoveryConsoleScreen(Screen):
         provision_row = QWidget()
         provision_layout = QHBoxLayout(provision_row)
         provision_layout.setContentsMargins(0, 0, 0, 0)
-        provision_layout.setSpacing(12)
+        provision_layout.setSpacing(metrics.SPACE_MS)
         provision_layout.addWidget(stretch())
         self._provision = action_button("Bazanı Avtomatik Qur")
         self._provision.clicked.connect(lambda: self.provision_requested.emit(self.values()))
@@ -244,7 +254,7 @@ class RecoveryConsoleScreen(Screen):
         folders = QWidget()
         folders_layout = QHBoxLayout(folders)
         folders_layout.setContentsMargins(0, 0, 0, 0)
-        folders_layout.setSpacing(12)
+        folders_layout.setSpacing(metrics.SPACE_MS)
         self._open_logs = secondary_button("Log Faylını Aç")
         self._open_logs.clicked.connect(self.open_logs_requested)
         folders_layout.addWidget(self._open_logs)

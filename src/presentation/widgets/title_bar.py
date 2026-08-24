@@ -101,8 +101,8 @@ class TitleBar(QWidget):
         self._drag_origin: QPoint | None = None
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 0, 0, 0)
+        layout.setSpacing(metrics.SPACE_MS)
 
         # ------------------------------------------------------------------
         # LOQO — RƏNGLİ KVADRAT DEYİL, ƏSL PƏRGAR İŞARƏSİ (logo.md)

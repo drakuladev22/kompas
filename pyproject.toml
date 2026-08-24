@@ -206,6 +206,13 @@ module = [
 ]
 ignore_missing_imports = true
 
+# `qtawesome` (VİZUAL FAZA #4, `widgets/icons.py::_qta_pixmap`) tip stub-u
+# daşımır. İstifadə DAR bir funksiyada, `qta.icon(...).pixmap(...)`-ın
+# XAM qaytardığı `QPixmap`-ı `QPixmap | None`-a bağlayaraq çərçivəyə salınıb.
+[[tool.mypy.overrides]]
+module = "qtawesome"
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false

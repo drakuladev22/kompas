@@ -78,6 +78,94 @@ def resolve_mono_family(candidates: str) -> str:
     return "monospace"
 
 
+def _resolve_caret_icon(icon_name: str, color: str) -> str:
+    """`resolve_caret_down_icon`/`resolve_caret_up_icon`-un ORTAQ nüvəsi.
+
+    ──────────────────────────────────────────────────────────────────────
+    NİYƏ BURADA, NİYƏ `tokens.py`-DA STATİK DEYİL
+    ──────────────────────────────────────────────────────────────────────
+    `resolve_mono_family` İLƏ EYNİ naxış: ikon faylı DİSKƏ yazılmalıdır
+    (`icons.cache_qss_icon`), bu isə Qt-dən VƏ fayl sistemindən asılı,
+    RUNTIME əməliyyatdır — saf tokendən deyil. `tokens.py`-dakı boş sətir
+    yalnız PLACEHOLDER-dir, faktiki dəyər hər `stylesheet()` çağırışında
+    (açılış + hər tema keçidi) bura yenidən hesablanır.
+
+    Returns:
+        `"image: url(...);"` — YA DA boş sətir, İKİ halda: (1) keş yazıla
+        bilmədi (`icons.cache_qss_icon` `None` qaytardı — icazə, dolu disk),
+        (2) `QApplication` hələ yoxdur (DPI oxuna bilmir). Hər iki halda
+        çağıran qayda HEÇ NƏ təyin ETMİR — tətbiq ikon-öncəki vəziyyətə
+        sükutla qayıdır, ÇÖKMÜR.
+
+    ──────────────────────────────────────────────────────────────────────
+    YÜKSƏK DPI — STRUKTUR VAR, 2× MÜHİTDƏ ÖLÇÜLMƏYİB
+    ──────────────────────────────────────────────────────────────────────
+    `dpr` HƏR ÇAĞIRIŞDA TƏZƏDƏN oxunur (yaddaşda SAXLANMIR) və keş
+    faylının ADI ONU daşıyır (`chevron_down_<rəng>_<dpr>.png`) — miqyas
+    dəyişəndə YENİ fayl yaranır, köhnəsi ÜSTÜNDƏN yazılmır. `stylesheet()`
+    tema keçidində YENİDƏN çağırılır (`set_preference` → `apply` →
+    `stylesheet`), yəni O andan sonra dpr da yenidən oxunur. Bu maşının
+    ekranı 1×/96 DPI olduğu üçün 2× kəskinlik FAKTİKİ ÖLÇÜLMƏYİB — iddia
+    RƏDD EDİLMİR, sadəcə TƏSDİQ EDİLƏ BİLMİR.
+
+    QALAN BOŞLUQ (mövcud kod bazasının HAMISINA aiddir, YALNIZ bu ikona
+    DEYİL): `QGuiApplication.primaryScreen()` OS-un TƏYİN ETDİYİ əsas
+    ekrandır, PƏNCƏRƏNİN FAKTİKİ olduğu ekran DEYİL (çox-monitorlu, fərqli
+    DPI-li quraşdırmada fərqli ola bilər — `buttons.py::_dpr()` bu fərqi
+    `self.window().windowHandle()` ilə HƏLL EDİR, lakin `stylesheet()`-in
+    konkret pəncərə istinadı YOXDUR). Pəncərəni İŞ ZAMANI başqa DPI-li
+    ekrana sürüşdürmək — YA DA ilk quraşdırmada QEYRİ-BİRİNCİ ekranda
+    açmaq — HEÇ BİR yenidən-render TETİKLƏMİR: bu, YALNIZ combobox oxuna
+    aid DEYİL, `NavButton`/`WindowButton` kimi BÜTÜN DPI-həssas ikonlara
+    aid, LAYİHƏ-ÇAPINDA mövcud struktur məhdudiyyətdir (heç yerdə
+    `screenChanged`/DPI-dəyişmə DİNLƏYİCİSİ yoxdur) — bu funksiyanın YENİ
+    qüsuru DEYİL, mövcud arxitekturanın EYNİ sərhədidir.
+    """
+    try:
+        from PySide6.QtGui import QGuiApplication  # noqa: PLC0415
+
+        from src.presentation.widgets import icons  # noqa: PLC0415
+        from src.shared.data_paths import shared_root  # noqa: PLC0415
+
+        screen = QGuiApplication.primaryScreen()
+        dpr = screen.devicePixelRatio() if screen is not None else 1.0
+    except Exception:
+        _log.warning("CARET_ICON_SKIPPED", extra={"icon": icon_name, "reason": "no_qapplication"})
+        return ""
+
+    path = icons.cache_qss_icon(
+        icon_name,
+        color,
+        size=10,
+        device_pixel_ratio=dpr,
+        cache_dir=shared_root() / "icon_cache",
+    )
+    if path is None:
+        return ""
+    # QSS `url()` YALNIZ irəli-slash qəbul edir — Windows-un tərs-slash yolu
+    # QSS PARSE XƏTASI verər (bütün şablonu KEÇƏRSİZ edər), ona görə
+    # `as_posix()` MƏCBURİDİR, sadə `str(path)` DEYİL.
+    return f"image: url({path.as_posix()});"
+
+
+def resolve_caret_down_icon(color: str) -> str:
+    """Combobox/təqvim oxu üçün QSS parçası — `{{--icon-caret-down-rule}}` yerinə.
+
+    `QComboBox::down-arrow` VƏ `QDateEdit`/`QDateTimeEdit`-in TƏQVİM açan
+    düyməsi (`::drop-down`, `setCalendarPopup(True)` halında) EYNİ oxu
+    paylaşır — ikisi də "aşağı aç" mənasını daşıyır, ikinci bir ikon
+    yaratmaq eyni mənanı iki fərqli formada göstərərdi.
+    """
+    return _resolve_caret_icon("chevron_down", color)
+
+
+def resolve_caret_up_icon(color: str) -> str:
+    """`QSpinBox`/`QDateEdit`/`QTimeEdit`/`QDateTimeEdit`-in YUXARI addım
+    düyməsi üçün QSS parçası — `{{--icon-caret-up-rule}}` yerinə.
+    """
+    return _resolve_caret_icon("chevron_up", color)
+
+
 #: OS seçimi bilinmədikdə istifadə olunan rejim.
 #:
 #: İŞIQLI seçilir, çünki bu, bilinməyən mühitdə daha təhlükəsiz nəticədir:
@@ -251,13 +339,17 @@ class ThemeManager:
     # ------------------------------- tətbiq --------------------------------- #
 
     def stylesheet(self) -> str:
-        """QSS mətni — mono şrift ailəsi CANLI olaraq həll edilmiş halda.
+        """QSS mətni — mono şrift ailəsi VƏ combobox/spin oxları CANLI həll edilmiş halda.
 
-        Bax `resolve_mono_family` — QSS-dəki ailə SİYAHISI Qt-də fallback kimi
-        işləmir, ona görə şablona TƏK, mövcud ad yazılır.
+        Bax `resolve_mono_family` (ailə siyahısı Qt-də fallback kimi
+        işləmir) VƏ `resolve_caret_down_icon`/`resolve_caret_up_icon` (ox
+        faylı DİSKƏ yazılmalıdır, saf tokendən bilinmir) — hamısı şablona
+        TƏK, hazır dəyər yazır.
         """
         tokens = dict(self.tokens)
         tokens["--font-family-mono"] = resolve_mono_family(tokens["--font-family-mono"])
+        tokens["--icon-caret-down-rule"] = resolve_caret_down_icon(tokens["--color-text-secondary"])
+        tokens["--icon-caret-up-rule"] = resolve_caret_up_icon(tokens["--color-text-secondary"])
         return build_stylesheet(tokens)
 
     def apply(self, app: QApplication) -> None:

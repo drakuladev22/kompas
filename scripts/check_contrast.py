@@ -51,6 +51,22 @@ REQUIRED_PAIRS: list[tuple[str, str, float, str]] = [
     ("--color-text-primary", "--color-bg-primary", AA_NORMAL_TEXT, "Əsas mətn"),
     ("--color-text-secondary", "--color-bg-primary", AA_NORMAL_TEXT, "İkinci dərəcəli mətn"),
     ("--color-text-primary", "--color-bg-surface", AA_NORMAL_TEXT, "Kart üzərində mətn"),
+    # COMBOBOX OXU — RƏNG QSS-DƏ DEYİL, PNG PİKSELİNDƏDİR
+    # ─────────────────────────────────────────────────────────────────────
+    # Qt `QComboBox::down-arrow`-a stil verilib `image` təyin edilməyəndə oxu
+    # BOŞ çəkir, nativ ox isə qabarıq çərçivə gətirir. Ona görə ox
+    # `icons.py`-dakı SVG gövdəsindən açılışda PNG kimi render olunub QSS-ə
+    # `image: url(...)` ilə verilir.
+    #
+    # NƏTİCƏSİ BU QAPI ÜÇÜN MÜHÜMDÜR: rəng artıq `color:` bəyanatı DEYİL,
+    # şəklin PİKSELİDİR — yəni bu skriptin `qss.py` MƏTNİNİ skan edən yolu
+    # onu GÖRMÜR. Cüt ona görə ƏL İLƏ yazılır: avtomatik aşkarlanma mümkün
+    # olmayan yeganə haldır.
+    #
+    # Hədd AA_LARGE_TEXT (3:1) — mətn deyil, İDARƏETMƏ ELEMENTİNİN qrafik
+    # hissəsidir (WCAG 1.4.11), «Vurğu (qrafik element)» cütü ilə eyni məntiq.
+    # Fon `--color-bg-surface`-dir, çünki ox sahənin İÇİNDƏ durur.
+    ("--color-text-secondary", "--color-bg-surface", AA_LARGE_TEXT, "Combobox oxu (PNG)"),
     ("--color-text-on-accent", "--color-accent", AA_NORMAL_TEXT, "Vurğu düyməsində mətn"),
     ("--color-accent", "--color-bg-primary", AA_LARGE_TEXT, "Vurğu (qrafik element)"),
     ("--color-success", "--color-bg-primary", AA_LARGE_TEXT, "Uğur göstəricisi"),

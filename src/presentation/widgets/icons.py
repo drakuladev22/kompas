@@ -26,13 +26,17 @@ halda 16px ikon bulanıq görünərdi.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Final
 
-from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtCore import QByteArray, QSize, Qt
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 from src.shared.exceptions import KompasOSError
+from src.shared.logger import get_logger
+
+_log = get_logger(__name__)
 
 
 class IconNotFoundError(KompasOSError):
@@ -152,6 +156,16 @@ _BODIES: Final[dict[str, str]] = {
     # göstərir — sol ox «daralt», sağ ox «genişlət».
     "chevron_left": '<path d="M10 3.6 5.6 8l4.4 4.4"/>',
     "chevron_right": '<path d="M6 3.6 10.4 8 6 12.4"/>',
+    # `QComboBox::down-arrow` üçün (VİZUAL FAZA #6, Hipotez 3-ün ucuz variantı):
+    # `chevron_left`/`chevron_right`-un EYNİ nöqtələri (3.6/4.4/5.6/6/8/10/
+    # 10.4/12.4), sadəcə 90° DÖNDƏRİLİB — üfüqi "<"/"" naxışı şaquli "v"-yə
+    # çevrilib. Yeni ölçü YOX, mövcud vizual çəki (xətt qalınlığı, künc
+    # radiusu) TAM eyni qalır.
+    "chevron_down": '<path d="M3.6 5.6 8 10l4.4-4.4"/>',
+    # `QSpinBox`/`QDateEdit`/`QTimeEdit`/`QDateTimeEdit`-in YUXARI addım
+    # düyməsi üçün (`chevron_down`-un ŞAQULİ GÜZGÜSÜ — eyni nöqtələr, əks
+    # istiqamətdə).
+    "chevron_up": '<path d="M3.6 10.4 8 6l4.4 4.4"/>',
     "send": '<path d="M14 2 7.2 8.8M14 2 9.8 14l-2.6-5.2L2 6.2z"/>',
     "logout": '<path d="M9.4 5.2 12.6 8l-3.2 2.8M12.6 8H6.6"/><path d="M6.2 2.5H3.2v11h3"/>',
     "login": '<path d="M6.6 8H2.2M4 6l-1.8 2L4 10"/><path d="M9.4 2.6h4.4v10.8H9.4"/>',
@@ -199,6 +213,155 @@ _BODIES: Final[dict[str, str]] = {
     ),
 }
 
+#: `_BODIES`-də OLMAYAN adlar üçün `qtawesome` (Phosphor 1.3.0) qarşılığı —
+#: VİZUAL FAZA #4.
+#:
+#: `_BODIES` ARTIQ QURULMUŞ, HAZIR SİYAHIDIR (yuxarıda, 54 ad) — bu lüğət ONU
+#: ƏVƏZ ETMİR, YALNIZ arxasına qoşulur: `render()` HƏMİŞƏ ƏVVƏLCƏ `_BODIES`-ə
+#: baxır (bax onun məntiqi), bu lüğət isə YALNIZ orada tapılmayan bir ad
+#: gələndə işə düşür. Yəni MÖVCUD 43 `MenuEntry(icon=...)` + 31 çağırış
+#: nöqtəsi TOXUNULMUR — hamısı `_BODIES`-dən keçməyə davam edir.
+#:
+#: NİYƏ "PH" (PHOSPHOR): bizim `stroke_width` parametrimizin QARŞILIĞI var —
+#: Phosphor-un DÖRD DİSKRET çəki-variantı (`-thin`/`-light`/defolt/`-bold`,
+#: bax `_qta_weight_suffix`) davamlı `stroke-width` ədədimizi əvəz edir.
+#: `mdi6` (Material Design) əsasən DOLĞUN qliflərdir, üslub uyğun gəlmir.
+#:
+#: DƏYƏRLƏR `phosphor-charmap-1.3.0.json`-a qarşı YOXLANILIB (hər 4 çəki
+#: variantı da mövcuddur) — yazı səhvi burada SƏSSİZ qalmır, `IconNotFoundError`
+#: `qta.icon()`-un ÖZÜNDƏN atılar (bax `_qta_pixmap`).
+_QTA_ALIASES: Final[dict[str, str]] = {
+    "dashboard": "squares-four",
+    "grid": "grid-four",
+    "queue": "list-bullets",
+    "list": "list",
+    "checklist": "check-square",
+    "roster": "clipboard-text",
+    # "Fine" (cərimə) — xəbərdarlıq üçbucağı, bizim SVG-nin ÖZÜ ilə EYNİ konsept.
+    "fine": "warning",
+    "settings": "gear",
+    "users": "users",
+    "user": "user",
+    # Bizim ikon üz-tanıma ÇƏRÇİVƏSİdir (dörd künc); Phosphor-da bu DƏQİQ
+    # konsept yoxdur — "kimlik təsdiqi" mənasında ən yaxın qarşılıq seçilib.
+    "face_scan": "identification-card",
+    "calendar": "calendar",
+    "shield": "shield",
+    "star": "star",
+    "tag": "tag",
+    "chat": "chat-circle",
+    "server": "hard-drives",
+    "server_off": "prohibit",
+    "database": "database",
+    "activity": "activity",
+    "wifi_off": "wifi-slash",
+    "power": "power",
+    "cloud": "cloud",
+    "desktop": "desktop",
+    "folder_file": "folder-notch",
+    "plus": "plus",
+    "check": "check",
+    "check_circle": "check-circle",
+    "help": "question",
+    "close": "x",
+    "refresh": "arrow-clockwise",
+    "search": "magnifying-glass",
+    "edit": "pencil-simple",
+    "download": "download-simple",
+    "arrow_up": "arrow-up",
+    "arrow_down": "arrow-down",
+    "chevron_left": "caret-left",
+    "chevron_right": "caret-right",
+    "send": "paper-plane-tilt",
+    "logout": "sign-out",
+    "login": "sign-in",
+    "clock": "clock",
+    "bell": "bell",
+    "lock": "lock",
+    "file": "file",
+    "folder": "folder",
+    "image": "image",
+    "moon": "moon",
+    "window_minimize": "minus",
+    "window_maximize": "corners-out",
+    "window_restore": "square-half",
+    "window_close": "x",
+    "sun": "sun",
+    # "slash" QƏSDƏN BURADA YOXDUR: `_BODIES`-də var, LAKİN heç bir çağırış
+    # nöqtəsi ONU işlətmir (yoxlanılıb) — istifadə olunmayan adın Phosphor
+    # qarşılığını TƏXMİN etmək mənasız risk daşıyardı.
+}
+
+
+#: `_qta_weight_suffix` hədləri — `DEFAULT_STROKE` (1.5) `""`-a (defolt/
+#: "regular") düşəcək şəkildə seçilib: mövcud çağırış nöqtələrinin (1.2–1.8
+#: aralığı, bax `grep -rn stroke_width=`) əksəriyyəti dəyişməz qalır.
+_QTA_THIN_BELOW: Final = 1.3
+_QTA_LIGHT_BELOW: Final = 1.5
+_QTA_BOLD_AT_OR_ABOVE: Final = 1.8
+
+
+def _qta_weight_suffix(stroke_width: float) -> str:
+    """Bizim rəqəmsal qalınlığı Phosphor-un DÖRD çəki-adına uyğunlaşdırır."""
+    if stroke_width < _QTA_THIN_BELOW:
+        return "-thin"
+    if stroke_width < _QTA_LIGHT_BELOW:
+        return "-light"
+    if stroke_width < _QTA_BOLD_AT_OR_ABOVE:
+        return ""
+    return "-bold"
+
+
+def _qta_pixmap(
+    name: str, color: str, *, size: int, stroke_width: float, device_pixel_ratio: float
+) -> QPixmap | None:
+    """`_BODIES`-də tapılmayan adı `qtawesome`-dan çəkir — bax `_QTA_ALIASES` başlığı.
+
+    Raises:
+        IconNotFoundError: Alias VAR, LAKİN `qtawesome` idxal/yüklənmə xətası
+            verir (aşağıya bax) — `None` YALNIZ alias TAPILMADIQDA qaytarılır
+            (çağıran, `render`, bunu `_BODIES`-in ÖZ "tapılmadı" halı ilə
+            EYNİ `IconNotFoundError`-a çevirir).
+
+    ──────────────────────────────────────────────────────────────────────
+    `qtawesome` YÜKLƏNMƏSƏ — XAM `ImportError` YOX, DİAQNOZ EDİLƏ BİLƏN XƏTA
+    ──────────────────────────────────────────────────────────────────────
+    Paketlənmiş `.exe`-də `_ICON_FONT_DATAS` yığılmayıbsa (bax `KompasOS.
+    spec`) və ya şrift resursu çatışmırsa, `qta.icon(...)` `ImportError`
+    (və ya oxşar yüklənmə xətası) ata bilər. Bu, BURADA TUTULUR və
+    `qtawesome`-un ADINI AÇIQ ÇƏKƏN ÖZ `IconNotFoundError`-una çevrilir —
+    səssiz boş ikon istifadəçini "niyə?" sualı ilə tək qoyardı (ölü kod
+    kimi), bu forma isə jurnalda VƏ istisna mesajında SƏBƏBİ göstərir.
+
+    ──────────────────────────────────────────────────────────────────────
+    DPI — `pixmap(w, h)` YOX, `pixmap(QSize, dpr)` (VİZUAL FAZA #4 riski)
+    ──────────────────────────────────────────────────────────────────────
+    `QIcon.pixmap(16, 16)` HƏMİŞƏ `devicePixelRatio()==1.0` qaytarır —
+    yüksək-DPI ekranda (150–200%, Windows-da adi) nəticə BULANIQ görünərdi.
+    `pixmap(QSize(size, size), device_pixel_ratio)` overload-u YEGANƏ yoldur
+    ki, fiziki piksel sayı `size × dpr` olsun (`render()`-in `_BODIES` yolu
+    ilə EYNİ nəticə).
+    """
+    qta_name = _QTA_ALIASES.get(name)
+    if qta_name is None:
+        return None
+    try:
+        import qtawesome as qta  # noqa: PLC0415
+
+        full_name = f"ph.{qta_name}{_qta_weight_suffix(stroke_width)}"
+        # Açıq `QIcon` annotasiyası: `qtawesome`-un stub-u yoxdur (bax
+        # `pyproject.toml`), ona görə `qta.icon(...)` mypy üçün `Any` qayıdır
+        # — annotasiya olmadan `.pixmap(...)`-ın nəticəsi də `Any` qalardı.
+        qta_icon: QIcon = qta.icon(full_name, color=color)
+        return qta_icon.pixmap(QSize(size, size), device_pixel_ratio)
+    except Exception as error:
+        raise IconNotFoundError(
+            f"'{name}' ikonu `qtawesome` (Phosphor, alias '{qta_name}') ilə "
+            "çəkilə bilmədi — kitabxana yüklənmədi və ya şrift resursu çatışmır",
+            context={"icon": name, "qta_alias": qta_name},
+        ) from error
+
+
 #: `render()` keşi — açar: (ad, rəng, ölçü, qalınlıq, dpr).
 _CACHE: dict[tuple[str, str, int, float, float], QPixmap] = {}
 
@@ -237,31 +400,51 @@ def render(
     """İkonu verilmiş rəng və ölçüdə `QPixmap` kimi çəkir.
 
     Args:
-        name: `available()` siyahısındakı ad.
+        name: `available()` siyahısındakı ad VƏ YA `_QTA_ALIASES`-dəki ad
+            (VİZUAL FAZA #4) — aşağıya bax.
         color: `#RRGGBB` — adətən tema tokeni.
         device_pixel_ratio: Ekranın piksel sıxlığı. 1.0-dan böyük dəyər
             daha iri bufer çəkib nəticəni miqyaslayır (kəskin görüntü üçün).
 
     Raises:
-        IconNotFoundError: Ad dəstdə yoxdursa.
+        IconNotFoundError: Ad NƏ `_BODIES`-də, NƏ DƏ `_QTA_ALIASES`-də
+            yoxdursa — VƏ YA alias VAR, LAKİN `qtawesome` yüklənmirsə (bax
+            `_qta_pixmap`, mesajda kitabxananın adı AÇIQ çəkilir).
+
+    `_BODIES` HƏMİŞƏ ƏVVƏLCƏ yoxlanılır (VİZUAL FAZA #4) — 54 mövcud ikon
+    ƏVVƏLKİ KİMİ, `qtawesome`-a TOXUNMADAN render olunur. `qta` YALNIZ
+    `_BODIES`-də olmayan ad üçün idxal edilir (bax `_qta_pixmap`) — modul
+    IDXAL VAXTI `qtawesome`-dan ASILI DEYİL.
     """
     key = (name, color, size, stroke_width, device_pixel_ratio)
     cached = _CACHE.get(key)
     if cached is not None:
         return cached
 
-    document = _document(name, color, stroke_width)
-    physical = max(1, round(size * device_pixel_ratio))
+    if name in _BODIES:
+        document = _document(name, color, stroke_width)
+        physical = max(1, round(size * device_pixel_ratio))
 
-    pixmap = QPixmap(physical, physical)
-    pixmap.fill(Qt.GlobalColor.transparent)
+        pixmap = QPixmap(physical, physical)
+        pixmap.fill(Qt.GlobalColor.transparent)
 
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    QSvgRenderer(QByteArray(document)).render(painter)
-    painter.end()
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        QSvgRenderer(QByteArray(document)).render(painter)
+        painter.end()
 
-    pixmap.setDevicePixelRatio(device_pixel_ratio)
+        pixmap.setDevicePixelRatio(device_pixel_ratio)
+    else:
+        qta_pixmap = _qta_pixmap(
+            name, color, size=size, stroke_width=stroke_width, device_pixel_ratio=device_pixel_ratio
+        )
+        if qta_pixmap is None:
+            raise IconNotFoundError(
+                f"'{name}' adlı ikon dəstdə yoxdur",
+                context={"icon": name, "available": list(available())},
+            )
+        pixmap = qta_pixmap
+
     _CACHE[key] = pixmap
     return pixmap
 
@@ -291,11 +474,64 @@ def clear_cache() -> None:
     _CACHE.clear()
 
 
+def cache_qss_icon(
+    name: str,
+    color: str,
+    *,
+    size: int = DEFAULT_SIZE,
+    stroke_width: float = DEFAULT_STROKE,
+    device_pixel_ratio: float = 1.0,
+    cache_dir: Path,
+) -> Path | None:
+    """İkonu DİSKƏ yazır — QSS `image: url(...)` FAYL YOLU tələb edir.
+
+    ──────────────────────────────────────────────────────────────────────
+    NİYƏ BU FUNKSİYA VAR (VİZUAL FAZA #6, Hipotez 3-ün ucuz variantı)
+    ──────────────────────────────────────────────────────────────────────
+    `render()` yaddaşda `QPixmap` qaytarır — QSS mətni isə statik STRING-dir
+    və `image: url(...)`-a in-memory pikseli deyil, FAYL YOLUNU yazmaq
+    lazımdır. Statik `.spec`-ə paketlənmiş asset ƏVƏZİNƏ (`infra`
+    koordinasiyası, yeni paketləmə asılılığı tələb edərdi) ikon RUNTIME-da
+    `_BODIES`-dəki mövcud SVG-dən doğulur və keş qovluğuna yazılır — heç bir
+    yeni fayl `.spec`-ə DÜŞMÜR.
+
+    Ad rəngi VƏ DPI-ni ÖZÜNDƏ daşıyır (`chevron_down_0b1d3a_1.5.png` kimi) —
+    tema dəyişəndə (rəng dəyişəndə) YENİ fayl yaranır, köhnəsi ÜSTÜNDƏN
+    YAZILMIR (iki tema, iki fayl — eyni anda İKİSİ də mövcud qala bilər).
+
+    Returns:
+        Uğurla yazılan faylın yolu, YA DA `None` — yazı UĞURSUZ olanda
+        (icazə, dolu disk, salt-oxunan qovluq). `None` heç vaxt İSTİSNA kimi
+        YAYILMIR: ikon olmadan davam etmək HƏMİŞƏ mümkündür (`::down-arrow`
+        boş qalır, `qss.py`-dakı Hipotez-1 vəziyyətinə qayıdır) — tətbiqin
+        AÇILMASI keş qovluğunun yazıla bilməsindən ASILI OLA BİLMƏZ.
+    """
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        pixmap = render(
+            name,
+            color,
+            size=size,
+            stroke_width=stroke_width,
+            device_pixel_ratio=device_pixel_ratio,
+        )
+        safe_color = color.lstrip("#").lower()
+        path = cache_dir / f"{name}_{safe_color}_{device_pixel_ratio:g}.png"
+        if not pixmap.save(str(path), "PNG"):
+            _log.warning("QSS_ICON_CACHE_WRITE_FAILED", extra={"path": str(path)})
+            return None
+    except OSError as exc:
+        _log.warning("QSS_ICON_CACHE_WRITE_FAILED", extra={"error": str(exc)})
+        return None
+    return path
+
+
 __all__ = [
     "DEFAULT_SIZE",
     "DEFAULT_STROKE",
     "IconNotFoundError",
     "available",
+    "cache_qss_icon",
     "clear_cache",
     "icon",
     "render",

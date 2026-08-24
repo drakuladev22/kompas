@@ -79,9 +79,6 @@ DECLARED_BUT_NOT_IMPORTED: Final[dict[str, str]] = {
     "setuptools": "ASILILIQ DEYİL, QORUYUCU PİN: 81+ `pkg_resources`-u çıxarır "
     "və `face_recognition` idxal anında `quit()` çağırır (bax requirements.txt, "
     "səbəb 3)",
-    # --- İkon dəsti (UI-FINAL vizual iş) ------------------------------------ #
-    "qtawesome": "UI-FINAL vizual iş üçün ikon dəsti quraşdırılıb, istifadəsi "
-    "ui sahəsindədir (src/presentation/) — hələ idxal edilməyib",
 }
 
 

@@ -176,7 +176,7 @@ class SyncConflictScreen(Screen):
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_layout.setSpacing(12)
+        toolbar_layout.setSpacing(metrics.SPACE_MS)
         self._summary = muted_label("")
         toolbar_layout.addWidget(self._summary)
         toolbar_layout.addWidget(stretch())
@@ -226,7 +226,8 @@ class SyncConflictScreen(Screen):
     # ------------------------------- siyahı ----------------------------------- #
 
     def _build_list_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — sabit kartlardan biri (loop-da deyil).
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         card.add(title_label("Həll gözləyən konfliktlər", size=15))
         card.add(
             muted_label(
@@ -237,7 +238,7 @@ class SyncConflictScreen(Screen):
         card.add(Divider())
 
         self._list_rows = QVBoxLayout()
-        self._list_rows.setSpacing(12)
+        self._list_rows.setSpacing(metrics.SPACE_MS)
         holder = QWidget()
         holder.setLayout(self._list_rows)
         card.add(holder)
@@ -314,6 +315,14 @@ class SyncConflictScreen(Screen):
     # ------------------------------ müqayisə ---------------------------------- #
 
     def _build_comparison_card(self) -> Card:
+        # VİZUAL FAZA #1 — KÖLGƏ YOXDUR (4-cü bənd, ölçülmüş). DƏQİQLƏŞDİRMƏ:
+        # bu kartın ÖZ təbii `sizeHint()`-i CƏMİ 570px-dir (kartın MƏZMUNU
+        # dardır) — 1844px DEYİL. Faktiki render eni 1844px olur, çünki
+        # QONŞU kart (`_build_decision_card`, təbii tələbi 1844px)
+        # konteyneri həmin enə MƏCBUR EDİR; bu kart isə elastik olduğu üçün
+        # qonşusuna görə DARTILIR. Yəni xərc bu kartın ÖZ tələbindən yox,
+        # FAKTİKİ render enindən gəlir — qonşu kart dəyişsə, bu kartın
+        # kölgə statusu da YENİDƏN qiymətləndirilməlidir.
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._detail_title = title_label("Konflikt seçilməyib", size=15)
         card.add(self._detail_title)
@@ -345,7 +354,7 @@ class SyncConflictScreen(Screen):
         header = QWidget()
         layout = QHBoxLayout(header)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
 
         marker = section_label("Fərq")
         marker.setFixedWidth(_MARKER_WIDTH)
@@ -367,7 +376,7 @@ class SyncConflictScreen(Screen):
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
 
         marker: QWidget = Chip("Fərqli", "warning") if differs else muted_label("eyni", size=12)
         marker.setFixedWidth(_MARKER_WIDTH)
@@ -438,6 +447,9 @@ class SyncConflictScreen(Screen):
     # -------------------------------- qərar ----------------------------------- #
 
     def _build_decision_card(self) -> Card:
+        # VİZUAL FAZA #1 — KÖLGƏ YOXDUR (4-cü bənd, ölçülmüş): təbii eni
+        # 1844px — 1400px pəncərədə SIXIŞDIRILA BİLMİR, tam-enli paneldir.
+        # Tək-başına repaint 5.69 ms — `SyncConflictScreen`-in əsas yükü.
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(section_label("Qərar"))
         card.add(
@@ -470,7 +482,7 @@ class SyncConflictScreen(Screen):
         card.add(self._notice)
 
         self._decisions = QVBoxLayout()
-        self._decisions.setSpacing(12)
+        self._decisions.setSpacing(metrics.SPACE_MS)
         holder = QWidget()
         holder.setLayout(self._decisions)
         card.add(holder)

@@ -145,7 +145,7 @@ Hər dəyişiklikdən sonra HAMISI keçməlidir:
 .venv/Scripts/python.exe -m ruff check src/ tests/ scripts/
 .venv/Scripts/python.exe -m ruff format src/ tests/ scripts/
 .venv/Scripts/python.exe -m mypy src            # strict, 100% type hints (376 fayl)
-QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 6413 test, 50 skip
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q  # 6601 keçir, 66 skip, 1 xfail
 .venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast
 ```
 
@@ -161,8 +161,8 @@ offscreen ölçüsüdür: dəsti fon işi kimi başladıb gözləmək lazımdır
 saymaq yox. Yeganə fərq: `test_mono_role_resolves_to_a_fixed_pitch_font`
 atlanır (aşağıya bax).
 
-Kontrast yoxlayıcısı **162 rəng cütünü** (`--include-high-contrast` olmadan
-160) ölçür — həm `tokens.py` cütlərini,
+Kontrast yoxlayıcısı **164 rəng cütünü** (`--include-high-contrast` olmadan
+162) ölçür — həm `tokens.py` cütlərini,
 həm də `qss.py`-dəki FAKTİKİ istifadəni (`::placeholder`, `:disabled`,
 `:focus`, `:hover`, sərhədlər). Yalnız tokenləri yoxlamaq kifayət etmirdi:
 dörd kontrast qüsuru məhz bu boşluqda gizlənmişdi. **Bu rəqəm dəyişkəndir** —

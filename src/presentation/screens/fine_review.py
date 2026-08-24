@@ -276,7 +276,7 @@ class MonthlyFineReviewScreen(Screen):
         toolbar = QWidget()
         layout = QHBoxLayout(toolbar)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
         # Dar pəncərədə dövr seçimi və düymələr alt-alta düşür.
         self.responsive_row(layout)
 
@@ -313,6 +313,8 @@ class MonthlyFineReviewScreen(Screen):
         return toolbar
 
     def _build_footer(self) -> QWidget:
+        # VİZUAL FAZA #1 — KÖLGƏ YOXDUR (4-cü bənd, ölçülmüş): təbii eni
+        # 1831px — 1400px pəncərədə SIXIŞDIRILA BİLMİR, tam-enli paneldir.
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Nəşr", size=15))
         card.add(muted_label(IRREVERSIBLE_NOTE, size=12))
@@ -320,7 +322,7 @@ class MonthlyFineReviewScreen(Screen):
         row = QWidget()
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(12)
+        row_layout.setSpacing(metrics.SPACE_MS)
         row_layout.addWidget(stretch())
 
         # TƏK DÜYMƏ (spesifikasiya): filial-filial göndərmə yolu ekranda
@@ -435,7 +437,7 @@ class MonthlyFineReviewScreen(Screen):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(12)
+        head_layout.setSpacing(metrics.SPACE_MS)
         head_layout.addWidget(title_label(group.store, size=15))
         head_layout.addWidget(muted_label(f"{group.count_text} · {group.total_text}"))
         head_layout.addWidget(stretch())
@@ -621,7 +623,8 @@ class PublishConfirmDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — dialoqun BÜTÖV məzmun kartı, BİR dəfə qurulur.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         layout.addWidget(card)
 
         card.add(title_label("Cərimələr bütün filiallara göndərilsin?", size=19))
@@ -649,7 +652,7 @@ class PublishConfirmDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")

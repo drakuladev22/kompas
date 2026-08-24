@@ -83,8 +83,20 @@ def action_button(
     return button
 
 
-def secondary_button(text: str, *, parent: QWidget | None = None) -> QPushButton:
+def secondary_button(
+    text: str,
+    *,
+    icon_name: str | None = None,
+    icon_color: str | None = None,
+    parent: QWidget | None = None,
+) -> QPushButton:
     """İkinci dərəcəli düymə — "Keçən aya bax", "Dəstəyə yaz".
+
+    Args:
+        icon_name: Soldakı ikon — `action_button`-un EYNİ parametri
+            (VİZUAL FAZA #4 tapıntısı: bu funksiyada YOX idi, 131 çağırışın
+            heç biri ikon əlavə edə BİLMİRDİ).
+        icon_color: İkonun rəngi — adətən `--color-nav-item-text`.
 
     FOCUS-1/D11: bax `action_button` başlığı — eyni izah.
     """
@@ -93,6 +105,10 @@ def secondary_button(text: str, *, parent: QWidget | None = None) -> QPushButton
     button.setCursor(Qt.CursorShape.PointingHandCursor)
     _apply_font(button, size=14, weight=QFont.Weight.Normal)
     button.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+
+    if icon_name is not None and icon_color is not None:
+        button.setIcon(icons.icon(icon_name, icon_color, size=15, stroke_width=1.6))
+        button.setIconSize(QSize(15, 15))
     return button
 
 
@@ -162,24 +178,30 @@ class NavButton(QPushButton):
     amber rəngə çevirir — hər ikisi `set_active()` içində tətbiq olunur.
 
     ──────────────────────────────────────────────────────────────────────────
-    TOOLTIP NİYƏ KONSTRUKTORDA QURULUR
+    TOOLTIP NİYƏ KONSTRUKTORDA QURULUR VƏ NİYƏ BİR DAHA DƏYİŞMİR
     ──────────────────────────────────────────────────────────────────────────
-    İki AYRI səbəb eyni bir sətirdə birləşir:
-
     1. KƏSİLƏN MƏTN OXUNA BİLƏN QALIR. Sol panel sabit enlidir
-       (`metrics.SIDEBAR_WIDTH`) və uzun maddə (məsələn «Ehtiyat Nüsxə və
-       Bərpa») Qt tərəfindən «…» ilə kəsilir. Tooltip olmasa, istifadəçi
-       maddənin tam adını NƏ görə, NƏ də siçanla oxuya bilərdi — yeganə yol
-       ekran oxuyucusu qalırdı.
+       (`metrics.SIDEBAR_WIDTH`) və uzun maddə (məsələn «Performans
+       Qiymətləndirmələri») ekrana sığmır.
 
-    2. `set_compact()` MƏTNİ TOOLTIP-DƏ SAXLAYIR. O metod daraldılmış paneldə
-       `setText("")` edir və mətni geri qaytarmaq üçün `toolTip()`-dən oxuyur.
-       Tooltip boş olsaydı, dövrə belə pozulardı:
-           set_compact(True)  → text="", tooltip=""      (mətn İTİR)
-           set_compact(False) → text=toolTip() or text() = ""  (geri gəlmir)
-       Yəni panel bir dəfə yığılıb açıldıqdan sonra bütün maddələr ADSIZ
-       qalırdı. Tooltip-i başlanğıcda doldurmaq həm bu dövrəni bağlayır, həm
-       də (1)-i həll edir — ona görə ayrıca saxlama sahəsi əlavə edilmir.
+       ƏVVƏLKİ ŞƏRH SƏHV İDDİA EDİRDİ ki, Qt bunu ÖZÜ «…» ilə kəsir —
+       yoxlanıldı: `elid` sözü nə bu faylda, nə `sidebar.py`-də keçmirdi və
+       QSS-lənmiş `QPushButton` avtomatik elide ETMİR (Qt-nin sənədləşdirilmiş
+       davranışı — stil-vərəqi tətbiq olunan düymə mətni SƏRT kəsir, «…»
+       ƏLAVƏ ETMİR). Nəticə: mətn sərhəddə görünmədən yoxa çıxırdı. İndi
+       `_apply_elided_text()` `fontMetrics().elidedText(...)` ilə HƏQİQİ
+       elide edir (bax aşağı).
+
+    2. TOOLTIP HƏMİŞƏ TAM ADI DAŞIYIR, ELİDE EDİLMİŞ MƏTNİ YOX. Əvvəl
+       `set_compact()` mətni geri qaytarmaq üçün `toolTip()`-dən oxuyurdu —
+       elide əlavə olunanda bu, TƏHLÜKƏLİ dövrə yaradardı:
+           set_compact(False) → setText(elided) → setToolTip(elided)
+                               → tam ad HƏMİŞƏLİK İTƏRDİ (bir daha bərpa
+                                 olunmazdı, çünki mənbənin özü kəsilmişdi).
+       Ona görə tam ad AYRICA saxlanılır (`self._full_text`) və tooltip
+       TƏKCƏ konstruktorda, ONDAN yazılır — nə `set_compact()`, nə
+       `_apply_elided_text()` tooltip-ə TOXUNMUR. Beləliklə tooltip HƏMİŞƏ
+       (elide, daraltma sayından ASILI OLMAYARAQ) tam adı göstərir.
     """
 
     def __init__(
@@ -198,6 +220,10 @@ class NavButton(QPushButton):
         self._idle_color = idle_color
         self._active_color = active_color
         self._active = False
+        #: Tam ad — HƏMİŞƏ bunun üzərindən elide edilir, heç vaxt `self.text()`-
+        #: dən (o, artıq kəsilmiş ola bilər — bax sinif başlığı, bənd 2).
+        self._full_text = text
+        self._compact = False
 
         self.setProperty("variant", "nav")
         # Başlanğıc dəyər AÇIQ yazılır: Qt təyin olunmamış dinamik xüsusiyyəti
@@ -288,6 +314,11 @@ class NavButton(QPushButton):
         super().resizeEvent(event)
         if self._badge.isVisible():
             self._position_badge()
+        # PANEL ENİ DƏYİŞƏNDƏ ELİDE YENİDƏN HESABLANIR (`set_compact` sol
+        # panelin enini `SIDEBAR_WIDTH`/`SIDEBAR_COLLAPSED_WIDTH` arasında
+        # dəyişdirəndə bu düymə də ölçüsünü dəyişir, Qt `resizeEvent`
+        # yayır) — `_apply_elided_text` özü daraldılmış vəziyyəti keçir.
+        self._apply_elided_text()
 
     # ------------------------------- vəziyyət ------------------------------- #
 
@@ -319,12 +350,13 @@ class NavButton(QPushButton):
     def set_compact(self, compact: bool) -> None:
         """Daraldılmış paneldə yalnız ikon göstərilir (mətn tooltip-də qalır).
 
-        Tooltip HƏM açıq, HƏM yığılmış vəziyyətdə eyni mətni saxlayır — o,
-        həm kəsilən başlığın oxunma yolu, həm də `setText("")`-dən sonra
-        mətnin yeganə mənbəyidir (bax sinif başlığı).
+        Tooltip (`self._full_text`-dən, konstruktorda) HƏR İKİ vəziyyətdə
+        DƏYİŞMİR — mətnin YEGANƏ mənbəyi `self._full_text`-dir, `self.text()`
+        DEYİL (o, elide edilmiş ola bilər, bax sinif başlığı bənd 2).
         """
-        self.setText("" if compact else self.toolTip() or self.text())
-        self.setToolTip(self.text() if not compact else self.toolTip())
+        self._compact = compact
+        self.setText("" if compact else self._full_text)
+        self._apply_elided_text()
         # ──────────────────────────────────────────────────────────────────
         # DARALDILMIŞ REJİMDƏ İKON MƏRKƏZDƏ OLUR
         # ──────────────────────────────────────────────────────────────────
@@ -344,6 +376,28 @@ class NavButton(QPushButton):
         if self._badge_count:
             self._position_badge()
         refresh_widget_style(self)
+
+    def _apply_elided_text(self) -> None:
+        """Cari enə görə `self._full_text`-i «…» ilə kəsir.
+
+        DARALDILMIŞ VƏZİYYƏTDƏ HEÇ NƏ ETMİR — mətn onsuz da boşdur
+        (`set_compact(True)` `setText("")` edib), elide onu «…»-ya
+        çevirməməlidir.
+
+        EN HƏLƏ BİLİNMİRSƏ (≤0, tərtibat hələ İCRA OLUNMAYIB) TAM ADI
+        SAXLAYIR — sıfır enə görə hesablanan elide bütün mətni yeyərdi.
+        Bu hal keçicidir: widget göstəriləndə `resizeEvent` həqiqi enlə
+        yenidən çağırır.
+        """
+        if self._compact:
+            return
+        available = self.width() - metrics.NAV_ITEM_TEXT_RESERVED_WIDTH
+        if available <= 0:
+            return
+        elided = self.fontMetrics().elidedText(
+            self._full_text, Qt.TextElideMode.ElideRight, available
+        )
+        self.setText(elided)
 
     def _refresh_icon(self) -> None:
         color = self._active_color if self._active else self._idle_color

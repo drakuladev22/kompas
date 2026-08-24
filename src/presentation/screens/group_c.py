@@ -207,11 +207,17 @@ class DashboardScreen(Screen):
         middle_layout.setSpacing(metrics.CARD_SPACING)
         self.responsive_row(middle_layout)
 
-        chart_card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — kart elevasiyası: bu kart Dashboard-un ORTA
+        # sırasında, İKİ kartla YAN-YANA, HƏMİŞƏ görünür (loop-da DEYİL,
+        # ekran-başına BİR dəfə qurulur) — `QGraphicsDropShadowEffect`-in
+        # performans riski YOXDUR (bax `Card.__init__` şərhi).
+        chart_card = Card(
+            padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True
+        )
         chart_head = QWidget()
         chart_head_layout = QHBoxLayout(chart_head)
         chart_head_layout.setContentsMargins(0, 0, 0, 0)
-        chart_head_layout.setSpacing(12)
+        chart_head_layout.setSpacing(metrics.SPACE_MS)
         chart_head_layout.addWidget(title_label("Cərimələr — filial üzrə", size=15))
         self._chart_period = muted_label("")
         chart_head_layout.addWidget(self._chart_period)
@@ -242,10 +248,14 @@ class DashboardScreen(Screen):
         self._leaders = RankList("Xal liderləri")
         bottom_layout.addWidget(self._leaders, 1)
 
-        self._health = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — chart_card ilə EYNİ əsaslandırma (loop-da deyil,
+        # sabit sayda kart).
+        self._health = Card(
+            padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True
+        )
         self._health.add(title_label("Server sağlamlığı", size=15))
         self._health_rows = QVBoxLayout()
-        self._health_rows.setSpacing(12)
+        self._health_rows.setSpacing(metrics.SPACE_MS)
         health_holder = QWidget()
         health_holder.setLayout(self._health_rows)
         self._health.add(health_holder)
@@ -458,11 +468,13 @@ class DashboardScreen(Screen):
             layout.removeWidget(widget)
 
     def _build_ranking_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — Çox-Mağaza Benchmark bölməsinin BEŞ kartından biri:
+        # sabit sayda (loop-da deyil), sabit sayı üçün fabrika metodudur.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(12)
+        head_layout.setSpacing(metrics.SPACE_MS)
         head_layout.addWidget(title_label("Çox-Mağaza Reytinq Cədvəli", size=15))
         head_layout.addWidget(stretch())
         self._ranking_metric_combo = QComboBox()
@@ -488,7 +500,8 @@ class DashboardScreen(Screen):
         return card
 
     def _build_store_vs_network_card(self, theme: ThemeManager) -> tuple[Card, QLabel, BarChart]:
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — bax `_build_ranking_card`-ın eyni qeydi.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         card.add(title_label("Mağaza — Şəbəkə Ortalaması", size=15))
         subtitle = muted_label("")
         card.add(subtitle)
@@ -500,7 +513,8 @@ class DashboardScreen(Screen):
         return card, subtitle, chart
 
     def _build_trend_card(self, theme: ThemeManager) -> tuple[Card, QLabel, BarChart]:
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — bax `_build_ranking_card`-ın eyni qeydi.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         title = title_label("Zaman-üzrə Trend", size=15)
         card.add(title)
         chart = BarChart(theme)
@@ -509,7 +523,8 @@ class DashboardScreen(Screen):
         return card, title, chart
 
     def _build_outlier_card(self) -> tuple[Card, QLabel, QVBoxLayout]:
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — bax `_build_ranking_card`-ın eyni qeydi.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         card.add(title_label("Kritik-Kənar (Outlier) Kartı", size=15))
         summary = body_label("", size=13)
         summary.setWordWrap(True)
@@ -523,7 +538,8 @@ class DashboardScreen(Screen):
         return card, summary, rows_layout
 
     def _build_break_overuse_card(self) -> tuple[Card, QVBoxLayout]:
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — bax `_build_ranking_card`-ın eyni qeydi.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         card.add(title_label("Gündəlik fasilə həddini aşanlar", size=15))
         card.add(
             muted_label(
@@ -559,7 +575,7 @@ class DashboardScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(12)
+            layout.setSpacing(metrics.SPACE_MS)
             layout.addWidget(body_label(name, size=13, wrap=False))
             layout.addWidget(stretch())
             layout.addWidget(Chip(warning, "warning"))
@@ -621,7 +637,7 @@ class DashboardScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(12)
+            layout.setSpacing(metrics.SPACE_MS)
             layout.addWidget(StatusDot(self.theme.color(tones.get(tone, "--color-success"))))
             layout.addWidget(body_label(name, size=13, wrap=False))
             layout.addWidget(stretch())
@@ -715,7 +731,7 @@ class DashboardScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(12)
+            layout.setSpacing(metrics.SPACE_MS)
             layout.addWidget(body_label(name, size=13, wrap=False))
             layout.addWidget(stretch())
             layout.addWidget(Chip(detail, "warning"))
@@ -851,7 +867,7 @@ class PermissionMatrixScreen(Screen):
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(16, 20, 16, 20)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
 
         layout.addWidget(title_label("Vəzifələr", size=15))
 
@@ -925,13 +941,13 @@ class PermissionMatrixScreen(Screen):
     def _build_matrix_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(26, 22, 26, 22)
+        layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(12)
+        head_layout.setSpacing(metrics.SPACE_MS)
 
         self._matrix_title = title_label("", size=19)
         head_layout.addWidget(self._matrix_title)
@@ -1192,7 +1208,7 @@ class RoleCreateDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")
@@ -1342,7 +1358,7 @@ class UsersScreen(Screen):
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_layout.setSpacing(12)
+        toolbar_layout.setSpacing(metrics.SPACE_MS)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("Ad, rol və ya mağaza")
@@ -1712,7 +1728,7 @@ class NewUserDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")
@@ -1905,7 +1921,7 @@ class PosThresholdDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
 
         # "Geri Al" YALNIZ mövcud, aktiv sətir varsa görünür — olmayan bir
         # səlahiyyəti "geri almaq" istifadəçini çaşdırardı.
@@ -2010,7 +2026,7 @@ class ResetPinDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")
@@ -2092,7 +2108,7 @@ class ResetPasswordDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")
@@ -2187,7 +2203,7 @@ class ChangeRoleDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")
@@ -2340,7 +2356,7 @@ class EmployeeDocumentDialog(QDialog):
         file_row = QWidget()
         file_row_layout = QHBoxLayout(file_row)
         file_row_layout.setContentsMargins(0, 0, 0, 0)
-        file_row_layout.setSpacing(12)
+        file_row_layout.setSpacing(metrics.SPACE_MS)
         self._file_label = muted_label("Fayl seçilməyib")
         file_row_layout.addWidget(self._file_label, stretch=1)
         pick_button = secondary_button("Fayl Seç")
@@ -2351,7 +2367,7 @@ class EmployeeDocumentDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         close_button = secondary_button("Bağla")
@@ -2546,9 +2562,17 @@ class ShiftPlanningScreen(Screen):
         bar = QWidget()
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
 
+        # `compact="true"` MƏCBURİDİR — `AuditScreen.set_pagination`-un ("‹ ›"
+        # səhifələmə düymələri, `group_d.py`) ÖZ tapıntısı: adi `secondary`
+        # doldurması (`padding: 0 --space-lg`, 24+24=48px) 44-48px enli sabit
+        # düymədə MƏNFİ sahə yaradır və Qt qlifi TAM kəsir — nəticə "boş
+        # kvadrat"dır, ikon/şrift qüsuru DEYİL (piksellə yoxlanıldı: `compact`
+        # ilə "‹" görünür, onsuz TAM boşdur). `[compact="true"]` doldurmanı
+        # sıfırlayır (`qss.py`, "DAR düymə" qaydası).
         previous = secondary_button("‹")
+        previous.setProperty("compact", "true")
         previous.setFixedWidth(44)
         previous.clicked.connect(lambda: self.month_changed.emit(-1))
         layout.addWidget(previous)
@@ -2557,6 +2581,7 @@ class ShiftPlanningScreen(Screen):
         layout.addWidget(self._month_label)
 
         nxt = secondary_button("›")
+        nxt.setProperty("compact", "true")
         nxt.setFixedWidth(44)
         nxt.clicked.connect(lambda: self.month_changed.emit(1))
         layout.addWidget(nxt)
@@ -2612,14 +2637,14 @@ class ShiftPlanningScreen(Screen):
             row = QWidget()
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(12)
+            row_layout.setSpacing(metrics.SPACE_MS)
             badge = plain_label(code or "—")
             badge.setFixedSize(26, 26)
             badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
             badge.setStyleSheet(
                 f"background-color: {self.theme.color('--color-neutral-bg')};"
                 f"color: {self.theme.color(token)};"
-                "border-radius: 6px;"
+                f"border-radius: {self.theme.color('--radius-badge')}px;"
             )
             row_layout.addWidget(badge)
             row_layout.addWidget(body_label(description, size=13, wrap=False))
@@ -2816,7 +2841,7 @@ class ShiftPlanningScreen(Screen):
                 cell.setStyleSheet(
                     f"background-color: {background};"
                     f"color: {self.theme.color(token)};"
-                    "border-radius: 6px; font-weight: 600;"
+                    f"border-radius: {self.theme.color('--radius-badge')}px; font-weight: 600;"
                 )
                 self._matrix_grid.addWidget(cell, row_index, column)
                 self._cells[(name, column)] = cell
@@ -2929,7 +2954,7 @@ class DailyRosterScreen(Screen):
         self._stats = QWidget()
         self._stats_layout = QHBoxLayout(self._stats)
         self._stats_layout.setContentsMargins(0, 0, 0, 0)
-        self._stats_layout.setSpacing(12)
+        self._stats_layout.setSpacing(metrics.SPACE_MS)
         self.add(self._stats)
 
         # Uyğunsuzluq xəbərdarlığı — HR planı ilə faktiki giriş uyuşmayanda.
@@ -2960,7 +2985,7 @@ class DailyRosterScreen(Screen):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         draft = secondary_button("Qaralama Saxla")
@@ -3065,7 +3090,7 @@ class ShiftSwapScreen(Screen):
             metrics.CONTENT_PADDING_H,
             metrics.CONTENT_PADDING_V,
         )
-        left_layout.setSpacing(12)
+        left_layout.setSpacing(metrics.SPACE_MS)
 
         self._filters = QWidget()
         filters_layout = QHBoxLayout(self._filters)
@@ -3084,7 +3109,7 @@ class ShiftSwapScreen(Screen):
         left_layout.addWidget(self._filters)
 
         self._list_layout = QVBoxLayout()
-        self._list_layout.setSpacing(12)
+        self._list_layout.setSpacing(metrics.SPACE_MS)
         list_holder = QWidget()
         list_holder.setLayout(self._list_layout)
         left_layout.addWidget(list_holder)
@@ -3104,7 +3129,7 @@ class ShiftSwapScreen(Screen):
         )
 
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(22, 22, 22, 22)
+        layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
         from src.presentation.widgets.primitives import section_label  # noqa: PLC0415
@@ -3114,7 +3139,7 @@ class ShiftSwapScreen(Screen):
         layout.addWidget(self._detail_title)
 
         self._detail_rows = QVBoxLayout()
-        self._detail_rows.setSpacing(12)
+        self._detail_rows.setSpacing(metrics.SPACE_MS)
         holder = QWidget()
         holder.setLayout(self._detail_rows)
         layout.addWidget(holder)
@@ -3124,7 +3149,7 @@ class ShiftSwapScreen(Screen):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
 
         reject = secondary_button("Rədd Et")
         reject.clicked.connect(self._emit_rejected)
@@ -3164,7 +3189,7 @@ class ShiftSwapScreen(Screen):
             head = QWidget()
             head_layout = QHBoxLayout(head)
             head_layout.setContentsMargins(0, 0, 0, 0)
-            head_layout.setSpacing(12)
+            head_layout.setSpacing(metrics.SPACE_MS)
             head_layout.addWidget(
                 title_label(f"{request['from_name']} → {request['to_name']}", size=15)
             )

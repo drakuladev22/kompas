@@ -260,7 +260,7 @@ def test_screen_data_forbids_kwargs_unpacking_calls() -> None:
     ──────────────────────────────────────────────────────────────────────────
     Yazılanda `screen_data.py`-də bütün faylda YEGANƏ pozuntu `_dashboard_
     benchmark_apply`-dakı `screen.set_store_vs_network(**data.comparison)`
-    idi. `ui-speed` sətri açıq açar-arqumentlərə keçirdi VƏ `_DashboardBench
+    idi. Sətir açıq açar-arqumentlərə keçirildi VƏ `_DashboardBench
     markData.comparison`-ı `dict[str, Any] | None`-dan `_BenchmarkComparison
     | None` (frozen dataclass) etdi — indi mypy sahə adlarını, bu test isə
     setter imzasını yoxlayır. `test_binder_calls_match_screen_setter_

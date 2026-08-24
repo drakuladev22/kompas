@@ -391,11 +391,14 @@ class OperatorQueueScreen(Screen):
         # Aralıq SIFIR DEYİL (`appl.md` FAZA 3, qayda 9): başlıq ilə izahı
         # əvvəl `Divider()` ayırırdı, indi BOŞLUQ ayırır — xətt bir sətir
         # məlumat vermir, boşluq isə eyni sərhədi səssiz çəkir.
+        # VİZUAL FAZA #1 — KÖLGƏ YOXDUR (4-cü bənd, ölçülmüş): konteynerdə
+        # 640px-ə sıxışdırılıb görünsə də, təbii `sizeHint()` 2166px-dir —
+        # 1920px monitoru da aşır.
         reminder = Card(padding=16, spacing=metrics.CARD_CONTENT_SPACING)
         reminder_line = QWidget()
         reminder_layout = QHBoxLayout(reminder_line)
         reminder_layout.setContentsMargins(0, 0, 0, 0)
-        reminder_layout.setSpacing(12)
+        reminder_layout.setSpacing(metrics.SPACE_MS)
         from src.presentation.widgets import icons  # noqa: PLC0415
 
         glyph = plain_label()
@@ -456,7 +459,7 @@ class OperatorQueueScreen(Screen):
         self._bulk_bar = QWidget()
         bulk_layout = QHBoxLayout(self._bulk_bar)
         bulk_layout.setContentsMargins(0, 0, 0, 0)
-        bulk_layout.setSpacing(12)
+        bulk_layout.setSpacing(metrics.SPACE_MS)
         bulk_layout.addWidget(
             muted_label(
                 "Seçilmiş sətirlər BİR səbəblə rədd edilir — səbəb hər sətrin auditinə yazılır."
@@ -473,7 +476,7 @@ class OperatorQueueScreen(Screen):
         self._rows_host = QWidget()
         self._rows_layout = QVBoxLayout(self._rows_host)
         self._rows_layout.setContentsMargins(0, 0, 0, 0)
-        self._rows_layout.setSpacing(12)
+        self._rows_layout.setSpacing(metrics.SPACE_MS)
         self.add(self._rows_host)
 
         self.body().addStretch(1)
@@ -708,14 +711,18 @@ class ManualTimeOverrideDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — dialoqun BÜTÖV məzmun kartı, BİR dəfə qurulur.
+        # NƏZƏRƏ AL: aşağıda `self._dual_control` bu kartın İÇİNƏ ƏLAVƏ
+        # olunur (`card.add(self._dual_control)`) — O, İKİQAT ELEVASİYA
+        # olmasın deyə KÖLGƏSİZ QALIR (bax onun şərhi).
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         layout.addWidget(card)
 
         # ------------------------------ başlıq ------------------------------ #
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(12)
+        head_layout.setSpacing(metrics.SPACE_MS)
 
         head_text = QWidget()
         head_text_layout = QVBoxLayout(head_text)
@@ -782,6 +789,10 @@ class ManualTimeOverrideDialog(QDialog):
         card.add(reason_box)
 
         # -------------------------- dual-control ---------------------------- #
+        # VİZUAL FAZA #1 — bu kart yuxarıdakı `card`-ın İÇİNƏ əlavə olunur
+        # (aşağıda `card.add(self._dual_control)`) — `surface="panel"`
+        # QƏSDƏN İŞLƏDİLMİR, amma ROLU EYNİDİR ("kartın içi"): kölgə
+        # VERİLMİR, əks halda valideynin kölgəsi ilə İKİQAT elevasiya olardı.
         self._dual_control = Card(padding=16, spacing=8)
         self._dual_control.add(title_label("Cüt Nəzarətli Təsdiq Tələb Olunacaq", size=15))
         self._dual_control_detail = body_label("", size=13)
@@ -793,7 +804,7 @@ class ManualTimeOverrideDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")
@@ -1034,7 +1045,9 @@ class FineEntryScreen(Screen):
     # -------------------------------- forma ---------------------------------- #
 
     def _build_form(self, fine_types: list[str], stores: list[str], employees: list[str]) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — ekranın BÜTÖV forma kartı, BİR dəfə qurulur
+        # (siyahı parametrləri MƏLUMATDIR, iterasiya DEYİL).
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)

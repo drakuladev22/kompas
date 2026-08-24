@@ -199,7 +199,7 @@ class FaceEnrollmentScreen(Screen):
         toolbar = QWidget()
         layout = QHBoxLayout(toolbar)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
 
         self._summary = muted_label("")
         layout.addWidget(self._summary)
@@ -236,7 +236,7 @@ class FaceEnrollmentScreen(Screen):
         state_row = QWidget()
         state_layout = QHBoxLayout(state_row)
         state_layout.setContentsMargins(0, 0, 0, 0)
-        state_layout.setSpacing(12)
+        state_layout.setSpacing(metrics.SPACE_MS)
         self._state_chip = Chip("Qeydiyyatsız", "danger")
         state_layout.addWidget(self._state_chip)
         self._enrolled_at = mono_label("")
@@ -282,7 +282,7 @@ class FaceEnrollmentScreen(Screen):
         buttons = QWidget()
         button_layout = QHBoxLayout(buttons)
         button_layout.setContentsMargins(0, 0, 0, 0)
-        button_layout.setSpacing(12)
+        button_layout.setSpacing(metrics.SPACE_MS)
         button_layout.addWidget(stretch())
 
         self._retake = secondary_button("Yenidən Çək")
@@ -609,7 +609,7 @@ class FaceExemptionScreen(Screen):
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
         layout.addWidget(Chip("Kompensasiya edici nəzarət", "warning"))
         layout.addWidget(stretch())
         card.add(row)
@@ -676,7 +676,7 @@ class FaceExemptionScreen(Screen):
         buttons = QWidget()
         button_layout = QHBoxLayout(buttons)
         button_layout.setContentsMargins(0, 0, 0, 0)
-        button_layout.setSpacing(12)
+        button_layout.setSpacing(metrics.SPACE_MS)
         button_layout.addWidget(stretch())
         grant = action_button("İstisna Ver")
         grant.clicked.connect(self._on_grant)
@@ -688,12 +688,12 @@ class FaceExemptionScreen(Screen):
         host = QWidget()
         layout = QVBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
 
         header = QWidget()
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(12)
+        header_layout.setSpacing(metrics.SPACE_MS)
         header_layout.addWidget(title_label("Aktiv istisnalar", size=15))
         self._summary = muted_label("")
         header_layout.addWidget(self._summary)
@@ -1125,14 +1125,14 @@ class FaceSetupRequiredScreen(Screen):
         self._error.setStyleSheet(
             f"background-color: {theme.color('--color-danger-bg')};"
             f"color: {theme.color('--color-danger')};"
-            "border-radius: 12px; padding: 12px 14px;"
+            f"border-radius: {theme.color('--radius-lg')}px; padding: 12px 14px;"
         )
         card.add(self._error)
 
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
 
         later = secondary_button("Sonra")
         later.clicked.connect(self.skipped)

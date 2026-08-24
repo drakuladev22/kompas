@@ -32,6 +32,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from src.presentation.screens.base import Screen
+from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import secondary_button
 from src.presentation.widgets.data_table import Column, DataTable
 from src.presentation.widgets.layout_utils import clear_layout
@@ -64,7 +65,7 @@ class AttritionRiskScreen(Screen):
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_layout.setSpacing(12)
+        toolbar_layout.setSpacing(metrics.SPACE_MS)
         self._summary = muted_label("")
         toolbar_layout.addWidget(self._summary)
         toolbar_layout.addWidget(stretch())

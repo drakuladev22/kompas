@@ -76,13 +76,16 @@ class OpenShiftMarketCard(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # VİZUAL FAZA #1 — KÖLGƏ VERİLMİR (4-cü bənd, ölçülmüş): 1,881,900 px²
+        # sahə, ölçülmüş repaint: 13.91 ms (60fps büdcəsinin 83%-i) — siyahının
+        # ən bahalısı. `OpenShiftMarketCard` tam-enli bazar panelidir.
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(12)
+        head_layout.setSpacing(metrics.SPACE_MS)
         head_layout.addWidget(title_label("Açıq Növbə Bazarı", size=15))
         head_layout.addWidget(stretch())
 
@@ -166,7 +169,7 @@ class OpenShiftMarketCard(QWidget):
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
 
         layout.addWidget(body_label(row["date"], size=13, wrap=False))
         layout.addWidget(
@@ -186,7 +189,7 @@ class OpenShiftMarketCard(QWidget):
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
 
         layout.addWidget(body_label(row["date"], size=13, wrap=False))
         layout.addWidget(muted_label(f"{row['work_mode']} · {row['store']}", size=12))
@@ -232,7 +235,8 @@ class OpenShiftPostDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — dialoqun BÜTÖV məzmun kartı, BİR dəfə qurulur.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         layout.addWidget(card)
         card.add(title_label("Açıq Növbə Elan Et", size=19))
         card.add(
@@ -254,7 +258,7 @@ class OpenShiftPostDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")

@@ -111,7 +111,7 @@ class CatalogScreen(Screen):
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_layout.setSpacing(12)
+        toolbar_layout.setSpacing(metrics.SPACE_MS)
         self._summary = muted_label("")
         toolbar_layout.addWidget(self._summary)
         toolbar_layout.addWidget(stretch())
@@ -231,7 +231,8 @@ class CatalogEntryDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — dialoqun BÜTÖV məzmun kartı, BİR dəfə qurulur.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         layout.addWidget(card)
         card.add(title_label(title, size=19))
 
@@ -247,7 +248,7 @@ class CatalogEntryDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")
@@ -499,12 +500,13 @@ class ReportExportScreen(Screen):
             )
         )
 
-        period_card = Card()
+        # VİZUAL FAZA #1 — sabit dövr kartı (loop-da deyil).
+        period_card = Card(shadow=True)
         period_body = period_card.body()
         row = QWidget()
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(12)
+        row_layout.setSpacing(metrics.SPACE_MS)
         row_layout.addWidget(muted_label("Hesabat dövrü"))
         row_layout.addWidget(self._period_label)
         row_layout.addWidget(self._build_range_mode())
@@ -563,7 +565,7 @@ class ReportExportScreen(Screen):
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
 
         # Format göstərişi HƏR İKİ sahədə təkrarlanır. Yalnız birində
         # qalsaydı iki fərqli səbəbdən pis olardı: sətir iki sütunludur və
@@ -602,20 +604,25 @@ class ReportExportScreen(Screen):
         return combo
 
     def _build_card(self, key: str, title: str, description: str, icon_name: str) -> QWidget:
-        card = Card()
+        # VİZUAL FAZA #1 — KÖLGƏ VAR: `_REPORT_CARDS` `Final` tuple üzərində
+        # dövr edir (sabit, 2 element — 1-ci şərtin "dinamik sayda kart"
+        # narahatlığı tətbiq olunmur) və hər ikisi ölçülüb keçib
+        # (`attendance` 570×206px, `bonus_penalty` 518×221px — 4/5-ci şərt).
+        card = Card(shadow=True)
         body = card.body()
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(12)
+        head_layout.setSpacing(metrics.SPACE_MS)
 
         glyph = plain_label()
         glyph.setFixedSize(32, 32)
         glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
         glyph.setPixmap(icons.render(icon_name, self.theme.color("--color-action-bg"), size=16))
         glyph.setStyleSheet(
-            f"background-color: {self.theme.color('--color-neutral-bg')}; border-radius: 10px;"
+            f"background-color: {self.theme.color('--color-neutral-bg')};"
+            f"border-radius: {self.theme.color('--radius-control')}px;"
         )
         head_layout.addWidget(glyph)
         head_layout.addWidget(title_label(title, size=15))
@@ -649,6 +656,12 @@ class ReportExportScreen(Screen):
         edilmiş düzəlişlər → təsdiq. Ayrı kartlar bu ardıcıllığı vizual olaraq
         pozardı.
         """
+        # VİZUAL FAZA #1 — KÖLGƏ YOXDUR (4-cü bənd, ölçülmüş): konteynerdə
+        # 640px-ə sıxışdırılıb görünsə də, təbii `sizeHint()` 1584px-dir.
+        # ƏLAVƏ SƏBƏB: kart daxilində ÜÇ `DataTable` var (`_finding_table`,
+        # `_comparison_table`, `_correction_table`) — doğrulama axını boyu
+        # təkrar yenilənir, hər yeniləmə isə kölgəli kartın TAM yenidən
+        # rasterizəsini tətikləyərdi.
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Export-öncəsi Doğrulama", size=19))
         card.add(
@@ -681,13 +694,13 @@ class ReportExportScreen(Screen):
         self._corrections_card = QWidget()
         corrections_layout = QVBoxLayout(self._corrections_card)
         corrections_layout.setContentsMargins(0, 0, 0, 0)
-        corrections_layout.setSpacing(12)
+        corrections_layout.setSpacing(metrics.SPACE_MS)
         corrections_layout.addWidget(Divider())
 
         corrections_head = QWidget()
         head_layout = QHBoxLayout(corrections_head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(12)
+        head_layout.setSpacing(metrics.SPACE_MS)
         head_layout.addWidget(title_label("Manual düzəlişlər", size=15))
         head_layout.addWidget(stretch())
         self._correction_button = secondary_button("Düzəliş Et")
@@ -717,7 +730,7 @@ class ReportExportScreen(Screen):
         confirm_row = QWidget()
         confirm_layout = QHBoxLayout(confirm_row)
         confirm_layout.setContentsMargins(0, 0, 0, 0)
-        confirm_layout.setSpacing(12)
+        confirm_layout.setSpacing(metrics.SPACE_MS)
         confirm_layout.addWidget(stretch())
         self._confirm_button = action_button(
             "Təsdiqlə və Export Et",
@@ -1081,7 +1094,8 @@ class ExportCorrectionDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — dialoqun BÜTÖV məzmun kartı, BİR dəfə qurulur.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         layout.addWidget(card)
         card.add(title_label("Export Düzəlişi", size=19))
         card.add(
@@ -1139,7 +1153,7 @@ class ExportCorrectionDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")
@@ -1349,7 +1363,7 @@ class HelpTopicCard(Card):
             row = QWidget()
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(12)
+            row_layout.setSpacing(metrics.SPACE_MS)
 
             number = plain_label(str(index))
             number.setFixedSize(22, 22)
@@ -1394,7 +1408,7 @@ class HelpCenterScreen(Screen):
         header = QWidget()
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(12)
+        header_layout.setSpacing(metrics.SPACE_MS)
         header_layout.addWidget(
             section_header(
                 "Yardım Mərkəzi",

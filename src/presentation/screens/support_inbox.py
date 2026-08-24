@@ -213,6 +213,9 @@ class SupportInboxScreen(Screen):
 
     def _build_filter_card(self) -> Card:
         """Status zolağı + kombinə süzgəclər + aktiv «chip»-lər."""
+        # VİZUAL FAZA #1 — KÖLGƏ YOXDUR (4-cü bənd, ölçülmüş): konteynerdə
+        # 1352px-ə sıxışdırılıb görünsə də, təbii `sizeHint()` 1489px-dir —
+        # 1400px pəncərəni artıq aşır.
         card = Card(padding=16, spacing=metrics.CARD_CONTENT_SPACING)
 
         status_row = QWidget()
@@ -305,10 +308,11 @@ class SupportInboxScreen(Screen):
     # ------------------------------- quruluş --------------------------------- #
 
     def _build_list_panel(self) -> QWidget:
-        card = Card()
+        # VİZUAL FAZA #1 — iki sabit paneldən biri (loop-da deyil).
+        card = Card(shadow=True)
         card.setFixedWidth(metrics.SUPPORT_INBOX_LIST_WIDTH)
         body = card.body()
-        body.setSpacing(12)
+        body.setSpacing(metrics.SPACE_MS)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -327,9 +331,15 @@ class SupportInboxScreen(Screen):
         return card
 
     def _build_thread_panel(self) -> QWidget:
+        # VİZUAL FAZA #1 — KÖLGƏ YOXDUR (5-ci şərt, ölçülmüş): təbii
+        # `sizeHint()` cəmi 481px-dir — kart öz məzmununa görə DARDIR, LAKİN
+        # iki-sütunlu düzülüşün GENİŞ sütunu olduğu üçün elastik dartılır.
+        # 1920px pəncərədə faktiki render eni 1516px (1400px-də 1400px),
+        # sahə 1400→1920 keçidində +52% (688,236 → 1,047,556 px²) — ekranın
+        # kölgə yükünün əsas hissəsi MƏHZ bu karta aiddir.
         card = Card()
         body = card.body()
-        body.setSpacing(12)
+        body.setSpacing(metrics.SPACE_MS)
 
         head = QHBoxLayout()
         self._subject = section_label("")
@@ -364,7 +374,7 @@ class SupportInboxScreen(Screen):
         host = QWidget()
         self._messages = QVBoxLayout(host)
         self._messages.setContentsMargins(4, 4, 4, 4)
-        self._messages.setSpacing(12)
+        self._messages.setSpacing(metrics.SPACE_MS)
         self._messages.addStretch(1)
         scroll.setWidget(host)
         body.addWidget(scroll, 1)

@@ -191,7 +191,13 @@ class NewTaskDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — KÖLGƏ VAR (4-cü şərt, ölçülmüş): `sizeHint()`
+        # 1298×651px — 1400px həddinə cəmi 102px qalır, gözlənilməzdi
+        # ("sadə tapşırıq dialoqu" üçün geniş). DİQQƏT: forma sahə qazansa
+        # (yeni sahə, geniş sütun) hədd asanlıqla aşıla bilər — bu dialoqa
+        # element əlavə edən hər dəyişiklikdə kölgə YENİDƏN ölçülüb
+        # qiymətləndirilməlidir, "əvvəl keçmişdi" kifayət deyil.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         layout.addWidget(card)
         card.add(title_label("Yeni Tapşırıq", size=19))
         card.add(
@@ -246,7 +252,7 @@ class NewTaskDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")
@@ -362,12 +368,12 @@ class TasksScreen(Screen):
         column = QWidget()
         layout = QVBoxLayout(column)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
 
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(12)
+        head_layout.setSpacing(metrics.SPACE_MS)
         head_layout.addWidget(title_label(title, size=15))
         count = Chip("0", "neutral")
         self._column_counts[key] = count
@@ -381,7 +387,7 @@ class TasksScreen(Screen):
         host = QWidget()
         cards_layout = QVBoxLayout(host)
         cards_layout.setContentsMargins(0, 0, 0, 0)
-        cards_layout.setSpacing(12)
+        cards_layout.setSpacing(metrics.SPACE_MS)
         cards_layout.addStretch(1)
         scroll.setWidget(host)
         layout.addWidget(scroll, 1)
@@ -485,7 +491,7 @@ class SalesPointsScreen(Screen):
         history_head = QWidget()
         history_head_layout = QHBoxLayout(history_head)
         history_head_layout.setContentsMargins(0, 0, 0, 0)
-        history_head_layout.setSpacing(12)
+        history_head_layout.setSpacing(metrics.SPACE_MS)
         history_head_layout.addWidget(title_label("Xal tarixçəsi", size=15))
         self._history_period = muted_label("")
         history_head_layout.addWidget(self._history_period)
@@ -550,7 +556,7 @@ class SalesPointsScreen(Screen):
             )
         )
         self._dispute_rows = QVBoxLayout()
-        self._dispute_rows.setSpacing(12)
+        self._dispute_rows.setSpacing(metrics.SPACE_MS)
         dispute_holder = QWidget()
         dispute_holder.setLayout(self._dispute_rows)
         dispute_layout.addWidget(dispute_holder)
@@ -581,7 +587,7 @@ class SalesPointsScreen(Screen):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(12)
+        head_layout.setSpacing(metrics.SPACE_MS)
         head_layout.addWidget(body_label(row.get("employee", ""), size=13, wrap=False))
         head_layout.addWidget(mono_label(row.get("points", "")))
         status = row.get("status", "")
@@ -681,7 +687,8 @@ class SalesPointsScreen(Screen):
                 icons.render("star", self.theme.color("--color-brand-amber"), size=30)
             )
             thumbnail.setStyleSheet(
-                f"background-color: {self.theme.color('--color-neutral-bg')};border-radius: 10px;"
+                f"background-color: {self.theme.color('--color-neutral-bg')};"
+                f"border-radius: {self.theme.color('--radius-control')}px;"
             )
             card.add(thumbnail)
 
@@ -760,7 +767,7 @@ class FineAppealScreen(Screen):
         self.add(title_label("Cərimə tarixçəm", size=15))
 
         self._history_layout = QVBoxLayout()
-        self._history_layout.setSpacing(12)
+        self._history_layout.setSpacing(metrics.SPACE_MS)
         history_host = QWidget()
         history_host.setLayout(self._history_layout)
         self.add(history_host)
@@ -777,7 +784,7 @@ class FineAppealScreen(Screen):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(12)
+        head_layout.setSpacing(metrics.SPACE_MS)
         head_layout.addWidget(title_label("Yeni etiraz", size=15))
         self._form_subject = muted_label("")
         head_layout.addWidget(self._form_subject)
@@ -840,7 +847,7 @@ class FineAppealScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(12)
+            layout.setSpacing(metrics.SPACE_MS)
 
             text_box = QWidget()
             text_layout = QVBoxLayout(text_box)
@@ -914,7 +921,7 @@ class FineAppealInboxScreen(Screen):
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(theme, parent=parent)
         self._layout_host = QVBoxLayout()
-        self._layout_host.setSpacing(12)
+        self._layout_host.setSpacing(metrics.SPACE_MS)
         host = QWidget()
         host.setLayout(self._layout_host)
         self.add(host)
@@ -937,7 +944,7 @@ class FineAppealInboxScreen(Screen):
             head = QWidget()
             head_layout = QHBoxLayout(head)
             head_layout.setContentsMargins(0, 0, 0, 0)
-            head_layout.setSpacing(12)
+            head_layout.setSpacing(metrics.SPACE_MS)
             head_layout.addWidget(title_label(appeal.get("employee", ""), size=15))
             head_layout.addWidget(Chip(appeal.get("fine_type", ""), "neutral"))
             head_layout.addWidget(stretch())
@@ -960,7 +967,7 @@ class FineAppealInboxScreen(Screen):
             actions = QWidget()
             actions_layout = QHBoxLayout(actions)
             actions_layout.setContentsMargins(0, 0, 0, 0)
-            actions_layout.setSpacing(12)
+            actions_layout.setSpacing(metrics.SPACE_MS)
             actions_layout.addWidget(stretch())
 
             appeal_id = appeal.get("id", "")

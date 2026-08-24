@@ -98,8 +98,8 @@ class PhaseRow(QWidget):
         self._phase = phase
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 6, 0, 6)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 8, 0, 8)
+        layout.setSpacing(metrics.SPACE_MS)
 
         self._marker = plain_label()
         self._marker.setFixedSize(22, 22)
@@ -199,7 +199,7 @@ class InfrastructureScreen(Screen):
         row = QWidget()
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(12)
+        row_layout.setSpacing(metrics.SPACE_MS)
         row_layout.addWidget(muted_label("Aktiv baza"))
         self._active_label = title_label("", size=15)
         row_layout.addWidget(self._active_label)
@@ -259,7 +259,7 @@ class InfrastructureScreen(Screen):
         history_header = QWidget()
         history_header_layout = QHBoxLayout(history_header)
         history_header_layout.setContentsMargins(0, 0, 0, 0)
-        history_header_layout.setSpacing(12)
+        history_header_layout.setSpacing(metrics.SPACE_MS)
         history_header_layout.addWidget(title_label("Keçid tarixçəsi", size=15))
         history_header_layout.addWidget(stretch())
         self._history_refresh = secondary_button("Yenilə")
@@ -377,7 +377,9 @@ class MigrationConfirmDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — KÖLGƏ VAR (5-ci şərt, ölçülmüş): `sizeHint()`
+        # 531×381px — dialoq modalın ÖZÜdür, konteynerə dartılmır.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         layout.addWidget(card)
 
         card.add(title_label("Baza keçidi başlasın?", size=19))
@@ -403,7 +405,7 @@ class MigrationConfirmDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")
@@ -506,7 +508,7 @@ class WidgetRow(QWidget):
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 8, 0, 8)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
 
         text_box = QWidget()
         text_layout = QVBoxLayout(text_box)
@@ -1070,7 +1072,7 @@ class PluginScreen(Screen):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(12)
+        head_layout.setSpacing(metrics.SPACE_MS)
         head_layout.addWidget(title_label(plugin.get("name", ""), size=15))
         head_layout.addWidget(Chip(f"v{plugin.get('version', '?')}", "neutral"))
 
@@ -1156,7 +1158,7 @@ class PluginPageScreen(Screen):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(12)
+        head_layout.setSpacing(metrics.SPACE_MS)
         head_layout.addWidget(title_label(plugin_name, size=15))
         head_layout.addWidget(Chip("Plugin", "info"))
         head_layout.addWidget(stretch())
@@ -1199,8 +1201,8 @@ class PluginPageScreen(Screen):
         for index, (label, value) in enumerate(rows):
             line = QWidget()
             line_layout = QHBoxLayout(line)
-            line_layout.setContentsMargins(0, 6, 0, 6)
-            line_layout.setSpacing(12)
+            line_layout.setContentsMargins(0, 8, 0, 8)
+            line_layout.setSpacing(metrics.SPACE_MS)
             line_layout.addWidget(muted_label(label))
             line_layout.addWidget(stretch())
             line_layout.addWidget(body_label(value, size=13, wrap=False))

@@ -34,6 +34,7 @@ from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath
 from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 
+from src.presentation.widgets import metrics
 from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
@@ -328,7 +329,7 @@ class RankList(Card):
         super().__init__(padding=20, spacing=12, parent=parent)
         self.add(title_label(title, size=15))
         self._rows_layout = QVBoxLayout()
-        self._rows_layout.setSpacing(12)
+        self._rows_layout.setSpacing(metrics.SPACE_MS)
         holder = QWidget()
         holder.setLayout(self._rows_layout)
         self.add(holder)

@@ -195,7 +195,7 @@ class ErpServersScreen(Screen):
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_layout.setSpacing(12)
+        toolbar_layout.setSpacing(metrics.SPACE_MS)
         self._summary = muted_label("")
         toolbar_layout.addWidget(self._summary)
         toolbar_layout.addWidget(stretch())
@@ -364,7 +364,7 @@ class ErpServersScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(12)
+            layout.setSpacing(metrics.SPACE_MS)
             layout.addWidget(StatusDot(self.theme.color(tones.get(tone, "--color-success"))))
             layout.addWidget(body_label(name, size=13, wrap=False))
             layout.addWidget(stretch())
@@ -434,7 +434,7 @@ class _ConnectorCard(ClickableCard):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(12)
+        head_layout.setSpacing(metrics.SPACE_MS)
 
         glyph = plain_label()
         glyph.setPixmap(
@@ -599,6 +599,15 @@ class ServerConnectionWizard(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        # VİZUAL FAZA #1 — KÖLGƏ YOXDUR (4-cü şərt, ölçülmüş): `sizeHint()`
+        # 1439×922px — 1400px həddini AŞIR. Səbəb `_build_type_cards()`-dir:
+        # üç bağlantı-növü kartı (`_ConnectorCard`) YAN-YANA düzülür və
+        # dialoqun təbii enini digər üç modal dialoqdan (`RestoreConfirmDialog`,
+        # `NewTaskDialog`, `MigrationConfirmDialog` — hamısı 1400px altında)
+        # xeyli yuxarı itələyir. Bu, "dialoqlar avtomatik keçir" TƏXMİNİNİN
+        # SƏHV olduğu tapılan yerdir — kölgə ƏLAVƏ ETMƏZDƏN ƏVVƏL bunu da
+        # ölçün, quruluşu dəyişdikcə (yeni bağlantı növü, əlavə sahə) nəticə
+        # dəyişə bilər.
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
 
@@ -706,7 +715,7 @@ class ServerConnectionWizard(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
 
         self._test_button = secondary_button("Bağlantını Yoxla")
         self._test_button.clicked.connect(lambda: self.test_requested.emit(self.collected()))
@@ -755,7 +764,7 @@ class ServerConnectionWizard(QDialog):
         row = QWidget()
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(12)
+        row_layout.setSpacing(metrics.SPACE_MS)
 
         windows = (self._system_name or platform.system()) == "Windows"
         for connector_type in ConnectorType:
@@ -1175,7 +1184,7 @@ class BackupScreen(Screen):
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_layout.setSpacing(12)
+        toolbar_layout.setSpacing(metrics.SPACE_MS)
         self._schedule_label = muted_label("")
         toolbar_layout.addWidget(self._schedule_label)
         toolbar_layout.addWidget(stretch())
@@ -1308,7 +1317,10 @@ class RestoreConfirmDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — KÖLGƏ VAR (5-ci şərt, ölçülmüş): `sizeHint()`
+        # 570×285px — dialoq modalın ÖZÜdür, konteynerə dartılmır (`Server
+        # ConnectionWizard`-dan FƏRQLİ olaraq, bax o faylın öz şərhi).
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         layout.addWidget(card)
 
         card.add(title_label("Bu nöqtəyə bərpa edilsin?", size=19))
@@ -1330,7 +1342,7 @@ class RestoreConfirmDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
         cancel = secondary_button("İmtina")
@@ -1420,7 +1432,7 @@ class HealthScreen(Screen):
         self._alerts = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._alerts.add(title_label("Aktiv xəbərdarlıqlar", size=15))
         self._alerts_rows = QVBoxLayout()
-        self._alerts_rows.setSpacing(12)
+        self._alerts_rows.setSpacing(metrics.SPACE_MS)
         alerts_holder = QWidget()
         alerts_holder.setLayout(self._alerts_rows)
         self._alerts.add(alerts_holder)
@@ -1459,7 +1471,7 @@ class HealthScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(12)
+            layout.setSpacing(metrics.SPACE_MS)
             layout.addWidget(StatusDot(self.theme.color(tones.get(tone, "--color-success"))))
             layout.addWidget(mono_label(name))
             layout.addWidget(stretch())
@@ -1479,7 +1491,7 @@ class HealthScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(12)
+            layout.setSpacing(metrics.SPACE_MS)
             layout.addWidget(StatusDot(self.theme.color(tones.get(tone, "--color-warning"))))
             layout.addWidget(body_label(text, size=13), 1)
             layout.addWidget(mono_label(time_text, muted=True))
@@ -1556,7 +1568,7 @@ class AuditScreen(Screen):
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_layout.setSpacing(12)
+        toolbar_layout.setSpacing(metrics.SPACE_MS)
         self._total = muted_label("")
         toolbar_layout.addWidget(self._total)
         toolbar_layout.addWidget(stretch())
@@ -1569,7 +1581,7 @@ class AuditScreen(Screen):
         filters_row = QWidget()
         filters_layout = QHBoxLayout(filters_row)
         filters_layout.setContentsMargins(0, 0, 0, 0)
-        filters_layout.setSpacing(12)
+        filters_layout.setSpacing(metrics.SPACE_MS)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("İstifadəçi və ya əməliyyat")
@@ -1778,7 +1790,7 @@ class SettingsScreen(Screen):
         options = QWidget()
         options_layout = QHBoxLayout(options)
         options_layout.setContentsMargins(0, 0, 0, 0)
-        options_layout.setSpacing(12)
+        options_layout.setSpacing(metrics.SPACE_MS)
 
         for key, label in self._THEME_OPTIONS:
             button = secondary_button(label)
@@ -1806,7 +1818,7 @@ class SettingsScreen(Screen):
         language_row = QWidget()
         language_layout = QHBoxLayout(language_row)
         language_layout.setContentsMargins(0, 0, 0, 0)
-        language_layout.setSpacing(12)
+        language_layout.setSpacing(metrics.SPACE_MS)
         language_layout.addWidget(field_label("İnterfeys dili"))
         language_layout.addWidget(stretch())
         self._language = body_label("Azərbaycan dili", size=13, wrap=False)
@@ -1833,7 +1845,7 @@ class SettingsScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(12)
+            layout.setSpacing(metrics.SPACE_MS)
 
             text_box = QWidget()
             text_layout = QVBoxLayout(text_box)
@@ -2030,7 +2042,7 @@ class DriveConnectionScreen(Screen):
         status_row = QWidget()
         status_layout = QHBoxLayout(status_row)
         status_layout.setContentsMargins(0, 0, 0, 0)
-        status_layout.setSpacing(12)
+        status_layout.setSpacing(metrics.SPACE_MS)
         self._status_dot = StatusDot(theme.color("--color-text-muted"))
         status_layout.addWidget(self._status_dot)
         self._account = body_label("Hesab qoşulmayıb", size=13, wrap=False)
@@ -2054,7 +2066,7 @@ class DriveConnectionScreen(Screen):
         actions = QWidget()
         actions_layout = QHBoxLayout(actions)
         actions_layout.setContentsMargins(0, 0, 0, 0)
-        actions_layout.setSpacing(12)
+        actions_layout.setSpacing(metrics.SPACE_MS)
         actions_layout.addWidget(stretch())
 
         # Kontekstual kömək (audit G-4) — kartdakı qeyd yalnız arxivlənməni
@@ -2145,7 +2157,7 @@ class DriveConnectionScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(12)
+            layout.setSpacing(metrics.SPACE_MS)
             layout.addWidget(body_label(account, size=13, wrap=False))
             layout.addWidget(stretch())
             layout.addWidget(mono_label(when))
@@ -2310,7 +2322,7 @@ class RootControlScreen(Screen):
         banner_row = QWidget()
         banner_layout = QHBoxLayout(banner_row)
         banner_layout.setContentsMargins(0, 0, 0, 0)
-        banner_layout.setSpacing(12)
+        banner_layout.setSpacing(metrics.SPACE_MS)
         banner_layout.addWidget(Chip("ROOT rejimi", "danger"))
         banner_layout.addWidget(body_label("Bütün əməliyyatlar audit jurnalına yazılır.", size=13))
         banner_layout.addWidget(stretch())
@@ -2335,7 +2347,7 @@ class RootControlScreen(Screen):
         self._limits = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._limits.add(title_label("Dinamik limitlər", size=15))
         self._limits_rows = QVBoxLayout()
-        self._limits_rows.setSpacing(12)
+        self._limits_rows.setSpacing(metrics.SPACE_MS)
         limits_holder = QWidget()
         limits_holder.setLayout(self._limits_rows)
         self._limits.add(limits_holder)
@@ -2349,7 +2361,7 @@ class RootControlScreen(Screen):
         self._modules = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._modules.add(title_label("Modul açarları", size=15))
         self._modules_rows = QVBoxLayout()
-        self._modules_rows.setSpacing(12)
+        self._modules_rows.setSpacing(metrics.SPACE_MS)
         modules_holder = QWidget()
         modules_holder.setLayout(self._modules_rows)
         self._modules.add(modules_holder)
@@ -2401,7 +2413,7 @@ class RootControlScreen(Screen):
         )
 
         self._break_rows = QVBoxLayout()
-        self._break_rows.setSpacing(12)
+        self._break_rows.setSpacing(metrics.SPACE_MS)
         holder = QWidget()
         holder.setLayout(self._break_rows)
         card.add(holder)
@@ -2485,7 +2497,7 @@ class RootControlScreen(Screen):
         active_row = QWidget()
         active_layout = QHBoxLayout(active_row)
         active_layout.setContentsMargins(0, 0, 0, 0)
-        active_layout.setSpacing(12)
+        active_layout.setSpacing(metrics.SPACE_MS)
         active_layout.addWidget(plain_label("Aktiv"))
         active_layout.addWidget(stretch())
         self._telegram_active = ToggleSwitch(self._theme)
@@ -2496,7 +2508,7 @@ class RootControlScreen(Screen):
         buttons = QWidget()
         button_layout = QHBoxLayout(buttons)
         button_layout.setContentsMargins(0, 0, 0, 0)
-        button_layout.setSpacing(12)
+        button_layout.setSpacing(metrics.SPACE_MS)
         button_layout.addWidget(stretch())
         self._telegram_test_button = secondary_button("Test Mesajı Göndər")
         self._telegram_test_button.clicked.connect(self.telegram_test_requested)
@@ -2621,7 +2633,7 @@ class RootControlScreen(Screen):
         )
 
         self._face_scope_rows = QVBoxLayout()
-        self._face_scope_rows.setSpacing(12)
+        self._face_scope_rows.setSpacing(metrics.SPACE_MS)
         scope_holder = QWidget()
         scope_holder.setLayout(self._face_scope_rows)
         card.add(scope_holder)
@@ -2753,7 +2765,7 @@ class RootControlScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(12)
+            layout.setSpacing(metrics.SPACE_MS)
             layout.addWidget(body_label(store.get("name", ""), size=13, wrap=False))
             layout.addWidget(stretch())
 
@@ -2882,7 +2894,7 @@ class RootControlScreen(Screen):
         create_row = QWidget()
         create_layout = QHBoxLayout(create_row)
         create_layout.setContentsMargins(0, 0, 0, 0)
-        create_layout.setSpacing(12)
+        create_layout.setSpacing(metrics.SPACE_MS)
 
         # Göstəriş `can_` prefiksini ADLANDIRIR, çünki `PermissionFlag` onu
         # TƏLƏB EDİR (bax `authorization.PermissionFlag.__post_init__`) —
@@ -2976,7 +2988,7 @@ class RootControlScreen(Screen):
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
         layout.addWidget(body_label(label, size=13, wrap=False))
         layout.addWidget(stretch())
 
@@ -3021,7 +3033,7 @@ class RootControlScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(12)
+            layout.setSpacing(metrics.SPACE_MS)
             layout.addWidget(body_label(label, size=13, wrap=False))
             if structural:
                 layout.addWidget(Chip("struktur-kritik", "warning"))
@@ -3091,7 +3103,7 @@ class RootControlScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(12)
+            layout.setSpacing(metrics.SPACE_MS)
             layout.addWidget(mono_label(name))
             layout.addWidget(stretch())
             layout.addWidget(

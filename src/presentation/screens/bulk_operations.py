@@ -160,6 +160,10 @@ class BulkOperationsScreen(Screen):
     # ------------------------------- CSV idxalı -------------------------------- #
 
     def _build_import_card(self) -> Card:
+        # VİZUAL FAZA #1 — KÖLGƏ GERİ ALINDI (4-cü bənd): ölçülmüş repaint
+        # bu TAM-ENLİ paneli ölçdü — kölgəli repaint 18.13 ms (60fps
+        # büdcəsi 16.67 ms-i AŞIR), kölgəsiz 2.00 ms. Xərc kart SAYINDAN
+        # yox, SAHƏDƏN asılıdır — bu, geniş panel, kompakt kart deyil.
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("CSV İşçi İdxalı", size=19))
         card.add(
@@ -175,7 +179,7 @@ class BulkOperationsScreen(Screen):
         file_row = QWidget()
         file_row_layout = QHBoxLayout(file_row)
         file_row_layout.setContentsMargins(0, 0, 0, 0)
-        file_row_layout.setSpacing(12)
+        file_row_layout.setSpacing(metrics.SPACE_MS)
         self._file_label = muted_label("Fayl seçilməyib")
         file_row_layout.addWidget(self._file_label, stretch=1)
         pick_button = secondary_button("CSV Faylı Seç")
@@ -186,7 +190,7 @@ class BulkOperationsScreen(Screen):
         actions_row = QWidget()
         actions_layout = QHBoxLayout(actions_row)
         actions_layout.setContentsMargins(0, 0, 0, 0)
-        actions_layout.setSpacing(12)
+        actions_layout.setSpacing(metrics.SPACE_MS)
         actions_layout.addWidget(stretch())
         preview_button = secondary_button("Önizlə")
         preview_button.clicked.connect(self._on_preview_clicked)
@@ -321,12 +325,16 @@ class BulkOperationsScreen(Screen):
     # ----------------------------- mağaza şablonu ------------------------------ #
 
     def _build_template_card(self) -> Card:
+        # VİZUAL FAZA #1 — KÖLGƏ VERİLMİR (4-cü bənd, ölçülmüş): təbii eni
+        # 2767px — tipik 1400px pəncərədən GENİŞ, "Mağaza Şablonları"
+        # tam-enli paneldir. Ölçülmüş repaint: 10.09 ms (60fps büdcəsinin
+        # 60%-i), `_build_import_card`-la EYNİ sinif.
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
 
         header = QWidget()
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(12)
+        header_layout.setSpacing(metrics.SPACE_MS)
         header_layout.addWidget(title_label("Mağaza Şablonları", size=19))
         header_layout.addWidget(stretch())
         capture_button = action_button(
@@ -437,7 +445,8 @@ class StoreTemplateCaptureDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — dialoqun BÜTÖV məzmun kartı, BİR dəfə qurulur.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         layout.addWidget(card)
         card.add(title_label("Mağaza Şablonu Çıxar", size=19))
         card.add(
@@ -465,7 +474,7 @@ class StoreTemplateCaptureDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
         cancel = secondary_button("İmtina")
         cancel.clicked.connect(self.reject)
@@ -523,7 +532,8 @@ class StoreTemplateApplyDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — dialoqun BÜTÖV məzmun kartı, BİR dəfə qurulur.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         layout.addWidget(card)
         card.add(title_label(f"«{template_name}» şablonunu tətbiq et", size=19))
 
@@ -557,7 +567,7 @@ class StoreTemplateApplyDialog(QDialog):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
         cancel = secondary_button("İmtina")
         cancel.clicked.connect(self.reject)
@@ -625,7 +635,8 @@ class BulkImportResultDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — dialoqun BÜTÖV məzmun kartı, BİR dəfə qurulur.
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         layout.addWidget(card)
         card.add(title_label("İdxal Nəticəsi", size=19))
         card.add(

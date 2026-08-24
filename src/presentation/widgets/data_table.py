@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from src.presentation.i18n.text import az_upper
 from src.presentation.theme.manager import enable_styled_background
+from src.presentation.widgets import metrics
 from src.presentation.widgets.layout_utils import clear_layout
 from src.presentation.widgets.primitives import (
     Card,
@@ -187,7 +188,7 @@ class DataTable(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
 
         layout.addWidget(self._build_header())
 

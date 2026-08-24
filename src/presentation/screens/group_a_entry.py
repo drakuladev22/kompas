@@ -775,7 +775,7 @@ class FirstRunWizard(QWidget):
         footer = QWidget()
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(0, 0, 0, 0)
-        footer_layout.setSpacing(12)
+        footer_layout.setSpacing(metrics.SPACE_MS)
 
         self._progress_label = muted_label("")
         footer_layout.addWidget(self._progress_label)
@@ -802,7 +802,7 @@ class FirstRunWizard(QWidget):
         self._error.setStyleSheet(
             f"background-color: {self._theme.color('--color-danger-bg')};"
             f"color: {self._theme.color('--color-danger')};"
-            "border-radius: 12px; padding: 12px 14px;"
+            f"border-radius: {self._theme.color('--radius-lg')}px; padding: 12px 14px;"
         )
 
     def apply_theme(self, theme: ThemeManager) -> None:
@@ -1273,7 +1273,7 @@ class FatalStartupScreen(QWidget):
             actions = QWidget()
             actions_layout = QHBoxLayout(actions)
             actions_layout.setContentsMargins(0, 0, 0, 0)
-            actions_layout.setSpacing(12)
+            actions_layout.setSpacing(metrics.SPACE_MS)
             actions_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
             if retry:
@@ -1431,7 +1431,7 @@ class ConnectionSettingsScreen(QWidget):
         actions = QWidget()
         actions_layout = QHBoxLayout(actions)
         actions_layout.setContentsMargins(0, 0, 0, 0)
-        actions_layout.setSpacing(12)
+        actions_layout.setSpacing(metrics.SPACE_MS)
 
         self._cancel = secondary_button("İmtina")
         self._cancel.setMinimumHeight(44)

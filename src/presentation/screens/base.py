@@ -585,7 +585,7 @@ def _section_error_banner() -> tuple[QWidget, QLabel]:
     line = QWidget()
     layout = QHBoxLayout(line)
     layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(12)
+    layout.setSpacing(metrics.SPACE_MS)
 
     chip = Chip(SECTION_ERROR_CHIP, "danger")
     layout.addWidget(chip, 0, Qt.AlignmentFlag.AlignTop)

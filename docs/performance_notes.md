@@ -601,6 +601,75 @@ klikləməlidir).
 
 ---
 
+## UI-FINAL — kart kölgəsinin ÖLÇÜLMÜŞ xərci (`QGraphicsDropShadowEffect`)
+
+Vizual redizayn kartlara kölgə əlavə etdi (7 → 45). Kölgə RASTER effektdir:
+Qt widget-i offscreen pixmap-a çəkir, bulanıqlaşdırır, sonra kompozisiya edir.
+Xərc `show()`-da YOX, HƏR REPAINT-də ödənilir — ona görə adi «testlər keçir»
+yoxlaması onu GÖRMÜR.
+
+### Üç ölçü, üç fərqli nəticə — və yalnız sonuncusu doğru sual idi
+
+| Ölçü üsulu | Nəticə | Niyə yanıldıcı idi |
+|---|---|---|
+| e2e dəsti, yaddaş, qurulma vaxtı | «reqressiya yoxdur» | offscreen fake-populate ekranı FAKTİKİ ÇƏKMİR — yəni kölgənin xərci olan yeri ölçmür |
+| sahə (px²) siyahısı | proksi | doğru istiqamət, lakin kartın FAKTİKİ render eni ilə TƏBİİ `sizeHint()`-i fərqlidir |
+| real `show()` + `repaint()` dövrəsi | HƏQİQİ | 60fps büdcəsi (16.67 ms/kadr) ilə birbaşa müqayisə olunur |
+
+### Ölçülmüş qanun
+
+* Xərc KART SAYINDAN yox, **KART SAHƏSİNDƏN** asılıdır (~7–9.5 ns/px², sabit).
+* Kiçik tile (≤300K px²): ~0.2–0.4 ms — problemsiz.
+* Orta kart (320×220): +0.71 ms.
+* Tam-enli panel (≥900K px²): **8–14 ms** — tək başına kadr büdcəsinin yarısı və ya çoxu.
+* **İSTƏNİLƏN uşaq widget-in yenilənməsi** — hətta məzmun dəyişmədən boş
+  `update()` belə — kartın TAM yenidən rasterizəsini tətikləyir. `paintEvent`
+  sayğacı ilə təsdiqləndi. Yəni cədvəl sətri yenilənən kölgəli panelin xərci
+  BİR DƏFƏ yox, HƏR YENİLƏMƏDƏ ödənilir.
+
+### Blur radiusunu azaltmaq KÖMƏK ETMİR
+
+İki müstəqil kartda ölçüldü (`OpenShiftMarketCard` 1.88M px²,
+`RecoveryConsoleScreen` 916K px²): `--shadow-blur` 24 → 8 (radiusun 3× azalması)
+cəmi **2–5%** qazandırır, kölgəni SÖNDÜRMƏK isə **6–21×**. Səbəb: xərcin böyük
+hissəsi MƏNBƏ widget-in pixmap-a çəkilməsindən gəlir, konvolyusiya radiusundan
+yox. **Yəni «kölgəni incəldib saxlayaq» aralıq həlli YOXDUR — qərar ikilikdir.**
+
+### Meyar (kartda `shadow=True` nə vaxt olur)
+
+BEŞ şərtin HAMISI ödənməlidir:
+
+1. dövrədə qurulmayıb (dinamik, naməlum sayda kart);
+2. `surface="panel"` deyil;
+3. başqa kartın içinə `.add()` ilə qoyulmayıb;
+4. `sizeHint().width()` ≤ 1400px;
+5. faktiki render eni konteyneri DOLDURMUR.
+
+4 və 5 AYRI şərtdir və biri digərini əvəz etmir. `sync_conflicts.py:319`
+naxışı: kartın öz `sizeHint()`-i cəmi 570px, LAKİN qonşusu konteyneri 1844px-ə
+məcbur etdiyi üçün faktiki render eni 1844px-dir — xərc TƏBİİ tələbdən yox,
+FAKTİKİ endən gəlir. Əks naxış da var: `field_reports.py:271` 1400px-lik
+konteynerdə 640px görünürdü, təbii tələbi isə **2897px**-dir — layout onu
+sıxışdırmışdı və kart «kiçik» sanılırdı.
+
+**Gözlə qiymətləndirmə İŞLƏMİR.** «640px görünür, deməli kiçikdir» mühakiməsi
+bu auditdə DÖRD dəfə yanlış çıxdı. Şübhəli hər kart ölçülməlidir.
+
+Qapı: `tests/unit/test_shadow_card_width_gate.py` (sürətli, AST) və
+`tests/e2e/test_shadow_card_width_budget.py` (yavaş, hər iki şərti REAL ölçür).
+
+### Ölçülərin şərti
+
+Bütün rəqəmlər `QT_QPA_PLATFORM=offscreen` altındadır — raster backend, yəni
+real Windows-un GPU kompozisiyası ƏKS OLUNMUR. `QGraphicsDropShadowEffect`
+onsuz da `QWidget` üzərində Qt-nin CPU bulanıqlaşdırması ilə işlədiyi üçün
+ölçü etibarlıdır, lakin MÜTLƏQ millisaniyə real maşında fərqlənə bilər.
+Ölçülər 1400px VƏ 1920px pəncərədə aparılıb: 1400→1920 keçidində tam-enli
+kartların xərci **~30% artır** — yəni yalnız 1400px-də ölçmək ən yaxşı halı
+ölçmək deməkdir.
+
+---
+
 ## Hələ ölçülməmiş / gələcək addımlar
 
 | Mövzu | Ölçülmüş dəyər | Qeyd |
@@ -609,4 +678,4 @@ klikləməlidir).
 | `_build_session()` (use case qrafı) | ~45 ms | Hər sessiyada. Şəbəkə yanında kiçikdir, lakin sıfır deyil. |
 | Ekranların canlı məlumatı | ölçülüb | 41 ekran, 0.7–5.9 s, hamısı ~%100 baza gözləməsi (yuxarıdakı cədvəl). |
 | `dashboard` ekranının sorğu sayı | ~28 sorğu / 1 sessiya | Tək sessiyada çox sorğu — birləşdirmək (JOIN / tək sorğu) növbəti addımdır. |
-| Sorğuların fon sapına köçürülməsi | — | `_authenticate()` (PERF-6 #2) və `_after_splash()` (PERF-6 #1) ARTIQ köçürülüb. `show_admin()` (PERF-6 #3) HƏLƏ QALIR — səbəb: `ScreenDataBinder.populate()` fetch+widget-tətbiqini AYIRMIR, `BackgroundTask` isə Qt widget-ə fon sapından toxunmağı qadağan edir. |
+| Sorğuların fon sapına köçürülməsi | edilib | `_authenticate()` (PERF-6 #2), `_after_splash()` (PERF-6 #1) VƏ `show_admin()` (PERF-6 #3) — ÜÇÜ DƏ köçürülüb. Bu sətir bir müddət «`show_admin()` HƏLƏ QALIR» yazırdı, halbuki yuxarıdakı §3 bölməsi artıq «EDİLDİ» deyirdi: xülasə cədvəli bölmə ilə birlikdə yenilənməmişdi. Sənədin İKİ yerində eyni fakt varsa, ikisi də dəyişməlidir (CLAUDE.md §7-nin «qayda İKİ yerdə» prinsipi sənədə də aiddir). |

@@ -99,6 +99,52 @@ _ADMIN_FLAGS: Final = (
     # Onun kamera roluna verilə bilməməsi (`excludes_camera_role`) isə
     # `build_camera_operator` tərəfində qorunur: orada flag YOXDUR.
     "can_publish_fines",
+    # ──────────────────────────────────────────────────────────────────────
+    # 11-LİK BOŞLUQ (skrinşot auditi) — aşağıdakı flag-lər `_ADMIN_FLAGS`-də
+    # ÜMUMİYYƏTLƏ yox idi. Nəticə yuxarıdakı `can_view_exceptions`-un
+    # bir dəfə sənədləşdirdiyi qüsurun TƏKRARI idi: 12 ekran (`announcements`,
+    # `annual_leave`, `attrition_risk`, `bulk_operations`, `devices`,
+    # `drive_connection`, `face_exemptions`, `internal_requests`,
+    # `performance_reviews`, `permissions`, `technical_support`) önizləmədə
+    # `NAVIGATION_DENIED` ilə ÜMUMİYYƏTLƏ açılmırdı — halbuki `menu.py`-dakı
+    # `required_flag` onları gözləyirdi. Üç qrupa bölünür (yuxarıdakı iki
+    # blokla EYNİ ayrım: real ADMIN-də varmı, yoxsa yalnız maket üçündürmü).
+    # ──────────────────────────────────────────────────────────────────────
+    #
+    # QRUP 1 — Real `ADMIN` rolunda DA var (defolt sahiblik) — güzgü, güzəşt
+    # deyil (`can_publish_fines` ilə EYNİ kateqoriya):
+    "can_manage_leave_balances",  # #28, migrations/038 — ADMIN defolt sahib
+    "can_perform_bulk_operations",  # #29, migrations/038 — ADMIN defolt (DELEGABLE)
+    "can_manage_devices",  # DEVICE-1, migrations/063 — ROOT/CEO/ADMIN defolt (DELEGABLE)
+    "can_view_internal_requests",  # CHAT-1, migrations/068+069 — ADMIN defolt
+    # `sync_conflicts` ekranının HƏQİQİ qapısı `can_view_audit_logs` DEYİL —
+    # bu, ilkin tapıntıda YANLIŞ təxmin edilmişdi. `menu.py`-dakı
+    # `required_flag=RESOLVE_CONFLICT_FLAG` `use_cases/sync_conflicts.py`-dən
+    # gəlir və onun dəyəri `can_resolve_sync_conflicts`-dır (migrations/056) —
+    # AYRICA, ÜMUMİYYƏTLƏ siyahıda olmayan bir flag. `is_anti_fraud=TRUE`
+    # olsa da, istisna YALNIZ Mağaza Meneceri/Satıcı (anti-fraud) və Kamera
+    # Nəzarətçisinə (`excludes_camera_role`) aiddir — ADMIN real sistemdə DƏ
+    # sahibdir (056: "ROOT, CEO, ADMIN, HR_ADMIN"), ona görə QRUP 1-dədir.
+    "can_resolve_sync_conflicts",  # SEC-018, migrations/056 — ADMIN defolt
+    #
+    # QRUP 2 — Real `ADMIN` rolunda DEFOLT YOXDUR, lakin hardlock NONE/
+    # DELEGABLE olduğu üçün Root/CEO onu Permission Matrisindən DATADAN verə
+    # bilər (`can_view_exceptions`-un yuxarıdakı əsaslandırması ilə EYNİ) —
+    # önizləmə burada yalnız ekranın maketlə tutuşdurulması üçün verir:
+    "can_broadcast_announcements",  # #19, migrations/021 — defolt ROOT/CEO/HR_ADMIN
+    "can_view_attrition_risk",  # #21, migrations/021 — defolt ROOT/CEO/HR_ADMIN
+    "can_conduct_performance_review",  # #20, migrations/021 — defolt ROOT/CEO/HR_ADMIN
+    "can_manage_drive_connection",  # migrations/002 — defolt ROOT/CEO
+    "can_view_technical_support",  # CHAT-1, migrations/068 — DELEGABLE, defolt YALNIZ Root
+    #
+    # QRUP 3 — Real `ADMIN` rolunda YOXDUR VƏ struktur baxımdan OLA DA
+    # BİLMƏZ: hardlock `ROOT_CEO`-dur (səviyyə 2), yəni `enforce_permission_
+    # hardlock()` Admin-ə verilməsini DB səviyyəsində bloklayardı —
+    # `can_switch_db`/`can_manage_plugins` qrupu ilə EYNİ kateqoriya (yuxarı
+    # bax). Yalnız önizləmə bütün ekranları göstərə bilsin deyə verilir,
+    # fikstür istehsalat axınında işləmir (modul başlığı):
+    "can_manage_face_exemptions",  # facecontrol.md bənd 14, migrations/047 — ROOT_CEO
+    "can_manage_positions",  # schema.sql §22, migrations/077 — ROOT_CEO
 )
 
 

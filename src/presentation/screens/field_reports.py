@@ -222,7 +222,8 @@ class FieldReportScreen(Screen):
     # ------------------------------- quruluş --------------------------------- #
 
     def _build_form_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — sabit addım-kartlarından biri (loop-da deyil).
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
 
         self._form_title = title_label("Sahə hesabatı", size=19)
         card.add(self._form_title)
@@ -254,7 +255,7 @@ class FieldReportScreen(Screen):
         photo_row = QWidget()
         photo_layout = QHBoxLayout(photo_row)
         photo_layout.setContentsMargins(0, 0, 0, 0)
-        photo_layout.setSpacing(12)
+        photo_layout.setSpacing(metrics.SPACE_MS)
         photo_layout.addWidget(self._photo_label, stretch=1)
         pick = secondary_button("Şəkil Seç")
         pick.clicked.connect(self.pick_photos)
@@ -266,6 +267,9 @@ class FieldReportScreen(Screen):
         return card
 
     def _build_checklist_card(self) -> Card:
+        # VİZUAL FAZA #1 — KÖLGƏ YOXDUR (4-cü bənd, ölçülmüş): konteynerdə
+        # 640px-ə sıxışdırılıb görünsə də, təbii `sizeHint()` 2897px-dir —
+        # 1920px monitoru da aşır.
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Checklist", size=15))
         card.add(
@@ -289,7 +293,7 @@ class FieldReportScreen(Screen):
         add_row = QWidget()
         add_layout = QHBoxLayout(add_row)
         add_layout.setContentsMargins(0, 0, 0, 0)
-        add_layout.setSpacing(12)
+        add_layout.setSpacing(metrics.SPACE_MS)
         add_layout.addWidget(stretch())
         add_button = action_button(
             "Bənd Əlavə Et",
@@ -305,7 +309,7 @@ class FieldReportScreen(Screen):
         nav_row = QWidget()
         nav_layout = QHBoxLayout(nav_row)
         nav_layout.setContentsMargins(0, 0, 0, 0)
-        nav_layout.setSpacing(12)
+        nav_layout.setSpacing(metrics.SPACE_MS)
         self._previous_button = secondary_button("← Əvvəlki")
         self._previous_button.clicked.connect(self.go_previous)
         nav_layout.addWidget(self._previous_button)
@@ -320,7 +324,7 @@ class FieldReportScreen(Screen):
         self._step_host = QWidget()
         self._step_layout = QVBoxLayout(self._step_host)
         self._step_layout.setContentsMargins(0, 0, 0, 0)
-        self._step_layout.setSpacing(12)
+        self._step_layout.setSpacing(metrics.SPACE_MS)
         card.add(self._step_host)
 
         self._checklist_message = muted_label("")
@@ -330,12 +334,13 @@ class FieldReportScreen(Screen):
         return card
 
     def _build_actions_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — sabit addım-kartlarından biri (loop-da deyil).
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
 
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
         layout.addWidget(stretch())
         reset = secondary_button("Formanı Təmizlə")
         reset.clicked.connect(self.clear_form)
@@ -358,7 +363,7 @@ class FieldReportScreen(Screen):
         holder = QWidget()
         layout = QVBoxLayout(holder)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
 
         layout.addWidget(title_label("Açıq hesabatlar", size=15))
         self._list_notice = muted_label("")
@@ -646,7 +651,7 @@ class FieldReportScreen(Screen):
         photo_row = QWidget()
         photo_layout = QHBoxLayout(photo_row)
         photo_layout.setContentsMargins(0, 0, 0, 0)
-        photo_layout.setSpacing(12)
+        photo_layout.setSpacing(metrics.SPACE_MS)
         photo_layout.addWidget(
             muted_label(_file_name(entry.photo_path) or "Şəkil seçilməyib"), stretch=1
         )

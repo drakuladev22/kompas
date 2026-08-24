@@ -175,12 +175,12 @@ class EmptyState(QWidget):
         inner.addWidget(description, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self._extra = QVBoxLayout()
-        self._extra.setSpacing(12)
+        self._extra.setSpacing(metrics.SPACE_MS)
         inner.addLayout(self._extra)
 
         if primary_text or secondary_text:
             buttons = QHBoxLayout()
-            buttons.setSpacing(12)
+            buttons.setSpacing(metrics.SPACE_MS)
             buttons.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
             if primary_text:
@@ -232,7 +232,7 @@ class EmptyState(QWidget):
             line = QWidget()
             line_layout = QHBoxLayout(line)
             line_layout.setContentsMargins(0, 0, 0, 0)
-            line_layout.setSpacing(12)
+            line_layout.setSpacing(metrics.SPACE_MS)
 
             key_label = muted_label(name)
             line_layout.addWidget(key_label)
@@ -314,7 +314,7 @@ class LoadingState(QWidget):
 
         if show_filters:
             filters = QHBoxLayout()
-            filters.setSpacing(12)
+            filters.setSpacing(metrics.SPACE_MS)
             for index, width in enumerate((110, 150, 170)):
                 block = Skeleton(width, 32, delay_ms=index * 100)
                 self._blocks.append(block)

@@ -146,7 +146,7 @@ class HelpDialog(QDialog):
         row = QWidget()
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(12)
+        row_layout.setSpacing(metrics.SPACE_MS)
 
         number = plain_label(str(index))
         number.setFixedSize(_STEP_BADGE_SIZE, _STEP_BADGE_SIZE)

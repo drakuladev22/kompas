@@ -65,7 +65,14 @@ SAMPLE_PLACES: Final = 3
 #: kart doldurması 84 yerdə `metrics.CARD_PADDING` adına, kart daxili aralığı
 #: 104 yerdə `metrics.CARD_CONTENT_SPACING` adına keçdi, başlıq ölçüsündəki
 #: şkaladan kənar `14px` (5 yer) 15-ə düzəldildi.
-MAX_DISTINCT: Final = 58
+#:
+#: UI-FINAL #5: 58 → 57. `setSpacing(12)` şkalada ADSIZ idi və 175 yerdə
+#: təkrarlanırdı — ən çox işlədilən aralıq dəyəri, halbuki `--space-xs/sm/md/
+#: lg/xl` (4/8/16/24/32) onu ehtiva etmirdi. `--space-ms` (12) əlavə olundu və
+#: hər 175 çağırış `metrics.SPACE_MS` adına keçdi. Skriptin öz qeydi: adlı
+#: istinad SAYILMIR — yəni rəqəmin azalması səpələnmənin FAKTİKİ azalmasıdır,
+#: sayğacın gizlədilməsi deyil.
+MAX_DISTINCT: Final = 57
 MAX_OFF_GRID: Final = 0
 
 #: Rol → həmin rolu daşıyan çağırışlar. Ad `metrics.py`-dakı sabitlə uyğun

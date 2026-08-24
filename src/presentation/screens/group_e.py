@@ -186,8 +186,8 @@ class SupportChatWidget(QWidget):
         header = QWidget()
         header.setFixedHeight(56)
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(18, 0, 18, 0)
-        header_layout.setSpacing(12)
+        header_layout.setContentsMargins(16, 0, 16, 0)
+        header_layout.setSpacing(metrics.SPACE_MS)
 
         avatar = plain_label()
         avatar.setFixedSize(34, 34)
@@ -245,7 +245,7 @@ class SupportChatWidget(QWidget):
         self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self._messages_host = QWidget()
         self._messages_layout = QVBoxLayout(self._messages_host)
-        self._messages_layout.setContentsMargins(18, 18, 18, 18)
+        self._messages_layout.setContentsMargins(16, 16, 16, 16)
         self._messages_layout.setSpacing(16)
         self._messages_layout.addStretch(1)
         self._scroll.setWidget(self._messages_host)
@@ -263,8 +263,8 @@ class SupportChatWidget(QWidget):
         """«Kimə yazırsınız?» — iki kart, uzun izahat YOX (Faza 1)."""
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(18, 20, 18, 20)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 20, 16, 20)
+        layout.setSpacing(metrics.SPACE_MS)
         layout.addWidget(title_label("Kimə yazırsınız?", size=15))
         for channel in (SupportChannel.INTERNAL, SupportChannel.TECHNICAL):
             layout.addWidget(self._channel_card(channel))
@@ -278,7 +278,8 @@ class SupportChatWidget(QWidget):
         card.setStyleSheet(
             f"QPushButton {{ background-color: {self._theme.color('--color-neutral-bg')};"
             f"border: 1px solid {self._theme.color('--color-card-border')};"
-            "border-radius: 10px; text-align: left; padding: 12px 14px; }"
+            f"border-radius: {self._theme.color('--radius-control')}px; text-align: left; "
+            "padding: 12px 14px; }"
             f"QPushButton:hover {{ border-color: {self._theme.color('--color-brand-amber')}; }}"
         )
         inner = QVBoxLayout(card)
@@ -300,8 +301,8 @@ class SupportChatWidget(QWidget):
         # ------------------------------- giriş ------------------------------ #
         composer = QWidget()
         composer_layout = QHBoxLayout(composer)
-        composer_layout.setContentsMargins(16, 14, 16, 14)
-        composer_layout.setSpacing(12)
+        composer_layout.setContentsMargins(16, 16, 16, 16)
+        composer_layout.setSpacing(metrics.SPACE_MS)
 
         self._input = QLineEdit()
         self._input.setPlaceholderText("Mesaj yazın…")
@@ -328,7 +329,7 @@ class SupportChatWidget(QWidget):
         )
         send.setStyleSheet(
             f"background-color: {self._theme.color('--color-brand-amber')};"
-            "border: none; border-radius: 9px;"
+            f"border: none; border-radius: {self._theme.color('--radius-control')}px;"
         )
         send.clicked.connect(self._on_send)
         composer_layout.addWidget(send)
@@ -340,7 +341,7 @@ class SupportChatWidget(QWidget):
         self._urgent.setVisible(False)
         urgent_row = QWidget()
         urgent_layout = QHBoxLayout(urgent_row)
-        urgent_layout.setContentsMargins(16, 0, 16, 10)
+        urgent_layout.setContentsMargins(16, 0, 16, 8)
         urgent_layout.setSpacing(8)
         urgent_layout.addWidget(self._urgent)
         # Seçilmiş faylın adı — «əlavə etdimmi?» sualının YEGANƏ cavabı:
@@ -375,7 +376,7 @@ class SupportChatWidget(QWidget):
 
         box = QWidget()
         box_layout = QHBoxLayout(box)
-        box_layout.setContentsMargins(12, 10, 12, 10)
+        box_layout.setContentsMargins(12, 8, 12, 8)
         box_layout.setSpacing(8)
         glyph = plain_label()
         glyph.setPixmap(icons.render("file", self._theme.color("--color-text-muted"), size=15))
@@ -384,7 +385,7 @@ class SupportChatWidget(QWidget):
         box.setStyleSheet(
             f"background-color: {self._theme.color('--color-neutral-bg')};"
             f"border: 1px solid {self._theme.color('--color-card-border')};"
-            "border-radius: 10px;"
+            f"border-radius: {self._theme.color('--radius-control')}px;"
         )
         layout.addWidget(box)
         self._messages_layout.insertWidget(self._messages_layout.count() - 1, chip)
@@ -616,7 +617,7 @@ class LicenseInactiveScreen(QWidget):
                 details.add(Divider())
             row = QWidget()
             row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(18, 14, 18, 14)
+            row_layout.setContentsMargins(16, 16, 16, 16)
             row_layout.addWidget(muted_label(name, size=13))
             row_layout.addWidget(stretch())
             row_layout.addWidget(

@@ -21,8 +21,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from src.presentation.theme.manager import enable_styled_background
 from src.presentation.widgets import icons, metrics
@@ -31,11 +38,54 @@ from src.presentation.widgets.primitives import section_label, stretch
 from src.presentation.widgets.safe_text import plain_tooltip
 
 if TYPE_CHECKING:
+    from PySide6.QtGui import QResizeEvent
+
     from src.presentation.navigation import MenuEntry
 
 #: `MenuEntry.icon` boş olduqda işlədilən ikon — menyu maddəsi ikonsuz qalsa
 #: sətir sıçrayardı (mətn sola sürüşərdi), ona görə neytral bir forma verilir.
 FALLBACK_ICON: Final = "list"
+
+
+class _OverlayScrollArea(QScrollArea):
+    """Şaquli zolaq MƏZMUNUN ÜSTÜNDƏ üzür — LAYOUT-dan yer ALMIR.
+
+    ──────────────────────────────────────────────────────────────────────
+    NİYƏ ÜST-QAT (OVERLAY), NİYƏ ADİ `QScrollArea` KİFAYƏT ETMİR
+    ──────────────────────────────────────────────────────────────────────
+    Adi `QScrollArea` şaquli zolaq görünəndə viewport-un ENİNİ zolağın
+    ölçüsü qədər AZALDIR (daxili layout belə qurulub) — nazik zolaq
+    (8px) belə maddələrin sahəsini 244→236px endirir və uzun başlıqların
+    elide sayını artırır (ölçülüb: istifadəçi məhz mətn kəsilməsindən
+    şikayət etmişdi). macOS-un sürüşdürmə zolağı LAYOUT-a təsir ETMİR —
+    o, məzmunun üstündə üzür və yalnız sürüşmə baş verəndə görünür; bu
+    sinif həmin naxışı təkrarlayır (layihənin dizayn dili, sırf texniki
+    seçim deyil).
+
+    ──────────────────────────────────────────────────────────────────────
+    NECƏ İŞLƏYİR — QT-nin ÖZ ZOLAĞI, YALNIZ YENİDƏN YERLƏŞDİRİLİR
+    ──────────────────────────────────────────────────────────────────────
+    Yeni, DUBLİKAT zolaq YARADILMIR (siçan təkərİ/klaviatura/sürüşdürmə
+    məntiqini TƏKRAR yazmaqdan qaçmaq üçün) — `verticalScrollBar()`
+    Qt-nin ÖZ obyektidir, bütün funksionallığı DAŞIYIR. `resizeEvent`
+    yalnız İKİ şeyi override edir: (1) viewport HƏMİŞƏ TAM enə qədər
+    genişlənir (Qt-nin defolt "zolağa yer ayır" davranışı ƏVƏZLƏNİR),
+    (2) zolağın özü sağ kənarda, viewport-un ÜSTÜNDƏ, `raise_()` ilə
+    üzən vəziyyətdə yerləşdirilir.
+
+    Zolaq `SIDEBAR_PADDING_H` (12px) sağ boşluğunun İÇİNDƏ qalır (8px enli,
+    12px-lik boşluqdan kiçikdir) — düymələrin `Expanding` en siyasəti
+    onları bu boşluğa QƏDƏR, yəni zolağın YERİNƏ UZATMIR, ona görə zolaq
+    klikə açıq mətn/ikon sahəsini ÖRTMÜR."""
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 — Qt API
+        super().resizeEvent(event)
+        self.viewport().setGeometry(0, 0, self.width(), self.height())
+
+        vbar = self.verticalScrollBar()
+        width = max(vbar.sizeHint().width(), 1)
+        vbar.setGeometry(self.width() - width, 0, width, self.height())
+        vbar.raise_()
 
 
 class Sidebar(QWidget):
@@ -80,19 +130,31 @@ class Sidebar(QWidget):
         self._active_key: str | None = None
         self._collapsed = False
 
+        # ──────────────────────────────────────────────────────────────────
+        # BAŞLIQ SABİTDİR, MADDƏLƏR SÜRÜŞDÜRÜLƏ BİLƏR (funksional düzəliş)
+        # ──────────────────────────────────────────────────────────────────
+        # Əvvəl `self._layout` (bu, birbaşa `self`-ə bağlı idi) həm başlığı,
+        # həm bütün maddələri birbaşa daşıyırdı, `QScrollArea` heç yerdə
+        # yox idi. Nəticə ölçülüb: ROOT rolunun 42 maddəsi ~2268px tələb
+        # edir, 1080p ekranda isə paneldə ~1040px yer var — sürüşdürmə
+        # olmadığı üçün ~1190px-lik hissə (təxminən yarısı) HEÇ CÜR
+        # açılmır, istifadəçi ora ÇATA BİLMİR. Bu, kosmetik deyil,
+        # funksional qüsurdur.
+        #
+        # Həll: xarici `self._layout` YALNIZ iki bloku (başlıq + sürüşdürmə
+        # sahəsi) daşıyır; maddələr `self._items_layout`-a keçib, o da
+        # `self._scroll`-un daxili widget-indədir. Köhnə vahid padding
+        # (`SIDEBAR_PADDING_H/V`) iki yerə bölünür ki, GÖRÜNÜŞ DƏYİŞMƏSİN —
+        # yalnız DAVRANIŞ (sürüşdürmə) əlavə olunur.
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(
-            metrics.SIDEBAR_PADDING_H,
-            metrics.SIDEBAR_PADDING_V,
-            metrics.SIDEBAR_PADDING_H,
-            metrics.SIDEBAR_PADDING_V,
-        )
-        self._layout.setSpacing(metrics.SIDEBAR_ITEM_SPACING)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(0)
 
         # Başlıq sətri: bölmə adı + aç/bağla düyməsi. Düymə YUXARIDADIR,
         # çünki daraldılmış rejimdə mətn yox olur və istifadəçi paneli geri
         # açmaq üçün SABİT bir nöqtə axtarır — siyahının altında olsaydı, uzun
-        # menyuda ekrandan çıxardı.
+        # menyuda ekrandan çıxardı. BAŞLIQ SÜRÜŞMÜR — sürüşəndə panelin
+        # kimliyi (bölmə adı, daraltma düyməsi) itərdi.
         header = QWidget()
         header_layout = QHBoxLayout(header)
         # SOL KƏNAR NAVİQASİYA SƏTRİ İLƏ EYNİDİR.
@@ -128,9 +190,53 @@ class Sidebar(QWidget):
         self._toggle.clicked.connect(self._on_toggle_clicked)
         header_layout.addWidget(self._toggle)
 
-        self._layout.addWidget(header)
+        # Başlığın ÖZ qabı — köhnə `self._layout`-un sol/sağ/üst padding-i
+        # BURAYA köçür (aşağıdakı sürüşdürmə sahəsi EYNİ üfüqi padding-i
+        # ÖZÜ təkrarlayır). Alt padding YOXDUR: başlıqla ilk maddə arasındakı
+        # boşluğu indi sürüşmə sahəsinin ÖZ üst kənar boşluğu verir (aşağı
+        # bax) — əks halda iki mənbə eyni boşluğu ikiqat yaradardı.
+        header_host = QWidget()
+        header_host_layout = QVBoxLayout(header_host)
+        header_host_layout.setContentsMargins(
+            metrics.SIDEBAR_PADDING_H, metrics.SIDEBAR_PADDING_V, metrics.SIDEBAR_PADDING_H, 0
+        )
+        header_host_layout.addWidget(header)
+        self._layout.addWidget(header_host)
 
-        self._layout.addStretch(1)
+        # Maddələr sürüşdürülə bilər sahədədir — bax konstruktorun başındakı
+        # "BAŞLIQ SABİTDİR" şərhi. `_OverlayScrollArea` (bax yuxarı) — adi
+        # `QScrollArea` DEYİL: zolaq maddələrin sahəsindən yer ALMIR.
+        self._scroll = _OverlayScrollArea()
+        self._scroll.setObjectName("SidebarScroll")
+        self._scroll.setWidgetResizable(True)
+        # `admin_shell.py`-dəki `ContentScroll` NAXIŞI TƏKRARLANIR
+        # (`setFrameShape(NoFrame)`): çərçivə əlavə olunsaydı panelin sağ
+        # kənarında naviqasiyaya AİD OLMAYAN ikinci bir xətt görünərdi.
+        self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        # ÜFÜQİ sürüşdürmə YOXDUR — maddələr HƏMİŞƏ panelin (sabit) eninə
+        # sığır, `NavButton`-un `Expanding` ölçü siyasəti bunu təmin edir;
+        # üfüqi zolağın görünməsi yalnız gözlənilməz bir dizayn səhvini
+        # gizli saxlayardı.
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._layout.addWidget(self._scroll, 1)
+
+        items_host = QWidget()
+        self._items_layout = QVBoxLayout(items_host)
+        # SOL/SAĞ: başlıqla EYNİ üfüqi padding (`SIDEBAR_PADDING_H`) —
+        # maddələr başlıqla eyni şaquli xətdən başlamalıdır. ÜST:
+        # `SIDEBAR_ITEM_SPACING` — başlıqla ilk maddə arasında əvvəlki
+        # `self._layout.setSpacing(SIDEBAR_ITEM_SPACING)`-in verdiyi boşluğun
+        # EYNİSİ. ALT: `SIDEBAR_PADDING_V` — panelin köhnə alt padding-i,
+        # indi sürüşən məzmunun sonuna keçib.
+        self._items_layout.setContentsMargins(
+            metrics.SIDEBAR_PADDING_H,
+            metrics.SIDEBAR_ITEM_SPACING,
+            metrics.SIDEBAR_PADDING_H,
+            metrics.SIDEBAR_PADDING_V,
+        )
+        self._items_layout.setSpacing(metrics.SIDEBAR_ITEM_SPACING)
+        self._items_layout.addStretch(1)
+        self._scroll.setWidget(items_host)
 
     # ------------------------------- məzmun --------------------------------- #
 
@@ -154,8 +260,10 @@ class Sidebar(QWidget):
             )
             button.clicked.connect(lambda _=False, key=entry.key: self._on_clicked(key))
             # `insertWidget` — sondakı stretch-dən ƏVVƏL yerləşdirilməlidir,
-            # əks halda maddələr panelin dibinə düşərdi.
-            self._layout.insertWidget(self._layout.count() - 1, button)
+            # əks halda maddələr sürüşmə sahəsinin dibinə düşərdi.
+            # `self._items_layout` — `self._layout` DEYİL (o, indi YALNIZ
+            # başlıq + sürüşdürmə qabını daşıyır, bax konstruktor).
+            self._items_layout.insertWidget(self._items_layout.count() - 1, button)
             self._buttons[entry.key] = button
 
         if self._active_key is not None and self._active_key in self._buttons:
@@ -185,7 +293,7 @@ class Sidebar(QWidget):
 
     def _clear(self) -> None:
         for button in self._buttons.values():
-            self._layout.removeWidget(button)
+            self._items_layout.removeWidget(button)
             button.deleteLater()
         self._buttons.clear()
 

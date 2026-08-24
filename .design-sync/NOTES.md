@@ -61,7 +61,7 @@ git-ə salınmır (bax `.gitignore`).
   `styles.css`-dən `@import` olunur (skillin invariantı: dizaynlara YALNIZ
   `styles.css`-in tranzitiv `@import` bağlaması çatır).
 - **Rənglər WCAG AA qapısından keçib** — `scripts/check_contrast.py`
-  `--include-high-contrast` ilə **156**, bayraqsız **154** cütü yoxlayır.
+  `--include-high-contrast` ilə **164**, bayraqsız **162** cütü yoxlayır.
   Tokenləri dəyişdirən hər kəs həmin skripti işlətməlidir.
   **(ÇATIŞMAZLIQ DÜZƏLİŞİ:** əvvəllər burada «50 cütü… bayraqsız 48» yazılırdı.
   Rəqəm yoxlayıcı yalnız `tokens.py` cütlərini ölçdüyü dövrdən qalmışdı; sonra
@@ -70,6 +70,13 @@ git-ə salınmır (bax `.gitignore`).
   Bu, sadəcə köhnə rəqəm deyildi — faylın öz xəbərdarlığına görə **dizayn
   agenti bu siyahını həqiqət kimi oxuyur**, yəni səhv rəqəm ona "əhatə tamdır"
   deyib real boşluğu gizlədə bilərdi.**)**
+  **(İKİNCİ KÖHNƏLMƏ, UI-FINAL vizual iş:** rəqəm 156/154-də qalmışdı,
+  faktiki isə 162/160 idi. Səbəb yeni QSS selektorlarıdır — `[variant=...]`
+  düymələrinin `:disabled` qaydaları və `QDateTimeEdit` qrupu. Yəni bu
+  rəqəm ARTIQ İKİ DƏFƏ köhnəlib: o, tokenlərin deyil, `qss.py`-dəki
+  SELEKTOR SAYININ funksiyasıdır və yeni selektor əlavə edən hər dəyişiklik
+  onu sürüşdürür. Ona görə burada rəqəmi ƏZBƏRDƏN yazmaq yox, skriptin son
+  sətrindən OXUYUB köçürmək lazımdır — eyni xəbərdarlıq `CLAUDE.md` §2-dədir.**)**
   **BU RƏQƏM DƏYİŞKƏNDİR — sənədə güvənməyin, skripti işə salıb yoxlayın:**
   `.venv/Scripts/python.exe scripts/check_contrast.py --include-high-contrast`
   — son sətir «UĞURLU: NN rəng cütü…» formasında cari sayı yazır. Yeni rəng

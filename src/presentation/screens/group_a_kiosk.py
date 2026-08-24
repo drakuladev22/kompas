@@ -662,7 +662,7 @@ class EmployeeHomeScreen(QWidget):
         row = QWidget()
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(12)
+        row_layout.setSpacing(metrics.SPACE_MS)
 
         self._break_combo = QComboBox()
         self._break_combo.setProperty("variant", "form")
@@ -878,7 +878,7 @@ class EmployeeHomeScreen(QWidget):
         card.add(head)
 
         self._open_shift_body = QVBoxLayout()
-        self._open_shift_body.setSpacing(12)
+        self._open_shift_body.setSpacing(metrics.SPACE_MS)
         holder = QWidget()
         holder.setLayout(self._open_shift_body)
         card.add(holder)
@@ -912,7 +912,7 @@ class EmployeeHomeScreen(QWidget):
         claimed_layout.addWidget(Divider())
         claimed_layout.addWidget(section_label("Tutduğunuz növbələr"))
         self._claimed_body = QVBoxLayout()
-        self._claimed_body.setSpacing(12)
+        self._claimed_body.setSpacing(metrics.SPACE_MS)
         claimed_holder = QWidget()
         claimed_holder.setLayout(self._claimed_body)
         claimed_layout.addWidget(claimed_holder)
@@ -1178,7 +1178,7 @@ class EmployeeHomeScreen(QWidget):
         card.add(head)
 
         self._announcement_body = QVBoxLayout()
-        self._announcement_body.setSpacing(12)
+        self._announcement_body.setSpacing(metrics.SPACE_MS)
         holder = QWidget()
         holder.setLayout(self._announcement_body)
         card.add(holder)

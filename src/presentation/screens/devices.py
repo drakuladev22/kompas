@@ -160,7 +160,8 @@ class DevicePendingScreen(Screen):
         layout = self.body()
         layout.addStretch(1)
 
-        card = Card()
+        # VİZUAL FAZA #1 — ekranın BÜTÖV məzmun kartı, loop-da deyil.
+        card = Card(shadow=True)
         body = card.body()
         body.setSpacing(metrics.CARD_SPACING)
 
@@ -280,13 +281,14 @@ class DeviceAdminScreen(Screen):
         layout.addLayout(header)
 
         # --- Təsdiq növbəsi (diqqət çəkən bölmə) ---------------------------
-        self._pending_card = Card()
+        # VİZUAL FAZA #1 — sabit bölmə kartı (loop-da deyil).
+        self._pending_card = Card(shadow=True)
         pending_body = self._pending_card.body()
-        pending_body.setSpacing(12)
+        pending_body.setSpacing(metrics.SPACE_MS)
         self._pending_heading = section_label("Təsdiq gözləyənlər")
         pending_body.addWidget(self._pending_heading)
         self._pending_rows = QVBoxLayout()
-        self._pending_rows.setSpacing(12)
+        self._pending_rows.setSpacing(metrics.SPACE_MS)
         pending_body.addLayout(self._pending_rows)
         layout.addWidget(self._pending_card)
 
@@ -445,7 +447,7 @@ class DeviceAdminScreen(Screen):
         outer.setSpacing(8)
 
         heading = QHBoxLayout()
-        heading.setSpacing(12)
+        heading.setSpacing(metrics.SPACE_MS)
         code = plain_label(str(device.get("short_code", "")))
         code.setProperty("variant", "mono")
         heading.addWidget(code)
@@ -454,7 +456,7 @@ class DeviceAdminScreen(Screen):
         outer.addLayout(heading)
 
         form = QHBoxLayout()
-        form.setSpacing(12)
+        form.setSpacing(metrics.SPACE_MS)
 
         form.addWidget(field_label("Ad"))
         name_input = QLineEdit()

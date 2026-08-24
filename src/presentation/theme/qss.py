@@ -270,6 +270,21 @@ QPushButton[variant="primary"]:pressed {
     border-color: {{--color-accent-pressed}};
 }
 
+/* DEAKTİV — funksional qüsur düzəlişi (VİZUAL FAZA #0).
+   `QPushButton:disabled` (yuxarıda) YALNIZ `color`/`border-color` sıfırlayır,
+   `background-color`-a TOXUNMUR — variant seçicisi ONDAN daha SPESİFİK
+   olduğu üçün `[variant="primary"]`-in `--color-accent` fonu KASKADDA QALIB
+   QALIRDI. Nəticə: deaktiv əsas düymə TAM güclü accent fonu ilə render
+   olunurdu, istifadəçi onu klikləmə üçün AKTİV zənn edirdi. `[variant=
+   "action"]:disabled` ilə EYNİ cütü işlədir (`--color-text-disabled` /
+   `--color-neutral-bg`, `scripts/check_contrast.py`-da ARTIQ TƏSDİQLƏNİB —
+   "Deaktiv hərəkət düyməsi", light 3.85:1 / dark 4.48:1) — YENİ cüt YOX. */
+QPushButton[variant="primary"]:disabled {
+    background-color: {{--color-neutral-bg}};
+    border-color: {{--color-card-border}};
+    color: {{--color-text-disabled}};
+}
+
 QPushButton[variant="danger"] {
     background-color: {{--color-danger}};
     color: {{--color-bg-primary}};
@@ -294,12 +309,18 @@ QPushButton[variant="ghost"]:hover {
 }
 
 /* Fokus halqası HƏR İKİ variantda görünür — klaviatura ilə naviqasiya
-   (əlçatanlıq) düymənin harada olduğunu göstərməlidir. */
+   (əlçatanlıq) düymənin harada olduğunu göstərməlidir.
+
+   GİRİŞ SAHƏLƏRİ (`QLineEdit`/`QComboBox`/`QPlainTextEdit`) BURADA YOXDUR —
+   VİZUAL FAZA #6 (alt-xətt naxışı, aşağıda) qəsdən çıxarır. Səbəb
+   SPESİFİKLİK BƏRABƏRLİYİDİR: bu qayda da, aşağıdakı sahə-spesifik fokus
+   qaydası da eyni `Tip:pseudo-sinif` formasındadır (Qt/CSS spesifikliyi
+   eynidir), yəni son sözü SƏTIR SIRASI deyir. Bu qayda burada qalsaydı,
+   onun `border: 2px solid` (DÖRD tərəfli) tərifi sahə-spesifik `border-
+   bottom`-u KEÇƏRDİ və fokusda köhnə DÖRDBUCAQ QUTU geri qayıdardı —
+   dizaynın bütün məqsədini sükutla pozardı. */
 QPushButton:focus,
-QLineEdit:focus,
-QComboBox:focus,
-QCheckBox:focus,
-QPlainTextEdit:focus {
+QCheckBox:focus {
     outline: none;
     border: {{--focus-ring-width}} solid {{--color-focus-ring}};
 }
@@ -321,44 +342,91 @@ QPlainTextEdit:focus {
    Doldurma 8 → 10/12: mətn kursoru ilə çərçivə arasındakı məsafə əvvəl
    sıxdı; 12px üfüqi doldurma `variant="form"` sahələri ilə də eyni sıraya
    düşür (14 → 12, hər ikisi 4px şəbəkəsində). */
-QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QDateEdit, QTimeEdit {
+/* `QDateTimeEdit` NİYƏ HƏR YERDƏ `QDateEdit`/`QTimeEdit` İLƏ BİRLİKDƏ (VİZUAL
+   FAZA #0b): Qt-də bu, `QDateEdit`/`QTimeEdit`-in AYRI (bacı) sinfidir, heç
+   birindən miras ALMIR — `group_f.py`-də quraşdırılanda seçicilər onu
+   TANIMIRDI və sahə HƏR İKİ temada Qt-nin DEFOLT (stilsiz) görünüşü ilə
+   render olunurdu. Düzəliş YALNIZ ad əlavəsidir, YENİ qayda YOX. */
+/* QUTU GEDİR, ALT XƏTT GƏLİR (VİZUAL FAZA #6, istifadəçi qərarı).
+   ─────────────────────────────────────────────────────────────────────────
+   DÖRD-TƏRƏFLİ QUTU NİYƏ ATILDI: `--color-border` (#86868B) orta-tünd boz
+   tondur, çünki 1.4.11-in 3:1 həddini DAŞIMALI idi — sahənin fonu
+   (`--color-bg-surface`) isə kartın ağ fonundan cəmi 1.09:1 fərqlənir,
+   yəni tünd sərhəd sahənin harada başladığını göstərən YEGANƏ vizual
+   siqnal idi. Nəticə: parlaq daxil + tünd DÖRD-tərəfli çərçivə "köhnə
+   forma" hissi yaradırdı (macOS/iOS deyil, klassik masaüstü qutusu).
+
+   3:1 İNDİ NECƏ ÖDƏNİR: `--color-border` HƏMİN token olaraq qalır, sadəcə
+   YALNIZ alt kənarda çəkilir (`border-bottom`) — rəng, qalınlıq və
+   yoxlanılan kontrast nisbəti (`--color-border` / `--color-bg-primary`,
+   `scripts/check_contrast.py`-də "Sərhəd/ayırıcı" cütü) DƏYİŞMİR, sadəcə
+   HANSI TƏRƏFDƏ çəkildiyi dəyişir. Üst/yan tərəflər indi sərhədsizdir —
+   onların fərqləndirməsini `--color-bg-surface` doldurması aparır, forma
+   şəklini isə alt xətt təyin edir (doldurulmuş sahə + alt xətt, Material
+   naxışı).
+
+   RADİUS BÖLÜNÜR: üst künclər yumşaq qalır, alt künclər 0-dır — əks halda
+   alt xətt künclərdə kəsilib "sınıq" görünərdi. */
+QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QDateEdit, QTimeEdit,
+QDateTimeEdit {
     background-color: {{--color-bg-surface}};
     color: {{--color-text-primary}};
-    border: {{--border-width}} solid {{--color-border}};
-    border-radius: {{--radius-control}};
+    border: none;
+    border-bottom: {{--border-width}} solid {{--color-border}};
+    border-top-left-radius: {{--radius-control}};
+    border-top-right-radius: {{--radius-control}};
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
     padding: 10px 12px;
     selection-background-color: {{--color-accent}};
     selection-color: {{--color-text-on-accent}};
 }
 
-/* Hover — sərhəd BİR PİLLƏ güclənir. `--color-border-strong` məhz bunun
+/* Hover — alt xətt BİR PİLLƏ güclənir. `--color-border-strong` məhz bunun
    üçün qalır: token silinmədi, rolu dəyişdi (əvvəl başlıqdakı ikon
    düyməsinin çərçivəsi idi, indi sahənin hover kənarı). Hər iki halda
-   ölçülən şey eynidir — 3:1 kontrastlı idarəetmə kənarı. */
+   ölçülən şey eynidir — 3:1 kontrastlı idarəetmə kənarı, sadəcə YALNIZ
+   alt tərəfdə (`border-color` → `border-bottom-color`). */
 QLineEdit:hover, QPlainTextEdit:hover, QTextEdit:hover,
-QComboBox:hover, QSpinBox:hover, QDateEdit:hover, QTimeEdit:hover {
-    border-color: {{--color-border-strong}};
+QComboBox:hover, QSpinBox:hover, QDateEdit:hover, QTimeEdit:hover,
+QDateTimeEdit:hover {
+    border-bottom-color: {{--color-border-strong}};
 }
 
 /* Fokus — sahə səthdən QALXIR: fon ağa (yüksəldilmiş səthə) keçir və
-   halqa vurğu rəngindədir. İki siqnal birlikdə işləyir, yəni rəngi
-   ayırd edə bilməyən istifadəçi üçün də fokus görünür. */
+   alt xətt qalınlaşıb (1px → 2px) vurğu rənginə keçir. İki siqnal birlikdə
+   işləyir, yəni rəngi ayırd edə bilməyən istifadəçi üçün də fokus görünür.
+
+   BÖRDER BURADA AÇIQ YAZILIR, ÜMUMİ FOKUS QAYDASINDAN GÖZLƏNMİR — yuxarıdakı
+   `QPushButton:focus, QCheckBox:focus` qaydası bu tipləri artıq ƏHATƏ
+   ETMİR (bax həmin qaydanın şərhi); qutunun geri qayıtmaması üçün alt-xətt
+   davranışı burada, YALNIZ sahələr üçün təyin olunur.
+
+   PADDİNG-BOTTOM 1PX AZALIR — hündürlük SIÇRAMASIN deyə: 1px → 2px alt
+   xətt keçidi `padding-bottom`-u 1px azaltmaqla kompensasiya edilir
+   (`data_table.py`-dəki "görünməz sərhəd" naxışının EYNİSİ, fərq ondadır
+   ki, orada sərhəd HƏMİŞƏ ayrılır, burada isə YALNIZ fokusda kiçilir —
+   nəticə eynidir: ümumi hündürlük dəyişmir). */
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus,
-QComboBox:focus, QSpinBox:focus, QDateEdit:focus, QTimeEdit:focus {
+QComboBox:focus, QSpinBox:focus, QDateEdit:focus, QTimeEdit:focus,
+QDateTimeEdit:focus {
     background-color: {{--color-bg-elevated}};
+    border-bottom: {{--focus-ring-width}} solid {{--color-focus-ring}};
+    padding-bottom: 9px;
 }
 
 /* Deaktiv sahə — çökük səth, solğun mətn: «yazıla bilməz» rəngdən ƏVVƏL
    FORMADAN oxunur. */
 QLineEdit:disabled, QPlainTextEdit:disabled, QTextEdit:disabled,
-QComboBox:disabled, QSpinBox:disabled, QDateEdit:disabled, QTimeEdit:disabled {
+QComboBox:disabled, QSpinBox:disabled, QDateEdit:disabled, QTimeEdit:disabled,
+QDateTimeEdit:disabled {
     background-color: {{--color-bg-sunken}};
     color: {{--color-text-disabled}};
-    border-color: {{--color-border-subtle}};
+    border-bottom-color: {{--color-border-subtle}};
 }
 
 QLineEdit[state="error"], QPlainTextEdit[state="error"] {
-    border-color: {{--color-danger}};
+    border-bottom-color: {{--color-danger}};
 }
 
 /* Placeholder DEAKTİV mətn DEYİL — sahə aktivdir və istifadəçi ondan nə
@@ -369,9 +437,206 @@ QLineEdit::placeholder {
     color: {{--color-text-placeholder}};
 }
 
+/* VİZUAL FAZA #6 DÜZƏLİŞİ — `background-color`/`subcontrol-*` ƏLAVƏ OLUNDU.
+   ─────────────────────────────────────────────────────────────────────────
+   İLKİN YOXLAMA SƏHV İDİ: `border: none` təkbaşına KİFAYƏT ETMİR. Qt-nin
+   sənədləşdirilmiş davranışı budur — `::drop-down` alt-kontroluna
+   `background-color` AÇIQ təyin edilməyəndə Qt native platform üslubuna
+   (Windows-da bu maşında) qayıdır və o, öz çərçivəli/haşiyəli "düymə"
+   fonunu çəkir; nəticə sağ tərəfdə şaquli ayırıcı xətt + qutulu ox sahəsi
+   kimi görünür — QSS-in `border: none`-u bu native fon çəkilişini
+   BLOKLAMIR, çünki NÖVBƏTİ addım (fon) hələ CSS-ə həvalə edilməmişdi.
+
+   Fon `transparent` olanda alt-kontrol artıq QComboBox-un ÖZ doldurulmuş
+   fonunu göstərir (heç bir ayrı səth yaratmır) və `subcontrol-origin`/
+   `subcontrol-position` açıq yazılanda Qt bu alt-kontrolu TAM CSS-yönümlü
+   kimi tanıyır — native fallback YOX olur. Ox NATİV `PE_IndicatorArrowDown`
+   ilə qalır (xüsusi ikon TƏYİN OLUNMUR), yəni görünüşü dəyişmir, YALNIZ
+   ətrafındakı qutu/xətt itir. */
 QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
     border: none;
+    background-color: transparent;
     width: {{--space-lg}};
+}
+
+/* İKİNCİ ADDIM YAZILDI, SONRA GERİ ÇIXARILDI — bax aşağıdakı ÜÇÜNCÜ addımın
+   şərhi. Burada YALNIZ `[variant="form"]` üçün `::drop-down` TƏKRARI qalır
+   (`::down-arrow` YOX): Qt-nin alt-kontrol kaskadı dinamik `[variant]`
+   xüsusiyyəti ilə seçilmiş `QComboBox`-a AD-SİZ `::drop-down` qaydasını
+   avtomatik VERMİR (ölçülüb: `new_task_dialog`/`fine_entry`-dəki formalı
+   seçicilərdə eyni bevel qaldı). Görünüş TƏKRARLANIR, çünki Qt-nin özü
+   BURADA miras vermir. */
+QComboBox[variant="form"]::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    border: none;
+    background-color: transparent;
+    width: {{--space-lg}};
+}
+
+/* ALTINCI ADDIM — EYNİ ÜÇ MÜALİCƏ `QDateEdit`/`QDateTimeEdit`-in TƏQVİM
+   düyməsinə DƏ (`setCalendarPopup(True)` — `group_f.py`-dəki "Son tarix",
+   `group_b.py`/`support_inbox.py`-dəki tarix seçiciləri). `QComboBox`-da
+   işləyən reseptin EYNİSİ: fon/sərhəd şəffaflaşdırılır, `::drop-down`
+   CSS-ə tam həvalə edilir (bax yuxarıdakı `QComboBox::drop-down` şərhi —
+   səbəb TƏKRARLANMIR). `QTimeEdit::drop-down` da PROFİLAKTİK əlavə olunur
+   (kodda `setCalendarPopup` İŞLƏDİLMİR, lakin `QTimeEdit` `QDateTimeEdit`-
+   dən miras alır, subcontrol NƏZƏRİ mövcuddur — gələcək istifadə üçün
+   eyni tələyə düşməsin). */
+QDateEdit::drop-down, QTimeEdit::drop-down, QDateTimeEdit::drop-down,
+QDateEdit[variant="form"]::drop-down, QTimeEdit[variant="form"]::drop-down,
+QDateTimeEdit[variant="form"]::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    border: none;
+    background-color: transparent;
+    width: {{--space-lg}};
+}
+
+/* `QSpinBox`/`QDateEdit`/`QTimeEdit`/`QDateTimeEdit`-in `::up-button`/
+   `::down-button`-u — `QComboBox::drop-down` ilə EYNİ alt-kontrol
+   memarlığı, ona görə EYNİ qaydaya tabedir (bax aşağıdakı ÜÇÜNCÜ addım:
+   bevel-i aradan qaldıran əsl amil `padding-right`-dır, bu qayda ONUN
+   YANINDA lazımdır ki, düymələrin ÖZÜ də şəffaf/haşiyəsiz qalsın).
+   `::up-arrow`/`::down-arrow` BURADA QƏSDƏN YOXDUR — bax ALTINCI addım
+   (aşağıda) — indi RUNTIME ikonla birlikdə əlavə olunurlar. */
+QSpinBox::up-button, QSpinBox::down-button,
+QDateEdit::up-button, QDateEdit::down-button,
+QTimeEdit::up-button, QTimeEdit::down-button,
+QDateTimeEdit::up-button, QDateTimeEdit::down-button {
+    border: none;
+    background: transparent;
+    width: {{--space-md}};
+}
+
+/* ÜÇÜNCÜ DÜZƏLİŞ — HƏQİQİ KÖK SƏBƏB TAPILDI, PİKSEL SƏVİYYƏSİNDƏ
+   YOXLANDI (`QWidget.grab()` + piksel oxuma, ZOOM skrinşot deyil — bax
+   commit tarixçəsi).
+   ─────────────────────────────────────────────────────────────────────────
+   Yuxarıdakı iki düzəliş (`background-color: transparent` + açıq
+   `::down-arrow`) TƏK BAŞINA kifayət etmirdi, çünki əsl səbəb BAŞQA idi:
+   sahənin ÖZ `padding`-i sağda alt-kontrol üçün YER AYIRMIRDI (`padding:
+   0 12px` — sol/sağ EYNİ). Qt-nin RƏSMİ "Customizing QComboBox" nümunəsi
+   məhz buna görə ASİMMETRİK doldurma işlədir (`padding: 1px 18px 1px 3px`)
+   — kifayət qədər sağ boşluq AYRILMAYANDA Qt alt-kontrolu CSS-ə TAM
+   HƏVALƏ ETMİR, native "kompleks kontrol" çəkilişinə (bevel daxil) geri
+   qayıdır, `::drop-down`-un ÖZ qaydaları TƏK BAŞINA ora TƏSİR ETMİR.
+   (DÜZƏLİŞ, DÖRDÜNCÜ addımdan sonra: `::down-arrow`-un TƏSİRSİZ olduğu
+   iddiası SƏHV idi — o, OXUN ÖZÜNÜ aparırdı, bevel-i yox. Bax aşağı.)
+
+   Sağ padding YALNIZ alt-kontrolu olan BEŞ tipə (`QComboBox`/`QSpinBox`/
+   `QDateEdit`/`QTimeEdit`/`QDateTimeEdit`) əlavə olunur — `QLineEdit`/
+   `QPlainTextEdit`/`QTextEdit`-in belə bir alt-kontrolu yoxdur, onlara
+   əlavə sağ boşluq lazımsız asimmetriya yaradardı.
+
+   SINAQ: 220px enində, hər iki temada, `grab()`-dan oxunan piksel
+   sətirlərində sağ kənarda TƏK BİR fon rəngi qaldı — açıq/tünd xətt,
+   bevel İZİ YOXDUR. */
+QComboBox, QSpinBox, QDateEdit, QTimeEdit, QDateTimeEdit {
+    padding-right: 28px;
+}
+
+QComboBox[variant="form"],
+QSpinBox[variant="form"],
+QDateEdit[variant="form"],
+QTimeEdit[variant="form"],
+QDateTimeEdit[variant="form"] {
+    padding-right: 28px;
+}
+
+/* DÖRDÜNCÜ ADDIM — REAL Windows platformasında yoxlandı (`app.platformName()
+   == "windows"`, offscreen DEYİL): `padding-right` bevel-i doğrudan da
+   apardı, LAKİN ox üçbucağı da GETMİŞDİ — sahə sağda boş fonla bitirdi.
+   Səbəb özümüzün İKİNCİ addımdakı `QComboBox::down-arrow` qaydası imiş:
+   Qt-nin sənədləşdirilmiş qaydasına görə `::down-arrow`-a HƏR HANSI stil
+   verilib, LAKİN `image` təyin edilməyəndə, Qt oxu BOŞ (heç nə) çəkir —
+   customizasiya olunmamış vəziyyətdə isə native primitiv (`PE_
+   IndicatorArrowDown`) özü çəkilirdi. Yəni `::down-arrow` qaydası bevel-i
+   YOX, OXUN ÖZÜNÜ aparırmış — ikisi TƏSADÜFƏN eyni committə düşdüyü üçün
+   səbəb-nəticə qarışmışdı.
+
+   Həll (o an üçün): `QComboBox::down-arrow` VƏ `QComboBox[variant="form"]
+   ::down-arrow` qaydaları TAMAMİLƏ ÇIXARILDI. `::drop-down` (fon/sərhəd) VƏ
+   `padding-right` QALDI — bevel-i onlar apardı, ox isə YENİDƏN nativ yolla
+   çəkildi (LAKİN real Windows-da o da GÖRÜNMƏDİ — bax BEŞİNCİ addım). */
+
+/* BEŞİNCİ ADDIM — RUNTIME-DA YARADILAN İKON (Hipotez 3-ün UCUZ variantı,
+   statik asset/`.spec`/`infra` koordinasiyası OLMADAN).
+   ─────────────────────────────────────────────────────────────────────────
+   Real Windows-da (offscreen DEYİL) sınandı: nativ `PE_IndicatorArrowDown`
+   HEÇ VAXT görünmədi (DÖRDÜNCÜ addımdan ƏVVƏL DƏ) — ox YOX idi, sadəcə boş
+   sahə. CSS-üçbucaq həlli (BEŞİNCİ addımdan ƏVVƏLKİ sınaq, Hipotez 2) DƏ
+   uğursuz oldu: Qt bu alt-kontrolda "transparent" sərhədi şəffaf ÇƏKMİR
+   (piksel sınağı: 3 rəngli sərhədlə diaqonal keçid GÖRÜNÜR, `transparent`
+   ilə isə bütün qutu dolu qalır — sübutla, təxminlə DEYİL).
+
+   Həll: ikon `widgets/icons.py`-dakı `_BODIES["chevron_down"]` SVG
+   gövdəsindən RUNTIME-da (`theme/manager.py::resolve_caret_down_icon`)
+   `QPixmap` kimi çəkilir və keş qovluğuna (`%PROGRAMDATA%\\KompasOS\
+   icon_cache\\`) YAZILIR — heç bir yeni fayl `.spec`-ə DÜŞMÜR, çünki ikonun
+   ÖZÜ artıq Python kodunda (SVG mətni) mövcuddur. Sonuncu sətir
+   `ThemeManager.stylesheet()`-də HƏR açılış/tema-keçidində YENİDƏN
+   hesablanan tam CSS bəyanatıdır (`"image: url(...);"` YA DA boş sətir) —
+   bax `resolve_caret_down_icon` VƏ `tokens.py`-dakı placeholder şərhi. Boş
+   qalanda bu blok effektiv OLARAQ boşdur, yəni tətbiq DÖRDÜNCÜ addımın
+   vəziyyətinə (bevel yox, ox yox) sükutla qayıdır — ÇÖKMÜR.
+
+   `setCalendarPopup(True)` olan `QDateEdit`/`QDateTimeEdit`-də bu, TƏQVİM
+   düyməsinin oxudur (ayrıca qayda, aşağıda) — TƏK, tam-hündürlük düymə
+   olduğu üçün `center right` DÜZGÜNDÜR (`QComboBox`-la EYNİ həndəsə). */
+QComboBox::down-arrow, QComboBox[variant="form"]::down-arrow {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 10px;
+    height: 10px;
+    {{--icon-caret-down-rule}}
+}
+
+/* ALTINCI ADDIM (davamı) — TƏQVİM düyməsinin oxu (`QDateEdit`/
+   `QDateTimeEdit`, `::drop-down` — yuxarıdakı ALTINCI addımın davamı).
+   `QComboBox::down-arrow` İLƏ EYNİ HƏNDƏSƏ: `::drop-down` TAM hündürlük
+   tutur, ona görə `center right`. */
+QDateEdit::down-arrow, QDateEdit[variant="form"]::down-arrow,
+QDateTimeEdit::down-arrow, QDateTimeEdit[variant="form"]::down-arrow {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 10px;
+    height: 10px;
+    {{--icon-caret-down-rule}}
+}
+
+/* YEDDİNCİ ADDIM — `QSpinBox`/`QTimeEdit`-in ADDIM (stepper) oxları
+   (`::up-arrow`/`::down-arrow`, `setCalendarPopup` YOXDUR — İKİ AYRI,
+   üst-üstə YIĞILMIŞ düymə, `QComboBox`-un TƏK tam-hündürlük düyməsindən
+   FƏRQLİ). Ona görə həndəsə DƏ fərqlidir: `top right`/`bottom right` —
+   `center right` yazılsaydı hər iki ox eyni nöqtəyə (widget-in ORTASINA)
+   düşərdi, üst/alt düymələrin ÖZ yarısına DEYİL.
+
+   `QDateEdit`/`QDateTimeEdit` bu qrupda YOXDUR: `setCalendarPopup(True)`
+   olduqda Qt addım düymələrini GİZLƏDİR (yalnız təqvim düyməsi qalır,
+   yuxarıdakı ALTINCI addım) — addım oxu qaydası onlarda heç vaxt işə
+   düşmür, əlavə etmək lazımsız seçici olardı.
+
+   `chevron_up` — `icons.py`-dakı `chevron_down`-un ŞAQULİ GÜZGÜSÜ, EYNİ
+   runtime-keş mexanizmi (`resolve_caret_up_icon`, `--icon-caret-up-rule`). */
+QSpinBox::up-arrow, QSpinBox[variant="form"]::up-arrow,
+QTimeEdit::up-arrow, QTimeEdit[variant="form"]::up-arrow {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 10px;
+    height: 10px;
+    {{--icon-caret-up-rule}}
+}
+
+QSpinBox::down-arrow, QSpinBox[variant="form"]::down-arrow,
+QTimeEdit::down-arrow, QTimeEdit[variant="form"]::down-arrow {
+    subcontrol-origin: padding;
+    subcontrol-position: bottom right;
+    width: 10px;
+    height: 10px;
+    {{--icon-caret-down-rule}}
 }
 
 QComboBox QAbstractItemView {
@@ -589,15 +854,44 @@ QPushButton[variant="nav"]:hover {
     color: {{--color-text-primary}};
 }
 
-/* Aktiv maddə maketdə DOLDURULMUŞ sətirdir (sol kənar xətti deyil). */
+/* Aktiv maddə maketdə DOLDURULMUŞ sətirdir — VİZUAL FAZA #3 buna bir sol
+   kənar xətti (lövbər) ƏLAVƏ EDİR, doldurmanı ƏVƏZ ETMİR.
+   `--color-focus-ring-on-dark` (`#F5A623`) SEÇİLİB, `--color-accent` YOX:
+   işıqlı temada `--color-accent` kontrast üçün `#9A5F00`-a tənzimlənir
+   (bax `kompasos-ui` skill-i), bu sərhəd isə HƏR İKİ temada `--color-nav-
+   active-bg` (`#2E3440`, hər iki palitrada EYNİ) üzərində 3:1 saxlamalıdır
+   — `scripts/check_contrast.py`-da bu CÜT ARTIQ VAR ("Fokus halqası (aktiv
+   nav)", 6.16:1), YENİ cüt YOX. `padding-left` 16 → 13px (`--space-md` −
+   3px sərhəd) ki, mətn sərhəd əlavə olunanda SAĞA SÜRÜŞMƏSİN. */
 QPushButton[variant="nav"][active="true"] {
     background-color: {{--color-nav-active-bg}};
     color: {{--color-nav-active-text}};
     font-weight: {{--font-weight-medium}};
+    border-left: 3px solid {{--color-focus-ring-on-dark}};
+    padding-left: 13px;
 }
 
 QPushButton[variant="nav"][active="true"]:hover {
     background-color: {{--color-nav-active-bg}};
+}
+
+/* DARALDILMIŞ PANEL (ikon mərkəzdə) — sol xətt BURADA YOXDUR: mətn yoxdur,
+   sərhəd ikonu mərkəzdən sürüşdürərdi (bax `[compact="true"]`-nın `text-
+   align: center`-i). Dolu fon YENƏ DƏ görünür — kifayət qədər aydın
+   siqnaldır, əlavə xətt lazım deyil. */
+QPushButton[variant="nav"][compact="true"][active="true"] {
+    border-left: none;
+    padding-left: 0;
+}
+
+/* DEAKTİV — bax `[variant="primary"]:disabled`-in izahı. Fon BURADA
+   `--color-neutral-bg` DEYİL: sıravi vəziyyət ARTIQ şəffafdır (bax `[variant
+   ="nav"]`), dolu fon əlavə etsək naviqasiya maddəsi qəflətən "qutu" kimi
+   görünərdi — sıravi maddələrdən vizual dilə görə fərqlənərdi. YALNIZ mətn
+   susdurulur, "flat" görünüş qorunur. */
+QPushButton[variant="nav"]:disabled {
+    background-color: transparent;
+    color: {{--color-text-disabled}};
 }
 
 /* ===================== SƏHİFƏ BAŞLIĞI (HEADER) ===================== */
@@ -667,6 +961,18 @@ QPushButton[variant="icon"][active="true"] {
     background-color: {{--color-action-bg}};
     border-color: {{--color-action-bg}};
     border-radius: {{--radius-pill}};
+}
+
+/* DEAKTİV — bax `[variant="primary"]:disabled`-in izahı. `color:` BURADA
+   YAZILMIR: `QIcon` hazır piksel şəklidir, QSS `color:` ONA TƏSİR ETMİR
+   (bax `buttons.py::icon_button` başlığı, "RƏNG NİYƏ QSS-DƏN DEYİL") —
+   yazsaq ölü kod olardı. Sıravi ikon düyməsi ARTIQ şəffafdır, ona görə
+   `[variant="icon"]:disabled` YALNIZ `[active="true"]` altvariantını
+   susdurur: O, DOLU `--color-action-bg` fonu daşıyır (məs. aktiv tema
+   düyməsi) və məhz BUNUN üçün "aktiv görünür" riski VAR. */
+QPushButton[variant="icon"][active="true"]:disabled {
+    background-color: {{--color-neutral-bg}};
+    border-color: {{--color-neutral-bg}};
 }
 
 /* ===================== KONTENT SAHƏSİ ===================== */
@@ -750,6 +1056,13 @@ QPushButton[variant="secondary"][active="true"] {
     font-weight: {{--font-weight-medium}};
 }
 
+/* DEAKTİV — bax `[variant="primary"]:disabled`-in izahı, EYNİ cüt. */
+QPushButton[variant="secondary"]:disabled {
+    background-color: {{--color-neutral-bg}};
+    border-color: {{--color-card-border}};
+    color: {{--color-text-disabled}};
+}
+
 /* ===================== YUMŞAQ NİŞANLAR (CHIP) ===================== */
 /* Maketdəki status həbləri: yumşaq fon + kalibrlənmiş mətn (bax tokens.py). */
 /* ŞƏFFAF SƏRHƏD NİYƏ HƏMİŞƏ VAR
@@ -788,15 +1101,32 @@ QLabel[chip="neutral"] {
 /* Forma sahəsi — yuxarıdakı ilə EYNİ dil: doldurulmuş səth, eyni sərhəd,
    eyni künc. Fərq yalnız hündürlük (`forms.FIELD_HEIGHT = 46`) və şrift
    ölçüsündədir, ona görə burada YALNIZ onlar təkrarlanır. */
+/* `QDateTimeEdit[variant="form"]` BURADA DA LAZIMDIR (VİZUAL FAZA #0b):
+   `FormField(widget=...)` HƏR widget-ə `variant="form"` qoyur
+   (`widgets/forms.py`), ona görə `group_f.py`-dəki son-tarix sahəsi (`self.
+   _deadline = QDateTimeEdit()`) MƏHZ bu seçici qrupuna düşür — yuxarıdakı
+   AD-siz qrup ona ÜMUMİYYƏTLƏ TƏSİR ETMİR. */
+/* QUTU → ALT XƏTT (VİZUAL FAZA #6) BURADA DA EYNİ PRİNSİPLƏ TƏTBİQ OLUNUR —
+   yuxarıdakı AD-siz qrupun şərhi izahı daşıyır. TƏK FƏRQ: burada `:focus`
+   qaydası `padding-bottom` AZALTMIR. Səbəb struktur fərqdir — bu qrupun
+   hündürlüyü CSS box-modelindən deyil, Python tərəfdən (`FormField`
+   `widget.setMinimumHeight(FIELD_HEIGHT)`, `widgets/forms.py`) gəlir və
+   `padding: 0` onsuz da sıfırdır; alt xəttin 1px→2px böyüməsi mövcud
+   minimum-hündürlük daxilində udulur, sıçrama YARADA BİLMİR. */
 QLineEdit[variant="form"],
 QComboBox[variant="form"],
 QSpinBox[variant="form"],
 QDateEdit[variant="form"],
-QTimeEdit[variant="form"] {
+QTimeEdit[variant="form"],
+QDateTimeEdit[variant="form"] {
     background-color: {{--color-bg-surface}};
     color: {{--color-text-primary}};
-    border: {{--border-width}} solid {{--color-border}};
-    border-radius: {{--radius-control}};
+    border: none;
+    border-bottom: {{--border-width}} solid {{--color-border}};
+    border-top-left-radius: {{--radius-control}};
+    border-top-right-radius: {{--radius-control}};
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
     padding: 0 12px;
     font-size: {{--font-size-md}};
 }
@@ -805,22 +1135,24 @@ QLineEdit[variant="form"]:hover,
 QComboBox[variant="form"]:hover,
 QSpinBox[variant="form"]:hover,
 QDateEdit[variant="form"]:hover,
-QTimeEdit[variant="form"]:hover {
-    border-color: {{--color-border-strong}};
+QTimeEdit[variant="form"]:hover,
+QDateTimeEdit[variant="form"]:hover {
+    border-bottom-color: {{--color-border-strong}};
 }
 
 QLineEdit[variant="form"]:focus,
 QComboBox[variant="form"]:focus,
 QSpinBox[variant="form"]:focus,
 QDateEdit[variant="form"]:focus,
-QTimeEdit[variant="form"]:focus {
+QTimeEdit[variant="form"]:focus,
+QDateTimeEdit[variant="form"]:focus {
     background-color: {{--color-bg-elevated}};
-    border: {{--focus-ring-width}} solid {{--color-focus-ring}};
+    border-bottom: {{--focus-ring-width}} solid {{--color-focus-ring}};
 }
 
 QLineEdit[variant="form"][state="error"],
 QComboBox[variant="form"][state="error"] {
-    border-color: {{--color-danger}};
+    border-bottom-color: {{--color-danger}};
 }
 
 /* ===================== KÖMƏKÇİ MƏTN ROLLARI ===================== */
@@ -966,6 +1298,29 @@ QWidget#SplashScreen QLabel#SplashWordmark {
 }
 
 /* ===================== DİGƏR ===================== */
+/* ÜMUMİ QAYDA (bu gün EYNİ tələ ÜÇ ayrı yerdə çıxdı — `QComboBox::drop-
+   down`, `QComboBox::down-arrow` və aşağıdakı sol-panel zolağı): Qt-nin
+   alt-kontrol (`::…`) sistemi İKİ FƏRQLİ tələ qurur, EYNİ görünüşlə
+   ("boş/səhv görünür") üzə çıxsa da:
+
+   1. STİLLƏŞDİRİLMƏMİŞ alt-kontrol NATİV ÜSLUBA qayıdır — valideynin
+      `border`/`background` təmizliyi ONA sirayət ETMİR (`::drop-down`-un
+      GİRİŞ SAHƏLƏRİ bölməsindəki tarixçəsi: bevel/haşiyə buradan gəldi).
+      `::add-line`/`::sub-line`-in aşağıda `height: 0; width: 0;` ilə AÇIQ
+      söndürülməsi bunun ÖZÜ nümunədir.
+
+   2. Alt-kontrol STİLLƏŞDİRİLİB, LAKİN `image` YOXDURSA (arrow/ikon
+      xarakterli alt-kontrollarda — `::down-arrow`, `::up-arrow`), Qt HEÇ
+      NƏ çəkmir — nə native, nə CSS. `QComboBox::down-arrow`-a `border:
+      none`/`background: transparent` yazmaq OXUN ÖZÜNÜ YOX ETDİ (GİRİŞ
+      SAHƏLƏRİ bölməsi, DÖRDÜNCÜ addım) — çünki bu, 1-ci hala YOX, 2-ci
+      hala aiddir.
+
+   Yəni QAYDA TƏK CÜMLƏ DEYİL: "boş yerə YAZ" (1-ci hal üçün) İLƏ "arrow
+   xarakterli alt-kontrola TOXUNMA, ya da `image` VER" (2-ci hal üçün)
+   ARASINDA FƏRQ VAR — hansının aid olduğunu qarışdırmaq əks nəticə verir.
+   Yeni alt-kontrollu widget QSS-ə əlavə edilərkən HƏR `::` seçici üçün
+   BU FƏRQİ aydınlaşdırmaq YOXLAMA SİYAHISINA daxil edilməlidir. */
 QScrollBar:vertical, QScrollBar:horizontal {
     background: transparent;
     border: none;
@@ -982,6 +1337,37 @@ QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
 
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
+
+/* SOL PANELİN SÜRÜŞDÜRMƏ ZOLAĞI NAZİKDİR — ÜMUMİ ZOLAQDAN (yuxarı, 16px)
+   QƏSDƏN FƏRQLƏNİR.
+   ─────────────────────────────────────────────────────────────────────────
+   16px-lik ÜMUMİ zolaq sol paneldə İKİ yan təsir yaratdı (ölçülüb):
+   (a) maddələrin sahəsi 244→228px düşdü, elide olunan maddə sayı 1-dən
+   6-ya qalxdı; (b) daraldılmış (64px) rejimdə zolaq ikon sütununu
+   mərkəzdən sürüşdürdü. Hər ikisinin kökü EYNİDİR — zolağın ÖZÜ genişdir,
+   `sidebar.py`-dəki `#SidebarScroll` (`setObjectName`) buna görə ÖZ,
+   nazik üslubunu alır.
+
+   `AsNeeded` siyasəti (`sidebar.py`) YERİNDƏ QALIR — bura `AlwaysOff`
+   YAZILMIR: 42 maddəlik ROOT panelində zolağı söndürmək aşağıdakı
+   ikonları YENİDƏN çatılmaz edərdi, yəni bu gün düzəldilən funksional
+   qüsuru geri qaytarardı. Yalnız EN azaldılır, sürüşdürmə ÖZÜ qalır.
+
+   `--space-sm` (8px) EN üçün, `--color-border-subtle` TUTACAQ üçün —
+   ikisi də MÖVCUD tokenlərdir (yenisi əlavə OLUNMUR): ümumi zolağın
+   `--space-md`/`--color-border` cütünə paralel, sadəcə bir pillə solğun
+   və nazik. */
+QScrollArea#SidebarScroll QScrollBar:vertical {
+    background: transparent;
+    border: none;
+    width: {{--space-sm}};
+}
+
+QScrollArea#SidebarScroll QScrollBar::handle:vertical {
+    background: {{--color-border-subtle}};
+    border-radius: {{--radius-sm}};
+    min-height: {{--space-lg}};
+}
 
 QToolTip {
     background-color: {{--color-bg-elevated}};

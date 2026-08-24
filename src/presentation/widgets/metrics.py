@@ -78,15 +78,26 @@ WINDOW_BUTTON_WIDTH: Final = 46
 # ekranlar arasında keçəndə məzmun "tərpənirdi".
 #
 # ŞƏBƏKƏDƏN KƏNARDA QALAN İKİ QRUP QƏSDƏNDİR:
-#   * 12 (`SIDEBAR_PADDING_H`, `NAV_ITEM_ICON_SPACING`) — 8-in misli deyil,
-#     lakin Apple şkalasının yarım-pilləsidir; 8-ə endirilsəydi ikon ilə mətn
-#     "bir söz" kimi oxunardı (bax `NAV_ITEM_ICON_SPACING` izahı), 16-ya
-#     qaldırılsaydı panelin eni də böyüməli olardı.
+#   * 12 (`SPACE_MS`, aşağıda; `SIDEBAR_PADDING_H`, `NAV_ITEM_ICON_SPACING`) —
+#     8-in misli deyil, lakin Apple şkalasının yarım-pilləsidir; 8-ə
+#     endirilsəydi ikon ilə mətn "bir söz" kimi oxunardı (bax `NAV_ITEM_ICON_
+#     SPACING` izahı), 16-ya qaldırılsaydı panelin eni də böyüməli olardı.
 #   * 44 (`NAV_ITEM_HEIGHT`, `ROW_HEIGHT_DENSE`) — toxunma hədəfinin minimumu
 #     (`--touch-target-min`), yəni erqonomik hədd, ritm dəyəri deyil.
 #
 # Pəncərə çərçivəsinin ölçüləri (`TITLEBAR_HEIGHT`, `WINDOW_BUTTON_WIDTH`)
 # TOXUNULMUR: onlar Windows konvensiyasıdır (`appl.md` qırmızı xətti).
+
+#: VİZUAL FAZA #5 — `tokens.METRICS["--space-ms"]` ilə EYNİ dəyər.
+#:
+#: YENİ ölçü YARATMIR: `setSpacing(12)` kod bazasında ~175 yerdə ARTIQ
+#: işlədilirdi — `SIDEBAR_PADDING_H`/`NAV_ITEM_ICON_SPACING`-in ÜMUMİLƏŞDİRİLMİŞ
+#: forması. Hər çağırış öz hərfi "12"-sini yazdığı üçün `check_symmetry.py`
+#: bunu "tərtibat aralığı" rolunda ADSIZ dəyər kimi sayırdı (58-lik tavanın
+#: bir vahidi). Bütün çağırış nöqtələri `setSpacing(metrics.SPACE_MS)`-ə
+#: köçürüldü (VİZUAL FAZA #5) — səpələnmə bununla AZALIR, "adlı istinadlar
+#: sayılmır" qaydası (`check_symmetry.py` başlığı) buna görə var.
+SPACE_MS: Final = 12
 
 # --------------------------------------------------------------------------- #
 # Sol naviqasiya
@@ -138,6 +149,25 @@ NAV_ITEM_TEXT_INDENT: Final = 16
 #: Aç/bağla düyməsinin ölçüsü — sətir hündürlüyündən kiçikdir ki, panelin
 #: başlığında «maddə» kimi oxunmasın.
 SIDEBAR_TOGGLE_SIZE: Final = 28
+#: `NavButton`-un mətn üçün ayırdığı sahədən İKON+DOLDURMA-nın YEDİYİ hissə
+#: (`buttons.NavButton._apply_elided_text` bunu `self.width()`-dən çıxarır).
+#:
+#: BAZA DÜYMƏNİN ÖZÜNÜN ENİDİR, PANELİN DEYİL — bu, İLK versiyada
+#: SƏHVƏN qarışdırılmışdı: sabit `SIDEBAR_WIDTH` (244) əsasında 80 kimi
+#: çıxarılmışdı, halbuki `self.width()` DÜYMƏNİN eni (`SIDEBAR_WIDTH −
+#: 2×SIDEBAR_PADDING_H` = 244−24 = 220), YOX panelin ÖZÜ. Nəticədə hər
+#: elide hesabından 24px ARTIQ çıxılırdı və lazımsız yerə daha çox maddə
+#: kəsilirdi (real ekranda ölçülüb: 1 gözlənilən yerinə 3 maddə kəsilirdi).
+#:
+#: ÖLÇÜLMÜŞ DƏYƏR, DÜSTUR DEYİL — düymə eni 220px-də «Performans
+#: Qiymətləndirmələri» sətri ~192px tələb edir, real ekranda ölçülmüş
+#: qalan yer isə ~164px-dir, yəni 220 − 164 = 56. Bu, sol/sağ
+#: `--space-md` düymə padding-i (16+16=32) + ikon (16) + Qt-nin
+#: `QPushButton` daxilində ikon/mətn arasında buraxdığı, QSS-dən idarə
+#: OLUNMAYAN daxili boşluğun (≈8) CƏMİDİR — sonuncunu əl ilə hesablamaq
+#: mümkün deyil (Qt bunu stilə görə DAXİLİ tərtib edir), ona görə dəyər
+#: RENDER OLUNMUŞ pəncərədə ÖLÇÜLÜB, düsturla ÇIXARILMAYIB.
+NAV_ITEM_TEXT_RESERVED_WIDTH: Final = 56
 
 # --------------------------------------------------------------------------- #
 # Səhifə başlığı (header)

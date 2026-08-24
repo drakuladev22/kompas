@@ -112,3 +112,18 @@ configs/
 # Yol KÖKƏ bağlanıb (`/theme/`): `src/presentation/theme/` HƏQİQİ paketdir və
 # ona toxunulmamalıdır.
 /theme/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ƏVVƏL/SONRA skrinşotları — `finalui.md` FAZA 6-nın vizual müqayisə dəsti.
+# ─────────────────────────────────────────────────────────────────────────────
+# 172 PNG (25 MB), hər ekran × iki tema × iki ağac. Bunlar BAXIŞ artefaktıdır,
+# mənbə DEYİL: onları git tarixçəsinə salmaq repozitoriyanı daimi 25 MB
+# şişirdərdi və geri alınması `filter-repo` tələb edərdi — halbuki dəst bir
+# əmrlə yenidən yaradıla bilir.
+#
+# YENİDƏN YARATMAQ: `tests/tools/capture_screenshots.py` (skript REPOZİTORİYADA
+# QALIR — məhz ona görə ki, şəkillər qalmır). «ƏVVƏL» dəsti üçün baza ağacı
+# worktree ilə açılır və İÇİNDƏ yalnız `preview_data.py` cari nüsxə ilə
+# əvəzlənir: fikstür sabitləşməsə müqayisə ƏDALƏTSİZ olur (bazada 12 ekran
+# önizləmədə ümumiyyətlə açılmırdı — bax həmin faylın flag siyahısı).
+/ui_before_after/

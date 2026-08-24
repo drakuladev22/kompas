@@ -94,7 +94,8 @@ class PerformanceReviewScreen(Screen):
     # ------------------------------- forma kartı ------------------------------ #
 
     def _build_form_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — iki sabit kartdan biri (loop-da deyil).
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         card.add(title_label("Yeni Qiymətləndirmə", size=19))
 
         self._employee = FormField("İşçi", widget=QComboBox())
@@ -110,7 +111,7 @@ class PerformanceReviewScreen(Screen):
         self._kpi_host = QWidget()
         self._kpi_layout = QVBoxLayout(self._kpi_host)
         self._kpi_layout.setContentsMargins(0, 0, 0, 0)
-        self._kpi_layout.setSpacing(12)
+        self._kpi_layout.setSpacing(metrics.SPACE_MS)
         card.add(self._kpi_host)
 
         card.add(field_label("Qeyd"))
@@ -137,7 +138,8 @@ class PerformanceReviewScreen(Screen):
         return card
 
     def _build_history_card(self) -> Card:
-        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        # VİZUAL FAZA #1 — iki sabit kartdan biri (loop-da deyil).
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         card.add(section_label("Keçmiş Dövrlər"))
 
         self._history_rows = QVBoxLayout()
@@ -177,7 +179,7 @@ class PerformanceReviewScreen(Screen):
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
         layout.addWidget(body_label(label, size=13), 1)
 
         combo = QComboBox()

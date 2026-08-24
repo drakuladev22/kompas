@@ -110,7 +110,7 @@ class NotificationItem(QWidget):
         # 20/14 əvəzinə 18/12 — fərq QSS-dəki 2px şəffaf fokus sərhədidir,
         # cəmi dəyişmir (bax `widgets/data_table.py`-dakı eyni naxış).
         layout.setContentsMargins(18, 12, 18, 12)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
 
         kind = notification.get("kind", "system")
         icon_name, background_token, icon_token = _NOTIFICATION_KINDS.get(
@@ -122,7 +122,8 @@ class NotificationItem(QWidget):
         glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
         glyph.setPixmap(icons.render(icon_name, theme.color(icon_token), size=15, stroke_width=1.6))
         glyph.setStyleSheet(
-            f"background-color: {theme.color(background_token)}; border-radius: 9px;"
+            f"background-color: {theme.color(background_token)};"
+            f"border-radius: {theme.color('--radius-control')}px;"
         )
         layout.addWidget(glyph, alignment=Qt.AlignmentFlag.AlignTop)
 
@@ -194,8 +195,8 @@ class NotificationPanel(Card):
         # ------------------------------ başlıq ------------------------------ #
         header = QWidget()
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(20, 18, 20, 18)
-        header_layout.setSpacing(12)
+        header_layout.setContentsMargins(20, 16, 20, 16)
+        header_layout.setSpacing(metrics.SPACE_MS)
         header_layout.addWidget(title_label("Bildirişlər", size=15))
 
         self._unread_chip = Chip("", "warning")
@@ -240,8 +241,8 @@ class NotificationPanel(Card):
         # ------------------------------- altlıq ----------------------------- #
         footer = QWidget()
         footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(20, 14, 20, 14)
-        footer_layout.setSpacing(12)
+        footer_layout.setContentsMargins(20, 16, 20, 16)
+        footer_layout.setSpacing(metrics.SPACE_MS)
 
         see_all = LinkLabel("Bütün bildirişlərə bax")
         see_all.clicked.connect(self.see_all_requested)
@@ -356,7 +357,7 @@ class ProfileScreen(Screen):
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_layout.setSpacing(12)
+        toolbar_layout.setSpacing(metrics.SPACE_MS)
         toolbar_layout.addWidget(stretch())
         cancel = secondary_button("Ləğv Et")
         # DÜYMƏ ƏVVƏL HEÇ NƏYƏ BAĞLI DEYİLDİ: istifadəçi adını səhv yazıb
@@ -485,7 +486,7 @@ class ProfileScreen(Screen):
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(title_label("Rol və səlahiyyət", size=15))
         self._role_rows = QVBoxLayout()
-        self._role_rows.setSpacing(12)
+        self._role_rows.setSpacing(metrics.SPACE_MS)
         holder = QWidget()
         holder.setLayout(self._role_rows)
         card.add(holder)
@@ -495,7 +496,7 @@ class ProfileScreen(Screen):
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         card.add(section_label("Son giriş tarixçəsi"))
         self._session_rows = QVBoxLayout()
-        self._session_rows.setSpacing(12)
+        self._session_rows.setSpacing(metrics.SPACE_MS)
         holder = QWidget()
         holder.setLayout(self._session_rows)
         card.add(holder)
@@ -508,7 +509,7 @@ class ProfileScreen(Screen):
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(12)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
 
         change = secondary_button("Şifrəni Dəyiş")
         change.clicked.connect(self.password_change_requested)
@@ -548,7 +549,7 @@ class ProfileScreen(Screen):
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(metrics.SPACE_MS)
         self._face_chip = Chip("Qeydiyyatsız", "neutral")
         layout.addWidget(self._face_chip)
         self._face_enrolled_at = mono_label("")
@@ -654,7 +655,7 @@ class ProfileScreen(Screen):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.setSpacing(12)
+        head_layout.setSpacing(metrics.SPACE_MS)
         head_layout.addWidget(title_label(row.get("period", ""), size=15))
         head_layout.addWidget(stretch())
         score_text = row.get("overall_score", "")
@@ -707,7 +708,7 @@ class ProfileScreen(Screen):
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(12)
+            layout.setSpacing(metrics.SPACE_MS)
             layout.addWidget(mono_label(time_text))
             layout.addWidget(body_label(device, size=13, wrap=False))
             layout.addWidget(stretch())
@@ -722,7 +723,7 @@ class ProfileScreen(Screen):
             row = QWidget()
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(12)
+            row_layout.setSpacing(metrics.SPACE_MS)
             row_layout.addWidget(muted_label(name))
             row_layout.addWidget(stretch())
             row_layout.addWidget(body_label(value, size=13, wrap=False))
