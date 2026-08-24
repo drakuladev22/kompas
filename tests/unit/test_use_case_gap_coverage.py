@@ -1490,6 +1490,8 @@ class _PointsRepo:
     def __init__(self, entries: list[PointsEntry] | None = None) -> None:
         self.entries = {entry.id: entry for entry in (entries or [])}
         self.saved: list[PointsEntry] = []
+        #: `list_undecided_disputes`-in XAM cavabı (bax həmin metod).
+        self.undecided_override: list[PointsEntry] | None = None
 
     def get(self, entry_id: PointsEntryId) -> PointsEntry | None:
         return self.entries.get(entry_id)
@@ -1498,7 +1500,23 @@ class _PointsRepo:
         return [e for e in self.entries.values() if e.employee_id == employee_id]
 
     def list_disputes(self, tenant_id: TenantId) -> list[PointsEntry]:
+        """YALNIZ açıq etiraz — müddət-bitmə işinin girişi (bax portun docstring-i)."""
         return [e for e in self.entries.values() if e.has_open_dispute]
+
+    def list_undecided_disputes(self, tenant_id: TenantId) -> list[PointsEntry]:
+        """İDARƏÇİ inbox-u: `PENDING` + `EXPIRED`.
+
+        SIRA SAHTƏDƏ DƏ SABİTDİR (əlavə edilmə ardıcıllığı): real repo
+        `points_appeals.created_at` üzrə sıralayır və use case sıranı
+        DƏYİŞMİR — test məhz bunu yoxlayır.
+
+        `self.undecided_override` verilibsə O qaytarılır: ikinci müdafiə
+        qatını (qərar ALINMIŞ sətrin süzülməsi) yoxlamaq üçün repo şərtini
+        QƏSDƏN yan keçmək lazımdır.
+        """
+        if self.undecided_override is not None:
+            return list(self.undecided_override)
+        return [e for e in self.entries.values() if e.has_undecided_dispute]
 
     def save(self, entry: PointsEntry) -> None:
         self.entries[entry.id] = entry
@@ -1855,3 +1873,96 @@ def test_transfer_ignores_rows_of_another_transaction() -> None:
 
     assert unrelated.status.value == "ACTIVE", "Başqa satışın sətri REVERSED olmamalıdır"
     assert points.saved[-1].points == 3
+
+
+# --------------------------------------------------------------------------- #
+# İDARƏÇİNİN ETİRAZ GƏLƏNLƏR QUTUSU — `list_undecided_disputes`
+# --------------------------------------------------------------------------- #
+#
+# `decide_dispute()` mövcud idi, lakin onu çağıracaq SƏTİR heç bir ekranda
+# görünmürdü: `list_disputes` yalnız `PENDING` qaytarır və o da yalnız
+# müddət-bitmə işində işlədilirdi. Yəni `expire_dispute()`-in YARATDIĞI
+# vəziyyət (`EXPIRED`) heç kimin siyahısına düşmürdü.
+
+
+def _disputed_entry(*, employee: EmployeeId, points: int = 60) -> PointsEntry:
+    """Etiraz AÇILMIŞ sətir — `open_dispute()` real domen yolundan keçir."""
+    entry = _points_entry(employee=employee, points=points)
+    entry.open_dispute(reason="Çek mənim satışımdır", disputed_at=NOW)
+    return entry
+
+
+def test_the_inbox_keeps_expired_disputes_and_flags_them() -> None:
+    """«Vaxt bitdi» ≠ «qərar verildi» (M-6) — sətir siyahıdan ÇIXMIR.
+
+    Gizlətsəydik `expire_dispute()` bir ölü-sonu (əbədi «gözləyir») digəri ilə
+    (görünməz «bitmiş») əvəz etmiş olardı.
+    """
+    manager = make_employee(SystemRole.HR_ADMIN, flags=[MANAGE_POINTS])
+    worker = make_employee(SystemRole.SELLER, flags=[])
+    pending = _disputed_entry(employee=worker.id)
+    expired = _disputed_entry(employee=worker.id, points=40)
+    from datetime import timedelta
+
+    assert expired.expire_dispute(now=NOW + timedelta(hours=73)) is True
+    points = _PointsRepo([pending, expired])
+    use_case = _points_use_case(points=points, rewards=_RewardRepo())
+
+    views = use_case.list_undecided_disputes(tenant_id=TENANT, actor=manager)
+
+    flags = {view.entry_id: view.is_expired for view in views}
+    assert flags == {pending.id: False, expired.id: True}
+    assert all(view.dispute_reason == "Çek mənim satışımdır" for view in views)
+
+
+def test_the_inbox_requires_the_manager_flag() -> None:
+    """Siyahı BAŞQA işçilərin xal sətirlərini və etiraz mətnlərini açır.
+
+    Ona görə qapı `decide_dispute` ilə EYNİDİR — qərar qapısından ZƏİF bir
+    qapı arxasında dayana bilməz.
+    """
+    worker = make_employee(SystemRole.SELLER, flags=[])
+    points = _PointsRepo([_disputed_entry(employee=worker.id)])
+    use_case = _points_use_case(points=points, rewards=_RewardRepo())
+
+    with pytest.raises(SalesPointsError):
+        use_case.list_undecided_disputes(tenant_id=TENANT, actor=worker)
+
+
+def test_a_decided_row_never_reaches_the_inbox() -> None:
+    """MÜDAFİƏNİN İKİNCİ QATININ YEGANƏ TESTİ.
+
+    Repo şərti (`status IN ('PENDING','EXPIRED')`) onsuz da süzür, LAKİN qərar
+    ALINMIŞ sətir buraya düşsəydi, idarəçi onu «cavab gözləyir» sanıb qərar
+    verməyə çalışardı və qapı ancaq DÜYMƏ BASILDIQDAN sonra kəsərdi. Sətir
+    süzülür — və SÜKUTLA atılmır (jurnala düşür).
+    """
+    manager = make_employee(SystemRole.HR_ADMIN, flags=[MANAGE_POINTS])
+    worker = make_employee(SystemRole.SELLER, flags=[])
+    decided = _disputed_entry(employee=worker.id)
+    decided.reject_dispute(decided_by=manager.id, decided_at=NOW, reason="Kassa qeydi düzgündür")
+    points = _PointsRepo()
+    points.undecided_override = [decided]
+    use_case = _points_use_case(points=points, rewards=_RewardRepo())
+
+    assert use_case.list_undecided_disputes(tenant_id=TENANT, actor=manager) == []
+
+
+def test_the_repository_order_is_preserved() -> None:
+    """Ən çox gözləyən sətir BAŞDA — use case sıranı DƏYİŞMİR.
+
+    Sıralama repo-dadır (`points_appeals.created_at`); use case-də ikinci
+    sıralama olsaydı, iki mənbə bir gün ayrıla bilərdi.
+    """
+    manager = make_employee(SystemRole.HR_ADMIN, flags=[MANAGE_POINTS])
+    worker = make_employee(SystemRole.SELLER, flags=[])
+    first = _disputed_entry(employee=worker.id, points=10)
+    second = _disputed_entry(employee=worker.id, points=20)
+    third = _disputed_entry(employee=worker.id, points=30)
+    points = _PointsRepo()
+    points.undecided_override = [third, first, second]
+    use_case = _points_use_case(points=points, rewards=_RewardRepo())
+
+    views = use_case.list_undecided_disputes(tenant_id=TENANT, actor=manager)
+
+    assert [view.entry_id for view in views] == [third.id, first.id, second.id]
