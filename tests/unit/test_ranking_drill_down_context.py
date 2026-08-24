@@ -54,9 +54,21 @@ class _FakeBinder:
     def __init__(self) -> None:
         self.drilled: list[Any] = []
         self.populated: list[str] = []
+        #: `apply_daily_roster_for_store`-un ÇAĞIRIŞ tarixçəsi — stale-nəticə
+        #: testinin YALNIZ SONUNCU klikin tətbiq olunduğunu sübut etməsi üçün
+        #: lazımdır (`populate_daily_roster_for_store`-un varisi `fetch_.../
+        #: apply_...` cütü indi AYRI addımlardır, bax PERF-6 Mərhələ 3).
+        self.applied: list[Any] = []
 
     def populate_daily_roster_for_store(self, store_id: Any, screen: Any) -> None:
         self.drilled.append(store_id)
+
+    def fetch_daily_roster_for_store(self, store_id: Any) -> Any:
+        self.drilled.append(store_id)
+        return store_id
+
+    def apply_daily_roster_for_store(self, screen: Any, data: Any) -> None:
+        self.applied.append(data)
 
     def populate(self, key: str, screen: Any) -> None:
         self.populated.append(key)
@@ -66,11 +78,19 @@ def _application(
     qt_app: Any, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[Any, _FakeShell, _FakeBinder]:
     from src.presentation.app import KompasApplication
+    from src.presentation.background_task import InlineExecutor
     from src.presentation.theme.tokens import ThemeMode
 
     application = KompasApplication(
         qt_app, preview=False, theme_preference=ThemeMode.LIGHT, context=None
     )
+    # PERF-6 Mərhələ 3 — `_on_ranking_row_selected` DB işini artıq `run_job`-a
+    # verir (bax `app.py::_start_ranking_drill_down_fetch`). `InlineExecutor`
+    # işi ÇAĞIRAN sapda DƏRHAL icra edir, ona görə bu faylın mövcud SİNXRON
+    # assertion üslubu (klikdən DƏRHAL sonra yoxlama) POZULMUR — naxış
+    # `test_login_and_startup_recovery.py`/`test_password_login_background.py`
+    # ilə EYNİDİR.
+    application._executor = InlineExecutor()
     shell, binder = _FakeShell(), _FakeBinder()
     application._shell = shell
     application._binder = binder
@@ -128,3 +148,73 @@ def test_a_roster_visit_without_a_drill_down_is_untouched(qt_app, monkeypatch) -
 
     assert binder.populated == []
     assert shell.subtitles[DAILY_ROSTER_SCREEN_KEY] == "Bu gün · 12 nəfər"
+
+
+class _DeferredExecutor:
+    """`InlineExecutor`-dan FƏRQLİ olaraq işi DƏRHAL yerinə yetirmir.
+
+    `test_face_enrollment_screen_e2e.py::_DeferredExecutor` ilə EYNİ naxış
+    (bu fayl da sahtəni YERLİ saxlayır — paralel işləyən agentlər ortaq
+    `tests/fixtures/fakes.py`-ı dəyişə bilər). İki sürətli klikin ARASINDA
+    «birinci HƏLƏ QAÇIR» pəncərəsini deterministik göstərir: iş `flush()`
+    çağırılana qədər NÖVBƏDƏ qalır.
+    """
+
+    def __init__(self) -> None:
+        self.pending: list[Any] = []
+
+    @property
+    def runs_inline(self) -> bool:
+        # Sinxron BAĞLANTI növü tələb olunur ki, `flush()` içindəki `emit`
+        # hadisə dövrəsi gözləmədən dərhal `_deliver`-ə çatsın.
+        return True
+
+    def submit(self, job: Any) -> None:
+        self.pending.append(job)
+
+    def flush(self) -> None:
+        jobs, self.pending = self.pending, []
+        for job in jobs:
+            job()
+
+
+@requires_qt
+def test_a_stale_drill_down_result_never_overwrites_the_latest_click(qt_app, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """İKİ ARDICIL klik — YALNIZ SONUNCUSUNUN nəticəsi tətbiq olunmalıdır.
+
+    ──────────────────────────────────────────────────────────────────────
+    SSENARİ
+    ──────────────────────────────────────────────────────────────────────
+    İstifadəçi reytinq cədvəlində A mağazasına, sonra DƏRHAL B-yə klikləyir.
+    Qoruma olmasaydı A-nın (gec gələn) nəticəsi B-nin ekranına yazılardı —
+    başlıqda B, məlumatda A. `self._ranking_drill_down_store_id` hər klikdə
+    yenilənir və `_apply` YALNIZ sonuncu kliki qəbul edir (bax `app.py::
+    _start_ranking_drill_down_fetch` "STALE NƏTİCƏYƏ QARŞI" bölməsi).
+
+    `_DeferredExecutor` hər iki fetch işini NÖVBƏYƏ salır (heç biri klikin
+    ÖZÜNDƏ icra olunmur) — `flush()` onları YAZILMA SIRASI ilə (A, sonra B)
+    işə salır. Sıra əhəmiyyətsizdir: qoruma NƏTİCƏNİN GƏLİŞ VAXTINDAN yox,
+    `self._ranking_drill_down_store_id`-in CARİ dəyərindən asılıdır — B
+    kliklənəndə bu sahə ARTIQ B-yə keçib, ona görə A-nın nəticəsi HANSI
+    SIRADA gəlsə də rədd edilməlidir.
+    """
+    application, shell, binder = _application(qt_app, monkeypatch)
+    executor = _DeferredExecutor()
+    application._executor = executor
+
+    store_a, store_b = str(uuid.uuid4()), str(uuid.uuid4())
+    names = {store_a: "Mağaza A", store_b: "Mağaza B"}
+    monkeypatch.setattr(application, "_drill_store_name", lambda text: names[text])
+
+    application._on_ranking_row_selected(store_a)  # BİRİNCİ klik — fetch NÖVBƏDƏ
+    application._on_ranking_row_selected(store_b)  # İKİNCİ klik — fetch NÖVBƏDƏ
+
+    executor.flush()  # hər iki fetch YAZILMA SIRASI ilə (A, sonra B) icra olunur
+
+    # `store_id` `perform_ranking_drill_down` daxilində `StoreId`-ə çevrilir —
+    # `test_drill_down_names_the_store_in_the_page_context`-dəki EYNİ `str()`
+    # müqayisəsi (STORE_ID) buna görədir.
+    assert [str(item) for item in binder.applied] == [store_b], (
+        f"A-nın stale nəticəsi tətbiq olunub: {binder.applied}"
+    )
+    assert shell.subtitles[DAILY_ROSTER_SCREEN_KEY] == "Mağaza B · İdarə Panelindən"

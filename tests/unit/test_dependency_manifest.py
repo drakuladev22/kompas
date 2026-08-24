@@ -190,6 +190,55 @@ def test_declared_but_unused_packages_are_justified() -> None:
     )
 
 
+def test_declared_but_not_imported_entries_go_stale_once_imported() -> None:
+    """`DECLARED_BUT_NOT_IMPORTED` BİR İSTİQAMƏTLİ QAPI OLA BİLMƏZ.
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ ƏKS İSTİQAMƏT DƏ LAZIMDIR
+    ──────────────────────────────────────────────────────────────────────────
+    `test_declared_but_unused_packages_are_justified` YALNIZ bir tərəfi tutur:
+    manifestdə olan, idxal edilməyən paketin SƏBƏBSİZ qalmasını. Əks tərəf
+    HEÇ NƏ ilə qorunmurdu — açar bir dəfə `DECLARED_BUT_NOT_IMPORTED`-a
+    düşəndən sonra HƏMİŞƏLİK "əsaslandırılmış" sayılır, HƏTTA paket
+    SONRADAN HƏQİQƏTƏN idxal olunmağa başlasa da: sözlükdəki giriş SİLİNMİR,
+    çünki onu silməyə heç nə MƏCBUR ETMİR. Nəticə KÖHNƏLMİŞ giriş — gələcək
+    oxucu "niyə bu paket üçün səbəb yazılıb, axı `src/`-də istifadə olunur?"
+    sualı ilə qalır. Bu, `test_screen_data_binding.py::test_every_delegate_
+    contributes_a_setter_call`-un tapdığı `_dashboard_benchmark` boşluğu ilə
+    EYNİ SİNİF qüsurdur (elan edilmiş bir giriş öz mənasını itirib, amma heç
+    bir mövcud yoxlama bunu görmür) — həmin testin naxışı BURADA ƏKS
+    İSTİQAMƏTDƏ tətbiq olunur.
+
+    Test `DECLARED_BUT_NOT_IMPORTED`-dakı HƏR paket üçün, əgər o İNDİ
+    `src/`-də idxal olunursa, UĞURSUZ olur və girişin ÇIXARILMASINI tələb
+    edir — beləliklə vizual faza `qtawesome`-u idxal edən KİMİ (məhz bu
+    girişin QURULMA SƏBƏBİ) test qırmızı olacaq, insan yaddaşına ehtiyac
+    qalmayacaq.
+    """
+    imported_by_distribution: dict[str, tuple[str, str]] = {}
+    for module, files in _source_imports().items():
+        distribution = IMPORT_TO_DISTRIBUTION.get(module, module.lower().replace("_", "-"))
+        imported_by_distribution.setdefault(distribution, (module, sorted(files)[0]))
+
+    assert DECLARED_BUT_NOT_IMPORTED, "sözlük boşdur — yoxlanacaq heç nə qalmayıb"
+
+    stale: list[str] = []
+    for package in DECLARED_BUT_NOT_IMPORTED:
+        hit = imported_by_distribution.get(package)
+        if hit is None:
+            continue
+        module, first_file = hit
+        stale.append(
+            f"`{package}` — artıq `{module}` kimi idxal olunur ({first_file}). "
+            f"`DECLARED_BUT_NOT_IMPORTED['{package}']` girişini ÇIXARIN."
+        )
+
+    assert not stale, (
+        "`DECLARED_BUT_NOT_IMPORTED`-da KÖHNƏLMİŞ giriş(lər) var — paket artıq "
+        "idxal olunur, izahat artıq lazım deyil:\n  " + "\n  ".join(stale)
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Manifestlər arasında uyğunluq
 # --------------------------------------------------------------------------- #

@@ -51,7 +51,13 @@ if TYPE_CHECKING:
 
     from src.domain.entities.employee import Employee
     from src.domain.value_objects.credentials import Username
-    from src.domain.value_objects.identifiers import EmployeeId, LeaveTypeId, SessionId, TenantId
+    from src.domain.value_objects.identifiers import (
+        EmployeeId,
+        LeaveTypeId,
+        SessionId,
+        StoreId,
+        TenantId,
+    )
     from src.infrastructure.persistence.mappers import Credentials
     from src.presentation.composition import (
         ApplicationContext,
@@ -65,7 +71,9 @@ if TYPE_CHECKING:
     from src.presentation.controllers.sales_review import SalesReviewController
     from src.presentation.controllers.screen_data import ScreenDataBinder
     from src.presentation.controllers.session_guard import SessionGuard
+    from src.presentation.navigation import NavigationRegistry
     from src.presentation.plugin_surface import PluginPage
+    from src.presentation.screens.group_a_entry import AdminLoginScreen
     from src.presentation.screens.group_a_kiosk import EmployeeHomeScreen, PinPadScreen
     from src.presentation.widgets.worker_status import WorkerStatus
 
@@ -129,10 +137,85 @@ class _StartupPreload:
     isə BİR DƏFƏLİK İSTİFADƏ edir (bax onun şərhi) — sonrakı `show_login()`
     çağırışları (logout, sessiya bitmə) YENƏ CANLI oxuyur, köhnəlmiş dəyər
     əbədi keşlənmir.
+
+    `face_login_module_enabled` NİYƏ `face_login_available` DEYİL (PERF-6,
+    `cv2` maddəsi): əvvəl bu sahə `FaceLoginController.available()`-in
+    BİRLƏŞMİŞ nəticəsini (toggle + `cv2` idxalı) daşıyırdı — həmin idxal
+    soyuq keşdə 70–624 ms çəkir və splash arxasındakı fon işinə ƏLAVƏ
+    olunurdu. İndi BURADA YALNIZ toggle (ucuz DB oxusu) var; kamera probu
+    `show_login()` GÖRÜNDÜKDƏN SONRA, `_probe_face_login_camera()` ilə AYRI
+    fon işində gedir. Ad DƏYİŞİB ki, "bu sahə tam əlçatanlığı bilir" fərziyyəsi
+    kodun başqa yerində sükutla təkrarlanmasın.
     """
 
     route: StartupRoute
-    face_login_available: bool
+    face_login_module_enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _SessionIssueResult:
+    """`_start_session_guard()`-in YAZI NƏTİCƏSİ (SEC-5) — bax `_AdminShellPreload`."""
+
+    token: str
+    session_id: SessionId
+
+
+@dataclass(frozen=True, slots=True)
+class _AdminShellPreload:
+    """`_build_admin_shell()`-in BÜTÜN DB oxu/yazısının NƏTİCƏSİ (PERF-6, Mərhələ 2).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ VAR — `docs/performance_notes.md` PERF-6 #3
+    ──────────────────────────────────────────────────────────────────────────
+    O bölmə `show_admin()`-in fon sapına köçürülmədiyini yazırdı, çünki DB
+    oxuları və Qt widget qurulması `_build_admin_shell`-in HƏR SƏTRİNDƏ
+    növbələşirdi — sabit "əvvəlcə bütün oxular, sonra bütün widget-lər"
+    sərhədi YOX idi. FAZA C/D (`screen_data.py`, bax `ScreenDataBinder`
+    başlığı) hər binder-i `inputs`/`fetch`/`apply` üç mərhələsinə ayırandan
+    SONRA bu sərhəd artıq MÜMKÜNDÜR: `_build_admin_shell`-in DB-yə toxunan
+    HƏR addımı (tema, aktiv modullar, plugin səthi, altyazı sayğacları,
+    dəstək nişanları, dövrə ritmləri, sessiya-buraxılışı VƏ İLK ekranın
+    fetch-i) faktiki olaraq Qt qurulmasından ƏVVƏL BAŞ VERİR (`AdminShell(...)`
+    yalnız `theme`/`registry`/`enabled_modules`-dan asılıdır, sonrakı addımlar
+    isə YALNIZ artıq-mövcud `shell`-ə DƏYƏR YAZIR) — sadəcə KODDA interleaved
+    yazılmışdı. Bu tip həmin addımların NƏTİCƏSİNİ TƏK obyektdə yığır ki,
+    `app.py::_fetch_admin_shell_preload()` onları FON SAPINDA (bir
+    `read_batch()` daxilində) toplaya bilsin, `_build_admin_shell()` isə
+    ƏSAS SAPDA YALNIZ Qt qursun və bu dəyərləri TƏTBİQ etsin.
+
+    `first_screen_apply` NİYƏ CALLABLE: hər ekranın MƏLUMAT tipi fərqlidir
+    (`_DashboardData`, `_UsersData`, …) — closure `ScreenDataBinder.
+    prefetch_first_screen()`-in daxilində, artıq FETCH edilmiş dəyəri
+    BAĞLAYIR (bax onun başlığı) və `app.py::_register_screens::build()`
+    İLK ekranı qurandan SONRA, ƏSAS SAPDA çağırılır.
+
+    HEÇ BİR SAHƏ MƏCBURİ DEYİL: `None`/boş dəyər "bu addım BURADA
+    OXUNMADI" demir — köhnə fərdi metodların EYNİ fail-soft ehtiyatını
+    daşıyır (`_apply_stored_theme`, `_enabled_modules`, s. başlıqlarına
+    bax). `_build_admin_shell()` `None` gələn sahəni ÖZ köhnə tək-tək canlı
+    oxusu ilə DOLDURUR (bax çağırış yerləri) — preload YALNIZ SÜRƏTLƏNDİRMƏ
+    qatıdır, DAVRANIŞ MƏNBƏYİ DEYİL.
+    """
+
+    theme_mode: ThemeMode | None
+    enabled_modules: frozenset[str] | None
+    plugin_pages: tuple[PluginPage, ...]
+    registry: NavigationRegistry
+    first_screen_key: str | None
+    first_screen_apply: Callable[[Any], None] | None
+    store_count: int | None
+    employee_count: int | None
+    support_badge_counts: dict[str, int]
+    upload_poll_interval_ms: int | None
+    scheduler_poll_interval_ms: int | None
+    session_issue: _SessionIssueResult | None
+    #: SEC-011 — `SessionGuard` üçün ÜÇ ROOT parametri (bax `_start_session_
+    #: guard`-ın `_admin_panel_idle_timeout_minutes` s. çağırışları). `None`
+    #: = BU SAHƏ oxunmayıb, canlı fallback işə düşür — digər sahələrlə EYNİ
+    #: qayda.
+    admin_panel_idle_timeout_minutes: int | None
+    admin_panel_absolute_timeout_hours: int | None
+    camera_dashboard_absolute_timeout_hours: int | None
 
 
 #: Splash ekranının minimum görünmə müddəti.
@@ -471,6 +554,25 @@ class KompasApplication:
         self._kiosk_face_task: Any = None
         #: Plugin-lərin verdiyi səhifələr (audit G-3) — girişdə hesablanır.
         self._plugin_pages: tuple[PluginPage, ...] = ()
+        #: PERF-6, Mərhələ 2 — `show_admin()`-in fon-preload işçisinə istinad.
+        #: `_login_task` ilə EYNİ səbəbdən saxlanılır: nəticə gəlməmiş Python
+        #: obyekti toplanmasın.
+        self._admin_shell_task: Any = None
+        #: PERF-6, Mərhələ 2 — İLK ekranın FON SAPINDA artıq fetch edilmiş
+        #: nəticəsi. `_register_screens::build()` yalnız BU açar üçün, YALNIZ
+        #: BİR DƏFƏ (bax `_build_admin_shell`-in sonu) canlı `populate()`-i
+        #: ƏVƏZ edir — digər bütün ekranlar (menyudan klik) TOXUNULMUR.
+        self._pending_first_screen_key: str | None = None
+        self._pending_first_screen_apply: Callable[[Any], None] | None = None
+        #: PERF-6 (`cv2` maddəsi) — `_probe_face_login_camera()`-nın fon
+        #: işçisinə istinad. `_login_task` ilə EYNİ səbəbdən saxlanılır.
+        self._face_login_camera_task: Any = None
+        #: PERF-6, Mərhələ 3 — reytinq drill-down-un fon fetch işçisinə istinad.
+        #: `_login_task` ilə EYNİ səbəbdən saxlanılır.
+        self._ranking_drill_down_task: Any = None
+        #: SONUNCU kliklənən mağaza — bax `_start_ranking_drill_down_fetch`-in
+        #: "stale nəticəyə qarşı" qeydi. `None` = gözlənilən drill-down yoxdur.
+        self._ranking_drill_down_store_id: StoreId | None = None
 
     # ------------------------------- pəncərə --------------------------------- #
 
@@ -669,7 +771,9 @@ class KompasApplication:
             self.show_setup_wizard()
             return
         self.show_login(
-            face_login_available=preload.face_login_available if preload is not None else None
+            face_login_module_enabled=(
+                preload.face_login_module_enabled if preload is not None else None
+            )
         )
 
     def _startup_route(self) -> StartupRoute:
@@ -938,13 +1042,19 @@ class KompasApplication:
 
     # -------------------------------- giriş ---------------------------------- #
 
-    def show_login(self, *, face_login_available: bool | None = None) -> None:
+    def show_login(self, *, face_login_module_enabled: bool | None = None) -> None:
         """Giriş ekranını açır.
 
         Args:
-            face_login_available: PRELOADED dəyər (PERF-6, bax `_StartupPreload`)
-                — verilibsə YENİDƏN DB-yə getmir. `None` (bütün DİGƏR çağırış
-                yerləri — logout, sessiya bitmə) → köhnə kimi CANLI oxunur.
+            face_login_module_enabled: PRELOADED toggle dəyəri (PERF-6, bax
+                `_StartupPreload`) — verilibsə YENİDƏN DB-yə getmir, LAKİN
+                `cv2` (kamera kitabxanası) hələ PROBLANMAYIB: düymə
+                TƏHLÜKƏSİZ defoltla (gizli) açılır, `_probe_face_login_
+                camera()` onu FON SAPINDA aktivləşdirir (bax onun başlığı).
+                `None` (bütün DİGƏR çağırış yerləri — logout, sessiya bitmə)
+                → köhnə kimi CANLI, BİRLƏŞMİŞ (toggle + `cv2`) oxunur —
+                `cv2` bu nöqtədə artıq idxal olunub (proses-səviyyəli keş),
+                ona görə bu yol AYRICA fon işi TƏLƏB ETMİR.
         """
         from src.presentation.screens.group_a_entry import AdminLoginScreen  # noqa: PLC0415
 
@@ -955,25 +1065,29 @@ class KompasApplication:
         # Önizləmədə həmişə göstərilir ki, dizayn baxışı ekranın tam formasını
         # görsün — orada kamera və baza onsuz da yoxdur.
         #
-        # QISA-DÖVRƏ QORUNUR: `self._preview` `True`-dursa `_face_login_
-        # available()` ÜMUMİYYƏTLƏ ÇAĞIRILMIR (əvvəlki `self._preview or
-        # self._face_login_available()` ifadəsinin EYNİ semantikası) — `if/
-        # else`-ə keçəndə bunu itirmək preload-suz DA lazımsız çağırış
-        # yaradardı.
+        # QISA-DÖVRƏ QORUNUR: `self._preview` `True`-dursa NƏ CANLI oxu, NƏ
+        # DƏ fon probu ÇAĞIRILMIR (əvvəlki `self._preview or self.
+        # _face_login_available()` ifadəsinin EYNİ semantikası).
         if self._preview:
             login.set_face_login_available(True)
+        elif face_login_module_enabled is not None:
+            # PERF-6 (`cv2` maddəsi) — TƏHLÜKƏSİZ defolt: düymə GİZLİ açılır.
+            # Toggle SÖNÜKDÜRSƏ heç bir prob İŞƏ SALINMIR (`cv2` heç vaxt
+            # idxal olunmur) — bax `_probe_face_login_camera` başlığı.
+            login.set_face_login_available(False)
+            if face_login_module_enabled:
+                self._probe_face_login_camera(login)
         else:
-            available = (
-                face_login_available
-                if face_login_available is not None
-                else self._face_login_available()
-            )
-            login.set_face_login_available(available)
+            login.set_face_login_available(self._face_login_available())
         self._window.set_content(login)
         self._login = login
 
     def _face_login_available(self) -> bool:
-        """«Üzlə daxil ol» düyməsi bu maşında mənalıdırmı."""
+        """«Üzlə daxil ol» düyməsi bu maşında mənalıdırmı — CANLI, BİRLƏŞMİŞ yoxlama.
+
+        YALNIZ preload-suz çağırış yerlərində (logout, sessiya bitmə) işlədilir
+        — bax `show_login` başlığı.
+        """
         if self._context is None:
             return False
 
@@ -982,6 +1096,60 @@ class KompasApplication:
         )
 
         return FaceLoginController(self._context).available()
+
+    def _probe_face_login_camera(self, login: AdminLoginScreen) -> None:
+        """`cv2` (kamera kitabxanası) mövcudluğunu FON SAPINDA yoxlayır (PERF-6).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ VAR
+        ──────────────────────────────────────────────────────────────────────
+        `perf-startup` ölçdü: splash arxasındakı fon işi gözlənilən "~3.5 s"
+        yox, **4235–4636 ms** oldu — səbəb `cv2`-nin İLK idxalı (soyuq keşdə
+        70–624 ms, `camera.py:108`), `_compute_startup_preload()` → `Face
+        LoginController.available()` daxilində. Toggle isə ucuz DB oxusudur
+        (batch-da onsuz da var) — YALNIZ `cv2` idxalı BURAYA, giriş ekranı
+        ARTIQ göründükdən SONRA köçürülür (bax `docs/performance_notes.md`
+        PERF-6 1a).
+
+        NAXIŞ YENİ İCAD EDİLMİR — `FaceEnrollmentController.
+        _refresh_camera_state`-in EYNİSİdir: düymə TƏHLÜKƏSİZ defoltla
+        (gizli, `show_login`-da ARTIQ qurulub) başlayır, prob YALNIZ
+        UĞURLA `True` qaytaranda onu GÖRÜNƏN edir.
+
+        `login is self._login` YOXLAMASI STALE NƏTİCƏYƏ QARŞI: `owner=login`
+        (bax `background_task.py`) widget MƏHV olanda gec gələn nəticəni
+        avtomatik atır, LAKİN `_window.set_content()` köhnə widget-i DƏRHAL
+        məhv ETMİR (yalnız örtükdən çıxarır) — istifadəçi bu qısa pəncərədə
+        LOGOUT edib YENİDƏN giriş ekranına düşsəydi, köhnə probun nəticəsi
+        YENİ (başqa) `AdminLoginScreen`-ə yazıla bilərdi.
+        """
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        def probe() -> bool:
+            # FON SAPINDA icra olunur — Qt-yə TOXUNMUR, DB sessiyası AÇMIR.
+            from src.infrastructure.kiosk.camera import camera_available  # noqa: PLC0415
+
+            try:
+                return bool(camera_available())
+            except Exception:
+                _log.exception("FACE_LOGIN_CAMERA_PROBE_FAILED")
+                return False
+
+        self._face_login_camera_task = run_job(
+            probe,
+            on_success=lambda available: self._on_face_login_camera_probed(login, available),
+            on_failure=lambda error: _log.error(
+                "FACE_LOGIN_CAMERA_PROBE_TASK_FAILED", exc_info=error
+            ),
+            owner=login,
+            name="FACE_LOGIN_CAMERA_PROBE",
+            executor=self._executor,
+        )
+
+    def _on_face_login_camera_probed(self, login: AdminLoginScreen, available: object) -> None:
+        """Kamera probu bitdi — ƏSAS SAPDA, YALNIZ HƏLƏ CANLI ekranı yeniləyir."""
+        if login is self._login and bool(available):
+            login.set_face_login_available(True)
 
     def _on_face_login_requested(self, username: str) -> None:
         """«Üzlə daxil ol» — şifrəsiz giriş (1:1 üz doğrulaması), İŞ FON SAPINDA (UI-7).
@@ -1063,17 +1231,17 @@ class KompasApplication:
         # `show_admin()` DA BLOKLAYAN ƏMƏLİYYATDIR — İKİNCİ BUSY PƏNCƏRƏSİ (UI-1)
         # ──────────────────────────────────────────────────────────────────
         # Yuxarıdakı sətir göstəricini artıq söndürüb (uğursuz cəhddə düymə
-        # AÇIQ qalmalıdır), lakin bu sətirdən sonra `read_batch()` (PERF-3)
-        # YENİDƏN bloklayır — adətən 1-2 s, hovuz tükənəndə/bağlantı qırılanda
-        # isə köhnə yola qayıdıb ~18 s-ə qədər çəkə bilər (bax `show_admin`
-        # başlığı). Göstərici bu pəncərədə də SÖNÜK qalsaydı, istifadəçi
+        # AÇIQ qalmalıdır), lakin bu sətirdən sonra `show_admin()` YENİDƏN
+        # bloklayırdı (bax onun köhnə başlığı) — indi (PERF-6, Mərhələ 2) FON
+        # SAPINDADIR, ona görə göstərici artıq `finally` ilə YOX, `on_ready`
+        # callback-i ilə SÖNDÜRÜLÜR: panel HƏQİQƏTƏN hazır olanda, sinxron
+        # qayıdışda YOX. Göstərici bu pəncərədə də SÖNÜK qalsaydı, istifadəçi
         # düymənin normala qayıtdığını görüb pəncərəni "cavab vermir" sanardı.
         self._login.set_busy(True)
         flush_ui()
-        try:
-            self.show_admin(employee, now=datetime.now(UTC))
-        finally:
-            self._login.set_busy(False)
+        self.show_admin(
+            employee, now=datetime.now(UTC), on_ready=lambda: self._login.set_busy(False)
+        )
 
     def _on_face_login_failed(self, error: BaseException) -> None:
         """Fon işində qalan istisna — SÜKUTLA UDULMUR.
@@ -1239,15 +1407,14 @@ class KompasApplication:
             employee, on_continue=lambda: self.show_admin(employee, now=datetime.now(UTC))
         ):
             return
-        # `show_admin()` DA bloklayan əməliyyatdır — bax `_on_face_login_
-        # succeeded`-dəki EYNİ blokun izahı (UI-1): göstərici bura qədər ARTIQ
-        # sönüb (yuxarı), `read_batch()` isə YENİDƏN bloklaya bilər.
+        # `show_admin()` FON SAPINDADIR (PERF-6, Mərhələ 2) — bax `_on_face_
+        # login_succeeded`-dəki EYNİ blokun izahı: göstərici `on_ready`
+        # callback-i ilə, panel HƏQİQƏTƏN hazır olanda söndürülür.
         self._login.set_busy(True)
         flush_ui()
-        try:
-            self.show_admin(employee, now=datetime.now(UTC))
-        finally:
-            self._login.set_busy(False)
+        self.show_admin(
+            employee, now=datetime.now(UTC), on_ready=lambda: self._login.set_busy(False)
+        )
 
     def _on_password_login_failed(self, error: BaseException) -> None:
         """Fon işində qalan istisna — SÜKUTLA UDULMUR.
@@ -1425,53 +1592,117 @@ class KompasApplication:
         self._shell = None
         self.show_login()
 
-    def show_admin(self, employee: Employee, *, now: datetime) -> None:
+    def show_admin(
+        self,
+        employee: Employee,
+        *,
+        now: datetime,
+        on_ready: Callable[[], None] | None = None,
+    ) -> None:
         """Admin örtüyünü qurur və bütün ekranları qeydiyyata alır.
 
         ──────────────────────────────────────────────────────────────────────
-        BÜTÜN AÇILIŞ OXULARI BİR TRANZAKSİYADADIR (PERF-3)
+        DB OXU/YAZISI FON SAPINDADIR (PERF-6, Mərhələ 2)
         ──────────────────────────────────────────────────────────────────────
-        Bu metod bir sıra kiçik oxu edir — saxlanmış tema, aktiv modullar,
-        plugin siyahısı, planlayıcı intervalı, cərimə növləri, işçi adları,
-        bildiriş sayğacı, dəstək nişanları, altyazılar — və hər biri ÖZ
-        sessiyasını açırdı. Ölçüldü: 13 tranzaksiya, `show_admin` **18 saniyə**
-        (uzaq bazada bir gediş-gəliş ~206 ms, sessiyanın öz yükü ~0.63 s).
+        Əvvəl bu metod bir sıra kiçik oxunu (saxlanmış tema, aktiv modullar,
+        plugin siyahısı, planlayıcı intervalı, altyazılar, dəstək nişanları,
+        İLK ekranın məlumatı) `read_batch()`-lə (PERF-3) BİR tranzaksiyaya
+        yığırdı, lakin YENƏ ƏSAS SAPDA, sinxron icra edirdi — ölçülüb: 3.2–13.1
+        saniyə donma, İKİ çağırış yerində (`docs/performance_notes.md`,
+        PERF-6 #3). O bölmə bunu FON SAPINA köçürməyin O ANDA MÜMKÜN
+        OLMADIĞINI yazırdı, çünki DB oxuları və Qt widget qurulması `_build_
+        admin_shell`-in HƏR SƏTRİNDƏ növbələşirdi.
 
-        `read_batch()` onları bir tranzaksiyada birləşdirir. Sərhəd BURADADIR,
-        çünki «açılış nə vaxt başlayıb nə vaxt bitir» sualının cavabını yalnız
-        bu metod bilir; aşağıdakı kontrollerlərin heç biri bunu bilmir və
-        onların əməliyyat-başına-sessiya qaydası DƏYİŞMİR.
+        FAZA C/D (`screen_data.py`) hər binder-i `inputs`/`fetch`/`apply`
+        mərhələsinə ayırandan SONRA bu artıq mümkündür: `_fetch_admin_shell_
+        preload()` BÜTÜN DB işini (bax `_AdminShellPreload` başlığı) `run_job`
+        ilə FON SAPINDA yığır, nəticə isə `_on_admin_shell_preload_ready`-də
+        ƏSAS SAPDA — YALNIZ Qt qurmaq üçün — `_build_admin_shell`-ə ötürülür.
+        `background_task.py`-nın «fon işi Qt widget-inə TOXUNMAMALIDIR»
+        qaydası BUNUNLA POZULMUR: fon sapı YALNIZ məlumat qaytarır.
 
-        `_context` yoxdursa (önizləmə rejimi) toplu da yoxdur — orada baza
-        ümumiyyətlə açılmır.
+        `_context` yoxdursa (önizləmə rejimi) fon işi DƏ yoxdur — orada baza
+        ümumiyyətlə açılmır, `_build_admin_shell` birbaşa, sinxron çağırılır.
 
-        `read_batch()`-in qaytardığı `bool` FALLBACK halını bildirir (UI-1):
-        hovuz tükənib ya bağlantı qırılıbsa toplu açılmır, oxular köhnə
-        13-sessiyalı yola qayıdır (~18 s). Bu, YALNIZ loga (`READ_BATCH_
-        UNAVAILABLE`) düşsəydi, istifadəçi pəncərənin niyə adi vaxtdan uzun
-        açıldığını heç vaxt öyrənməzdi — ona görə `_notify_slow_admin_load()`
-        AYRICA çağırılır.
+        `on_ready` NİYƏ VAR: çağıran (`_on_password_login_succeeded`, `_on_
+        face_login_succeeded`) panel HƏQİQƏTƏN hazır olanda "yüklənir"
+        göstəricisini söndürməlidir (UI-1) — metod ARTIQ dərhal qayıtdığı
+        üçün köhnə `try/finally` bunu ELƏ EDƏ BİLMİR (o, fon işi hələ
+        BAŞLAMAMIŞ işə düşərdi). `None` = çağıran tamamlanma hadisəsi ilə
+        maraqlanmır (məs. önizləmə giriş yolu).
+
+        `_notify_slow_admin_load()` (UI-1) fon işinin ÖZÜ İSTİSNA ATANDA
+        (son qoruyucu, `_on_admin_shell_preload_failed`) çağırılır — bu HAL
+        köhnə `read_batch()` FALLBACK-inin YERİNİ tutur: hər ikisi "sürətli
+        yol alınmadı, köhnə tək-tək oxuya qayıdıldı" mənasını daşıyır.
         """
         if self._context is None:
             self._build_admin_shell(employee, now=now)
+            if on_ready is not None:
+                on_ready()
             return
-        # Toplu AKTORLA açılır: açılış oxularının çoxu `session(user_id=...)`
-        # şəklindədir (bildirişlər, dəstək nişanları, cərimə növləri) və
-        # aktorsuz toplu onları kənarda qoyardı — yəni qazanc yarıya enərdi.
-        with self._context.read_batch(user_id=employee.id) as batch_active:
-            self._build_admin_shell(employee, now=now)
-        if not batch_active:
-            self._notify_slow_admin_load()
+
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        context = self._context
+        self._admin_shell_task = run_job(
+            lambda: _fetch_admin_shell_preload(context, employee, now=now),
+            on_success=lambda preload: self._on_admin_shell_preload_ready(
+                employee,
+                now=now,
+                preload=cast("_AdminShellPreload", preload),
+                on_ready=on_ready,
+            ),
+            on_failure=lambda error: self._on_admin_shell_preload_failed(
+                employee, now=now, error=error, on_ready=on_ready
+            ),
+            owner=self._window,
+            name="ADMIN_SHELL_PRELOAD",
+            executor=self._executor,
+        )
+
+    def _on_admin_shell_preload_ready(
+        self,
+        employee: Employee,
+        *,
+        now: datetime,
+        preload: _AdminShellPreload,
+        on_ready: Callable[[], None] | None,
+    ) -> None:
+        """Preload HAZIRDIR — ƏSAS SAPDA Qt qurulur (bax `show_admin` başlığı)."""
+        self._build_admin_shell(employee, now=now, preload=preload)
+        if on_ready is not None:
+            on_ready()
+
+    def _on_admin_shell_preload_failed(
+        self,
+        employee: Employee,
+        *,
+        now: datetime,
+        error: BaseException,
+        on_ready: Callable[[], None] | None,
+    ) -> None:
+        """Fon işi İSTİSNA ATDI — SON QORUYUCU: köhnə sinxron yol açılır (UI-1).
+
+        `_fetch_admin_shell_preload` normalda İSTİSNA ATMIR (hər addım öz
+        try/except-i ilə qorunur, bax onun başlığı) — bura YALNIZ gözlənilməz
+        bir kök səhv (məs. `read_batch()`-in ÖZÜ, pool tamamilə əlçatmazdır)
+        düşür. İstifadəçi YENƏ DƏ panelə çatır — YALNIZ köhnə sürətlə.
+        """
+        _log.error("ADMIN_SHELL_PRELOAD_FAILED", exc_info=error)
+        self._build_admin_shell(employee, now=now)
+        self._notify_slow_admin_load()
+        if on_ready is not None:
+            on_ready()
 
     def _notify_slow_admin_load(self) -> None:
-        """`read_batch()` FALLBACK halında istifadəçini xəbərdar edir (UI-1).
+        """Fon-preload SON QORUYUCUYA düşəndə istifadəçini xəbərdar edir (UI-1).
 
         YENİ widget QURULMUR — `QMessageBox.information` artıq iki kontrollerdə
         (`profile.py::_inform`, `settings.py::_inform`) EYNİ məqsədlə işlədilir:
         "bura xəta deyil, sadəcə məlumatdır". Səssiz keçmək YANLIŞ olardı: admin
         panelin niyə adi vaxtdan uzun açıldığını bilməli, əks halda "asılıb"
-        zənn edib məcburi bağlaya bilər — məhz `docstring`-dəki 18 saniyəlik
-        halın PRAKTİKİ nəticəsi budur.
+        zənn edib məcburi bağlaya bilər.
         """
         from PySide6.QtWidgets import QMessageBox  # noqa: PLC0415
 
@@ -1482,10 +1713,42 @@ class KompasApplication:
             "yükləmə adi vaxtdan uzun çəkdi — bütün məlumatlar doğru yükləndi.",
         )
 
-    def _build_admin_shell(self, employee: Employee, *, now: datetime) -> None:
-        """Örtüyün FAKTİKİ qurulması — sərhəd `show_admin`-dədir."""
+    def _build_admin_shell(  # noqa: PLR0915
+        self,
+        employee: Employee,
+        *,
+        now: datetime,
+        preload: _AdminShellPreload | None = None,
+    ) -> None:
+        """Örtüyün FAKTİKİ qurulması — sərhəd `show_admin`-dədir.
+
+        `PLR0915` (çox ifadə) BURADA SUSDURULUB — `_build_session`
+        (`composition.py`) ilə EYNİ səbəb: bu, mürəkkəb MƏNTİQ deyil, düz
+        gedən Qt qurma + `preload`-dan TƏTBİQ ardıcıllığıdır. `preload`-un
+        ƏLAVƏ etdiyi hər budaq artıq mövcud bir canlı-oxu addımının YERİNƏ
+        keçir (heç biri YENİ məntiq əlavə etmir), ona görə süni alt-metodlara
+        bölmək oxunaqlığı ARTIRMIR.
+
+        ──────────────────────────────────────────────────────────────────────
+        `preload` (PERF-6, Mərhələ 2)
+        ──────────────────────────────────────────────────────────────────────
+        VARSA, DB oxu/yazısının HAMISI ARTIQ fon sapında edilib (bax
+        `_fetch_admin_shell_preload`) — bu metod BURADA YALNIZ Qt qurur və
+        hazır dəyərləri TƏTBİQ edir, HEÇ BİR sətri özü DB-yə getmir.
+
+        `None`-dur (önizləmə rejimi VƏ YA `show_admin`-in fon-preload SON
+        QORUYUCUSU) — o zaman metod KÖHNƏ tək-tək CANLI oxu yoluna qayıdır:
+        hər addım öz canlı metodunu (`_apply_stored_theme`, `_enabled_
+        modules`, s.) çağırır. DAVRANIŞ HƏR İKİ HALDA EYNİDİR, YALNIZ SÜRƏT
+        dəyişir.
+        """
         self._current_employee = employee
-        self._apply_stored_theme(employee)
+
+        if preload is not None and preload.theme_mode is not None:
+            self.set_theme(preload.theme_mode)
+        else:
+            self._apply_stored_theme(employee)
+
         if self._context is not None:
             from src.presentation.controllers.fine_entry import (  # noqa: PLC0415
                 FineEntryController,
@@ -1503,27 +1766,52 @@ class KompasApplication:
             # (işçi adları) KONSTRUKTORA lazımdır — ekran qurulandan sonra
             # onu doldurmaq mümkün deyil.
             self._sales_review = SalesReviewController(self._context, employee)
-            self._start_upload_timer()
-            self._start_scheduler_timer()
-            self._start_session_guard(employee)
+            self._start_upload_timer(
+                interval_ms=preload.upload_poll_interval_ms if preload is not None else None
+            )
+            self._start_scheduler_timer(
+                interval_ms=preload.scheduler_poll_interval_ms if preload is not None else None
+            )
+            self._start_session_guard(
+                employee,
+                issued=preload.session_issue if preload is not None else None,
+                idle_timeout_minutes=(
+                    preload.admin_panel_idle_timeout_minutes if preload is not None else None
+                ),
+                absolute_timeout_hours=(
+                    preload.admin_panel_absolute_timeout_hours if preload is not None else None
+                ),
+                camera_absolute_timeout_hours=(
+                    preload.camera_dashboard_absolute_timeout_hours if preload is not None else None
+                ),
+            )
 
-        # PLUGIN SƏTHİ (audit G-3) — reyestr HƏR GİRİŞDƏ TƏZƏDƏN qurulur.
-        #
-        # Səbəb: plugin dəsti iki giriş arasında dəyişə bilər (Root birini
-        # təsdiqləyir/söndürür). Eyni reyestrə təkrar yazsaydıq, ikinci giriş
-        # "açar təkrarlanır" xətası ilə qarşılaşar və maddə sükutla itərdi.
-        # `build_default_registry()`-nin öz sənədləşməsi də məhz bu səbəbdən
-        # hər çağırışda təzə obyekt qaytarır.
-        self._plugin_pages = self._collect_plugin_pages()
-        self._registry = build_default_registry()
-        register_plugin_pages(self._registry, self._plugin_pages)
+        if preload is not None:
+            # PLUGIN SƏTHİ (audit G-3) ARTIQ fon sapında toplanıb — bax
+            # `_fetch_admin_shell_preload`. Reyestr ONUN QURDUĞU obyektdir
+            # (eyni instansı `AdminShell`-ə ötürülür), TƏKRAR qurulmur.
+            self._plugin_pages = preload.plugin_pages
+            self._registry = preload.registry
+            enabled_modules = preload.enabled_modules
+        else:
+            # PLUGIN SƏTHİ (audit G-3) — reyestr HƏR GİRİŞDƏ TƏZƏDƏN qurulur.
+            #
+            # Səbəb: plugin dəsti iki giriş arasında dəyişə bilər (Root birini
+            # təsdiqləyir/söndürür). Eyni reyestrə təkrar yazsaydıq, ikinci
+            # giriş "açar təkrarlanır" xətası ilə qarşılaşar və maddə sükutla
+            # itərdi. `build_default_registry()`-nin öz sənədləşməsi də məhz
+            # bu səbəbdən hər çağırışda təzə obyekt qaytarır.
+            self._plugin_pages = self._collect_plugin_pages()
+            self._registry = build_default_registry()
+            register_plugin_pages(self._registry, self._plugin_pages)
+            enabled_modules = self._enabled_modules()
 
         shell = AdminShell(
             theme=self._theme,
             registry=self._registry,
             employee=employee,
             now=now,
-            enabled_modules=self._enabled_modules(),
+            enabled_modules=enabled_modules,
         )
         shell.theme_toggle_requested.connect(self.toggle_theme)
         shell.logout_requested.connect(self.logout)
@@ -1536,18 +1824,29 @@ class KompasApplication:
         self._window.layout_mode_changed.connect(shell.apply_layout_mode)
         shell.apply_layout_mode(self._window.layout_mode)
         self._shell = shell
+        # PERF-6, Mərhələ 2 — İLK ekranın fon sapında artıq fetch edilmiş
+        # nəticəsi `_register_screens::build()`-ə BU İKİ dəyişənlə keçirilir
+        # (bax onların `__init__`-dəki şərhi). `None`/`None` = köhnə davranış
+        # (canlı `populate()`), `preload` yoxdursa BUNLAR onsuz da `None`-dur.
+        self._pending_first_screen_key = preload.first_screen_key if preload is not None else None
+        self._pending_first_screen_apply = (
+            preload.first_screen_apply if preload is not None else None
+        )
         self._register_screens(shell)
 
         self._window.set_content(shell)
         # ──────────────────────────────────────────────────────────────────
         # ÖRTÜK MƏLUMATDAN ƏVVƏL ÇƏKİLİR (PERF-5)
         # ──────────────────────────────────────────────────────────────────
-        # Bundan sonra gələn hər sətir BAZAYA gedir: altyazılar, dəstək
-        # nişanları və ilk ekranın doldurulması — uzaq bazada cəmi bir neçə
-        # saniyə. Qt isə yeni məzmunu YALNIZ hadisə dövrəsinə qayıdanda çəkir,
-        # yəni həmin saniyələr boyu ekranda HƏLƏ DƏ giriş forması qalırdı:
-        # istifadəçi şifrəni yazır, sahələr boşalır, ekran dəyişmir — «heç nə
-        # olmadı» təəssüratı məhz budur (bildirilən qüsur).
+        # Bundan sonra gələn hər sətir (preload YOXDURSA) BAZAYA gedir:
+        # altyazılar, dəstək nişanları və ilk ekranın doldurulması — uzaq
+        # bazada cəmi bir neçə saniyə. Qt isə yeni məzmunu YALNIZ hadisə
+        # dövrəsinə qayıdanda çəkir, yəni həmin saniyələr boyu ekranda HƏLƏ
+        # DƏ giriş forması qalırdı: istifadəçi şifrəni yazır, sahələr
+        # boşalır, ekran dəyişmir — «heç nə olmadı» təəssüratı məhz budur
+        # (bildirilən qüsur). `preload` VARSA aşağıdakı addımların hamısı
+        # artıq Qt-YALNIZ TƏTBİQdir (DB-yə getmir), amma `flush_ui()` YENƏ
+        # BURADA qalır — örtük istifadəçiyə DƏRHAL görünməlidir.
         #
         # `flush_ui()` örtüyü DƏRHAL göstərir; rəqəmlər bir neçə saniyə sonra
         # yerinə düşür. Bu, gözləməni GİZLƏTMİR — onu görünən edir: istifadəçi
@@ -1555,14 +1854,32 @@ class KompasApplication:
         # (UX-1) artıq işlədilir.
         flush_ui()
         self._install_overlays(shell)
-        self._refresh_context_subtitles(shell, now=now)
-        self._refresh_support_badges(shell)
+
+        if preload is None:
+            self._refresh_context_subtitles(shell, now=now)
+        elif preload.store_count is not None and preload.employee_count is not None:
+            self._apply_context_subtitles(
+                shell, now=now, stores=preload.store_count, employees=preload.employee_count
+            )
+        # `preload` VAR AMMA sayğaclar `None`-dur: KÖHNƏ metod da EYNİ halda
+        # (öz sorğusu sınanda) sükutla heç nə yazmırdı — TƏKRAR canlı oxu
+        # YOX, fail-soft EYNİ qalır (bax `_AdminShellPreload` başlığı).
+
+        if preload is None:
+            self._refresh_support_badges(shell)
+        elif preload.support_badge_counts:
+            for key, count in preload.support_badge_counts.items():
+                shell.sidebar().set_badge(key, count)
+        # Yuxarıdakı `elif`-in EYNİ qeydi: preload VAR, nişanlar isə BOŞDUR —
+        # o özü fail-soft nəticədir, TƏKRAR sınanmır.
 
         # İlk açılan ekran — menyuda görünən ilk maddə. Sabit "dashboard"
         # yazmaq olmazdı: icazəsi olmayan istifadəçidə boş ekran qalardı.
         visible = shell.sidebar().entry_keys()
         if visible:
             shell.show_screen(visible[0])
+        self._pending_first_screen_key = None
+        self._pending_first_screen_apply = None
 
     #: Ekrana QAYIDANDA məlumatı yenidən oxunan açarlar.
     #:
@@ -1706,8 +2023,21 @@ class KompasApplication:
 
         if row is None:
             return
-        stores = int(row["store_count"])
-        employees = int(row["employee_count"])
+        self._apply_context_subtitles(
+            shell, now=now, stores=int(row["store_count"]), employees=int(row["employee_count"])
+        )
+
+    def _apply_context_subtitles(
+        self, shell: AdminShell, *, now: datetime, stores: int, employees: int
+    ) -> None:
+        """`_refresh_context_subtitles`-in APPLY (Qt-YALNIZ) hissəsi.
+
+        PERF-6, Mərhələ 2: sayğaclar ARTIQ fon sapında (`_fetch_admin_shell_
+        preload`) oxunmuş ola bilər — bu metod HEÇ BİR DB-YƏ TOXUNMUR, YALNIZ
+        gətirilmiş rəqəmləri `shell`-ə yazır. `_refresh_context_subtitles` DA
+        (canlı yol) EYNİ metodu, ÖZ oxusundan SONRA çağırır — mətn qurulması
+        İKİ yerdə TƏKRARLANMASIN.
+        """
         today = _format_date_az(now)
 
         shell.set_screen_subtitle("dashboard", f"{_stores_az(stores)} · {today}")
@@ -1846,7 +2176,7 @@ class KompasApplication:
             return QUEUE_STORE_FILTER_THRESHOLD
         return max(1, value)
 
-    def _start_upload_timer(self) -> None:
+    def _start_upload_timer(self, *, interval_ms: int | None = None) -> None:
         """Sübut növbəsini dövri boşaldır (Faza 3.9).
 
         Taymerin ÖZÜ Qt hadisə dövrəsindədir (`timeout` GUI sapında yayılır),
@@ -1859,11 +2189,17 @@ class KompasApplication:
         qurularkən bir dəfə oxunur — Qt taymerinin intervalını hər dövrədə
         yenidən soruşmaq üçün ikinci bir taymer lazım olardı; yeni ritm növbəti
         girişdə qüvvəyə minir və bu, fon işi üçün kifayət qədər tezdir.
+
+        `interval_ms` (PERF-6, Mərhələ 2) VERİLİBSƏ (fon sapında ARTIQ oxunub,
+        bax `_AdminShellPreload.upload_poll_interval_ms`), canlı oxu ATLANIR —
+        `QTimer`-in ÖZÜ isə YENƏ DƏ burada, ƏSAS SAPDA qurulur (Qt obyektidir).
         """
         if self._context is None or self._upload_timer is not None:
             return
         timer = QTimer(self._window)
-        timer.setInterval(self._upload_poll_interval_ms())
+        timer.setInterval(
+            interval_ms if interval_ms is not None else self._upload_poll_interval_ms()
+        )
         timer.timeout.connect(self._drain_upload_queue)
         timer.start()
         self._upload_timer = timer
@@ -1956,7 +2292,7 @@ class KompasApplication:
 
     # --------------------------- planlaşdırılmış işlər ------------------------ #
 
-    def _start_scheduler_timer(self) -> None:
+    def _start_scheduler_timer(self, *, interval_ms: int | None = None) -> None:
         """Planlaşdırılmış YÜNGÜL işləri dövri işlədir (Faza 11).
 
         ──────────────────────────────────────────────────────────────────────
@@ -1978,11 +2314,17 @@ class KompasApplication:
         qərar `_start_upload_timer`-dədir: Qt taymerinin intervalını hər
         dövrədə yenidən soruşmaq üçün ikinci taymer lazım olardı; yeni ritm
         növbəti girişdə qüvvəyə minir).
+
+        `interval_ms` (PERF-6, Mərhələ 2) VERİLİBSƏ (fon sapında ARTIQ oxunub,
+        bax `_AdminShellPreload.scheduler_poll_interval_ms`), canlı oxu
+        ATLANIR — `QTimer`-in ÖZÜ isə YENƏ DƏ burada, ƏSAS SAPDA qurulur.
         """
         if self._context is None or self._scheduler_timer is not None:
             return
         timer = QTimer(self._window)
-        timer.setInterval(self._scheduler_poll_interval_ms())
+        timer.setInterval(
+            interval_ms if interval_ms is not None else self._scheduler_poll_interval_ms()
+        )
         timer.timeout.connect(self._run_scheduled_jobs)
         timer.start()
         self._scheduler_timer = timer
@@ -2032,7 +2374,15 @@ class KompasApplication:
 
     # ---------------------------- sessiya müddəti (SEC-011) ------------------- #
 
-    def _start_session_guard(self, employee: Employee) -> None:
+    def _start_session_guard(
+        self,
+        employee: Employee,
+        *,
+        issued: _SessionIssueResult | None = None,
+        idle_timeout_minutes: int | None = None,
+        absolute_timeout_hours: int | None = None,
+        camera_absolute_timeout_hours: int | None = None,
+    ) -> None:
         """Sessiya müddətini SERVER-DƏ yaradır və yerli qapını quraşdırır (SEC-5).
 
         ──────────────────────────────────────────────────────────────────────
@@ -2067,6 +2417,14 @@ class KompasApplication:
 
         KİOSK bura DAXİL DEYİL: `sessiya YOXDUR — hər əməliyyat üçün PIN`
         (SEC-5 müqaviləsi) və kiosk axını `show_admin()`-dən keçmir.
+
+        ──────────────────────────────────────────────────────────────────────
+        `issued`/`*_timeout_*` (PERF-6, Mərhələ 2)
+        ──────────────────────────────────────────────────────────────────────
+        VERİLİBSƏ (fon sapında ARTIQ oxunub/yazılıb, bax `_AdminShellPreload`),
+        müvafiq canlı YAZI (`session.sessions.issue`) və ya OXU (`_admin_
+        panel_idle_timeout_minutes` s.) ATLANIR — `SessionGuard`-ın ÖZÜ isə
+        YENƏ DƏ burada, ƏSAS SAPDA qurulur (Qt obyektidir).
         """
         if self._context is None:
             return
@@ -2080,32 +2438,52 @@ class KompasApplication:
             SessionContext.CAMERA_DASHBOARD if is_camera else SessionContext.ADMIN_PANEL
         )
 
-        import socket  # noqa: PLC0415
-
-        try:
-            with self._context.session(user_id=employee.id) as session:
-                issued = session.sessions.issue(
-                    tenant_id=session.tenant_id,
-                    employee=employee,
-                    context=session_context,
-                    machine_name=socket.gethostname(),
-                )
-                session.commit()
+        if issued is not None:
             self._session_token = issued.token
-            self._session_id = issued.session.id
-        except Exception:
-            # Bax metod başlığı: `issue()` KÖMƏKÇİ qatdır, uğursuzluğu girişi
-            # DAYANDIRMAMALIDIR.
-            _log.exception("SESSION_ISSUE_FAILED")
-            self._session_token = None
-            self._session_id = None
+            self._session_id = issued.session_id
+        else:
+            import socket  # noqa: PLC0415
+
+            try:
+                with self._context.session(user_id=employee.id) as session:
+                    result = session.sessions.issue(
+                        tenant_id=session.tenant_id,
+                        employee=employee,
+                        context=session_context,
+                        machine_name=socket.gethostname(),
+                    )
+                    session.commit()
+                self._session_token = result.token
+                self._session_id = result.session.id
+            except Exception:
+                # Bax metod başlığı: `issue()` KÖMƏKÇİ qatdır, uğursuzluğu
+                # girişi DAYANDIRMAMALIDIR.
+                _log.exception("SESSION_ISSUE_FAILED")
+                self._session_token = None
+                self._session_id = None
 
         guard = SessionGuard(
-            inactivity_minutes=None if is_camera else self._admin_panel_idle_timeout_minutes(),
-            absolute_hours=(
-                self._camera_dashboard_absolute_timeout_hours()
+            inactivity_minutes=(
+                None
                 if is_camera
-                else self._admin_panel_absolute_timeout_hours()
+                else (
+                    idle_timeout_minutes
+                    if idle_timeout_minutes is not None
+                    else self._admin_panel_idle_timeout_minutes()
+                )
+            ),
+            absolute_hours=(
+                (
+                    camera_absolute_timeout_hours
+                    if camera_absolute_timeout_hours is not None
+                    else self._camera_dashboard_absolute_timeout_hours()
+                )
+                if is_camera
+                else (
+                    absolute_timeout_hours
+                    if absolute_timeout_hours is not None
+                    else self._admin_panel_absolute_timeout_hours()
+                )
             ),
             touch=self._touch_session if self._session_token is not None else None,
             parent=self._window,
@@ -3217,16 +3595,29 @@ class KompasApplication:
         olmaya bilər (`daily_roster`-in canlı yolu defolt aktorun ÖZ
         `store_id`-sinə bağlıdır, bax `screen_data._daily_roster`), ona görə
         keçiddən SONRA `AdminShell.screen_for()` ilə artıq açılmış instansiya
-        götürülür və `populate_daily_roster_for_store` ONU XÜSUSİ olaraq
-        kliklənən mağaza ilə doldurur. Bu ÜÇ addım `screen_data.
+        götürülür və doldurulur. Bu addımlar `screen_data.
         perform_ranking_drill_down`-da SAF funksiya kimi yaşayır ki,
         `QApplication` olmadan test oluna bilsin — burada YALNIZ HAZIR
         collaborator-lar ötürülür.
+
+        ──────────────────────────────────────────────────────────────────
+        PERF-6, Mərhələ 3 — `populate` ARTIQ FON İŞİNİ BAŞLADIR
+        ──────────────────────────────────────────────────────────────────
+        Əvvəl `populate=self._binder.populate_daily_roster_for_store`
+        birbaşa ötürülürdü — bütöv (inputs+fetch+apply) çağırış ƏSAS SAPDA,
+        SİNXRON icra olunurdu (`open_sheet()` gündəlik tabel YARADIR,
+        DB gediş-gəlişi var). İndi `_start_ranking_drill_down_fetch`
+        ötürülür — o, fetch-i `run_job`-a verir (bax onun başlığı: sıra
+        `perform_ranking_drill_down`-da QORUNUR, `screen` arqumenti ARTIQ
+        `show_screen()`-dən SONRA gəldiyi üçün DOĞRU instansiyadır). Başlıq
+        altyazısının yenilənməsi (aşağıdakı köhnə "DEEP-GAP UX-8" bloku) DA
+        HƏMİN fon işinin tərkibinə köçüb (bax `_start_ranking_drill_down_
+        fetch`-in `_apply` daxili funksiyası) — `_drill_store_name` ÖZÜ DƏ
+        DB-yə gedirdi və İKİNCİ sinxron gecikmə mənbəyi idi.
         """
         if self._shell is None or self._binder is None:
             return
         from src.presentation.controllers.screen_data import (  # noqa: PLC0415
-            DAILY_ROSTER_SCREEN_KEY,
             perform_ranking_drill_down,
         )
 
@@ -3234,31 +3625,96 @@ class KompasApplication:
             store_id_text,
             show_screen=self._shell.show_screen,
             screen_for=self._shell.screen_for,
-            populate=self._binder.populate_daily_roster_for_store,
+            populate=lambda store_id, screen: self._start_ranking_drill_down_fetch(
+                store_id, screen, store_id_text=store_id_text
+            ),
         )
         if not succeeded:
             _log.warning("BENCHMARK_DRILL_DOWN_FAILED", extra={"value": store_id_text})
-            return
 
-        # ──────────────────────────────────────────────────────────────────
-        # İSTİFADƏÇİ HARA DÜŞDÜYÜNÜ GÖRÜR (DEEP-GAP UX-8)
-        # ──────────────────────────────────────────────────────────────────
-        # Keçid SÜKUTLA baş verirdi: menecer reytinq sətrinə klikləyir və
-        # özünü BAŞQA mağazanın tabelində tapır — başlıqda isə yalnız
-        # «Gündəlik Tabel» yazırdı. Nəticədə iki səhv birlikdə gəlirdi:
-        # (1) hansı mağazaya baxdığını bilmirdi, (2) sol paneldən qayıdanda
-        # ekran HƏMİN başqa mağazanın məlumatı ilə dolu qalırdı, çünki
-        # ekranlar açara görə keşlənir (`REFRESH_ON_REVISIT` yalnız
-        # `dashboard`-ı əhatə edir).
-        #
-        # YENİ EKRAN VƏ YA NAVİQASİYA YIĞINI YARADILMIR: başlığın altındakı
-        # MÖVCUD kontekst sətri kliklənən mağazanın adını daşıyır, sol
-        # paneldən qayıdış isə `_on_screen_revisited`-də sıfırlanır.
-        if self._roster_drill_subtitle is None:
-            self._roster_drill_subtitle = self._shell.screen_subtitle(DAILY_ROSTER_SCREEN_KEY)
-        self._shell.set_screen_subtitle(
-            DAILY_ROSTER_SCREEN_KEY,
-            f"{self._drill_store_name(store_id_text)} · İdarə Panelindən",
+    def _start_ranking_drill_down_fetch(
+        self, store_id: StoreId, screen: Any, *, store_id_text: str
+    ) -> None:
+        """Drill-down-un DB işini FON SAPINDA başladır (PERF-6, Mərhələ 3).
+
+        ──────────────────────────────────────────────────────────────────
+        SIRA ZƏMANƏTİ — ÇAĞIRAN TƏRƏFDƏN GƏLİR
+        ──────────────────────────────────────────────────────────────────
+        Bu metod `perform_ranking_drill_down`-a `populate=` kimi ötürülür
+        (bax `_on_ranking_row_selected`) — o funksiya `screen_for()`-u
+        `show_screen()`-dən SONRA çağırır (bax onun başlığı: bu sıra ORADA
+        qorunur), yəni `screen` ARTIQ DOĞRU instansiyadır. Bu metod ÖZÜ
+        Qt naviqasiyası ilə MARAQLANMIR — YALNIZ artıq düzgün müəyyən
+        edilmiş `screen`-ə DB işini fon sapında BAĞLAYIR.
+
+        ──────────────────────────────────────────────────────────────────
+        NİYƏ İKİ DB OXUSU BİRLƏŞDİRİLİB (roster + mağaza adı)
+        ──────────────────────────────────────────────────────────────────
+        `ScreenDataBinder.fetch_daily_roster_for_store()` (tabel sətirləri)
+        VƏ `_drill_store_name()` (başlıq altyazısı üçün ad) ƏVVƏL İKİ AYRI
+        sinxron DB çağırışı idi. Hər ikisi YALNIZ OXUYUR (adın ÖZÜ, `open_
+        sheet()`-in YAZISINDAN ASILI DEYİL), ona görə TƏK fon işində
+        birləşdirilib — ikinci `run_job` çağırışı əlavə gecikmə YARADARDI.
+
+        ──────────────────────────────────────────────────────────────────
+        STALE NƏTİCƏYƏ QARŞI
+        ──────────────────────────────────────────────────────────────────
+        İstifadəçi tez-tez fərqli reytinq sətirlərinə klikləsə (nadir, amma
+        mümkün), `self._ranking_drill_down_store_id` HƏR klikdə YENİLƏNİR —
+        YALNIZ SONUNCU kliklənən mağazanın nəticəsi tətbiq olunur (əvvəlki,
+        gec gələn nəticə sükutla ATILIR). `owner=self._shell` ƏLAVƏ qat verir:
+        panel bağlananda (logout) gec gələn nəticə widget-ə heç TOXUNMUR.
+        """
+        if self._binder is None:
+            return
+        from src.presentation.background_task import run_job  # noqa: PLC0415
+
+        self._ranking_drill_down_store_id = store_id
+        binder = self._binder
+
+        def fetch() -> tuple[Any, str]:
+            # FON SAPINDA icra olunur — Qt-yə TOXUNMUR, hər ikisi ÖZ
+            # sessiyasını AÇIR/BAĞLAYIR (bax `background_task.py` başlığı).
+            data = binder.fetch_daily_roster_for_store(store_id)
+            return data, self._drill_store_name(store_id_text)
+
+        def _apply(result: object) -> None:
+            if self._ranking_drill_down_store_id != store_id or self._shell is None:
+                return
+            data, store_name = cast("tuple[Any, str]", result)
+            binder.apply_daily_roster_for_store(screen, data)
+            # ──────────────────────────────────────────────────────────
+            # İSTİFADƏÇİ HARA DÜŞDÜYÜNÜ GÖRÜR (DEEP-GAP UX-8)
+            # ──────────────────────────────────────────────────────────
+            # Keçid SÜKUTLA baş verirdi: menecer reytinq sətrinə klikləyir
+            # və özünü BAŞQA mağazanın tabelində tapır — başlıqda isə yalnız
+            # «Gündəlik Tabel» yazırdı. Nəticədə iki səhv birlikdə gəlirdi:
+            # (1) hansı mağazaya baxdığını bilmirdi, (2) sol paneldən
+            # qayıdanda ekran HƏMİN başqa mağazanın məlumatı ilə dolu
+            # qalırdı, çünki ekranlar açara görə keşlənir (`REFRESH_ON_
+            # REVISIT` yalnız `dashboard`-ı əhatə edir).
+            #
+            # YENİ EKRAN VƏ YA NAVİQASİYA YIĞINI YARADILMIR: başlığın
+            # altındakı MÖVCUD kontekst sətri kliklənən mağazanın adını
+            # daşıyır, sol paneldən qayıdış isə `_on_screen_revisited`-də
+            # sıfırlanır.
+            from src.presentation.controllers.screen_data import (  # noqa: PLC0415
+                DAILY_ROSTER_SCREEN_KEY,
+            )
+
+            if self._roster_drill_subtitle is None:
+                self._roster_drill_subtitle = self._shell.screen_subtitle(DAILY_ROSTER_SCREEN_KEY)
+            self._shell.set_screen_subtitle(
+                DAILY_ROSTER_SCREEN_KEY, f"{store_name} · İdarə Panelindən"
+            )
+
+        self._ranking_drill_down_task = run_job(
+            fetch,
+            on_success=_apply,
+            on_failure=lambda error: _log.error("RANKING_DRILL_DOWN_FETCH_FAILED", exc_info=error),
+            owner=self._shell,
+            name="RANKING_DRILL_DOWN_FETCH",
+            executor=self._executor,
         )
 
     def _drill_store_name(self, store_id_text: str) -> str:
@@ -3543,11 +3999,16 @@ class KompasApplication:
             return
         self.set_theme(ThemeMode(str(stored).lower()))
 
-    def _register_screens(self, shell: AdminShell) -> None:
+    def _register_screens(self, shell: AdminShell) -> None:  # noqa: PLR0915
         """Bütün modul ekranlarını `açar → fabrika` şəklində bağlayır.
 
         Ekranlar burada QURULMUR — yalnız necə qurulacağı yazılır. Faktiki
         qurulma ilk açılışda baş verir (bax `AdminShell.show_screen`).
+
+        `PLR0915` (çox ifadə) BURADA SUSDURULUB — `pyproject.toml`-dakı
+        ekran qurucuları istisnası ilə EYNİ səbəb: 28 ekranın `shell.
+        register_screen(key, make(key, factory))` çağırışı təkrarlanan,
+        budaqsız qeydiyyat siyahısıdır, mürəkkəb MƏNTİQ deyil.
         """
         from src.domain.value_objects.support import SupportChannel  # noqa: PLC0415
         from src.presentation.screens import (  # noqa: PLC0415
@@ -3603,6 +4064,14 @@ class KompasApplication:
                     from src.presentation import preview_screens  # noqa: PLC0415
 
                     preview_screens.populate(key, screen)
+                elif (
+                    key == self._pending_first_screen_key
+                    and self._pending_first_screen_apply is not None
+                ):
+                    # PERF-6, Mərhələ 2 — İLK ekranın fetch-i ARTIQ fon
+                    # sapında edilib (bax `_build_admin_shell`); burada
+                    # YALNIZ tətbiq olunur, canlı `populate()` ÇAĞIRILMIR.
+                    self._pending_first_screen_apply(screen)
                 elif self._binder is not None:
                     # İstehsalat: eyni imza, canlı məlumat (bax `screen_data`).
                     self._binder.populate(key, screen)
@@ -4916,20 +5385,291 @@ def _compute_startup_preload(context: ApplicationContext) -> _StartupPreload:
     ARTIQ fon sapında olan `factory()` çağırışına QOŞULUR, YENİ sap AÇMIR.
 
     ──────────────────────────────────────────────────────────────────────────
+    `context.read_batch()` SƏRHƏDİ (PERF-6, düzəliş — `perf-startup` tapıntısı)
+    ──────────────────────────────────────────────────────────────────────────
+    `_resolve_startup_route`/`FaceLoginController.module_enabled()` HƏR BİRİ
+    ÖZ `context.session()`-ini açırdı — İKİ AYRI tranzaksiya, `_after_splash`-
+    ın (PERF-6 §1) `read_batch()`-lə qazandığı ~650 ms-i BURADA (ARTIQ NORMAL
+    açılış yolunda) itirirdi: ölçülüb, `_compute_startup_preload()` TAM 1723
+    ms çəkdi — orijinal, `read_batch()`-dən ƏVVƏLKİ 1724 ms ilə demək olar
+    EYNİ. Bu `with` bloku hər ikisini BİR tranzaksiyaya salır — sərhəd
+    `_after_splash`-ın ÖZ fallback qolunda ARTIQ MÖVCUD olan `with context.
+    read_batch():` naxışının EYNİSİdir, yalnız BURAYA da tətbiq olunur.
+
+    ──────────────────────────────────────────────────────────────────────────
+    `FaceLoginController.available()` YOX, `.module_enabled()` (PERF-6, `cv2`)
+    ──────────────────────────────────────────────────────────────────────────
+    `available()` `cv2` kitabxanasını da idxal edir (soyuq keşdə 70–624 ms,
+    ölçülüb — `docs/performance_notes.md` PERF-6 1a) — bu, BURADA, splash
+    arxasındakı fon işinin ÖZÜNDƏ olsa da, giriş ekranını GÖRÜNMƏDƏN GECİKDİRİR.
+    `module_enabled()` YALNIZ toggle-ı (ucuz DB oxusu, YUXARIDAKI `read_batch`
+    daxilində) oxuyur; `cv2` idxalı `app.py::_probe_face_login_camera()`-ya,
+    giriş ekranı ARTIQ GÖRÜNDÜKDƏN sonrakı AYRI fon işinə köçüb.
+
+    ──────────────────────────────────────────────────────────────────────────
     UĞURSUZLUQ HALI — TƏTBİQ YENƏ QALXMALIDIR
     ──────────────────────────────────────────────────────────────────────────
     Bu funksiya İSTİSNA ATMIR: `_resolve_startup_route` VƏ `FaceLoginController.
-    available()` HƏR İKİSİ ÖZ istisnalarını daxildə tutur (mövcud davranış,
+    module_enabled()` HƏR İKİSİ ÖZ istisnalarını daxildə tutur (mövcud davranış,
     bax onların tərifləri) və müvafiq TƏHLÜKƏSİZ dəyərə (`LOGIN`, `False`)
     düşür. Çağıran (`_load_context_behind_splash`) YENƏ DƏ əlavə `try/except`
     ilə əhatə edir — gözlənilməz bir SƏHV BURADA (məs. gələcək dəyişiklik)
     UĞURLU kontekst qurulmasını FATAL başlanğıc xətasına ÇEVİRMƏMƏLİDİR.
+    `read_batch()`-in ÖZÜ də eyni prinsiplə İSTİSNA ATMIR (fallback halında
+    sadəcə hər oxu ÖZ sessiyasına qayıdır, bax onun tərifi).
     """
     from src.presentation.controllers.face_login import FaceLoginController  # noqa: PLC0415
 
-    return _StartupPreload(
-        route=_resolve_startup_route(context),
-        face_login_available=FaceLoginController(context).available(),
+    with context.read_batch():
+        return _StartupPreload(
+            route=_resolve_startup_route(context),
+            face_login_module_enabled=FaceLoginController(context).module_enabled(),
+        )
+
+
+def _preload_theme(context: ApplicationContext, employee: Employee) -> ThemeMode | None:
+    """1) TEMA — bax `_apply_stored_theme`. `None` = oxunmadı, canlı fallback işə düşür."""
+    try:
+        with context.session() as session:
+            stored = session.preferences.theme_for(employee.id)
+        return ThemeMode(str(stored).lower())
+    except Exception:
+        _log.exception("THEME_LOAD_FAILED")
+        return None
+
+
+def _preload_enabled_modules(context: ApplicationContext) -> frozenset[str] | None:
+    """2) AKTİV MODULLAR — bax `_enabled_modules`."""
+    try:
+        with context.session() as session:
+            return frozenset(session.toggles.enabled_modules(context.tenant_id))
+    except Exception:
+        _log.exception("FEATURE_TOGGLES_LOAD_FAILED")
+        return None
+
+
+def _preload_plugin_pages(context: ApplicationContext) -> tuple[PluginPage, ...]:
+    """3) PLUGIN SƏTHİ — bax `_collect_plugin_pages`."""
+    from src.presentation.plugin_surface import PluginRegistrySurface  # noqa: PLC0415
+
+    try:
+        with context.session() as session:
+            surface = PluginRegistrySurface(
+                session.uow.repository("plugins"), context.tenant_id
+            ).surface()
+        return surface.pages
+    except Exception:
+        _log.exception("PLUGIN_PAGES_LOAD_FAILED")
+        return ()
+
+
+def _preload_first_screen(
+    context: ApplicationContext,
+    employee: Employee,
+    *,
+    now: datetime,
+    registry: NavigationRegistry,
+    enabled_modules: frozenset[str] | None,
+) -> tuple[str | None, Callable[[Any], None] | None]:
+    """4) İLK EKRAN AÇARI + ONUN FETCH-i — bax `ScreenDataBinder.prefetch_first_screen`."""
+    from src.presentation.controllers.screen_data import ScreenDataBinder  # noqa: PLC0415
+
+    visible = registry.visible_for(employee, now=now, enabled_modules=enabled_modules)
+    first_screen_key = visible[0].key if visible else None
+    if first_screen_key is None:
+        return None, None
+    binder = ScreenDataBinder(context, employee)
+    return first_screen_key, binder.prefetch_first_screen(first_screen_key)
+
+
+def _preload_subtitle_counts(context: ApplicationContext) -> tuple[int | None, int | None]:
+    """5) KONTEKST ALTYAZI SAYĞACLARI — bax `_refresh_context_subtitles`."""
+    try:
+        with context.session() as session:
+            row = session.uow.connection.execute(
+                """
+                SELECT
+                    (SELECT count(*) FROM stores
+                      WHERE tenant_id = %s AND is_active)    AS store_count,
+                    (SELECT count(*) FROM employees
+                      WHERE tenant_id = %s AND is_active)    AS employee_count
+                """,
+                (str(context.tenant_id), str(context.tenant_id)),
+            ).fetchone()
+        if row is None:
+            return None, None
+        return int(row["store_count"]), int(row["employee_count"])
+    except Exception:
+        _log.exception("SHELL_SUBTITLE_COUNTS_UNAVAILABLE")
+        return None, None
+
+
+def _preload_support_badges(context: ApplicationContext, employee: Employee) -> dict[str, int]:
+    """6) DƏSTƏK NİŞANLARI — bax `_refresh_support_badges`."""
+    from src.domain.value_objects.support import SupportChannel  # noqa: PLC0415
+
+    try:
+        keys = {
+            SupportChannel.INTERNAL: "internal_requests",
+            SupportChannel.TECHNICAL: "technical_support",
+        }
+        with context.session(user_id=employee.id) as session:
+            return {
+                key: session.support_inbox.actionable_count(
+                    tenant_id=session.tenant_id, actor=employee, channel=channel
+                )
+                for channel, key in keys.items()
+            }
+    except Exception:
+        _log.exception("SUPPORT_BADGE_REFRESH_FAILED")
+        return {}
+
+
+def _preload_upload_interval_ms(context: ApplicationContext) -> int | None:
+    """7a) SÜBUT NÖVBƏSİNİN RİTMİ — bax `_upload_poll_interval_ms`."""
+    try:
+        seconds = context.infrastructure_limits().int_of(
+            SystemLimitKey.EVIDENCE_UPLOAD_POLL_INTERVAL_SECONDS
+        )
+        return max(MIN_UPLOAD_POLL_INTERVAL_SECONDS, seconds) * 1000
+    except Exception:
+        _log.exception("UPLOAD_POLL_INTERVAL_READ_FAILED")
+        return None
+
+
+def _preload_scheduler_interval_ms(context: ApplicationContext) -> int | None:
+    """7b) PLANLAYICI DÖVRƏSİNİN RİTMİ — bax `_scheduler_poll_interval_ms`."""
+    try:
+        interval = context.job_runner().poll_interval(context.tenant_id)
+        return int(interval.total_seconds() * 1000)
+    except Exception:
+        _log.exception("SCHEDULER_POLL_INTERVAL_READ_FAILED")
+        return None
+
+
+def _preload_session_issue(
+    context: ApplicationContext, employee: Employee
+) -> _SessionIssueResult | None:
+    """8) SESSİYA MÜDDƏTİ (SEC-5) — YAZI, bax `_start_session_guard`."""
+    import socket  # noqa: PLC0415
+
+    from src.domain.entities.auth_session import SessionContext  # noqa: PLC0415
+
+    try:
+        is_camera = bool(employee.position.is_camera_type)
+        session_context = (
+            SessionContext.CAMERA_DASHBOARD if is_camera else SessionContext.ADMIN_PANEL
+        )
+        with context.session(user_id=employee.id) as session:
+            issued = session.sessions.issue(
+                tenant_id=session.tenant_id,
+                employee=employee,
+                context=session_context,
+                machine_name=socket.gethostname(),
+            )
+            session.commit()
+        return _SessionIssueResult(token=issued.token, session_id=issued.session.id)
+    except Exception:
+        _log.exception("SESSION_ISSUE_FAILED")
+        return None
+
+
+def _preload_session_guard_limits(
+    context: ApplicationContext,
+) -> tuple[int | None, int | None, int | None]:
+    """9) SEC-011 — `SessionGuard`-ın ÜÇ ROOT parametri, bax `_start_session_guard`-ın
+    `_admin_panel_idle_timeout_minutes` s. çağırışları (indi orada `None`
+    ötürülür, canlı oxu ATLANIR).
+    """
+    idle_minutes: int | None = None
+    try:
+        idle_minutes = context.infrastructure_limits().int_of(
+            SystemLimitKey.ADMIN_PANEL_SESSION_IDLE_TIMEOUT_MINUTES
+        )
+    except Exception:
+        _log.exception("SESSION_IDLE_TIMEOUT_READ_FAILED")
+
+    absolute_hours: int | None = None
+    try:
+        absolute_hours = context.infrastructure_limits().int_of(
+            SystemLimitKey.ADMIN_PANEL_SESSION_ABSOLUTE_TIMEOUT_HOURS
+        )
+    except Exception:
+        _log.exception("SESSION_ABSOLUTE_TIMEOUT_READ_FAILED")
+
+    camera_absolute_hours: int | None = None
+    try:
+        camera_absolute_hours = context.infrastructure_limits().int_of(
+            SystemLimitKey.CAMERA_DASHBOARD_SESSION_ABSOLUTE_TIMEOUT_HOURS
+        )
+    except Exception:
+        _log.exception("SESSION_CAMERA_ABSOLUTE_TIMEOUT_READ_FAILED")
+
+    return idle_minutes, absolute_hours, camera_absolute_hours
+
+
+def _fetch_admin_shell_preload(
+    context: ApplicationContext, employee: Employee, *, now: datetime
+) -> _AdminShellPreload:
+    """`_build_admin_shell()`-in DB oxu/yazısı — FON SAPINDA (PERF-6, Mərhələ 2).
+
+    Modul-səviyyəli funksiyadır (`self`-siz), `_compute_startup_preload` ilə
+    EYNİ səbəbdən: `run_job`-a birbaşa veriləndə fon sapında çağırılır və
+    Qt widget-ə TOXUNMUR (bax `background_task.py` başlığı). Bax
+    `_AdminShellPreload` başlığı — HANSI addımların bura köçdüyü VƏ NİYƏ.
+
+    HƏR ADDIM (`_preload_*` köməkçiləri) ÖZ KÖHNƏ METODUNUN EYNİ try/except
+    EHTİYATINI TƏKRARLAYIR (`_apply_stored_theme`, `_enabled_modules`,
+    `_collect_plugin_pages`, `_refresh_context_subtitles`, `_refresh_
+    support_badges`, `_upload_poll_interval_ms`, `_scheduler_poll_interval_
+    ms`, `_start_session_guard`) — DAVRANIŞ EYNİDİR, YALNIZ SAP dəyişir. Bir
+    addımın uğursuzluğu QALANLARINI DAYANDIRMIR (`_build_admin_shell`
+    başlığındakı "bölmə xətaları" prinsipi bura da tətbiq olunur). Hər addım
+    AYRI funksiyadır (`_dashboard_fetch`-in bölmə-bölmə naxışı ilə EYNİ
+    səbəb): `_fetch_admin_shell_preload`-in ÖZÜ YALNIZ ardıcıllığı yığır.
+
+    `context.read_batch(user_id=employee.id)` (PERF-3) BÜTÜN addımları BİR
+    tranzaksiyaya yığır — sərhəd əvvəl `show_admin()`-də ƏSAS SAPDA idi,
+    indi eyni FAYDA fon sapında qalır (thread-local, bax `composition.py`).
+    """
+    with context.read_batch(user_id=employee.id):
+        theme_mode = _preload_theme(context, employee)
+        enabled_modules = _preload_enabled_modules(context)
+        plugin_pages = _preload_plugin_pages(context)
+
+        registry = build_default_registry()
+        register_plugin_pages(registry, plugin_pages)
+
+        first_screen_key, first_screen_apply = _preload_first_screen(
+            context, employee, now=now, registry=registry, enabled_modules=enabled_modules
+        )
+        store_count, employee_count = _preload_subtitle_counts(context)
+        support_badge_counts = _preload_support_badges(context, employee)
+        upload_poll_interval_ms = _preload_upload_interval_ms(context)
+        scheduler_poll_interval_ms = _preload_scheduler_interval_ms(context)
+        session_issue = _preload_session_issue(context, employee)
+        (
+            admin_panel_idle_timeout_minutes,
+            admin_panel_absolute_timeout_hours,
+            camera_dashboard_absolute_timeout_hours,
+        ) = _preload_session_guard_limits(context)
+
+    return _AdminShellPreload(
+        theme_mode=theme_mode,
+        enabled_modules=enabled_modules,
+        plugin_pages=plugin_pages,
+        registry=registry,
+        first_screen_key=first_screen_key,
+        first_screen_apply=first_screen_apply,
+        store_count=store_count,
+        employee_count=employee_count,
+        support_badge_counts=support_badge_counts,
+        upload_poll_interval_ms=upload_poll_interval_ms,
+        scheduler_poll_interval_ms=scheduler_poll_interval_ms,
+        session_issue=session_issue,
+        admin_panel_idle_timeout_minutes=admin_panel_idle_timeout_minutes,
+        admin_panel_absolute_timeout_hours=admin_panel_absolute_timeout_hours,
+        camera_dashboard_absolute_timeout_hours=camera_dashboard_absolute_timeout_hours,
     )
 
 

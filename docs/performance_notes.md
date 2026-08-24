@@ -393,6 +393,30 @@ available()` ÇAĞIRILMIR) qorunduğu — dörd ssenari ilə təsdiqləndi. Ayr�
 baza/SETUP_WIZARD, dolu baza/LOGIN, sxem yox/SCHEMA_MISSING, naməlum
 xəta/LOGIN) HƏR BİRİNİ `_startup_route()` ilə EYNİ verdiyi təsdiqləndi.
 
+**Canlı ölçü (`perf-startup`, 4 işə salma) BÖLGÜNÜ DÜZƏLDİR:** splash
+arxasındakı ÜMUMİ fon işi gözlənilən "~3.5 s" DEYİL, **4235–4636 ms**
+(orta ~4360 ms) oldu — yuxarıdakı cədvəldəki "~700–900 ms ARTIQ". Səbəb
+TƏXMİN DEYİL, ÖLÇÜLÜB: `_compute_startup_preload()` → `FaceLoginController.
+available()` → `camera_available()` `cv2`-ni İLK DƏFƏ idxal edir
+(`camera.py:108`, soyuq keşdə 70–624 ms). Bu idxal ƏVVƏL `show_login()`-da,
+UI SAPINDA baş verirdi və 1-ci bölmədəki 1724/1050–1160 ms donmanın BİR
+HİSSƏSİ idi — indi fon sapına köçüb, LAKİN silinmədi, YERİ dəyişdi.
+Riyaziyyat: 2353 ms (`build_context`) + ~1075 ms (iki oxu) + ~600 ms
+(soyuq `cv2`) ≈ 4030–4630 ms — müşahidə ilə uyğundur.
+
+**"ÜMUMİ açılış müddəti dəyişmir (təxminən)" sətri DƏQİQLƏŞDİRİLİR:** cəm
+HƏQİQƏTƏN dəyişməyib (yalnız BÖLGÜSÜ dəyişib — `cv2` xərci UI donmasından
+fon animasiyasına köçüb), lakin rəqəm artıq TƏXMİN deyil, ÖLÇÜLÜB. Bu,
+REQRESSİYA DEYİL: istifadəçi bir qədər uzun, LAKİN CANLI (splash animasiya
+edir) gözləyir; splash bitəndən sonra giriş ekranı DƏRHAL açılır.
+
+**Gələcək maddə (bu sənəddə qeyd, İNDİ EDİLMİR):** `cv2` idxalı YALNIZ
+«Üzlə daxil ol» düyməsinin görünüb-görünməyəcəyini həll edir — onu
+splash-dan TAMAMILƏ çıxarıb (yalnız toggle-ı preload-da saxlayıb) giriş
+ekranını DƏRHAL göstərmək, prob bitəndə düyməni aktivləşdirmək mümkündür
+(~600 ms qazanc). Naxış `face_enrollment.py::FaceEnrollmentController.
+_refresh_camera_state`-də ARTIQ var.
+
 ### 2 — `AuthController.authenticate()`: 1894 ms sinxron
 
 `app.py::_authenticate()` `self._auth.authenticate(...)`-i birbaşa GUI
@@ -426,39 +450,71 @@ recorders`).
 
 ### 3 — `show_admin()`: 3.2–13.1 s, İKİ çağırış yerində (`app.py:1079`, `:950`)
 
-**Bu tapıntı FON SAPINA köçürülmədi — aşağıdakı SƏBƏBLƏ.**
+**EDİLDİ (PERF-6, Mərhələ 2) — aşağıdakı yolla.**
 
-`show_admin()` → `_build_admin_shell()` artıq `read_batch()` (PERF-3) və
-`_refresh_context_subtitles`/`_refresh_support_badges`-in uow-paylaşımı
-(PERF-5) ilə optimallaşdırılıb (13 sessiya → 4), lakin qalan vaxt İKİ
-növ işin SIX INTERLEAVED ardıcıllığıdır: (a) DB oxuları (tema, aktiv
-modullar, plugin səthi, kontekst altyazıları, dəstək nişanları, İLK
-ekranın `ScreenDataBinder.populate()`-i) VƏ (b) Qt widget qurulması
-(`AdminShell(...)`, ekran qeydiyyatı, siqnal bağlantıları). Bu ikisi
-metodun HƏR SƏTRİNDƏ növbələşir — sabit "əvvəlcə bütün oxular, sonra
-bütün widget-lər" sərhədi YOXDUR.
+İlk cəhddə (SPEED-FIX Faza 3) bu tapıntı FON SAPINA köçürülməmişdi: DB
+oxuları və Qt widget qurulması `_build_admin_shell`-in HƏR SƏTRİNDƏ
+növbələşirdi, sabit "əvvəlcə bütün oxular, sonra bütün widget-lər" sərhədi
+YOX idi. Doğru həll kimi `ScreenDataBinder.populate()`-in imzasını
+"fetch (fon) + tətbiq (əsas sap)" ayırmaq yazılmışdı — FAZA C/D
+(`screen_data.py`, bax `ScreenDataBinder` başlığı) bunu BÜTÜN 14 binder
+üçün tamamladıqdan SONRA bu bölmə artıq mümkün oldu.
 
-`background_task.py` modulunun ÖZ qaydası («Fon işi Qt widget-inə
-TOXUNMAMALIDIR») və CLAUDE.md bölmə 6-nın sessiya qaydası («sessiya sap
-sərhədini keçmir») BİRLİKDƏ bunu literal mənada qeyri-mümkün edir: `AdminShell`
-və 41 ekran Qt obyektidir, fon sapından qurula BİLMƏZ (Qt widget-ləri
-sap-təhlükəsiz deyil — çağırış çöksəydi və ya sükutla pozulsaydı, səbəbi
-tapmaq çətin olardı). Doğru həll `ScreenDataBinder.populate()`-in (bax
-`screen_data.py`) İMZASINI "fetch (fon) + tətbiq (əsas sap)" iki mərhələyə
-bölməkdir — bu, 41 ekranın hamısına toxunan, `screen_data.py`-nın ÖZ
-müqaviləsini dəyişən genişhəcmli dəyişiklikdir və "minimal düzəliş" +
-"mövcud işləyən ekranı YENİDƏN YAZMA" qaydalarını aşır.
+**Həll:** `app.py::_fetch_admin_shell_preload()` `_build_admin_shell`-in
+DB-yə toxunan HƏR addımını (tema, aktiv modullar, plugin səthi + reyestr,
+İLK ekranın `ScreenDataBinder.prefetch_first_screen()` fetch-i, kontekst
+altyazı sayğacları, dəstək nişanları, sübut/planlayıcı dövrə ritmləri,
+sessiya-buraxılışı YAZISI (SEC-5), SEC-011-in üç `SessionGuard` limiti)
+`context.read_batch()` daxilində, BİR `run_job()` çağırışı ilə FON SAPINDA
+toplayır (`_AdminShellPreload` bağlaması). `show_admin()` bu işi buraxır və
+DƏRHAL qayıdır; nəticə `_on_admin_shell_preload_ready`-də ƏSAS SAPDA
+`_build_admin_shell(..., preload=...)`-ə keçir — bu metod ARTIQ HEÇ BİR
+sətirdə DB-yə getmir, YALNIZ Qt qurur və hazır dəyərləri tətbiq edir.
+İLK ekranın tətbiqi (`_register_screens::build()` daxilində) canlı
+`ScreenDataBinder.populate()`-i ATLAYIR — ƏVƏZİNƏ fon sapında artıq hazır
+olan closure (`_pending_first_screen_apply`) çağırılır.
 
-Sənəddəki "Hələ ölçülməmiş / gələcək addımlar" siyahısında bu artıq
-qeyd olunub: **"Sorğuların fon sapına köçürülməsi — Doğru ümumi həll
-budur"** — yəni bu, YENİ tapıntı deyil, ƏVVƏLCƏDƏN tanınan, hələ
-edilməmiş iş kimi qalır. SPEED-FIX Faza 3 çərçivəsində TOXUNULMADI;
-ayrıca, `screen_data.py` səviyyəsində planlaşdırılmalıdır.
+`background_task.py`-nın «fon işi Qt widget-inə TOXUNMAMALIDIR» qaydası
+POZULMUR: `AdminShell` və bütün ekranlar YENƏ DƏ, İSTİSNASIZ, əsas sapda
+qurulur — fon sapı YALNIZ məlumat qaytarır.
 
-Mövcud müvəqqəti tədbir DƏYİŞMİR: `set_busy(True)` + `flush_ui()` bloklamadan
-ƏVVƏL çağırılır (UX-1) və `_notify_slow_admin_load()` `read_batch()` geri
-düşəndə (fallback) istifadəçini AÇIQ xəbərdar edir (UI-1) — bunlar artıq
-koddadır, YENİ əlavə edilmədi.
+**Fon işi tam İSTİSNA atsa** (son qoruyucu — normalda hər addım öz
+try/except-i ilə qorunur): `_on_admin_shell_preload_failed` `_build_admin_
+shell`-i `preload=None` ilə (KÖHNƏ, tək-tək canlı oxu yolu) çağırır və
+`_notify_slow_admin_load()` (UI-1) istifadəçini xəbərdar edir — bu, köhnə
+`read_batch()` FALLBACK-inin funksional YERİNİ tutur.
+
+`on_ready` (YENİ, opsional parametr) `show_admin()`-in çağıranına (hər iki
+giriş yolu, `_on_password_login_succeeded`/`_on_face_login_succeeded`)
+"panel HƏQİQƏTƏN hazırdır" hadisəsini verir — `set_busy(True)`/`flush_ui()`
+DƏYİŞMƏDƏN qalır (UX-1), `set_busy(False)` isə köhnə sinxron `finally`
+ƏVƏZİNƏ bu callback-dən çağırılır (metod artıq DƏRHAL qayıtdığı üçün
+`finally` fon işi hələ BAŞLAMAMIŞ işə düşərdi).
+
+**«Klikdən panelə» ÖLÇÜLMƏDİ (canlı giriş tələb edir, bu dövrədə test hesabı
+verilmədi) — rəqəm YAZILMIR, TƏXMİN DƏ EDİLMİR.** Zəmanət qapılardan gəlir:
+`mypy`/`ruff` təmiz, hədəflənmiş test dəsti yaşıl (aşağıya bax) və kod
+səviyyəsində `_build_admin_shell`-in `preload` yolunda HEÇ BİR sətir DB-yə
+getmir — yəni GUI sapının DONMA MƏNBƏYİ struktur olaraq aradan qalxıb,
+LAKİN bu, `perf-startup`-ın `MAIN_THREAD_STALL` ölçüsü ilə TƏSDİQLƏNMƏYİB.
+
+**Yoxlama:** `mypy src` (380 fayl, strict) təmiz; `ruff check`/`format`
+təmiz (`_build_admin_shell`/`_register_screens` ÜÇÜN `PLR0915` susdurulub —
+`_build_session`/ekran qurucuları ilə EYNİ əsaslandırma, `_fetch_admin_
+shell_preload`-in ÖZÜ isə 9 kiçik `_preload_*` köməkçisinə bölünüb).
+Hədəflənmiş dəst yaşıl: `test_login_and_startup_recovery.py`,
+`test_face_login_background.py`, `test_password_login_background.py`,
+`test_busy_feedback.py`, `test_screen_data_thread_boundary.py`,
+`test_screen_data_binding.py`, `test_read_batch_scope.py`,
+`test_session_guard_e2e.py`, `test_session_touch_guard.py`,
+`test_navigation_shell_ux.py`, `tests/e2e/test_shell_e2e.py` + geniş
+`dashboard/admin_shell/shell/login/startup/session/screen_data/navigation`
+süzgəci (362 keçdi) — **İKİ test faylı `show_admin`-i sahtələyən
+lambda/funksiyanın imzasını `on_ready` qəbul edəcək şəkildə YENİLƏMƏLİDİR**
+(`tests/` bu agentin sahəsi deyil, dəqiq dəyişiklik `qa`-ya bildirilib):
+`test_login_and_startup_recovery.py:88` və
+`test_face_login_background.py::test_successful_face_login_clears_the_
+form_and_opens_the_panel`-in `_fake_show_admin` köməkçisi.
 
 ### 5 — `internal_requests` (4.4 s / 3 sessiya) və `technical_support` (5.4 s / 4 sessiya)
 

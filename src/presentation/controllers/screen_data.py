@@ -744,6 +744,86 @@ class ScreenDataBinder:
             "health": self._health,
         }
 
+    def _first_screen_binders(
+        self,
+    ) -> dict[str, tuple[Callable[[Session, Any], Any], Callable[[Any, Any], None]]]:
+        """`_binders()`-in FETCH/APPLY cütü ilə eyni siyahısı (bax `prefetch_first_screen`).
+
+        `_binders()`-i TƏKRAR yazmır, YALNIZ hər açarın orkestratoru
+        (`_dashboard`, `_users`, …) daxilindəki İKİ addımı — `_X_fetch` +
+        `_X_apply` — ayrıca ifşa edir. `Any` ilə tipləndirilib, çünki hər
+        açarın MƏLUMAT tipi FƏRQLİDİR (`_DashboardData`, `_UsersData`, …) —
+        heterogen lüğət YALNIZ `Any` sərhədi ilə mypy strict altında keçir.
+        """
+        return {
+            "dashboard": (self._dashboard_fetch, self._dashboard_apply),
+            "live_queue": (self._live_queue_fetch, self._live_queue_apply),
+            "fines": (self._fines_fetch, self._fines_apply),
+            "shift_planning": (self._shift_planning_fetch, self._shift_planning_apply),
+            "shift_swaps": (self._shift_swaps_fetch, self._shift_swaps_apply),
+            "daily_roster": (self._daily_roster_fetch, self._daily_roster_apply),
+            "fine_appeals": (self._fine_appeals_fetch, self._fine_appeals_apply),
+            "tasks": (self._tasks_fetch, self._tasks_apply),
+            "sales_points": (self._sales_points_fetch, self._sales_points_apply),
+            "users": (self._users_fetch, self._users_apply),
+            "audit": (self._audit_fetch, self._audit_apply),
+            "reports": (self._reports_fetch, self._reports_apply),
+            "help": (self._help_fetch, self._help_apply),
+            "health": (self._health_fetch, self._health_apply),
+        }
+
+    def prefetch_first_screen(self, key: str) -> Callable[[Any], None] | None:
+        """FAZA D (PERF-6, Mərhələ 2) — İLK ekranın FETCH-i FON SAPINDA, ekran QURULMAMIŞ.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ VAR
+        ──────────────────────────────────────────────────────────────────────
+        `show_admin()` → `_build_admin_shell()` `shell.show_screen(visible[0])`
+        çağıranda `populate()` İLK ekranın bütün sorğularını ƏSAS SAPDA,
+        sinxron icra edirdi (bax `_dashboard`-ın "FAZA D" qeydi) — bu,
+        `show_admin`-in Qt qurulduqdan SONRAKI donmasının ƏSAS mənbəyidir
+        (`docs/performance_notes.md`, PERF-6 #3: "3.2–13.1 s"). `app.py`
+        bu metodu ekran HƏLƏ QURULMAMIŞ ikən, FON SAPINDA çağırır və
+        nəticəni bir APPLY closure-una bükür — closure isə ekran
+        (`AdminShell.show_screen` → `app.py::_register_screens::build`)
+        qurulandan SONRA, ƏSAS SAPDA çağırılır.
+
+        ──────────────────────────────────────────────────────────────────────
+        "USERS" ÜÇÜN XÜSUSİ HAL — WİDGET HƏLƏ YOXDUR
+        ──────────────────────────────────────────────────────────────────────
+        `_users_inputs` `screen.status_filter()` oxuyur (bax sinif başlığı,
+        "ÜÇ MƏRHƏLƏ, İKİ YOX") — İLK açılışda bu HƏMİŞƏ `"active"`-dir
+        (`UsersScreen`-in öz defoltu, bax `_users_fetch`-in şərhi). Widget
+        hələ qurulmadığı üçün BURADA canlı oxuna bilməz — sabit defolt
+        YAZILIR: bu, WİDGET-in ÖZ ilkin vəziyyətini TƏKRARLAYIR, YENİ
+        davranış YARATMIR.
+
+        ──────────────────────────────────────────────────────────────────────
+        UĞURSUZLUQ = `None` — KÖHNƏ (SİNXRON) YOLA QAYIDIR
+        ──────────────────────────────────────────────────────────────────────
+        Açar `_binders()`-də yoxdursa (məs. plugin səhifəsi İLK ekrandır) və
+        ya fetch istisna atarsa, `None` qaytarılır: çağıran `show_screen()`-i
+        öz KÖHNƏ (sinxron `populate()`) yolu ilə açır — istifadəçi HEÇ nə
+        itirmir, yalnız BU XÜSUSİ girişdə donma qalır (fail-soft, CLAUDE.md
+        bölmə 3 ilə eyni istiqamət).
+        """
+        entry = self._first_screen_binders().get(key)
+        if entry is None:
+            return None
+        fetch, apply = entry
+        inputs: Any = _UsersInputs(status_filter="active") if key == "users" else _NoInputs()
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                data = fetch(session, inputs)
+        except Exception:
+            _error_log.exception("FIRST_SCREEN_PREFETCH_FAILED", extra={"screen": key})
+            return None
+
+        def _apply(screen: Any) -> None:
+            apply(screen, data)
+
+        return _apply
+
     def _may_resolve_conflicts(self) -> bool:
         """Aktorun «Sinxronizasiya Konfliktləri» ekranına icazəsi varmı.
 
@@ -1402,9 +1482,34 @@ class ScreenDataBinder:
         olaraq bu metod `populate()`-dən keçmir, ÖZ sessiyasını özü qurur) —
         bu, DƏYİŞMİR, çünki `perform_ranking_drill_down` bu metodu birbaşa,
         artıq açılmış sessiyasız çağırır.
+
+        ──────────────────────────────────────────────────────────────────────
+        FAZA D (PERF-6, Mərhələ 3) — BÜTÖV FORMA QALIR, İKİ YARISI DA İFŞA OLUNUR
+        ──────────────────────────────────────────────────────────────────────
+        `app.py::_on_ranking_row_selected` ARTIQ bu bütöv metodu ÇAĞIRMIR —
+        `fetch_daily_roster_for_store()`/`apply_daily_roster_for_store()`-u
+        AYRI-AYRI, `run_job` sərhədi ilə işlədir (bax onların başlığı). Bu
+        metod (bütöv forma) YALNIZ digər, sap sərhədi TƏLƏB ETMƏYƏN çağıran
+        yerlər üçün (məs. `_on_screen_revisited`-in ÖZ `populate()` yolu,
+        testlər) SAXLANILIR — imza VƏ davranış DƏYİŞMİR.
         """
-        inputs = self._daily_roster_for_store_inputs(screen)
-        data = self._daily_roster_for_store_fetch(store_id, inputs)
+        self.apply_daily_roster_for_store(screen, self.fetch_daily_roster_for_store(store_id))
+
+    def fetch_daily_roster_for_store(self, store_id: StoreId) -> _DailyRosterData:
+        """`populate_daily_roster_for_store`-un FETCH mərhələsi — FON SAPINDA çağırıla bilər.
+
+        PERF-6, Mərhələ 3: `app.py::_on_ranking_row_selected` bunu `run_job`-a
+        verir ki, `open_sheet()`-in gizli YAZISI (bax `populate_daily_roster_
+        for_store` başlığı) `AdminShell.show_screen()`/`screen_for()`
+        (Qt naviqasiya, ƏSAS SAPDA) TAMAMLANDIQDAN SONRA, LAKİN GUI sapını
+        BLOKLAMADAN icra olunsun. `screen` arqumenti YOXDUR — `inputs`
+        həmişə `_NoInputs()`-dur (bax `_daily_roster_for_store_inputs`),
+        widget-dən oxunan HEÇ NƏ yoxdur.
+        """
+        return self._daily_roster_for_store_fetch(store_id, _NoInputs())
+
+    def apply_daily_roster_for_store(self, screen: Any, data: _DailyRosterData) -> None:
+        """`populate_daily_roster_for_store`-un APPLY mərhələsi — ƏSAS SAPDA, YALNIZ Qt."""
         self._daily_roster_for_store_apply(screen, data)
 
     def _daily_roster_for_store_inputs(self, screen: Any) -> _NoInputs:
@@ -2390,18 +2495,24 @@ def perform_ranking_drill_down(
     ──────────────────────────────────────────────────────────────────────────
     Naviqasiya qərarının ÖZÜ ("hansı açar, hansı sıra ilə") biznes məntiqidir
     və `QApplication` tələb etməməlidir. `app.py`-dakı `_on_ranking_row_
-    selected` bu funksiyanı `AdminShell.show_screen`/`screen_for` və
-    `ScreenDataBinder.populate_daily_roster_for_store`-u birbaşa ötürərək
-    çağırır — YENİ naviqasiya qatı YOXDUR, sadəcə MÖVCUD üç collaborator
-    (bax arqumentlər) bir yerdə çağırılır.
+    selected` bu funksiyanı `AdminShell.show_screen`/`screen_for` VƏ
+    (Mərhələ 3-dən) `app.py::_start_ranking_drill_down_fetch`-i `populate`
+    kimi ötürərək çağırır — YENİ naviqasiya qatı YOXDUR, sadəcə MÖVCUD
+    collaborator-lar (bax arqumentlər) bir yerdə çağırılır. `populate`-in
+    ÖZÜ İNDİ sinxron DEYİL (bax onun başlığı) — bu funksiya bunu BİLMİR VƏ
+    BİLMƏMƏLİDİR: o, YALNIZ `populate(store_id, screen)`-i ÇAĞIRIR, nəyin
+    ARXASINDA (sinxron tətbiq, yoxsa fon işinin BAŞLADILMASI) olduğu ilə
+    maraqlanmır — sərhəd HƏMİŞƏ ÇAĞIRANDA (bax `Returns` altındakı qeyd).
 
     Args:
         store_id_text: Klik edilən sətrin mağaza ID-si (mətn, `RankingEntry.
             store_id`).
         show_screen: `AdminShell.show_screen` — mövcud ekrana keçid.
         screen_for: `AdminShell.screen_for` — keçiddən SONRA instansiyanı tapır.
-        populate: `ScreenDataBinder.populate_daily_roster_for_store` — həmin
-            instansiyanı KLİKLƏNƏN mağaza ilə doldurur.
+        populate: KLİKLƏNƏN mağaza ilə doldurma çağırışı — `ScreenDataBinder.
+            populate_daily_roster_for_store` (sinxron) VƏ YA `app.py::_start_
+            ranking_drill_down_fetch` (fon işini BAŞLADIR, tətbiq gec gəlir)
+            OLA BİLƏR; bu funksiya İKİSİNİ DƏ EYNİ CÜR çağırır.
 
     Returns:
         Bütün addımlar uğurlu olduqda `True`. Yararsız ID, gizli ekran və ya
@@ -2410,18 +2521,23 @@ def perform_ranking_drill_down(
         idarəedicisidir, çökmə istifadəçini bütün paneldən məhrum edərdi).
 
     ──────────────────────────────────────────────────────────────────────────
-    FAZA C (PERF-6, RİSKLİ) — SƏRHƏD BURADA DEYİL, `populate`-İN İÇİNDƏDİR
+    FAZA D (PERF-6, Mərhələ 3) — SƏRHƏD BURADA DEYİL, `populate`-İN İÇİNDƏDİR
     ──────────────────────────────────────────────────────────────────────────
     Bu funksiyanın ÖZÜ nə DB, nə Qt widget-inə TOXUNUR — o, `show_screen`/
-    `screen_for` (Qt naviqasiya) ilə `populate` (indi ÖZÜ inputs/fetch/apply
-    üçlüyünə bölünmüş `populate_daily_roster_for_store`) arasında SADƏ
-    körpüdür. Fetch/apply sərhədi artıq `populate`-in DAXİLİNDƏDİR (bax onun
-    başlığı) — bura ƏLAVƏ struktur ƏLAVƏ ETMƏK YALNIZ eyni şeyi iki yerdə
-    ifadə edərdi. FAZA D-də `show_screen(DAILY_ROSTER_SCREEN_KEY)` (Qt,
-    ƏSAS SAPDA QALMALI) ilə `populate`-in fetch hissəsi (fon sapına köçə
-    bilər) arasındakı sıra BURADA qorunmalıdır: naviqasiya ƏVVƏL, fetch
-    SONRA — çünki `screen_for()` yalnız `show_screen()`-dən SONRA doğru
-    instansiyanı qaytarır.
+    `screen_for` (Qt naviqasiya) ilə `populate` arasında SADƏ körpüdür.
+    Fetch/apply sap sərhədi ARTIQ `populate`-in ÖZÜNDƏ (çağıran tərəfin
+    verdiyi funksiyada) HƏLL OLUNUB — bura ƏLAVƏ struktur ƏLAVƏ ETMƏK YALNIZ
+    eyni şeyi iki yerdə ifadə edərdi.
+
+    SIRA BURADA QORUNUR VƏ BU, KRİTİKDİR: aşağıdakı sətir sırası (əvvəl
+    `show_screen`, SONRA `screen_for`, SONRA `populate`) DƏYİŞDİRİLƏ BİLMƏZ
+    — `screen_for()` yalnız `show_screen()`-dən SONRA doğru instansiyanı
+    qaytarır (əvvəl heç qurulmamış ekranın widget-i YOXDUR). `populate`
+    ARTIQ fon işini BAŞLADA BİLdiyi üçün (bax `app.py::_start_ranking_
+    drill_down_fetch`) bu sıranın pozulması "yanlış ekrana yazma" yox,
+    "HEÇ NƏYƏ yazmama" (`screen_for()` `None` qaytarardı, `if screen is
+    None: return False` bunu artıq TUTUR) və ya STALE widget-ə yazma riski
+    yaradardı — SIRA saxlanıldığı üçün heç biri BAŞ VERMİR.
     """
     try:
         store_id = StoreId(uuid.UUID(store_id_text))

@@ -257,6 +257,60 @@ if not _ICON_FONT_DATAS:
         'ilə `qtawesome` paketini quraşdırın (bax requirements.txt, İkon Dəsti bölməsi).'
     )
 
+# İKON ŞRİFTLƏRİNİN LİSENZİYA MƏTNLƏRİ — INTER-lə EYNİ SƏBƏB
+# -----------------------------------------------------------------------------
+# `collect_data_files('qtawesome')` yalnız `qtawesome`-un ÖZ MIT lisenziyasını
+# (`dist-info/licenses/LICENSE.txt`) toplayır — daşıdığı SƏKKİZ ayrı şrift
+# ailəsinin (Font Awesome, Material Design Icons, Phosphor, Remix Icon,
+# Codicon, Elusive Icons) HEÇ BİRİNİN lisenziya mətni paketin İÇİNDƏ YOXDUR.
+# `LICENSE-Inter.txt`-lə EYNİ öhdəlik: OFL/Apache/CC BY nüsxəsi şriftlə
+# BİRLİKDƏ paylanmalıdır (aşağıdakı bənd, "İNTER ŞRİFTİ" şərhi).
+#
+# Hər faylın mətni RƏSMİ mənbədən, HƏMİN paketlə bağlı DƏQİQ versiya
+# etiketindən çəkilib (uydurma mətn YOX):
+#   * LICENSE-FontAwesome.txt      — SIL OFL 1.1 (ŞRİFT). Font Awesome-un
+#     İKİ lisenziyası var: SVG/JS ikonlar CC BY 4.0, ŞRİFT isə OFL — biz
+#     yalnız şrift daşıyırıq, ona görə YALNIZ OFL. Mənbə: FortAwesome/
+#     Font-Awesome tag 6.7.2, `LICENSE.txt`.
+#   * LICENSE-ElusiveIcons.txt     — SIL OFL 1.1. Mənbə: reduxframework/
+#     Elusive-Icons v2.0.0 `README.md` ("The Elusive Icons font is licensed
+#     under the SIL OFL 1.1") — repoda ayrıca LICENSE faylı yoxdur.
+#   * LICENSE-MaterialDesignIcons.txt — Apache License 2.0 (ŞRİFT). Mənbə:
+#     Templarian/MaterialDesign-Webfont tag v5.9.55/v6.9.96, `LICENSE`.
+#   * LICENSE-RemixIcon.txt        — Apache License 2.0. MÜHÜM: RemixIcon
+#     repoda SONRADAN (bu paketdəki v2.5.0-dan sonra) fərqli, xüsusi
+#     lisenziyaya keçib — mətn məhz `v2.5.0` GIT ETİKETİNDƏN çəkilib, HEAD-
+#     dən YOX, çünki bizim daşıdığımız fayl həmin versiyadır.
+#   * LICENSE-Phosphor.txt         — MIT. Mənbə: phosphor-icons/web (mətn
+#     layihənin bütün versiya tarixçəsində dəyişməyib, yoxlanılıb).
+#   * LICENSE-Codicon.txt          — CC BY 4.0. Mənbə: microsoft/vscode-
+#     codicons tag 0.0.36, `LICENSE` + `README.md` "Legal Notices" bəndi.
+_ICON_LICENSE_NAMES = [
+    'LICENSE-FontAwesome.txt',
+    'LICENSE-ElusiveIcons.txt',
+    'LICENSE-MaterialDesignIcons.txt',
+    'LICENSE-RemixIcon.txt',
+    'LICENSE-Phosphor.txt',
+    'LICENSE-Codicon.txt',
+]
+_ICON_LICENSE_DATAS = [
+    (os.path.join(SPECPATH, '..', 'assets', 'fonts', name), 'assets/fonts')  # noqa: F821
+    for name in _ICON_LICENSE_NAMES
+]
+_ICON_LICENSE_DIR = os.path.join(SPECPATH, '..', 'assets', 'fonts')  # noqa: F821
+_MISSING_ICON_LICENSES = [
+    name for name in _ICON_LICENSE_NAMES
+    if not os.path.isfile(os.path.join(_ICON_LICENSE_DIR, name))
+]
+if _MISSING_ICON_LICENSES:
+    # SÜKUTLA BOŞ QALMIR — bura düşən fayl atributsiya öhdəliyi daşıyır,
+    # yoxluğu build anında SÜKUTLA keçilsə, öhdəlik yalnız hüquqi mübahisə
+    # zamanı üzə çıxar.
+    raise SystemExit(
+        'İkon şrift lisenziya faylları tapılmadı: ' + ', '.join(_MISSING_ICON_LICENSES) +
+        ' (bax assets/fonts/, İKON ŞRİFTLƏRİNİN LİSENZİYA MƏTNLƏRİ bölməsi).'
+    )
+
 a = Analysis(
     [os.path.join(SPECPATH, 'main.py')],  # noqa: F821 — SPECPATH-ı PyInstaller inject edir
     pathex=[],
@@ -288,6 +342,7 @@ a = Analysis(
         (os.path.join(SPECPATH, '..', 'assets', 'fonts', 'LICENSE-Inter.txt'), 'assets/fonts'),  # noqa: F821
         *_FACE_MODEL_DATAS,
         *_ICON_FONT_DATAS,
+        *_ICON_LICENSE_DATAS,
         *_DATABASE_DATAS,
     ],
     hiddenimports=[*_FACE_HIDDEN_IMPORTS, *_WINDOW_CHROME_HIDDEN_IMPORTS],

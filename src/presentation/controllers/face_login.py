@@ -110,7 +110,7 @@ class FaceLoginController:
     # ------------------------------ görünmə ---------------------------------- #
 
     def available(self) -> bool:
-        """Düymə göstərilsinmi — modul + `cv2` kitabxanası.
+        """Düymə göstərilsinmi — modul + `cv2` kitabxanası, BİRLƏŞMİŞ CANLI yoxlama.
 
         ──────────────────────────────────────────────────────────────────────
         KAMERA BURADA AÇILMIR — KİOSKDAN FƏRQLİ QƏRAR
@@ -127,11 +127,30 @@ class FaceLoginController:
         Kamera əslində yoxdursa bu, basılan anda aydın mesajla bilinir və
         istifadəçi şifrə sahəsinə qayıdır — itki bir toxunuşdur, qazanc isə
         bütün ofis maşınlarında kameranın boş qalmasıdır.
-        """
-        from src.infrastructure.kiosk.camera import camera_available  # noqa: PLC0415
 
-        if not camera_available():
+        ──────────────────────────────────────────────────────────────────────
+        BÜTÖV METOD YALNIZ PRELOAD-SUZ ÇAĞIRIŞ YERLƏRİNDƏ (PERF-6, `cv2` maddəsi)
+        ──────────────────────────────────────────────────────────────────────
+        `app.py::show_login()` startup yolunda bunu ARTIQ ÇAĞIRMIR —
+        `module_enabled()`/`camera_available()` AYRI-AYRI, fərqli sap/anlarda
+        işlədilir (bax onların başlığı: `cv2` idxalının giriş ekranından
+        ƏVVƏL, splash arxasında baş verməsi ölçülüb, `docs/performance_
+        notes.md` PERF-6 1a). Bu metod YALNIZ logout/sessiya-bitmə kimi
+        preload-suz yollarda qalır — orada `cv2` artıq idxal olunub (proses
+        keşi), ayrıca fon işi lazım deyil.
+        """
+        if not self.camera_available():
             return False
+        return self.module_enabled()
+
+    def module_enabled(self) -> bool:
+        """YALNIZ toggle — `cv2` idxal ETMİR (PERF-6, `cv2` maddəsi).
+
+        Splash arxasındakı fon işinə (`app.py::_compute_startup_preload`)
+        DAXİL EDİLƏ BİLƏN YEGANƏ hissədir — DB oxusu ucuzdur (batch daxilində)
+        və Qt-yə TOXUNMUR. `camera_available()`-in ƏKSİNƏ, giriş ekranını
+        gecikdirmir.
+        """
         try:
             with self._context.session() as session:
                 enabled: bool = session.toggles.is_enabled(
@@ -141,6 +160,17 @@ class FaceLoginController:
         except Exception:
             _log.exception("FACE_LOGIN_AVAILABILITY_FAILED")
             return False
+
+    def camera_available(self) -> bool:
+        """YALNIZ `cv2` mövcudluğu — DB-yə TOXUNMUR (PERF-6, `cv2` maddəsi).
+
+        `app.py::_probe_face_login_camera()` bunu giriş ekranı ARTIQ
+        GÖRÜNDÜKDƏN SONRA, AYRI fon işində çağırır — idxalın ÖZÜ (soyuq
+        keşdə 70–624 ms) heç bir sinxron yolu BLOKLAMASIN deyə.
+        """
+        from src.infrastructure.kiosk.camera import camera_available  # noqa: PLC0415
+
+        return bool(camera_available())
 
     # ------------------------------- giriş ----------------------------------- #
 

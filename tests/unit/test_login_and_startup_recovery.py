@@ -85,7 +85,9 @@ def test_a_successful_login_reaches_the_shell_instead_of_raising() -> None:
     application._show_face_setup_if_required = (  # type: ignore[attr-defined]
         lambda subject, *, on_continue: reached.append(subject) or False
     )
-    application.show_admin = lambda subject, *, now: reached.append(("shell", subject))  # type: ignore[attr-defined]
+    application.show_admin = (  # type: ignore[attr-defined]
+        lambda subject, *, now, on_ready=None: reached.append(("shell", subject))
+    )
 
     application._authenticate("aysel", "parol")  # type: ignore[attr-defined]
 
