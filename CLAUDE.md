@@ -511,6 +511,7 @@ qalmır, qərara çevrilir.
 | Sessiyanın gediş-gəliş büdcəsi (PERF-1/2/3) | `docs/performance_notes.md`, `tests/unit/test_session_roundtrips.py`, `test_read_batch_scope.py` |
 | Açılış oxularının toplusu (PERF-3) | `ApplicationContext.read_batch()` — sapa görə ayrı, YALNIZ oxu |
 | `Screen` törəməsi ikinci layout QURMUR (LAYOUT-1) | `tests/unit/test_screen_layout_ownership.py` — pozulsa ekran BOŞ render olunur |
+| Webhook reyestri (Faza 12.2 — ROOT-idarəli, çatdırma qatı HƏLƏ YOXDUR) | `use_cases/webhook_registry.py`, `persistence/webhook_repositories.py`, `migrations/091` + `093` |
 | İki-kanallı dəstək (daxili / texniki) | `domain/value_objects/support.py`, `use_cases/support_chat.py`, `migrations/068` (CHAT-1) |
 | Dəstək gələnlər qutusu (İKİ bölmə, BİR ekran) | `presentation/screens/support_inbox.py`, `controllers/support_inbox.py` |
 | Müraciət statusu (Açıq/Gözləmədə/Həll olundu/Bağlandı) | `SupportTicketStatus` (`value_objects/support.py`) — nişan YALNIZ `OPEN` sayır |

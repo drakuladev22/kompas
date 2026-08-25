@@ -588,6 +588,12 @@ def _root_control(screen: group_d.RootControlScreen) -> None:
     # `v2backlog.md` Faza 8.1 — maket də DEFOLTU göstərir ("az"): canlı yol
     # `RootControlUseCase.language()` ilə eyni açarı oxuyur.
     screen.set_language("az")
+    # `v2backlog.md` Faza 12.2 — maket kartı GÖRÜNƏN vəziyyətdə göstərir,
+    # çünki maketin auditoriyası Root-dur (canlı yolda kart `may_manage`
+    # yalan olanda gizlənir, bax `controllers/root_control.py::_fill_webhooks`).
+    # Açarlar canlı yolun ötürdüyü sözlüklə EYNİDİR (CLAUDE.md §6).
+    screen.set_webhooks_visible(True)
+    screen.set_webhooks([dict(row) for row in data.WEBHOOK_ENDPOINTS])
 
 
 def _settings(screen: group_d.SettingsScreen) -> None:

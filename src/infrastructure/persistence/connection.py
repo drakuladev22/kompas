@@ -681,7 +681,13 @@ class PostgresUnitOfWork:
         params = tuple(value for pair in settings.items() for value in pair)
         self._conn.execute(f"SELECT {projection}", params)
 
-    def _build_repositories(self) -> None:
+    def _build_repositories(self) -> None:  # noqa: PLR0915
+        # PLR0915 (>50 ifadə) BURADA SÖNDÜRÜLÜB: bu metod bir SİYAHIdır —
+        # hər sətir bir repozitoriya qeydiyyatıdır, budaqlanma və məntiq
+        # YOXDUR. Onu iki metoda bölmək sayı azaldar, lakin «hansı repo hansı
+        # yarımda?» sualını yaradar və yeni repo əlavə edən adam onu səhv
+        # yarıma yazardı (`app.py::_register_screens` ilə eyni qərar).
+        #
         # Dövri idxaldan qaçmaq üçün yerli idxal (repo-lar bu modulu tanıyır).
         from src.infrastructure.persistence.announcement_repository import (  # noqa: PLC0415
             PostgresAnnouncementRepository,
@@ -839,6 +845,9 @@ class PostgresUnitOfWork:
         from src.infrastructure.persistence.telegram_repositories import (  # noqa: PLC0415
             PostgresTelegramConfigRepository,
         )
+        from src.infrastructure.persistence.webhook_repositories import (  # noqa: PLC0415
+            PostgresWebhookEndpointRepository,
+        )
         from src.infrastructure.persistence.whats_new_repositories import (  # noqa: PLC0415
             PostgresWhatsNewRepository,
         )
@@ -938,6 +947,11 @@ class PostgresUnitOfWork:
             # repo-nun içindədir (`face_embeddings` ilə eyni naxış) —
             # tətbiq qatı açıq token ilə işləyir, bazaya token yazılmır.
             "telegram_config": PostgresTelegramConfigRepository(
+                conn, self._context, encryption=EncryptionService()
+            ),
+            # Faza 12.2: imza açarı ŞİFRƏLİ sütundadır — `telegram_config`
+            # ilə eyni naxış, şifrələmə repo-nun içindədir.
+            "webhook_endpoints": PostgresWebhookEndpointRepository(
                 conn, self._context, encryption=EncryptionService()
             ),
             "sync_conflicts": PostgresSyncConflictRepository(conn, self._context),

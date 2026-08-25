@@ -2304,6 +2304,14 @@ class RootControlScreen(Screen):
     #: Aktiv/Deaktiv keçidi — token TOXUNMUR (bax use case).
     telegram_active_changed = Signal(bool)
     telegram_test_requested = Signal()
+    #: Webhook reyestri (`v2backlog.md` Faza 12.2) — hadisə, URL, imza açarı.
+    #:
+    #: `applied` SÖZLÜYÜNƏ QOŞULMADI — `telegram_saved` ilə EYNİ səbəb: burada
+    #: SİRR var (imza açarı) və onu ümumi «Tətbiq Et» sözlüyünə qatmaq hər
+    #: tətbiq əməliyyatında ötürərdi.
+    webhook_registered = Signal(dict)
+    #: Aç/söndür — `{"endpoint_id": str, "is_active": bool}`. Sətir SİLİNMİR.
+    webhook_active_changed = Signal(dict)
     #: İnterfeys dili (`v2backlog.md` Faza 8.1) — dil kodu ("az").
     #:
     #: `applied` SÖZLÜYÜNƏ QOŞULMADI — `face_scope_changed` ilə eyni səbəb:
@@ -2318,6 +2326,7 @@ class RootControlScreen(Screen):
         self._limit_texts: dict[str, QLineEdit] = {}
         self._break_inputs: dict[str, QSpinBox] = {}
         self._module_toggles: dict[str, ToggleSwitch] = {}
+        self._webhook_toggles: dict[str, ToggleSwitch] = {}
         self._structural: set[str] = set()
         self._face_scope_toggles: dict[str, ToggleSwitch] = {}
         #: Son `set_face_scope()` çağırışında əhatə QLOBAL idimi (heç bir
@@ -2366,6 +2375,7 @@ class RootControlScreen(Screen):
         self.add(self._build_branding_card())
         self.add(self._build_language_card())
         self.add(self._build_telegram_card())
+        self.add(self._build_webhook_card())
 
         self._modules = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         self._modules.add(title_label("Modul açarları", size=15))
@@ -2594,6 +2604,143 @@ class RootControlScreen(Screen):
             "chat_id": self._telegram_chat.text().strip(),
             "is_active": self._telegram_active.isChecked(),
         }
+
+    # ------------------- Webhook reyestri (Faza 12.2) ------------------------ #
+
+    def _build_webhook_card(self) -> Card:
+        """«Webhook Reyestri» — hadisə tipi, hədəf URL, imza açarı, aktivlik.
+
+        ──────────────────────────────────────────────────────────────────────
+        KART DEFOLT OLARAQ GİZLİDİR
+        ──────────────────────────────────────────────────────────────────────
+        `can_manage_webhooks` `hardlock_level = 1`-dir, yəni YALNIZ Root-da
+        ola bilər (migrations/093) — halbuki bu ekranın ÖZÜ
+        `can_manage_system_limits` ilə açılır və onu CEO da daşıya bilir.
+        Kart həmişə göstərilsəydi, CEO idarə edə bilmədiyi bir bölmə görərdi
+        («görmək = səlahiyyət» qaydası). Kontroller `may_manage` doğru olanda
+        `set_webhooks_visible(True)` çağırır.
+
+        ──────────────────────────────────────────────────────────────────────
+        AÇAR SAHƏSİ HƏR ƏLAVƏDƏN SONRA TƏMİZLƏNİR
+        ──────────────────────────────────────────────────────────────────────
+        `_build_telegram_card`-ın eyni qərarı: sirr ekranda QALMAMALIDIR —
+        Root paneli demo və uzaqdan dəstək zamanı açıq olur.
+        """
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        card.add(title_label("Webhook Reyestri", size=15))
+        card.add(
+            muted_label(
+                "Hansı hadisə baş verəndə hansı xarici ünvana bildiriş gedəcəyini "
+                "qeydiyyata alır. Yalnız `https://` və internetdə əlçatan ünvan "
+                "qəbul edilir. Sətir silinmir — söndürülür."
+            )
+        )
+
+        self._webhook_rows = QVBoxLayout()
+        self._webhook_rows.setSpacing(metrics.SPACE_MS)
+        rows_holder = QWidget()
+        rows_holder.setLayout(self._webhook_rows)
+        card.add(rows_holder)
+        card.add(Divider())
+
+        self._webhook_event = QLineEdit()
+        self._webhook_event.setPlaceholderText("FINE.PUBLISHED")
+        self._webhook_event.setProperty("variant", "form")
+        card.add(field_label("Hadisə tipi"))
+        card.add(self._webhook_event)
+
+        self._webhook_url = QLineEdit()
+        self._webhook_url.setPlaceholderText("https://example.com/kompasos")
+        self._webhook_url.setProperty("variant", "form")
+        card.add(field_label("Hədəf URL"))
+        card.add(self._webhook_url)
+
+        self._webhook_secret = QLineEdit()
+        self._webhook_secret.setPlaceholderText("İmza açarı (minimum 16 simvol)")
+        self._webhook_secret.setProperty("variant", "form")
+        self._webhook_secret.setEchoMode(QLineEdit.EchoMode.Password)
+        card.add(field_label("İmza açarı"))
+        card.add(self._webhook_secret)
+
+        buttons = QWidget()
+        button_layout = QHBoxLayout(buttons)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(metrics.SPACE_MS)
+        button_layout.addWidget(stretch())
+        register = action_button("Webhook Əlavə Et")
+        register.clicked.connect(self._on_webhook_register)
+        button_layout.addWidget(register)
+        card.add(buttons)
+
+        self._webhook_message = muted_label("")
+        self._webhook_message.setWordWrap(True)
+        card.add(self._webhook_message)
+
+        self._webhook_card = card
+        card.setVisible(False)
+        return card
+
+    def _on_webhook_register(self) -> None:
+        self.webhook_registered.emit(
+            {
+                "event_type": self._webhook_event.text().strip(),
+                "target_url": self._webhook_url.text().strip(),
+                "secret": self._webhook_secret.text().strip(),
+            }
+        )
+
+    def set_webhooks_visible(self, visible: bool) -> None:
+        """Kartı göstərir/gizlədir — bax `_build_webhook_card` başlığı."""
+        self._webhook_card.setVisible(visible)
+
+    def set_webhooks(self, endpoints: list[dict[str, object]]) -> None:
+        """Qeydiyyatdakı hədəflər — hər sətirdə aç/söndür açarı.
+
+        SAHƏLƏR TƏMİZLƏNİR: bu seter uğurlu əlavədən SONRA da çağırılır və
+        formada qalan açar növbəti kliklə təkrar göndərilərdi.
+        """
+        clear_layout(self._webhook_rows)
+        self._webhook_toggles.clear()
+        if not endpoints:
+            self._webhook_rows.addWidget(muted_label("Hələ webhook qeydiyyatı yoxdur."))
+        for entry in endpoints:
+            self._webhook_rows.addWidget(self._webhook_row_widget(entry))
+        self._webhook_event.clear()
+        self._webhook_url.clear()
+        self._webhook_secret.clear()
+
+    def _webhook_row_widget(self, entry: dict[str, object]) -> QWidget:
+        endpoint_id = str(entry.get("endpoint_id") or "")
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(metrics.SPACE_MS)
+
+        event_type = str(entry.get("event_type") or "")
+        target_url = str(entry.get("target_url") or "")
+        label = plain_label(f"{event_type} → {target_url}")
+        label.setWordWrap(True)
+        layout.addWidget(label, 1)
+        layout.addWidget(stretch())
+
+        toggle = ToggleSwitch(self._theme)
+        toggle.setChecked(bool(entry.get("is_active")))
+        # `blockSignals` LAZIM DEYİL: açar qoşulmadan ƏVVƏL vəziyyətə salınır,
+        # yəni başlanğıc dəyər siqnal yaratmır (`set_telegram`-dan fərqli
+        # olaraq orada eyni widget təkrar-təkrar doldurulur).
+        toggle.toggled.connect(
+            lambda checked, key=endpoint_id: self.webhook_active_changed.emit(
+                {"endpoint_id": key, "is_active": checked}
+            )
+        )
+        layout.addWidget(toggle)
+        self._webhook_toggles[endpoint_id] = toggle
+        return row
+
+    def set_webhook_message(self, text: str, *, error: bool = False) -> None:
+        self._webhook_message.setText(text)
+        colour = "--color-danger" if error else "--color-text-muted"
+        self._webhook_message.setStyleSheet(f"color: {self._theme.color(colour)};")
 
     # ------------------------ Face Control (bənd 15, 7 + 12) ----------------- #
 

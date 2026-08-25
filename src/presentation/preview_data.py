@@ -1219,6 +1219,27 @@ FACE_STORE_SCOPE: Final[list[dict[str, str]]] = [
     {"id": "00000000-0000-0000-0000-0000000000a4", "name": "Enza Home Gəncə", "active": "0"},
 ]
 
+#: Webhook reyestrinin maketi (`v2backlog.md` Faza 12.2).
+#:
+#: İKİNCİ SƏTİR QƏSDƏN DEAKTİVDİR: canlı yol deaktivləri GİZLƏTMİR (bax
+#: `WebhookRegistryUseCase.list_endpoints`), yəni maket də hər iki vəziyyəti
+#: göstərməlidir — əks halda «söndürülmüş sətir necə görünür?» sualı yalnız
+#: istehsalatda cavab tapardı.
+WEBHOOK_ENDPOINTS: Final[list[dict[str, object]]] = [
+    {
+        "endpoint_id": "00000000-0000-0000-0000-0000000000b1",
+        "event_type": "FINE.PUBLISHED",
+        "target_url": "https://hooks.example.com/kompasos/fine",
+        "is_active": True,
+    },
+    {
+        "endpoint_id": "00000000-0000-0000-0000-0000000000b2",
+        "event_type": "EMPLOYEE.DEACTIVATED",
+        "target_url": "https://hooks.example.com/kompasos/hr",
+        "is_active": False,
+    },
+]
+
 #: ROOT panelindəki hədd xülasəsi — TƏRS CÜT XƏBƏRDARLIĞI (bax
 #: `FaceToleranceBand.resolve`). Maket DÜZGÜN cütü göstərir (`inverted="0"`),
 #: çünki xəbərdarlığın YOX olduğu hal da yoxlanılmalıdır.

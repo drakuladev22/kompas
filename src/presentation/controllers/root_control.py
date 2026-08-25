@@ -216,6 +216,14 @@ class RootControlController:
             lambda active: self._on_telegram_active(screen, active=active)
         )
         screen.telegram_test_requested.connect(lambda: self._on_telegram_test(screen))
+        # Faza 12.2 — webhook reyestri (yalnız Root; kart görünürlüyü
+        # `_fill_webhooks`-dədir).
+        screen.webhook_registered.connect(
+            lambda payload: self._on_webhook_registered(screen, payload)
+        )
+        screen.webhook_active_changed.connect(
+            lambda payload: self._on_webhook_active(screen, payload)
+        )
         # `v2backlog.md` Faza 8.1 — dil seçimi `applied` sözlüyündən AYRI
         # gedir (bax `RootControlScreen.language_changed` şərhi).
         screen.language_changed.connect(lambda code: self._on_language_changed(screen, code))
@@ -335,6 +343,7 @@ class RootControlController:
         # oxunmaması qalan bölmələri görünməz etməməlidir.
         try:
             self._fill_telegram(session, screen)
+            self._fill_webhooks(session, screen)
         except Exception:
             _error_log.exception("ROOT_TELEGRAM_SECTION_UNAVAILABLE")
             screen.set_telegram_message(
@@ -574,6 +583,101 @@ class RootControlController:
                 "updated_by_name": view.updated_by_name,
             }
         )
+
+    def _fill_webhooks(self, session: Session, screen: RootControlScreen) -> None:
+        """Webhook kartı — SƏLAHİYYƏTSİZ İSTİFADƏÇİDƏ GİZLƏNİR.
+
+        `_fill_telegram`-dan bir fərqlə: orada kart boş qalır, burada
+        GİZLƏDİLİR. Səbəb səlahiyyət qatının fərqidir — Telegram flag-ini
+        Root öz mülahizəsi ilə başqasına verə bilər (kart onda dolur),
+        `can_manage_webhooks` isə `hardlock_level = 1`-dir və Root-dan
+        başqasına HEÇ VAXT verilə bilmir (migrations/093). Yəni bu kart
+        Root olmayan üçün heç bir şəraitdə işə yaramır — boş göstərmək
+        «bu bölmə mənim üçündür, sadəcə hələ boşdur» yanlış təəssüratı
+        yaradardı («görmək = səlahiyyət»).
+        """
+        if not session.webhook_registry.may_manage(self._actor):
+            screen.set_webhooks_visible(False)
+            return
+        screen.set_webhooks_visible(True)
+        screen.set_webhooks(
+            [
+                {
+                    "endpoint_id": view.endpoint_id,
+                    "event_type": view.event_type,
+                    "target_url": view.target_url,
+                    "is_active": view.is_active,
+                }
+                for view in session.webhook_registry.list_endpoints(
+                    tenant_id=session.tenant_id, actor=self._actor
+                )
+            ]
+        )
+
+    def _on_webhook_registered(self, screen: RootControlScreen, payload: object) -> None:
+        """«Webhook Əlavə Et» — hadisə adı normallaşır, URL use case-də yoxlanılır."""
+        if not isinstance(payload, dict):  # pragma: no cover - tip qoruyucusu
+            return
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                view = session.webhook_registry.register(
+                    tenant_id=session.tenant_id,
+                    actor=self._actor,
+                    event_type=str(payload.get("event_type") or ""),
+                    target_url=str(payload.get("target_url") or ""),
+                    secret=str(payload.get("secret") or ""),
+                )
+                session.commit()
+        except KompasOSError as error:
+            screen.set_webhook_message(error.user_message, error=True)
+            return
+        except Exception:
+            _error_log.exception("WEBHOOK_REGISTER_FAILED")
+            screen.set_webhook_message(
+                "Webhook qeydiyyatı saxlanmadı. Yenidən cəhd edin.", error=True
+            )
+            return
+        screen.set_webhook_message(f"«{view.event_type}» qeydiyyata alındı.")
+        # SİYAHI YENİDƏN OXUNUR, əl ilə əlavə EDİLMİR: təkrar qeydiyyat
+        # mövcud sətri yeniləyir (`ON CONFLICT`), yəni ekrana bir sətir
+        # ƏLAVƏ ETMƏK səhv olardı — sətir sayı dəyişməyə bilər.
+        self._reload_webhooks(screen)
+
+    def _on_webhook_active(self, screen: RootControlScreen, payload: object) -> None:
+        """Aç/söndür — sətir SİLİNMİR (bax `webhook_registry.py` başlığı)."""
+        if not isinstance(payload, dict):  # pragma: no cover - tip qoruyucusu
+            return
+        endpoint_id = str(payload.get("endpoint_id") or "")
+        is_active = bool(payload.get("is_active"))
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                session.webhook_registry.set_active(
+                    tenant_id=session.tenant_id,
+                    actor=self._actor,
+                    endpoint_id=endpoint_id,
+                    is_active=is_active,
+                )
+                session.commit()
+        except KompasOSError as error:
+            screen.set_webhook_message(error.user_message, error=True)
+            # VƏZİYYƏT GERİ QAYTARILIR: açar artıq ekranda çevrilib, amma
+            # baza dəyişmədi — yenidən oxumasaq Root söndürdüyünü zənn edərdi.
+            self._reload_webhooks(screen)
+            return
+        except Exception:
+            _error_log.exception("WEBHOOK_TOGGLE_FAILED")
+            screen.set_webhook_message("Vəziyyət dəyişmədi. Yenidən cəhd edin.", error=True)
+            self._reload_webhooks(screen)
+            return
+        screen.set_webhook_message("Aktiv." if is_active else "Söndürüldü.")
+
+    def _reload_webhooks(self, screen: RootControlScreen) -> None:
+        """Siyahını yenidən oxuyur — yazıdan SONRA (CLAUDE.md §6, yazı yolu)."""
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                self._fill_webhooks(session, screen)
+        except Exception:
+            _error_log.exception("WEBHOOK_RELOAD_FAILED")
 
     def _on_telegram_saved(self, screen: RootControlScreen, payload: object) -> None:
         """«Botu Dəyiş» — köhnə sətir ARXİVLƏNİR, yenisi yazılır."""

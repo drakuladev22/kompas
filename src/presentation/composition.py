@@ -157,6 +157,7 @@ if TYPE_CHECKING:
     from src.application.use_cases.telegram_config import TelegramConfigUseCase
     from src.application.use_cases.tenant_branding import TenantBrandingUseCase
     from src.application.use_cases.user_management import EmployeeDraft, UserManagementUseCase
+    from src.application.use_cases.webhook_registry import WebhookRegistryUseCase
     from src.application.use_cases.whats_new import WhatsNewUseCase
     from src.domain.entities.employee import Employee
     from src.domain.interfaces.ports import Clock, NtpVerifier
@@ -680,6 +681,7 @@ class Session:
     # «Texniki Dəstək» bölmələri. İki bölmə, TƏK use case (kanal arqumentdir).
     support_inbox: SupportInboxUseCase
     telegram_config: TelegramConfigUseCase
+    webhook_registry: WebhookRegistryUseCase
     sync_conflicts: SyncConflictUseCase
     devices: DeviceRegistryUseCase
     branding: TenantBrandingUseCase
@@ -3302,6 +3304,9 @@ class ApplicationContext:
         from src.application.use_cases.user_management import (  # noqa: PLC0415
             UserManagementUseCase,
         )
+        from src.application.use_cases.webhook_registry import (  # noqa: PLC0415
+            WebhookRegistryUseCase,
+        )
         from src.application.use_cases.whats_new import WhatsNewUseCase  # noqa: PLC0415
         from src.domain.exception_rules import ExceptionRuleRegistry  # noqa: PLC0415
         from src.infrastructure.backup.service import NightlyBackupService  # noqa: PLC0415
@@ -4152,6 +4157,14 @@ class ApplicationContext:
                 audit=audit,
                 clock=clock,
                 probe=telegram_gateway,
+            ),
+            # `v2backlog.md` Faza 12.2 — ümumi genişlənmə səthi. ÇATDIRMA
+            # QATI YOXDUR (sənədin öz tələbi), ona görə burada yalnız reyestr
+            # qurulur: use case + repo, göndərən kod yox.
+            webhook_registry=WebhookRegistryUseCase(
+                repository=repo("webhook_endpoints"),
+                audit=audit,
+                clock=clock,
             ),
             sync_conflicts=SyncConflictUseCase(
                 repository=repo("sync_conflicts"),

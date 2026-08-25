@@ -12,8 +12,14 @@ məhz bunu qoruyur.
 Onda çərçivə niyə lazımdır? Çünki mətnləri widget kodunun içinə səpələmək
 gələcəkdə dil əlavə etməyi TAM YENİDƏN YAZMA işinə çevirir. Bütün mətnlərin
 bir kataloqdan keçməsi indi heç nəyə başa gəlmir, sonra isə yeni dil sadəcə
-yeni kataloq faylı deməkdir. Ayarlar ekranında dil seçicisi GÖSTƏRİLMİR —
-seçiləcək ikinci dil yoxdur.
+yeni kataloq faylı deməkdir.
+
+DİL SEÇİCİSİ ARTIQ VAR — `v2backlog.md` Faza 8.1 onu ROOT İdarə Mərkəzinə
+əlavə etdi (`SystemLimitKey.UI_LANGUAGE`). Bu, yuxarıdakı mülahizəni
+DƏYİŞMİR: siyahı `AVAILABLE_UI_LANGUAGES`-dən doldurulur və orada hazırda
+YALNIZ `az` var, yəni seçici bu gün tək elementlidir. Seçicinin indidən
+mövcud olması qəsdlidir — ikinci dil əlavə olunanda dəyişəcək yeganə yer
+kataloq faylı olur, ekran yox.
 
 ──────────────────────────────────────────────────────────────────────────────
 ÇATIŞMAYAN AÇAR: SƏRT (dev/CI) vs YUMŞAQ (istehsalat)
