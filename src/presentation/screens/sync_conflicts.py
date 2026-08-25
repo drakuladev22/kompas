@@ -76,6 +76,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import secondary_button
@@ -192,7 +193,7 @@ class SyncConflictScreen(Screen):
         )
         toolbar_layout.addWidget(self._help)
 
-        refresh = secondary_button("Yenilə")
+        refresh = secondary_button(tr("common.refresh"))
         refresh.clicked.connect(self.refresh_requested)
         toolbar_layout.addWidget(refresh)
         self.add(toolbar)

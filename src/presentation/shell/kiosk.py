@@ -26,6 +26,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 
+from src.presentation.i18n import tr
 from src.presentation.widgets.layout_utils import detach_layout
 from src.presentation.widgets.metrics import KIOSK_CARDS_ROW_MIN_WIDTH
 from src.presentation.widgets.responsive import LayoutMode
@@ -53,7 +54,7 @@ class KioskWindow(QWidget):
         super().__init__(parent)
         self.setObjectName("KioskWindow")
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
-        self.setWindowTitle("KompasOS")
+        self.setWindowTitle(tr("common.app_name"))
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)

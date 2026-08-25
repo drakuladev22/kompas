@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.theme.manager import set_surface_color
 from src.presentation.theme.tokens import ThemeMode
 from src.presentation.widgets import brand_assets, icons, metrics
@@ -173,7 +174,7 @@ class SplashScreen(QWidget):
             )
             layout.addWidget(self._fallback_logo, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-            wordmark = plain_label("KompasOS")
+            wordmark = plain_label(tr("common.app_name"))
             # SÖZ NİŞANI SOLĞUN DEYİL, ƏSAS MƏTNDİR: `#SplashScreen QLabel`
             # qaydası bütün etiketləri solğunlaşdırır (bax `qss.py`), söz
             # nişanı isə ekranın BAŞLIĞIdır. Obyekt adı məhz həmin istisnanı
@@ -334,7 +335,7 @@ class AdminLoginScreen(QWidget):
             )
             heading_layout.addWidget(self._fallback_logo, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        heading = plain_label("Hesabınıza Daxil Olun")
+        heading = plain_label(tr("auth.login.title"))
         heading_font = heading.font()
         heading_font.setPixelSize(22)
         heading_font.setWeight(QFont.Weight.DemiBold)
@@ -344,13 +345,13 @@ class AdminLoginScreen(QWidget):
         card.add(heading_box)
 
         # ------------------------------ sahələr ----------------------------- #
-        self._username = FormField("İstifadəçi adı")
+        self._username = FormField(tr("common.username"))
         card.add(self._username)
 
-        self._password = FormField("Şifrə", password=True)
+        self._password = FormField(tr("common.password"), password=True)
         card.add(self._password)
 
-        self._submit = action_button("Daxil Ol")
+        self._submit = action_button(tr("auth.login.submit"))
         self._submit.setMinimumHeight(48)
         self._submit.setMaximumHeight(48)
         self._submit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -781,15 +782,15 @@ class FirstRunWizard(QWidget):
         footer_layout.addWidget(self._progress_label)
         footer_layout.addWidget(stretch())
 
-        self._back = secondary_button("Geri")
+        self._back = secondary_button(tr("common.back"))
         self._back.clicked.connect(self._on_back)
         footer_layout.addWidget(self._back)
 
-        self._skip = secondary_button("Keç")
+        self._skip = secondary_button(tr("common.skip"))
         self._skip.clicked.connect(self._on_skip)
         footer_layout.addWidget(self._skip)
 
-        self._next = action_button("Davam Et")
+        self._next = action_button(tr("common.next"))
         self._next.clicked.connect(self._on_next)
         footer_layout.addWidget(self._next)
 
@@ -945,7 +946,7 @@ class FirstRunWizard(QWidget):
             self._fields_layout.addWidget(field)
 
     def _build_store_fields(self) -> None:
-        self._heading.setText("İlk Mağaza")
+        self._heading.setText(tr("setup.step.store"))
         self._description.setText(
             "Ən azı bir mağaza tələb olunur — işçilər və növbələr mağazaya bağlanır."
         )
@@ -956,7 +957,7 @@ class FirstRunWizard(QWidget):
             self._fields_layout.addWidget(field)
 
     def _build_server_fields(self) -> None:
-        self._heading.setText("1C Server")
+        self._heading.setText(tr("setup.step.server"))
         self._description.setText(
             "Satış məlumatları bu serverdən oxunur. İndi keçsəniz, sonradan "
             "«ERP / 1C Serverləri» bölməsindən əlavə edə bilərsiniz."
@@ -1277,7 +1278,7 @@ class FatalStartupScreen(QWidget):
             actions_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
             if retry:
-                self._retry_button = action_button("Yenidən Cəhd Et")
+                self._retry_button = action_button(tr("common.retry"))
                 self._retry_button.setMinimumHeight(44)
                 self._retry_button.clicked.connect(self.retry_requested.emit)
                 actions_layout.addWidget(self._retry_button)
@@ -1400,7 +1401,7 @@ class ConnectionSettingsScreen(QWidget):
         self._host = FormField("Server ünvanı")
         self._port = FormField("Port")
         self._database = FormField("Baza adı")
-        self._username = FormField("İstifadəçi adı")
+        self._username = FormField(tr("common.username"))
         self._password = FormField("Parol", password=True)
         for field in (self._host, self._port, self._database, self._username, self._password):
             card.add(field)
@@ -1433,7 +1434,7 @@ class ConnectionSettingsScreen(QWidget):
         actions_layout.setContentsMargins(0, 0, 0, 0)
         actions_layout.setSpacing(metrics.SPACE_MS)
 
-        self._cancel = secondary_button("İmtina")
+        self._cancel = secondary_button(tr("common.decline"))
         self._cancel.setMinimumHeight(44)
         self._cancel.clicked.connect(self.cancelled.emit)
         actions_layout.addWidget(self._cancel)

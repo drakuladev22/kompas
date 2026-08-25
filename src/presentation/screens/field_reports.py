@@ -80,6 +80,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.domain.value_objects.field_reports import FieldReportStatus
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -183,12 +184,12 @@ class FieldReportScreen(Screen):
     _COLUMNS: ClassVar[list[Column]] = [
         Column("Şablon", 140),
         Column("Kateqoriya", 140),
-        Column("Mağaza", 130),
+        Column(tr("common.store"), 130),
         Column("Təfərrüat", 220),
         Column("Bal", 70),
         Column("Vəziyyət", 110),
-        Column("Tarix", 130, mono=True),
-        Column("Əməliyyat"),
+        Column(tr("common.date"), 130, mono=True),
+        Column(tr("common.action")),
     ]
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
@@ -269,7 +270,7 @@ class FieldReportScreen(Screen):
         pick = secondary_button("Şəkil Seç")
         pick.clicked.connect(self.pick_photos)
         photo_layout.addWidget(pick)
-        drop = secondary_button("Təmizlə")
+        drop = secondary_button(tr("common.clear"))
         drop.clicked.connect(self.clear_photos)
         photo_layout.addWidget(drop)
         card.add(photo_row)

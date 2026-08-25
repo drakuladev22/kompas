@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.forms import field_label
@@ -100,7 +101,7 @@ class ShiftHandoffNoteDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 

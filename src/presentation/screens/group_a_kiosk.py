@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
+from src.presentation.i18n import tr
 from src.presentation.theme.manager import set_surface_color
 from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -208,7 +209,7 @@ class PinPadScreen(QWidget):
 
         layout.addSpacing(46)
 
-        prompt = plain_label("PIN kodunuzu daxil edin")
+        prompt = plain_label(tr("kiosk.pin.prompt"))
         prompt_font = prompt.font()
         prompt_font.setPixelSize(22)
         prompt_font.setWeight(QFont.Weight.DemiBold)
@@ -241,7 +242,7 @@ class PinPadScreen(QWidget):
         layout.addWidget(self._build_face_button(), alignment=Qt.AlignmentFlag.AlignHCenter)
         layout.addStretch(1)
 
-        footer = muted_label("Problem yaşayırsınızsa mağaza rəhbərinizə müraciət edin.")
+        footer = muted_label(tr("kiosk.pin.help"))
         footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(footer, alignment=Qt.AlignmentFlag.AlignHCenter)
 
@@ -580,7 +581,7 @@ class KioskOnboardingOverlay(QWidget):
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(metrics.SPACE_MS)
 
-        skip = secondary_button("Keç")
+        skip = secondary_button(tr("common.skip"))
         skip.clicked.connect(self.finish)
         row_layout.addWidget(skip)
         row_layout.addWidget(stretch())
@@ -772,11 +773,11 @@ class EmployeeHomeScreen(QWidget):
 
         layout.addWidget(stretch())
 
-        photo_button = secondary_button("Şəkli Dəyiş")
+        photo_button = secondary_button(tr("kiosk.home.change_photo"))
         photo_button.clicked.connect(self.photo_change_requested)
         layout.addWidget(photo_button)
 
-        logout_button = secondary_button("Çıxış")
+        logout_button = secondary_button(tr("kiosk.home.logout"))
         logout_button.clicked.connect(self.logout_requested)
         layout.addWidget(logout_button)
 
@@ -1052,7 +1053,7 @@ class EmployeeHomeScreen(QWidget):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.addWidget(title_label("Açıq Tapşırıqlarım", size=metrics.FONT_CARD_TITLE))
+        head_layout.addWidget(title_label(tr("kiosk.home.tasks"), size=metrics.FONT_CARD_TITLE))
         head_layout.addWidget(stretch())
         self._tasks_count = Chip("0", "info")
         head_layout.addWidget(self._tasks_count)
@@ -1080,7 +1081,7 @@ class EmployeeHomeScreen(QWidget):
 
     def _build_points_card(self) -> Card:
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
-        card.add(title_label("Xal Balansım", size=metrics.FONT_CARD_TITLE))
+        card.add(title_label(tr("kiosk.home.points"), size=metrics.FONT_CARD_TITLE))
 
         self._points_value = title_label("0", size=32)
         card.add(self._points_value)
@@ -1110,7 +1111,7 @@ class EmployeeHomeScreen(QWidget):
 
     def _build_fines_card(self) -> Card:
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
-        card.add(title_label("Cərimələrim", size=metrics.FONT_CARD_TITLE))
+        card.add(title_label(tr("kiosk.home.fines"), size=metrics.FONT_CARD_TITLE))
 
         self._fines_summary = title_label("—", size=19)
         card.add(self._fines_summary)
@@ -1122,7 +1123,7 @@ class EmployeeHomeScreen(QWidget):
         card.add(self._fines_deadline)
 
         card.body().addStretch(1)
-        self._appeal_button = secondary_button("Etiraz Et")
+        self._appeal_button = secondary_button(tr("fine.appeal"))
         self._appeal_button.clicked.connect(self.appeal_requested)
         card.add(self._appeal_button)
         return card

@@ -30,6 +30,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from src import __version__
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.presentation.controllers.ui_feedback import flush_ui
+from src.presentation.i18n import configure_i18n
 from src.presentation.plugin_surface import register_plugin_pages
 from src.presentation.shell.admin_shell import AdminShell
 from src.presentation.shell.kiosk import KioskWindow
@@ -6088,6 +6089,22 @@ def run(
     app = existing if isinstance(existing, QApplication) else QApplication(sys.argv)
     app.setApplicationName("KompasOS")
     app.setApplicationVersion(__version__)
+
+    # İNTERFEYS DİLİ PƏNCƏRƏDƏN ƏVVƏL QURULUR (v2backlog.md Faza 8.1).
+    #
+    # Əvvəl `configure_i18n()` HEÇ YERDƏN çağırılmırdı: kataloq mövcud idi,
+    # ekranlar isə mətnləri birbaşa yazırdı — yəni «gələcək dillər üçün hazır
+    # struktur» tələbi kağız üzərində qalırdı. İndi ekranlar `tr(...)` ilə
+    # oxuyur və oxuduqları kataloq məhz burada seçilir.
+    #
+    # DİL BAZADAN DEYİL, DEFOLTDAN GƏLİR VƏ BU, QƏSDLİDİR: bu sətir açılış
+    # yolundadır, baza isə hələ açılmayıb (`HARDWARE_PROBE_TIMEOUT_SECONDS`
+    # ilə eyni dövri asılılıq). Root-un seçdiyi dil `UI_LANGUAGE` açarındadır;
+    # kataloq TƏK dillidir (`AVAILABLE_UI_LANGUAGES`), ona görə seçim bu gün
+    # yalnız «az» ola bilər və defolt onunla üst-üstə düşür. İkinci dil
+    # gələndə burada `RootControlUseCase.language()` oxunacaq — dəyişəcək
+    # YEGANƏ yer budur.
+    configure_i18n()
     # Çərçivəsiz pəncərədə Qt-nin öz "yüksək DPI" miqyaslaması ikon
     # kəskinliyi üçün vacibdir.
     app.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)

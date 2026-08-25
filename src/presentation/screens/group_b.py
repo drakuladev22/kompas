@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -260,15 +261,15 @@ class QueueRow(Card):
         # ÜMUMİYYƏTLƏ QURULMUR (boz DEYİL) — əks halda operator formanı
         # doldurur, göndərir və YALNIZ O ZAMAN `AuthorizationError` alır.
         if may_override_return_time:
-            adjust = secondary_button("Vaxtı Düzəlt")
+            adjust = secondary_button(tr("queue.adjust_time"))
             adjust.clicked.connect(lambda: self.adjust_requested.emit(entry.request_id))
             layout.addWidget(adjust)
 
-        reject = secondary_button("Rədd Et")
+        reject = secondary_button(tr("common.reject"))
         reject.clicked.connect(lambda: self.reject_requested.emit(entry.request_id))
         layout.addWidget(reject)
 
-        approve = action_button("Təsdiqlə")
+        approve = action_button(tr("common.approve"))
         approve.clicked.connect(lambda: self.approve_requested.emit(entry.request_id))
         layout.addWidget(approve)
 
@@ -382,7 +383,7 @@ class OperatorQueueScreen(Screen):
             self._store_box.setAccessibleName("Mağaza süzgəci — yalnız sizə təyin edilmişlər")
             self._store_box.setToolTip("Yalnız sizə təyin edilmiş mağazalar")
             self._store_box.currentIndexChanged.connect(self._on_store_selected)
-            filter_layout.addWidget(field_label("Mağaza"))
+            filter_layout.addWidget(field_label(tr("common.store")))
             filter_layout.addWidget(self._store_box)
 
         self.add(self._filter_bar)
@@ -703,7 +704,7 @@ class ManualTimeOverrideDialog(QDialog):
         self._threshold_minutes = (
             threshold_minutes if threshold_minutes > 0 else DUAL_CONTROL_THRESHOLD_MINUTES
         )
-        self.setWindowTitle("Vaxtı Manual Düzəlt")
+        self.setWindowTitle(tr("override.title"))
         self.setModal(True)
         self.setMinimumWidth(560)
 
@@ -728,7 +729,7 @@ class ManualTimeOverrideDialog(QDialog):
         head_text_layout = QVBoxLayout(head_text)
         head_text_layout.setContentsMargins(0, 0, 0, 0)
         head_text_layout.setSpacing(4)
-        head_text_layout.addWidget(title_label("Vaxtı Manual Düzəlt", size=19))
+        head_text_layout.addWidget(title_label(tr("override.title"), size=19))
         head_text_layout.addWidget(muted_label(f"{employee_name} · {store_name} · {kind}"))
         head_layout.addWidget(head_text)
         head_layout.addWidget(stretch())
@@ -749,7 +750,7 @@ class ManualTimeOverrideDialog(QDialog):
         system_layout = QVBoxLayout(system_box)
         system_layout.setContentsMargins(0, 0, 0, 0)
         system_layout.setSpacing(8)
-        system_layout.addWidget(field_label("Sistem qeydi"))
+        system_layout.addWidget(field_label(tr("override.system_time")))
         system_value = mono_label(system_time, size=19)
         system_layout.addWidget(system_value)
         times_layout.addWidget(system_box)
@@ -762,7 +763,7 @@ class ManualTimeOverrideDialog(QDialog):
         if parsed.isValid():
             self._time_edit.setTime(parsed)
         self._time_edit.timeChanged.connect(self._on_time_changed)
-        corrected = FormField("Düzəldilmiş vaxt", widget=self._time_edit)
+        corrected = FormField(tr("override.corrected_time"), widget=self._time_edit)
         times_layout.addWidget(corrected, 1)
 
         card.add(times)
@@ -772,7 +773,7 @@ class ManualTimeOverrideDialog(QDialog):
         reason_layout = QVBoxLayout(reason_box)
         reason_layout.setContentsMargins(0, 0, 0, 0)
         reason_layout.setSpacing(8)
-        reason_layout.addWidget(field_label("Səbəb *"))
+        reason_layout.addWidget(field_label(tr("override.reason")))
 
         self._reason = QPlainTextEdit()
         self._reason.setPlaceholderText("Nə üçün düzəliş edilir? Hadisəni qısa və konkret yazın.")
@@ -785,7 +786,7 @@ class ManualTimeOverrideDialog(QDialog):
         self._reason_error.setVisible(False)
         reason_layout.addWidget(self._reason_error)
 
-        reason_layout.addWidget(muted_label("Səbəb audit jurnalına yazılır və silinmir."))
+        reason_layout.addWidget(muted_label(tr("override.audit_note")))
         card.add(reason_box)
 
         # -------------------------- dual-control ---------------------------- #
@@ -794,7 +795,7 @@ class ManualTimeOverrideDialog(QDialog):
         # QƏSDƏN İŞLƏDİLMİR, amma ROLU EYNİDİR ("kartın içi"): kölgə
         # VERİLMİR, əks halda valideynin kölgəsi ilə İKİQAT elevasiya olardı.
         self._dual_control = Card(padding=16, spacing=8)
-        self._dual_control.add(title_label("Cüt Nəzarətli Təsdiq Tələb Olunacaq", size=15))
+        self._dual_control.add(title_label(tr("override.dual_control"), size=15))
         self._dual_control_detail = body_label("", size=13)
         self._dual_control.add(self._dual_control_detail)
         self._dual_control.setVisible(False)
@@ -807,11 +808,11 @@ class ManualTimeOverrideDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 
-        self._submit = action_button("Təsdiqə Göndər")
+        self._submit = action_button(tr("override.submit"))
         self._submit.clicked.connect(self._on_submit)
         buttons_layout.addWidget(self._submit)
         card.add(buttons)
@@ -868,7 +869,7 @@ class ManualTimeOverrideDialog(QDialog):
     def _on_submit(self) -> None:
         reason = self._reason.toPlainText().strip()
         if not reason:
-            self._reason_error.setText("Səbəb məcburidir")
+            self._reason_error.setText(tr("override.reason_required"))
             self._reason_error.setVisible(True)
             return
         self.submitted.emit(self._time_edit.time().toString("HH:mm"), reason)
@@ -1009,9 +1010,9 @@ class FineEntryScreen(Screen):
         super().__init__(theme, parent=parent)
 
         columns = [
-            Column("İşçi", 220),
+            Column(tr("common.employee"), 220),
             Column("Növ", 180),
-            Column("Tarix", 110, mono=True),
+            Column(tr("common.date"), 110, mono=True),
             Column("Məbləğ", 110),
             Column("Vəziyyət"),
         ]
@@ -1052,7 +1053,7 @@ class FineEntryScreen(Screen):
         head = QWidget()
         head_layout = QHBoxLayout(head)
         head_layout.setContentsMargins(0, 0, 0, 0)
-        head_layout.addWidget(title_label("Yeni Cərimə", size=15))
+        head_layout.addWidget(title_label(tr("fine.new"), size=15))
         head_layout.addWidget(stretch())
         card.add(head)
 
@@ -1061,11 +1062,11 @@ class FineEntryScreen(Screen):
         grid_layout.setContentsMargins(0, 0, 0, 0)
         grid_layout.setSpacing(16)
 
-        self._type = FormField("Cərimə Növü", widget=self._combo(fine_types))
+        self._type = FormField(tr("fine.type"), widget=self._combo(fine_types))
         grid_layout.addWidget(self._type, 1)
 
         self._store = FormField(
-            "Mağaza",
+            tr("common.store"),
             widget=self._combo(stores),
             hint="Yalnız sizə təyin edilmiş mağazalar",
         )
@@ -1085,7 +1086,9 @@ class FineEntryScreen(Screen):
         # sadəcə HEÇ BİR işçi seçilməmiş vəziyyət açıq göstərilir. Seçilmədən
         # göndərişdə forma onsuz da «işçi seçilməlidir» xətası verir
         # (`controllers/fine_entry.py::_on_submitted`).
-        self._employee = FormField("İşçi", widget=self._combo([EMPLOYEE_PLACEHOLDER, *employees]))
+        self._employee = FormField(
+            tr("common.employee"), widget=self._combo([EMPLOYEE_PLACEHOLDER, *employees])
+        )
         grid_layout.addWidget(self._employee, 1)
         card.add(grid)
 
@@ -1100,12 +1103,12 @@ class FineEntryScreen(Screen):
         from PySide6.QtCore import QDate  # noqa: PLC0415
 
         date_edit.setDate(QDate.currentDate())
-        self._date = FormField("Tarix", widget=date_edit)
+        self._date = FormField(tr("common.date"), widget=date_edit)
         second_layout.addWidget(self._date, 1)
 
         # Qiymət cərimə növündən gəlir və ƏL İLƏ DƏYİŞDİRİLMİR — əks halda
         # eyni pozuntuya görə fərqli məbləğlər yazıla bilərdi.
-        self._price = FormField("Qiymət", widget=self._readonly_field("—"))
+        self._price = FormField(tr("fine.amount"), widget=self._readonly_field("—"))
         self._price.input_widget().setEnabled(False)
         second_layout.addWidget(self._price, 1)
         second_layout.addWidget(stretch(), 1)
@@ -1115,7 +1118,7 @@ class FineEntryScreen(Screen):
         photo_layout = QVBoxLayout(photo_box)
         photo_layout.setContentsMargins(0, 0, 0, 0)
         photo_layout.setSpacing(8)
-        photo_layout.addWidget(field_label("Foto Sübutu *"))
+        photo_layout.addWidget(field_label(tr("fine.photo")))
         self._photo = PhotoDropZone(self.theme)
         photo_layout.addWidget(self._photo)
         self._photo_error = plain_label()
@@ -1129,7 +1132,7 @@ class FineEntryScreen(Screen):
         submit_layout.setContentsMargins(0, 0, 0, 0)
         submit_layout.addWidget(stretch())
         self._submit = action_button(
-            "Cəriməni Qeyd Et", icon_name="plus", icon_color=self.theme.color("--color-action-text")
+            tr("fine.submit"), icon_name="plus", icon_color=self.theme.color("--color-action-text")
         )
         self._submit.clicked.connect(self._on_submit)
         submit_layout.addWidget(self._submit)
@@ -1220,7 +1223,7 @@ class FineEntryScreen(Screen):
     def _on_submit(self) -> None:
         self.set_success_message("")
         if not self._photo.file_path:
-            self._photo_error.setText("Foto sübutu məcburidir")
+            self._photo_error.setText(tr("fine.photo_required"))
             self._photo_error.setVisible(True)
             return
         self._photo_error.setVisible(False)

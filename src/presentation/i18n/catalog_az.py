@@ -42,6 +42,31 @@ CATALOG_AZ: Final[dict[str, str]] = {
     "common.loading": "Yüklənir…",
     "common.waiting": "Gözlənilir…",
     "common.none": "—",
+    # --- ÜMUMİ CƏDVƏL BAŞLIQLARI (v2backlog.md Faza 8.1-in tamamlanması) --- #
+    #
+    # NİYƏ `common.` PREFİKSİ: bu sözlər ON-DAN ÇOX ekranın cədvəl başlığında
+    # təkrarlanır. Əvvəl kataloqda yalnız BÖLMƏYƏ BAĞLI nüsxələri vardı
+    # (`fine.employee`, `fine.date`, `license.inactive.reason`) və ekranlar
+    # onları öz mətnləri ilə TƏKRAR yazırdı. Köçürmə zamanı həmin bölmə
+    # açarlarını işlətmək cəlbedici görünür, lakin səhvdir: köçürmə sorğusu
+    # cədvəlindəki «Səbəb» sütunu cərimə ilə də, lisenziya ilə də əlaqəli
+    # deyil — ikinci dil əlavə olunanda tərcüməçi «hansı səbəb?» sualına
+    # cavab tapa bilməzdi (kataloq başlığındakı «kontekst qarışmasın» qaydası).
+    "common.employee": "İşçi",
+    "common.date": "Tarix",
+    "common.store": "Mağaza",
+    "common.reason": "Səbəb",
+    "common.username": "İstifadəçi adı",
+    "common.password": "Şifrə",
+    "common.action": "Əməliyyat",
+    "common.note": "Qeyd",
+    "common.active": "Aktiv",
+    "common.refresh": "Yenilə",
+    "common.delete": "Sil",
+    "common.pending": "Gözləyir",
+    "common.no_data": "Məlumat yoxdur",
+    "common.apply": "Tətbiq Et",
+    "common.clear": "Təmizlə",
     # ------------------------------ giriş ---------------------------------- #
     "auth.login.title": "Hesabınıza Daxil Olun",
     "auth.login.username": "İstifadəçi adı",

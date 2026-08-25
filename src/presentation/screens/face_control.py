@@ -74,6 +74,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -175,7 +176,7 @@ class FaceEnrollmentScreen(Screen):
         Column("Kadr", 90, mono=True),
         Column("Nəticə", 150),
         Column("Keyfiyyət", 130, mono=True),
-        Column("Səbəb"),
+        Column(tr("common.reason")),
     ]
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
@@ -205,7 +206,7 @@ class FaceEnrollmentScreen(Screen):
         layout.addWidget(self._summary)
         layout.addWidget(stretch())
 
-        refresh = secondary_button("Yenilə")
+        refresh = secondary_button(tr("common.refresh"))
         refresh.clicked.connect(self.refresh_requested)
         layout.addWidget(refresh)
         return toolbar
@@ -225,7 +226,7 @@ class FaceEnrollmentScreen(Screen):
         selector_layout = QVBoxLayout(selector)
         selector_layout.setContentsMargins(0, 0, 0, 0)
         selector_layout.setSpacing(8)
-        selector_layout.addWidget(field_label("İşçi"))
+        selector_layout.addWidget(field_label(tr("common.employee")))
 
         self._subject = QComboBox()
         self._subject.setProperty("variant", "form")
@@ -295,7 +296,7 @@ class FaceEnrollmentScreen(Screen):
         self._capture.clicked.connect(self._on_capture)
         button_layout.addWidget(self._capture)
 
-        self._save = action_button("Yadda Saxla")
+        self._save = action_button(tr("common.save"))
         self._save.clicked.connect(self._on_save)
         button_layout.addWidget(self._save)
 
@@ -585,12 +586,12 @@ class FaceExemptionScreen(Screen):
     refresh_requested = Signal()
 
     _COLUMNS: ClassVar[list[Column]] = [
-        Column("İşçi"),
-        Column("Səbəb"),
+        Column(tr("common.employee")),
+        Column(tr("common.reason")),
         Column("Bitmə tarixi", 150, mono=True),
         Column("Qalıb", 110, mono=True),
         Column("Verən", 170),
-        Column("Əməliyyat", 140),
+        Column(tr("common.action"), 140),
     ]
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
@@ -637,7 +638,7 @@ class FaceExemptionScreen(Screen):
         employee_layout = QVBoxLayout(employee_box)
         employee_layout.setContentsMargins(0, 0, 0, 0)
         employee_layout.setSpacing(8)
-        employee_layout.addWidget(field_label("İşçi"))
+        employee_layout.addWidget(field_label(tr("common.employee")))
         self._employee = QComboBox()
         self._employee.setProperty("variant", "form")
         employee_layout.addWidget(self._employee)
@@ -647,7 +648,7 @@ class FaceExemptionScreen(Screen):
         reason_layout = QVBoxLayout(reason_box)
         reason_layout.setContentsMargins(0, 0, 0, 0)
         reason_layout.setSpacing(8)
-        reason_layout.addWidget(field_label("Səbəb"))
+        reason_layout.addWidget(field_label(tr("common.reason")))
         self._reason = QLineEdit()
         self._reason.setProperty("variant", "form")
         self._reason.setPlaceholderText("Tibbi və ya fiziki səbəbi yazın")
@@ -698,7 +699,7 @@ class FaceExemptionScreen(Screen):
         self._summary = muted_label("")
         header_layout.addWidget(self._summary)
         header_layout.addWidget(stretch())
-        refresh = secondary_button("Yenilə")
+        refresh = secondary_button(tr("common.refresh"))
         refresh.clicked.connect(self.refresh_requested)
         header_layout.addWidget(refresh)
         layout.addWidget(header)
@@ -772,7 +773,7 @@ class FaceExemptionScreen(Screen):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
         key = row.get("id", "")
-        revoke = secondary_button("Ləğv Et")
+        revoke = secondary_button(tr("common.cancel"))
         revoke.setProperty("variant", "danger")
         revoke.clicked.connect(lambda *_, k=key: self.revoke_requested.emit(k))
         layout.addWidget(revoke)

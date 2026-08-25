@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -172,7 +173,7 @@ class RecoveryConsoleScreen(Screen):
         )
         self._port = FormField("Port", placeholder="5432")
         self._database = FormField("Baza adı", placeholder="postgres")
-        self._username = FormField("İstifadəçi adı", placeholder="postgres.abcdefgh")
+        self._username = FormField(tr("common.username"), placeholder="postgres.abcdefgh")
         self._password = FormField("Parol", password=True)
         self._tenant = FormField("Tenant ID", placeholder="UUID")
         self._supabase_url = FormField("Supabase URL", placeholder="https://<layihə>.supabase.co")
@@ -191,7 +192,7 @@ class RecoveryConsoleScreen(Screen):
         self._check.clicked.connect(lambda: self.check_tables_requested.emit(self.values()))
         actions_layout.addWidget(self._check)
         actions_layout.addWidget(stretch())
-        self._save = action_button("Yadda Saxla")
+        self._save = action_button(tr("common.save"))
         self._save.clicked.connect(lambda: self.save_requested.emit(self.values()))
         actions_layout.addWidget(self._save)
         card.add(actions)
@@ -262,7 +263,7 @@ class RecoveryConsoleScreen(Screen):
         self._open_config.clicked.connect(self.open_config_requested)
         folders_layout.addWidget(self._open_config)
         folders_layout.addWidget(stretch())
-        self._close = secondary_button("Bağla")
+        self._close = secondary_button(tr("common.close"))
         self._close.clicked.connect(self.closed)
         folders_layout.addWidget(self._close)
         card.add(folders)

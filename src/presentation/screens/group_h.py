@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.i18n.text import az_upper
 from src.presentation.screens.base import Screen, section_header
 from src.presentation.theme.manager import refresh_widget_style
@@ -251,7 +252,7 @@ class CatalogEntryDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 
@@ -309,7 +310,7 @@ def work_modes_screen(theme: ThemeManager, *, parent: QWidget | None = None) -> 
             Column("Rejim adı"),
             Column("Saat aralığı", 180, mono=True),
             Column("Vəziyyət", 110),
-            Column("Əməliyyat", metrics.CATALOG_ACTION_COLUMN_WIDTH),
+            Column(tr("common.action"), metrics.CATALOG_ACTION_COLUMN_WIDTH),
         ],
         create_label="Yeni İş Rejimi",
         empty_title="İş rejimi təyin edilməyib",
@@ -334,7 +335,7 @@ def fine_types_screen(theme: ThemeManager, *, parent: QWidget | None = None) -> 
             Column("Cərimə növü"),
             Column("Standart məbləğ", 170),
             Column("Vəziyyət", 110),
-            Column("Əməliyyat", metrics.CATALOG_ACTION_COLUMN_WIDTH),
+            Column(tr("common.action"), metrics.CATALOG_ACTION_COLUMN_WIDTH),
         ],
         create_label="Yeni Cərimə Növü",
         empty_title="Cərimə növü təyin edilməyib",
@@ -359,7 +360,7 @@ def leave_types_screen(theme: ThemeManager, *, parent: QWidget | None = None) ->
             Column("İcazə növü"),
             Column("Tövsiyə olunan müddət", 190),
             Column("Vəziyyət", 110),
-            Column("Əməliyyat", metrics.CATALOG_ACTION_COLUMN_WIDTH),
+            Column(tr("common.action"), metrics.CATALOG_ACTION_COLUMN_WIDTH),
         ],
         create_label="Yeni İcazə Növü",
         empty_title="İcazə növü təyin edilməyib",
@@ -415,10 +416,10 @@ _COMPARISON_COLUMNS: Final[list[Column]] = [
 
 #: Manual düzəliş jurnalı (bənd D).
 _CORRECTION_COLUMNS: Final[list[Column]] = [
-    Column("İşçi", 170),
-    Column("Tarix", 110, mono=True),
+    Column(tr("common.employee"), 170),
+    Column(tr("common.date"), 110, mono=True),
     Column("Dəyişiklik", 230),
-    Column("Səbəb"),
+    Column(tr("common.reason")),
 ]
 
 
@@ -1110,7 +1111,7 @@ class ExportCorrectionDialog(QDialog):
         self._employee = QComboBox()
         for employee_id, name in employees:
             self._employee.addItem(name, employee_id)
-        card.add(field_label("İşçi"))
+        card.add(field_label(tr("common.employee")))
         card.add(self._employee)
 
         self._field = QComboBox()
@@ -1120,7 +1121,7 @@ class ExportCorrectionDialog(QDialog):
         card.add(self._field)
 
         self._date = FormField(
-            "Tarix",
+            tr("common.date"),
             hint="Düzəlişin aid olduğu təqvim günü (İL-AY-GÜN).",
         )
         self._date.set_text(default_date)
@@ -1156,7 +1157,7 @@ class ExportCorrectionDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 

@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -132,11 +133,11 @@ class TaskCard(Card):
             actions_layout.setContentsMargins(0, 0, 0, 0)
             actions_layout.setSpacing(8)
 
-            reject = secondary_button("Rədd Et")
+            reject = secondary_button(tr("common.reject"))
             reject.clicked.connect(lambda: self.rejected.emit(task_id))
             actions_layout.addWidget(reject)
 
-            approve = action_button("Təsdiqlə")
+            approve = action_button(tr("common.approve"))
             approve.clicked.connect(lambda: self.approved.emit(task_id))
             actions_layout.addWidget(approve)
             self.add(actions)
@@ -276,7 +277,7 @@ class NewTaskDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 
@@ -439,7 +440,7 @@ class SelfCorrectionDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 
@@ -721,8 +722,8 @@ class SalesPointsScreen(Screen):
 
         self._history = DataTable(
             [
-                Column("Tarix", 110, mono=True),
-                Column("Səbəb"),
+                Column(tr("common.date"), 110, mono=True),
+                Column(tr("common.reason")),
                 Column("Vəziyyət", 160),
                 Column("Xal", 100),
                 # Etiraz sütunu — sətir-səviyyəli düymə (bax `set_history`).
@@ -993,7 +994,7 @@ class FineAppealScreen(Screen):
         history_host.setLayout(self._history_layout)
         self.add(history_host)
 
-        self.add(muted_label("Etiraz müddəti cərimə yazıldıqdan sonra 3 gündür."))
+        self.add(muted_label(tr("fine.appeal.deadline")))
 
         self.add(self._build_form(reasons))
         self.body().addStretch(1)
@@ -1015,13 +1016,13 @@ class FineAppealScreen(Screen):
         self._reason = QComboBox()
         self._reason.setProperty("variant", "form")
         self._reason.addItems(reasons)
-        card.add(FormField("Etiraz səbəbi", widget=self._reason))
+        card.add(FormField(tr("fine.appeal.reason"), widget=self._reason))
 
         explanation_box = QWidget()
         explanation_layout = QVBoxLayout(explanation_box)
         explanation_layout.setContentsMargins(0, 0, 0, 0)
         explanation_layout.setSpacing(8)
-        explanation_layout.addWidget(field_label("İzah"))
+        explanation_layout.addWidget(field_label(tr("fine.appeal.explanation")))
         self._explanation = QPlainTextEdit()
         self._explanation.setPlaceholderText("Nə baş verdiyini qısa izah edin.")
         self._explanation.setFixedHeight(96)
@@ -1047,7 +1048,7 @@ class FineAppealScreen(Screen):
         submit_layout = QHBoxLayout(submit_row)
         submit_layout.setContentsMargins(0, 0, 0, 0)
         submit_layout.addWidget(stretch())
-        submit = action_button("Etirazı Göndər")
+        submit = action_button(tr("fine.appeal.submit"))
         submit.clicked.connect(self._on_submit)
         submit_layout.addWidget(submit)
         card.add(submit_row)
@@ -1086,7 +1087,7 @@ class FineAppealScreen(Screen):
                 layout.addWidget(Chip(status, self._TONES.get(status, "neutral")))
 
             if fine.get("appealable") == "1":
-                button = secondary_button("Etiraz Et")
+                button = secondary_button(tr("fine.appeal"))
                 # Mətn dövrə DAXİLİNDƏ hesablanır: `lambda` yalnız hazır
                 # sətri tutur, beləliklə hər düymə öz cəriməsinə bağlanır.
                 subject = (
@@ -1111,7 +1112,7 @@ class FineAppealScreen(Screen):
     def _on_submit(self) -> None:
         explanation = self._explanation.toPlainText().strip()
         if not explanation:
-            self._explanation_error.setText("İzah məcburidir")
+            self._explanation_error.setText(tr("fine.appeal.explanation_required"))
             self._explanation_error.setVisible(True)
             return
         self._explanation_error.setVisible(False)
@@ -1192,7 +1193,7 @@ class FineAppealInboxScreen(Screen):
             actions_layout.addWidget(stretch())
 
             appeal_id = appeal.get("id", "")
-            reject = secondary_button("Rədd Et")
+            reject = secondary_button(tr("common.reject"))
             reject.clicked.connect(
                 lambda _=False, aid=appeal_id, box=reason: self.rejected.emit(
                     aid, box.toPlainText()
@@ -1200,7 +1201,7 @@ class FineAppealInboxScreen(Screen):
             )
             actions_layout.addWidget(reject)
 
-            accept = action_button("Qəbul Et")
+            accept = action_button(tr("common.accept"))
             accept.clicked.connect(
                 lambda _=False, aid=appeal_id, box=reason: self.accepted.emit(
                     aid, box.toPlainText()
@@ -1275,7 +1276,7 @@ class UnassignedSalesScreen(Screen):
         self._table = DataTable(
             [
                 Column("Çek", 100, mono=True),
-                Column("Tarix", 150, mono=True),
+                Column(tr("common.date"), 150, mono=True),
                 Column("Məbləğ", 120),
                 Column("1C təklifi", 180),
                 Column("Uyğunluq", 120),

@@ -56,6 +56,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -99,11 +100,11 @@ class AnnualLeaveInboxScreen(Screen):
     #: `ClassVar` — `Column` siyahısı nüsxələr arasında PAYLAŞILA bilər
     #: (heç bir nüsxə onu dəyişmir); bax `announcements.AnnouncementsScreen`.
     _COLUMNS: ClassVar[list[Column]] = [
-        Column("İşçi"),
+        Column(tr("common.employee")),
         Column("Tarixlər", 210, mono=True),
         Column("Müddət", 130),
         Column("Göndərilib", 150, mono=True),
-        Column("Əməliyyat", 210),
+        Column(tr("common.action"), 210),
     ]
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
@@ -117,7 +118,7 @@ class AnnualLeaveInboxScreen(Screen):
         toolbar_layout.addWidget(self._summary)
         toolbar_layout.addWidget(stretch())
 
-        refresh = secondary_button("Yenilə")
+        refresh = secondary_button(tr("common.refresh"))
         refresh.clicked.connect(self.refresh_requested)
         toolbar_layout.addWidget(refresh)
         self.add(toolbar)
@@ -170,11 +171,11 @@ class AnnualLeaveInboxScreen(Screen):
         actions_layout.setSpacing(8)
 
         key = row.get("id", "")
-        approve = action_button("Təsdiqlə")
+        approve = action_button(tr("common.approve"))
         approve.clicked.connect(lambda *_, k=key: self.approve_requested.emit(k))
         actions_layout.addWidget(approve)
 
-        reject = secondary_button("Rədd Et")
+        reject = secondary_button(tr("common.reject"))
         reject.setProperty("variant", "danger")
         reject.clicked.connect(lambda *_, k=key: self.reject_requested.emit(k))
         actions_layout.addWidget(reject)
@@ -258,7 +259,7 @@ class AnnualLeaveRequestDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 

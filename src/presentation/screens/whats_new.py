@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -51,9 +52,9 @@ class WhatsNewScreen(Screen):
         Column("Versiya", 140),
         Column("Başlıq", 220),
         Column("Mətn"),
-        Column("Tarix", 120, mono=True),
+        Column(tr("common.date"), 120, mono=True),
         Column("Vəziyyət", 110),
-        Column("Əməliyyat", 110),
+        Column(tr("common.action"), 110),
     ]
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
@@ -70,7 +71,7 @@ class WhatsNewScreen(Screen):
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
         toolbar_layout.setSpacing(metrics.SPACE_MS)
         toolbar_layout.addWidget(stretch())
-        refresh = secondary_button("Yenilə")
+        refresh = secondary_button(tr("common.refresh"))
         refresh.setAccessibleName("Versiya qeydlərini yenilə")
         refresh.clicked.connect(self.refresh_requested)
         toolbar_layout.addWidget(refresh)

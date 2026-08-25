@@ -35,6 +35,7 @@ from src.domain.document_rules import (
     ATTENTION_FLAG_LABEL_AZ,
     ATTENTION_FLAG_LABEL_INLINE_AZ,
 )
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -519,7 +520,7 @@ class DashboardScreen(Screen):
         self._ranking_table = DataTable(
             [
                 Column("Sıra", 50, mono=True),
-                Column("Mağaza", 220),
+                Column(tr("common.store"), 220),
                 Column("Dəyər", 110, mono=True),
                 Column("Trend"),
             ],
@@ -629,7 +630,7 @@ class DashboardScreen(Screen):
         )
         table = DataTable(
             [
-                Column("İşçi"),
+                Column(tr("common.employee")),
                 Column("Şübhəli cüt"),
                 Column("Məsafə", 90, mono=True),
                 Column("Açılıb", 140, mono=True),
@@ -689,8 +690,8 @@ class DashboardScreen(Screen):
         card.add(self._fairness_hint)
         self._fairness_table = DataTable(
             [
-                Column("İşçi"),
-                Column("Mağaza", 160),
+                Column(tr("common.employee")),
+                Column(tr("common.store"), 160),
                 Column("İş günləri", 100, mono=True),
                 Column("Nişan", 120),
             ],
@@ -1078,7 +1079,7 @@ class PermissionMatrixScreen(Screen):
         layout.setContentsMargins(16, 20, 16, 20)
         layout.setSpacing(metrics.SPACE_MS)
 
-        layout.addWidget(title_label("Vəzifələr", size=15))
+        layout.addWidget(title_label(tr("permissions.roles"), size=15))
 
         self._role_search = QLineEdit()
         self._role_search.setPlaceholderText("Vəzifə axtar")
@@ -1094,7 +1095,7 @@ class PermissionMatrixScreen(Screen):
 
         layout.addStretch(1)
 
-        create = secondary_button("+ Yeni Vəzifə")
+        create = secondary_button(tr("permissions.new_role"))
         create.clicked.connect(self.role_create_requested)
         layout.addWidget(create)
         return panel
@@ -1175,11 +1176,11 @@ class PermissionMatrixScreen(Screen):
         )
         head_layout.addWidget(self._help)
 
-        self._cancel = secondary_button("Ləğv Et")
+        self._cancel = secondary_button(tr("common.cancel"))
         self._cancel.clicked.connect(self._on_cancel)
         head_layout.addWidget(self._cancel)
 
-        self._save = action_button("Yadda Saxla")
+        self._save = action_button(tr("common.save"))
         self._save.clicked.connect(self._on_save)
         head_layout.addWidget(self._save)
         layout.addWidget(head)
@@ -1195,17 +1196,13 @@ class PermissionMatrixScreen(Screen):
         scroll.setWidget(self._groups_host)
         layout.addWidget(scroll, 1)
 
-        layout.addWidget(
-            muted_label(
-                "Qıfıllı icazələr hardlock-dur — yalnız ROOT İdarə Mərkəzindən dəyişdirilir."
-            )
-        )
+        layout.addWidget(muted_label(tr("permissions.hardlock_note")))
         layout.addWidget(self._build_override_card())
         return panel
 
     def _build_override_card(self) -> Card:
         card = Card(padding=16, spacing=metrics.CARD_CONTENT_SPACING)
-        card.add(title_label("Fərdi İstisna", size=15))
+        card.add(title_label(tr("permissions.override"), size=15))
         card.add(muted_label("Bir istifadəçiyə rolundan kənar icazə vermək"))
         self._override_search = QLineEdit()
         self._override_search.setPlaceholderText("İstifadəçi axtar")
@@ -1420,7 +1417,7 @@ class RoleCreateDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 
@@ -1603,7 +1600,7 @@ class UsersScreen(Screen):
         toolbar_layout.addWidget(self._help)
 
         create = action_button(
-            "Yeni İşçi",
+            tr("users.new"),
             icon_name="plus",
             icon_color=theme.color("--color-action-text"),
         )
@@ -1625,11 +1622,11 @@ class UsersScreen(Screen):
 
         self._table = DataTable(
             [
-                Column("İşçi", 260),
+                Column(tr("common.employee"), 260),
                 Column("Rol", 200),
-                Column("Mağaza", 220),
+                Column(tr("common.store"), 220),
                 Column("Vəziyyət", 160),
-                Column("Əməliyyat"),
+                Column(tr("common.action")),
             ],
             theme,
             footnote=(
@@ -1843,7 +1840,7 @@ class NewUserDialog(QDialog):
         #: `position_id` → kamera-tipli bayrağı — seçim dəyişəndə sahənin
         #: görünürlüyünü qərarlaşdırmaq üçün (aşağı `_on_position_changed`).
         self._camera_positions = {position_id for position_id, _, camera in positions if camera}
-        self.setWindowTitle("Yeni İşçi")
+        self.setWindowTitle(tr("users.new"))
         self.setModal(True)
         self.setMinimumWidth(520)
 
@@ -1853,7 +1850,7 @@ class NewUserDialog(QDialog):
 
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
-        card.add(title_label("Yeni İşçi", size=19))
+        card.add(title_label(tr("users.new"), size=19))
 
         self._first_name = FormField("Ad")
         card.add(self._first_name)
@@ -1875,11 +1872,11 @@ class NewUserDialog(QDialog):
         store_box.addItem("— Seçilməyib —", "")
         for store_id, store_name in stores:
             store_box.addItem(store_name, store_id)
-        self._store = FormField("Mağaza", widget=store_box)
+        self._store = FormField(tr("common.store"), widget=store_box)
         card.add(self._store)
 
         self._username = FormField(
-            "İstifadəçi adı",
+            tr("common.username"),
             placeholder="Admin panelə giriş üçün (kiosk-yalnız işçidə boş qalır)",
         )
         card.add(self._username)
@@ -1940,7 +1937,7 @@ class NewUserDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 
@@ -2142,11 +2139,11 @@ class PosThresholdDialog(QDialog):
 
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 
-        save = action_button("Yadda Saxla")
+        save = action_button(tr("common.save"))
         save.clicked.connect(self._on_submit)
         buttons_layout.addWidget(save)
         card.add(buttons)
@@ -2203,7 +2200,7 @@ class ResetPinDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._theme = theme
-        self.setWindowTitle("PIN Sıfırla")
+        self.setWindowTitle(tr("users.reset_pin"))
         self.setModal(True)
         # EN 480-DİR, 420 DEYİL (simmetriya qapısı, `check_symmetry.py`):
         # 420 layihədə YALNIZ bu üç dialoqda işlənirdi və ölçü səpələnməsini
@@ -2218,7 +2215,7 @@ class ResetPinDialog(QDialog):
 
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
-        card.add(title_label("PIN Sıfırla", size=19))
+        card.add(title_label(tr("users.reset_pin"), size=19))
         card.add(muted_label(employee_name))
         card.add(Divider())
         card.add(
@@ -2238,7 +2235,7 @@ class ResetPinDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 
@@ -2285,7 +2282,7 @@ class ResetPasswordDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._theme = theme
-        self.setWindowTitle("Şifrəni Yenilə")
+        self.setWindowTitle(tr("users.reset_password"))
         self.setModal(True)
         # EN 480-DİR, 420 DEYİL (simmetriya qapısı, `check_symmetry.py`):
         # 420 layihədə YALNIZ bu üç dialoqda işlənirdi və ölçü səpələnməsini
@@ -2300,7 +2297,7 @@ class ResetPasswordDialog(QDialog):
 
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
-        card.add(title_label("Şifrəni Yenilə", size=19))
+        card.add(title_label(tr("users.reset_password"), size=19))
         card.add(muted_label(employee_name))
         card.add(Divider())
         card.add(
@@ -2320,11 +2317,11 @@ class ResetPasswordDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 
-        save = action_button("Yenilə")
+        save = action_button(tr("common.refresh"))
         save.clicked.connect(self._on_submit)
         buttons_layout.addWidget(save)
         card.add(buttons)
@@ -2372,7 +2369,7 @@ class ChangeRoleDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._theme = theme
-        self.setWindowTitle("Rolu Dəyiş")
+        self.setWindowTitle(tr("users.change_role"))
         self.setModal(True)
         # EN 480-DİR, 420 DEYİL (simmetriya qapısı, `check_symmetry.py`):
         # 420 layihədə YALNIZ bu üç dialoqda işlənirdi və ölçü səpələnməsini
@@ -2387,7 +2384,7 @@ class ChangeRoleDialog(QDialog):
 
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
         layout.addWidget(card)
-        card.add(title_label("Rolu Dəyiş", size=19))
+        card.add(title_label(tr("users.change_role"), size=19))
         card.add(muted_label(f"{employee_name} — hazırkı rol: {current_role}"))
         card.add(Divider())
         card.add(
@@ -2415,7 +2412,7 @@ class ChangeRoleDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 
@@ -2511,7 +2508,7 @@ class EmployeeDocumentDialog(QDialog):
                 # SABİTDƏN gəlir ki, bildiriş və ekran ayrılmasın.
                 Column(ATTENTION_FLAG_LABEL_AZ, 130),
                 Column("Vəziyyət", 100),
-                Column("Əməliyyat"),
+                Column(tr("common.action")),
             ],
             theme,
             footnote=(
@@ -2579,7 +2576,7 @@ class EmployeeDocumentDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        close_button = secondary_button("Bağla")
+        close_button = secondary_button(tr("common.close"))
         close_button.clicked.connect(self.accept)
         buttons_layout.addWidget(close_button)
 
@@ -2604,7 +2601,7 @@ class EmployeeDocumentDialog(QDialog):
             status = document.get("status", "Aktiv")
             row_actions: QWidget | str = ""
             if status == "Aktiv":
-                deactivate = secondary_button("Deaktiv Et")
+                deactivate = secondary_button(tr("users.deactivate"))
                 deactivate.setProperty("variant", "danger")
                 document_id = document["id"]
                 deactivate.clicked.connect(
@@ -3010,7 +3007,7 @@ class ShiftPlanningScreen(Screen):
         clear_layout(self._matrix_grid)
         self._cells.clear()
 
-        header = plain_label("İşçi")
+        header = plain_label(tr("common.employee"))
         header.setProperty("variant", "mono-muted")
         self._matrix_grid.addWidget(header, 0, 0)
 
@@ -3175,11 +3172,11 @@ class DailyRosterScreen(Screen):
 
         self._table = DataTable(
             [
-                Column("İşçi", 220),
+                Column(tr("common.employee"), 220),
                 Column("Plan", 110, mono=True),
                 Column("Giriş", 110, mono=True),
                 Column("Vəziyyət", 220),
-                Column("Qeyd"),
+                Column(tr("common.note")),
             ],
             theme,
         )
@@ -3187,7 +3184,7 @@ class DailyRosterScreen(Screen):
 
         note_card = Card(padding=16, spacing=metrics.CARD_CONTENT_SPACING)
         self._note = QPlainTextEdit()
-        self._note.setPlaceholderText("Rəhbər qeydi əlavə et…")
+        self._note.setPlaceholderText(tr("roster.note_placeholder"))
         self._note.setFixedHeight(80)
         note_card.add(self._note)
 
@@ -3197,11 +3194,11 @@ class DailyRosterScreen(Screen):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        draft = secondary_button("Qaralama Saxla")
+        draft = secondary_button(tr("roster.save_draft"))
         draft.clicked.connect(lambda: self.draft_saved.emit(self._note.toPlainText()))
         buttons_layout.addWidget(draft)
 
-        approve = action_button("Tabeli Təsdiqlə")
+        approve = action_button(tr("roster.approve"))
         approve.clicked.connect(self.approve_requested)
         buttons_layout.addWidget(approve)
         note_card.add(buttons)
@@ -3360,11 +3357,11 @@ class ShiftSwapScreen(Screen):
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.setSpacing(metrics.SPACE_MS)
 
-        reject = secondary_button("Rədd Et")
+        reject = secondary_button(tr("common.reject"))
         reject.clicked.connect(self._emit_rejected)
         buttons_layout.addWidget(reject)
 
-        approve = action_button("Təsdiqlə")
+        approve = action_button(tr("common.approve"))
         approve.clicked.connect(self._emit_approved)
         buttons_layout.addWidget(approve)
         layout.addWidget(buttons)

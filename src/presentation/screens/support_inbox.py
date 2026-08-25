@@ -67,6 +67,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.domain.value_objects.support import SupportChannel, SupportTicketStatus
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.screens.group_e import ChatBubble
 from src.presentation.theme.manager import refresh_widget_style
@@ -191,7 +192,7 @@ class SupportInboxScreen(Screen):
         header = QHBoxLayout()
         header.addWidget(title_label(channel.section_title_az))
         header.addWidget(stretch())
-        refresh = secondary_button("Yenilə")
+        refresh = secondary_button(tr("common.refresh"))
         refresh.clicked.connect(self.refresh_requested)
         header.addWidget(refresh)
         layout.addLayout(header)
@@ -662,7 +663,7 @@ class SupportInboxScreen(Screen):
             )
         )
         layout.addWidget(label)
-        close = secondary_button("Bağla")
+        close = secondary_button(tr("common.close"))
         close.clicked.connect(dialog.accept)
         layout.addWidget(close)
         dialog.exec()

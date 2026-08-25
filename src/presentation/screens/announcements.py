@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -73,9 +74,9 @@ class AnnouncementsScreen(Screen):
     _COLUMNS: ClassVar[list[Column]] = [
         Column("Başlıq"),
         Column("Əhatə", 160),
-        Column("Tarix", 150, mono=True),
+        Column(tr("common.date"), 150, mono=True),
         Column("Vəziyyət", 110),
-        Column("Əməliyyat", 140),
+        Column(tr("common.action"), 140),
     ]
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
@@ -245,7 +246,7 @@ class AnnouncementComposeDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 

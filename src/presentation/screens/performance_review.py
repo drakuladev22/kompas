@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button
@@ -98,7 +99,7 @@ class PerformanceReviewScreen(Screen):
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         card.add(title_label("Yeni Qiymətləndirmə", size=19))
 
-        self._employee = FormField("İşçi", widget=QComboBox())
+        self._employee = FormField(tr("common.employee"), widget=QComboBox())
         employee_combo = self._employee.input_widget()
         assert isinstance(employee_combo, QComboBox)
         employee_combo.currentIndexChanged.connect(self._on_employee_changed)
@@ -114,7 +115,7 @@ class PerformanceReviewScreen(Screen):
         self._kpi_layout.setSpacing(metrics.SPACE_MS)
         card.add(self._kpi_host)
 
-        card.add(field_label("Qeyd"))
+        card.add(field_label(tr("common.note")))
         self._notes = QPlainTextEdit()
         self._notes.setProperty("variant", "form")
         self._notes.setMinimumHeight(88)
@@ -130,7 +131,7 @@ class PerformanceReviewScreen(Screen):
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.addWidget(stretch())
-        save = action_button("Yadda Saxla")
+        save = action_button(tr("common.save"))
         save.clicked.connect(self._on_submit)
         buttons_layout.addWidget(save)
         card.add(buttons)

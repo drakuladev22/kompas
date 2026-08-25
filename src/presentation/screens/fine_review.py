@@ -78,6 +78,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -307,7 +308,7 @@ class MonthlyFineReviewScreen(Screen):
         )
         layout.addWidget(self._help)
 
-        refresh = secondary_button("Yenilə")
+        refresh = secondary_button(tr("common.refresh"))
         refresh.clicked.connect(self.refresh_requested)
         layout.addWidget(refresh)
         return toolbar
@@ -655,7 +656,7 @@ class PublishConfirmDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 
@@ -686,10 +687,10 @@ class PublishConfirmDialog(QDialog):
 #: Cədvəl sütunları — `ClassVar` deyil, MODUL səviyyəsində: qrup kartlarının
 #: hər biri öz `DataTable`-ını qurur və siyahını heç biri dəyişmir.
 _COLUMNS: Final[list[Column]] = [
-    Column("İşçi"),
+    Column(tr("common.employee")),
     Column("Cərimə növü"),
     Column("Məbləğ", 110, mono=True),
-    Column("Tarix", 120, mono=True),
+    Column(tr("common.date"), 120, mono=True),
     Column("Qeydə alan", 170),
     Column("Sübut", 130),
     Column("Qərar", 260),

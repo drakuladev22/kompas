@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.domain.value_objects.support import SupportChannel
+from src.presentation.i18n import tr
 from src.presentation.theme.manager import set_surface_color
 from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.primitives import (
@@ -211,7 +212,7 @@ class SupportChatWidget(QWidget):
         identity_layout = QVBoxLayout(identity)
         identity_layout.setContentsMargins(0, 0, 0, 0)
         identity_layout.setSpacing(4)
-        identity_layout.addWidget(title_label("KompasOS Dəstək", size=15))
+        identity_layout.addWidget(title_label(tr("support.title"), size=15))
         # Başlıqdakı ikinci sətir SEÇİLMİŞ KANALI göstərir. Əvvəl burada
         # «Onlayn · adətən 10 dəq içində» yazırdı — o, uydurma vəd idi
         # (heç bir yerdə ölçülmürdü) və indi onun yerini işçinin FAKTİKİ
@@ -305,7 +306,7 @@ class SupportChatWidget(QWidget):
         composer_layout.setSpacing(metrics.SPACE_MS)
 
         self._input = QLineEdit()
-        self._input.setPlaceholderText("Mesaj yazın…")
+        self._input.setPlaceholderText(tr("support.placeholder"))
         self._input.setProperty("variant", "form")
         self._input.setMinimumHeight(40)
         self._input.returnPressed.connect(self._on_send)
@@ -586,7 +587,7 @@ class LicenseInactiveScreen(QWidget):
         self._icon_box = StateIconBox("lock", theme, tone="danger", box_size=62, icon_size=28)
         card.body().addWidget(self._icon_box, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        heading = plain_label("Lisenziya aktiv deyil")
+        heading = plain_label(tr("license.inactive.title"))
         heading_font = heading.font()
         heading_font.setPixelSize(26)
         heading_font.setWeight(QFont.Weight.DemiBold)
@@ -628,7 +629,7 @@ class LicenseInactiveScreen(QWidget):
 
         card.add(Divider())
 
-        contact_hint = muted_label("Bərpa üçün təchizatçı ilə əlaqə saxlayın")
+        contact_hint = muted_label(tr("license.inactive.contact"))
         contact_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card.body().addWidget(contact_hint, alignment=Qt.AlignmentFlag.AlignHCenter)
 

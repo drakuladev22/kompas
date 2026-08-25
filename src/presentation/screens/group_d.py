@@ -55,6 +55,7 @@ from src.domain.value_objects.erp import (
     ConnectorType,
     ErpPlatformError,
 )
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.theme.manager import refresh_widget_style
 from src.presentation.widgets import icons, metrics
@@ -212,12 +213,12 @@ class ErpServersScreen(Screen):
         )
         toolbar_layout.addWidget(self._help)
 
-        test_all = secondary_button("Hamısını Yoxla")
+        test_all = secondary_button(tr("erp.test_all"))
         test_all.clicked.connect(self.test_all_requested)
         toolbar_layout.addWidget(test_all)
 
         create = action_button(
-            "Yeni Server",
+            tr("erp.new_server"),
             icon_name="plus",
             icon_color=theme.color("--color-action-text"),
         )
@@ -230,7 +231,7 @@ class ErpServersScreen(Screen):
                 Column("Server", 180),
                 Column("Növ", 110),
                 Column("Ünvan", 190, mono=True),
-                Column("Mağaza", 130),
+                Column(tr("common.store"), 130),
                 Column("Sinxron", 110, mono=True),
                 Column("Vəziyyət"),
             ],
@@ -718,16 +719,16 @@ class ServerConnectionWizard(QDialog):
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.setSpacing(metrics.SPACE_MS)
 
-        self._test_button = secondary_button("Bağlantını Yoxla")
+        self._test_button = secondary_button(tr("erp.test_connection"))
         self._test_button.clicked.connect(lambda: self.test_requested.emit(self.collected()))
         buttons_layout.addWidget(self._test_button)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 
-        save = action_button("Yadda Saxla")
+        save = action_button(tr("common.save"))
         save.clicked.connect(self._on_save)
         buttons_layout.addWidget(save)
         card.add(buttons)
@@ -794,7 +795,7 @@ class ServerConnectionWizard(QDialog):
         self._host = FormField(ConnectorType.HTTP.address_label_az)
         self._database = FormField("Baza (infobase)")
         self._username = FormField("İstifadəçi")
-        self._password = FormField("Şifrə", password=True)
+        self._password = FormField(tr("common.password"), password=True)
         for field in (self._host, self._database, self._username, self._password):
             layout.addWidget(field)
         layout.addStretch(1)
@@ -814,7 +815,7 @@ class ServerConnectionWizard(QDialog):
         address = FormField(ConnectorType.COM.address_label_az)
         self._com_infobase = FormField("Baza adı (Ref)")
         self._com_username = FormField("İstifadəçi")
-        self._com_password = FormField("Şifrə", password=True)
+        self._com_password = FormField(tr("common.password"), password=True)
         for field in (address, self._com_infobase, self._com_username, self._com_password):
             layout.addWidget(field)
 
@@ -1104,7 +1105,7 @@ class ServerConnectionWizard(QDialog):
             self._spinner.stop()
             return
 
-        self._result.setText("Yoxlanılır…")
+        self._result.setText(tr("auth.login.checking"))
         self._result.setStyleSheet(f"color: {self._theme.color('--color-text-muted')};")
         self._result_row.setVisible(True)
         self._spinner.start()
@@ -1127,7 +1128,7 @@ class ServerConnectionWizard(QDialog):
         """
         self._spinner.stop()
         self._test_button.setEnabled(True)
-        self._test_button.setText("Bağlantını Yoxla")
+        self._test_button.setText(tr("erp.test_connection"))
 
         token = "--color-success" if ok else "--color-danger"
         self._result_icon.setPixmap(
@@ -1189,14 +1190,14 @@ class BackupScreen(Screen):
         self._schedule_label = muted_label("")
         toolbar_layout.addWidget(self._schedule_label)
         toolbar_layout.addWidget(stretch())
-        now = action_button("İndi Ehtiyat Nüsxə Al")
+        now = action_button(tr("backup.now"))
         now.clicked.connect(self.backup_now_requested)
         toolbar_layout.addWidget(now)
         self.add(toolbar)
 
         self._table = DataTable(
             [
-                Column("Tarix", 200, mono=True),
+                Column(tr("common.date"), 200, mono=True),
                 Column("Ölçü", 120),
                 Column("Növ", 180),
                 Column("Vəziyyət", 240),
@@ -1258,7 +1259,7 @@ class BackupScreen(Screen):
             succeeded = backup.get("ok", "1") == "1"
 
             if succeeded:
-                restore = secondary_button("Bu Nöqtəyə Bərpa Et")
+                restore = secondary_button(tr("backup.restore"))
                 restore.clicked.connect(
                     lambda _=False, date=backup["date"]: self.restore_requested.emit(date)
                 )
@@ -1324,7 +1325,7 @@ class RestoreConfirmDialog(QDialog):
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
         layout.addWidget(card)
 
-        card.add(title_label("Bu nöqtəyə bərpa edilsin?", size=19))
+        card.add(title_label(tr("backup.restore.confirm_title"), size=19))
         card.add(
             body_label(
                 f"{backup_date} tarixli ehtiyat nüsxə bərpa olunacaq. Bu tarixdən "
@@ -1346,7 +1347,7 @@ class RestoreConfirmDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 
@@ -1573,7 +1574,7 @@ class AuditScreen(Screen):
         self._total = muted_label("")
         toolbar_layout.addWidget(self._total)
         toolbar_layout.addWidget(stretch())
-        export = secondary_button("Excel-ə İxrac Et")
+        export = secondary_button(tr("common.export_excel"))
         export.clicked.connect(self.export_requested)
         toolbar_layout.addWidget(export)
         self.add(toolbar)
@@ -1637,7 +1638,7 @@ class AuditScreen(Screen):
             [
                 Column("Vaxt", 140, mono=True),
                 Column("İstifadəçi", 180),
-                Column("Əməliyyat", 240),
+                Column(tr("common.action"), 240),
                 Column("Modul", 150),
                 Column("Detal"),
             ],
@@ -1774,7 +1775,7 @@ class SettingsScreen(Screen):
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
         toolbar_layout.addWidget(stretch())
-        save = action_button("Yadda Saxla")
+        save = action_button(tr("common.save"))
         save.clicked.connect(lambda: self.saved.emit(self.collected()))
         toolbar_layout.addWidget(save)
         self.add(toolbar)
@@ -1786,7 +1787,7 @@ class SettingsScreen(Screen):
 
     def _build_appearance(self) -> Card:
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
-        card.add(title_label("Görünüş", size=15))
+        card.add(title_label(tr("settings.appearance"), size=15))
 
         options = QWidget()
         options_layout = QHBoxLayout(options)
@@ -1820,7 +1821,7 @@ class SettingsScreen(Screen):
         language_layout = QHBoxLayout(language_row)
         language_layout.setContentsMargins(0, 0, 0, 0)
         language_layout.setSpacing(metrics.SPACE_MS)
-        language_layout.addWidget(field_label("İnterfeys dili"))
+        language_layout.addWidget(field_label(tr("settings.language")))
         language_layout.addWidget(stretch())
         self._language = body_label("Azərbaycan dili", size=13, wrap=False)
         language_layout.addWidget(self._language)
@@ -1838,7 +1839,7 @@ class SettingsScreen(Screen):
 
     def _build_notifications(self) -> Card:
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
-        card.add(title_label("Bildirişlər", size=15))
+        card.add(title_label(tr("settings.notifications"), size=15))
 
         for index, (key, title, description) in enumerate(self._NOTIFICATIONS):
             if index:
@@ -1884,7 +1885,7 @@ class SettingsScreen(Screen):
 
     def _build_security(self) -> Card:
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
-        card.add(title_label("Təhlükəsizlik", size=15))
+        card.add(title_label(tr("settings.security"), size=15))
 
         password_row = QWidget()
         password_layout = QHBoxLayout(password_row)
@@ -1898,7 +1899,7 @@ class SettingsScreen(Screen):
         password_text_layout.addWidget(self._password_age)
         password_layout.addWidget(password_text)
         password_layout.addWidget(stretch())
-        change = secondary_button("Şifrəni Dəyiş")
+        change = secondary_button(tr("settings.change_password"))
         change.clicked.connect(self.password_change_requested)
         password_layout.addWidget(change)
         card.add(password_row)
@@ -1936,7 +1937,7 @@ class SettingsScreen(Screen):
         sessions_text_layout.addWidget(self._sessions_label)
         sessions_layout.addWidget(sessions_text)
         sessions_layout.addWidget(stretch())
-        close_all = secondary_button("Hamısını Bağla")
+        close_all = secondary_button(tr("settings.close_sessions"))
         close_all.clicked.connect(self.sessions_close_requested)
         sessions_layout.addWidget(close_all)
         card.add(sessions_row)
@@ -2081,7 +2082,7 @@ class DriveConnectionScreen(Screen):
         )
         actions_layout.addWidget(self._help)
 
-        self._cancel = secondary_button("Ləğv Et")
+        self._cancel = secondary_button(tr("common.cancel"))
         self._cancel.clicked.connect(self.cancel_requested)
         self._cancel.setVisible(False)
         actions_layout.addWidget(self._cancel)
@@ -2340,7 +2341,7 @@ class RootControlScreen(Screen):
         banner_layout = QHBoxLayout(banner_row)
         banner_layout.setContentsMargins(0, 0, 0, 0)
         banner_layout.setSpacing(metrics.SPACE_MS)
-        banner_layout.addWidget(Chip("ROOT rejimi", "danger"))
+        banner_layout.addWidget(Chip(tr("root.mode"), "danger"))
         banner_layout.addWidget(body_label("Bütün əməliyyatlar audit jurnalına yazılır.", size=13))
         banner_layout.addWidget(stretch())
 
@@ -2355,14 +2356,14 @@ class RootControlScreen(Screen):
         )
         banner_layout.addWidget(self._help)
 
-        apply_button = action_button("Tətbiq Et")
+        apply_button = action_button(tr("root.apply"))
         apply_button.clicked.connect(lambda: self.applied.emit(self.collected()))
         banner_layout.addWidget(apply_button)
         banner.add(banner_row)
         self.add(banner)
 
         self._limits = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
-        self._limits.add(title_label("Dinamik limitlər", size=15))
+        self._limits.add(title_label(tr("root.limits"), size=15))
         self._limits_rows = QVBoxLayout()
         self._limits_rows.setSpacing(metrics.SPACE_MS)
         limits_holder = QWidget()
@@ -2378,7 +2379,7 @@ class RootControlScreen(Screen):
         self.add(self._build_webhook_card())
 
         self._modules = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
-        self._modules.add(title_label("Modul açarları", size=15))
+        self._modules.add(title_label(tr("root.modules"), size=15))
         self._modules_rows = QVBoxLayout()
         self._modules_rows.setSpacing(metrics.SPACE_MS)
         modules_holder = QWidget()
@@ -2450,7 +2451,7 @@ class RootControlScreen(Screen):
         save_layout = QHBoxLayout(save_row)
         save_layout.setContentsMargins(0, 0, 0, 0)
         save_layout.addWidget(stretch())
-        save = action_button("Yadda Saxla")
+        save = action_button(tr("common.save"))
         # Yalnız BU bölmənin sahələri göndərilir. Ümumi «Tətbiq Et» də onları
         # daşıyır (`collected()`), yəni Root hansı düyməni basdığından asılı
         # olmayaraq eyni nəticəni alır — sadəcə bu düymə daha yaxındır.
@@ -2517,7 +2518,7 @@ class RootControlScreen(Screen):
         active_layout = QHBoxLayout(active_row)
         active_layout.setContentsMargins(0, 0, 0, 0)
         active_layout.setSpacing(metrics.SPACE_MS)
-        active_layout.addWidget(plain_label("Aktiv"))
+        active_layout.addWidget(plain_label(tr("common.active")))
         active_layout.addWidget(stretch())
         self._telegram_active = ToggleSwitch(self._theme)
         self._telegram_active.toggled.connect(self.telegram_active_changed)
@@ -2906,7 +2907,7 @@ class RootControlScreen(Screen):
         self._language_combo = QComboBox()
         self._language_combo.setProperty("variant", "form")
         # Screen-reader üçün açıq ad — kombinatın cari DƏYƏRİ deyil, VƏZİFƏSİ.
-        self._language_combo.setAccessibleName("İnterfeys dili")
+        self._language_combo.setAccessibleName(tr("settings.language"))
         self._language_combo.setAccessibleDescription(
             "Tətbiqin interfeys dilini seçir; hazırda yalnız Azərbaycan dili mövcuddur."
         )
@@ -3089,7 +3090,7 @@ class RootControlScreen(Screen):
 
     def _build_registry(self) -> Card:
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
-        card.add(title_label("İcazə registri", size=15))
+        card.add(title_label(tr("root.registry"), size=15))
 
         self._registry_rows = QVBoxLayout()
         self._registry_rows.setSpacing(8)

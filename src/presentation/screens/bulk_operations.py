@@ -81,6 +81,7 @@ from typing import TYPE_CHECKING, Final
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QComboBox, QDialog, QHBoxLayout, QVBoxLayout, QWidget
 
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.theme.manager import refresh_widget_style
 from src.presentation.widgets import metrics
@@ -116,14 +117,17 @@ NOT_TRANSFERRED_TEXT: Final = (
     "kataloqdur, yeni mağaza onlara birbaşa baxa bilir."
 )
 
-_PREVIEW_COLUMNS: Final[list[Column]] = [Column("Sətir", 70, mono=True), Column("Səbəb")]
+_PREVIEW_COLUMNS: Final[list[Column]] = [
+    Column("Sətir", 70, mono=True),
+    Column(tr("common.reason")),
+]
 _TEMPLATE_COLUMNS: Final[list[Column]] = [
     Column("Ad", 170),
     Column("Mənbə mağaza", 170),
     Column("Ayar sayı", 90, mono=True),
     Column("Çəkilmə tarixi", 120, mono=True),
     Column("Vəziyyət", 90),
-    Column("Əməliyyat"),
+    Column(tr("common.action")),
 ]
 
 
@@ -391,10 +395,10 @@ class BulkOperationsScreen(Screen):
         actions_layout.setContentsMargins(0, 0, 0, 0)
         actions_layout.setSpacing(8)
         if is_active:
-            apply_button = secondary_button("Tətbiq Et")
+            apply_button = secondary_button(tr("common.apply"))
             apply_button.clicked.connect(lambda *_, key=template_id: self.apply_requested.emit(key))
             actions_layout.addWidget(apply_button)
-            deactivate_button = secondary_button("Deaktiv Et")
+            deactivate_button = secondary_button(tr("users.deactivate"))
             deactivate_button.setProperty("variant", "danger")
             deactivate_button.clicked.connect(
                 lambda *_, key=template_id: self.deactivate_requested.emit(key)
@@ -476,7 +480,7 @@ class StoreTemplateCaptureDialog(QDialog):
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
         submit = action_button("Şablon Yarat")
@@ -569,7 +573,7 @@ class StoreTemplateApplyDialog(QDialog):
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
         submit = action_button("Yeni Mağaza Yarat")
@@ -669,7 +673,7 @@ class BulkImportResultDialog(QDialog):
             card.add(warning)
 
             password_table = DataTable(
-                [Column("İstifadəçi adı", 220), Column("Müvəqqəti şifrə", mono=True)], theme
+                [Column(tr("common.username"), 220), Column("Müvəqqəti şifrə", mono=True)], theme
             )
             for entry in self._created:
                 password_table.add_row(
@@ -685,7 +689,7 @@ class BulkImportResultDialog(QDialog):
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.addWidget(stretch())
-        close_button = action_button("Bağla")
+        close_button = action_button(tr("common.close"))
         close_button.clicked.connect(self.accept)
         buttons_layout.addWidget(close_button)
         card.add(buttons)

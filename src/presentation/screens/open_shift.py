@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
 from src.presentation.widgets.forms import field_label
@@ -196,7 +197,7 @@ class OpenShiftMarketCard(QWidget):
         layout.addWidget(stretch())
 
         posting_id = row["id"]
-        cancel = secondary_button("Ləğv Et")
+        cancel = secondary_button(tr("common.cancel"))
         cancel.setProperty("variant", "danger")
         cancel.clicked.connect(lambda _=False, key=posting_id: self.cancel_requested.emit(key))
         layout.addWidget(cancel)
@@ -261,7 +262,7 @@ class OpenShiftPostDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 

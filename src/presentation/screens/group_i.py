@@ -43,6 +43,7 @@ from src.domain.value_objects.infrastructure import (
     DatabaseTarget,
     MigrationPhase,
 )
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen, section_header
 from src.presentation.widgets import icons, metrics
 from src.presentation.widgets.buttons import action_button, icon_button, secondary_button
@@ -110,7 +111,7 @@ class PhaseRow(QWidget):
         label.setWordWrap(True)
         layout.addWidget(label, 1)
 
-        self._chip = Chip("Gözləyir", "neutral")
+        self._chip = Chip(tr("common.pending"), "neutral")
         layout.addWidget(self._chip)
 
         self.set_state("pending")
@@ -262,7 +263,7 @@ class InfrastructureScreen(Screen):
         history_header_layout.setSpacing(metrics.SPACE_MS)
         history_header_layout.addWidget(title_label("Keçid tarixçəsi", size=15))
         history_header_layout.addWidget(stretch())
-        self._history_refresh = secondary_button("Yenilə")
+        self._history_refresh = secondary_button(tr("common.refresh"))
         self._history_refresh.clicked.connect(self.history_requested)
         history_header_layout.addWidget(self._history_refresh)
         self.add(history_header)
@@ -314,7 +315,7 @@ class InfrastructureScreen(Screen):
 
         table = DataTable(
             [
-                Column("Tarix", 160, mono=True),
+                Column(tr("common.date"), 160, mono=True),
                 Column("İstiqamət"),
                 # Barmaq izi bir HASH-dır — maketin identifikator qaydası.
                 Column("Barmaq izi", 170, mono=True),
@@ -408,7 +409,7 @@ class MigrationConfirmDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 
@@ -1104,7 +1105,7 @@ class PluginScreen(Screen):
         body.addWidget(publisher)
         body.addWidget(Divider())
 
-        remove = secondary_button("Sil")
+        remove = secondary_button(tr("common.delete"))
         remove.clicked.connect(lambda *_, pid=plugin_id: self.remove_requested.emit(pid))
         footer = QWidget()
         footer_layout = QHBoxLayout(footer)
@@ -1261,12 +1262,12 @@ class ExceptionsScreen(Screen):
         self._table = DataTable(
             [
                 Column("Mənbə", 160),
-                Column("İşçi", 160),
-                Column("Mağaza", 140),
+                Column(tr("common.employee"), 160),
+                Column(tr("common.store"), 140),
                 Column("Təfərrüat", 240),
                 Column("Ciddiyyət", 100),
-                Column("Tarix", 140, mono=True),
-                Column("Əməliyyat"),
+                Column(tr("common.date"), 140, mono=True),
+                Column(tr("common.action")),
             ],
             theme,
             footnote=("Bağlanmış istisna yenidən açılmır — rədd qərarı da audit jurnalına düşür."),
@@ -1332,7 +1333,7 @@ class ExceptionsScreen(Screen):
         # "Rədd Et" `danger` variantını alır — `PosThresholdDialog`-dakı
         # "Geri Al" ilə EYNİ naxış (`secondary_button` + üstündən `variant`
         # dəyişikliyi), yeni kontrast cütü yaratmır.
-        dismiss = secondary_button("Rədd Et")
+        dismiss = secondary_button(tr("common.reject"))
         dismiss.setProperty("variant", "danger")
         dismiss.clicked.connect(lambda: self.dismissed_requested.emit(exception_id))
         layout.addWidget(dismiss)

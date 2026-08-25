@@ -38,6 +38,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
 
 from src.domain.value_objects.devices import DeviceStatus, DeviceType
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -275,7 +276,7 @@ class DeviceAdminScreen(Screen):
         # təsdiqləməzdən ƏVVƏL yer olub-olmadığını bilməlidir, sonra deyil.
         self._usage = Chip("", tone="info")
         header.addWidget(self._usage)
-        refresh = secondary_button("Yenilə")
+        refresh = secondary_button(tr("common.refresh"))
         refresh.clicked.connect(self.refresh_requested)
         header.addWidget(refresh)
         layout.addLayout(header)
@@ -300,7 +301,7 @@ class DeviceAdminScreen(Screen):
                 Column("Tip", 170),
                 Column("Vəziyyət", 140),
                 Column("Son görünmə", 150, mono=True),
-                Column("Əməliyyat", 260),
+                Column(tr("common.action"), 260),
             ],
             theme,
         )
@@ -475,7 +476,7 @@ class DeviceAdminScreen(Screen):
             type_box.addItem(label, device_type.value)
         form.addWidget(type_box, 2)
 
-        approve = action_button("Təsdiqlə")
+        approve = action_button(tr("common.approve"))
         approve.clicked.connect(
             lambda: self.approve_requested.emit(
                 {

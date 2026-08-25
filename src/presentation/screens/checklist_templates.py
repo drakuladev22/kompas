@@ -75,6 +75,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -146,7 +147,7 @@ class ChecklistTemplateScreen(Screen):
         # QSS-lənmiş `QPushButton` avtomatik elide ETMİR (bax `NavButton`
         # başlığı) və `180` "Aktivləşdir" mətnini sərt kəsirdi — bu MƏHZ o
         # düymə cütü üçün ÖLÇÜLMÜŞ adlı sabitdir, hardcode YOX.
-        Column("Əməliyyat", metrics.CATALOG_ACTION_COLUMN_WIDTH),
+        Column(tr("common.action"), metrics.CATALOG_ACTION_COLUMN_WIDTH),
     ]
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
@@ -305,7 +306,7 @@ class ChecklistTemplateScreen(Screen):
             row.get("item_text", ""),
             Chip("Bəli", "warning") if is_blocking else "—",
             Chip("Tələb olunur", "info") if photo_required else "—",
-            Chip("Aktiv", "success") if is_active else Chip("Deaktiv", "neutral"),
+            Chip(tr("common.active"), "success") if is_active else Chip("Deaktiv", "neutral"),
             actions,
         ]
 
@@ -408,7 +409,7 @@ class ChecklistTemplateDialog(QDialog):
         buttons_layout.setSpacing(metrics.SPACE_MS)
         buttons_layout.addWidget(stretch())
 
-        cancel = secondary_button("İmtina")
+        cancel = secondary_button(tr("common.decline"))
         cancel.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel)
 

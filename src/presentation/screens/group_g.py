@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen
 from src.presentation.theme.manager import enable_styled_background, set_surface_color
 from src.presentation.widgets import icons, metrics
@@ -197,7 +198,7 @@ class NotificationPanel(Card):
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(20, 16, 20, 16)
         header_layout.setSpacing(metrics.SPACE_MS)
-        header_layout.addWidget(title_label("Bildirişlər", size=15))
+        header_layout.addWidget(title_label(tr("settings.notifications"), size=15))
 
         self._unread_chip = Chip("", "warning")
         self._unread_chip.setVisible(False)
@@ -248,7 +249,7 @@ class NotificationPanel(Card):
         see_all.clicked.connect(self.see_all_requested)
         footer_layout.addWidget(see_all)
         footer_layout.addWidget(stretch())
-        footer_layout.addWidget(muted_label("30 gün saxlanılır"))
+        footer_layout.addWidget(muted_label(tr("notifications.retention")))
         self.add(footer)
 
         #: Sonuncu doldurulmuş dəst — süzgəc dəyişəndə yenidən süzülür.
@@ -274,7 +275,7 @@ class NotificationPanel(Card):
         visible = [n for n in notifications if self._matches(n)]
 
         if not visible:
-            empty = muted_label("Bildiriş yoxdur.")
+            empty = muted_label(tr("notifications.empty"))
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setContentsMargins(20, 40, 20, 40)
             self._list_layout.insertWidget(0, empty)
@@ -359,7 +360,7 @@ class ProfileScreen(Screen):
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
         toolbar_layout.setSpacing(metrics.SPACE_MS)
         toolbar_layout.addWidget(stretch())
-        cancel = secondary_button("Ləğv Et")
+        cancel = secondary_button(tr("common.cancel"))
         # DÜYMƏ ƏVVƏL HEÇ NƏYƏ BAĞLI DEYİLDİ: istifadəçi adını səhv yazıb
         # «Ləğv Et» basırdı, sahələr olduğu kimi qalırdı və o, dəyişikliyin
         # ATILDIĞINI sanırdı — sonra «Yadda Saxla» basanda SƏHV ad yazılırdı.
@@ -367,7 +368,7 @@ class ProfileScreen(Screen):
         # kontroller lazım deyil: sahələr son YÜKLƏNMİŞ dəyərlərə qayıdır.
         cancel.clicked.connect(self.revert_edits)
         toolbar_layout.addWidget(cancel)
-        save = action_button("Yadda Saxla")
+        save = action_button(tr("common.save"))
         save.clicked.connect(lambda: self.saved.emit(self.collected()))
         toolbar_layout.addWidget(save)
         self.add(toolbar)
@@ -449,7 +450,7 @@ class ProfileScreen(Screen):
         layout.addWidget(text_box)
         layout.addWidget(stretch())
 
-        change = secondary_button("Şəkli Dəyiş")
+        change = secondary_button(tr("kiosk.home.change_photo"))
         change.clicked.connect(self.photo_change_requested)
         layout.addWidget(change)
 
@@ -468,7 +469,7 @@ class ProfileScreen(Screen):
         self._loaded = {"full_name": full_name, "phone": ""}
         card.add(self._full_name)
 
-        self._username = FormField("İstifadəçi adı")
+        self._username = FormField(tr("common.username"))
         self._username.input_widget().setEnabled(False)
         card.add(self._username)
 
@@ -479,12 +480,12 @@ class ProfileScreen(Screen):
         self._email.input_widget().setEnabled(False)
         card.add(self._email)
 
-        card.add(muted_label("İstifadəçi adı və e-poçt yalnız Admin tərəfindən dəyişdirilir."))
+        card.add(muted_label(tr("profile.locked_note")))
         return card
 
     def _build_role_card(self) -> Card:
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
-        card.add(title_label("Rol və səlahiyyət", size=15))
+        card.add(title_label(tr("profile.role"), size=15))
         self._role_rows = QVBoxLayout()
         self._role_rows.setSpacing(metrics.SPACE_MS)
         holder = QWidget()
@@ -504,14 +505,14 @@ class ProfileScreen(Screen):
 
     def _build_security_card(self) -> Card:
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
-        card.add(title_label("Təhlükəsizlik", size=15))
+        card.add(title_label(tr("settings.security"), size=15))
 
         buttons = QWidget()
         buttons_layout = QHBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.setSpacing(metrics.SPACE_MS)
 
-        change = secondary_button("Şifrəni Dəyiş")
+        change = secondary_button(tr("settings.change_password"))
         change.clicked.connect(self.password_change_requested)
         buttons_layout.addWidget(change)
 
@@ -602,7 +603,7 @@ class ProfileScreen(Screen):
                 "işçi bunu özü edə bilmir."
             )
         else:
-            self._face_chip.setText("Məlumat yoxdur")
+            self._face_chip.setText(tr("common.no_data"))
             self._face_chip.set_tone("neutral")
             self._face_note.setText("")
 

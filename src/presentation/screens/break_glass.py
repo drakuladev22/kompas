@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.domain.entities.break_glass import MIN_BREAK_GLASS_REASON_LENGTH
+from src.presentation.i18n import tr
 from src.presentation.screens.base import Screen, section_header
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import action_button, secondary_button
@@ -84,25 +85,25 @@ class BreakGlassScreen(Screen):
 
     _PENDING_COLUMNS: ClassVar[list[Column]] = [
         Column("İstəyən"),
-        Column("Səbəb"),
+        Column(tr("common.reason")),
         Column("Soruşulub", 150, mono=True),
         Column("Pəncərə bitir", 150, mono=True),
-        Column("Əməliyyat", 210),
+        Column(tr("common.action"), 210),
     ]
 
     _ACTIVE_COLUMNS: ClassVar[list[Column]] = [
-        Column("İşçi"),
+        Column(tr("common.employee")),
         Column("Təsdiq edən"),
         Column("Başladı", 150, mono=True),
         Column("Bitir", 150, mono=True),
-        Column("Əməliyyat", 130),
+        Column(tr("common.action"), 130),
     ]
 
     _TRUSTEE_COLUMNS: ClassVar[list[Column]] = [
         Column("Ehtiyat-admin"),
         Column("Təyin edən"),
         Column("Təyin tarixi", 160, mono=True),
-        Column("Əməliyyat", 130),
+        Column(tr("common.action"), 130),
     ]
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
@@ -116,7 +117,7 @@ class BreakGlassScreen(Screen):
         self._summary = muted_label("")
         toolbar_layout.addWidget(self._summary)
         toolbar_layout.addWidget(stretch())
-        refresh = secondary_button("Yenilə")
+        refresh = secondary_button(tr("common.refresh"))
         refresh.clicked.connect(self.refresh_requested)
         toolbar_layout.addWidget(refresh)
         self.add(toolbar)
@@ -366,10 +367,10 @@ class BreakGlassScreen(Screen):
         actions_layout.setContentsMargins(0, 0, 0, 0)
         actions_layout.setSpacing(8)
         key = row.get("id", "")
-        approve = action_button("Təsdiqlə")
+        approve = action_button(tr("common.approve"))
         approve.clicked.connect(lambda *_, k=key: self.approve_requested.emit(k))
         actions_layout.addWidget(approve)
-        reject = secondary_button("Rədd Et")
+        reject = secondary_button(tr("common.reject"))
         reject.setProperty("variant", "danger")
         reject.clicked.connect(lambda *_, k=key: self.reject_requested.emit(k))
         actions_layout.addWidget(reject)
@@ -405,7 +406,7 @@ class BreakGlassScreen(Screen):
             row.get("designated_at", ""),
         ]
         if row.get("revokable") == "1":
-            revoke = secondary_button("Ləğv Et")
+            revoke = secondary_button(tr("common.cancel"))
             revoke.setProperty("variant", "danger")
             key = row.get("employee_id", "")
             revoke.clicked.connect(lambda *_, k=key: self.trustee_revoke_requested.emit(k))
