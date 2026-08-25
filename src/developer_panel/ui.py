@@ -785,9 +785,7 @@ class DeveloperPanelWindow(QMainWindow):
         if not names:
             return "adlar boşdur — kanal axınında qalır"
 
-        rows_by_name = {
-            row.tenant_name.casefold(): row for row in self._rows if row.tenant_name
-        }
+        rows_by_name = {row.tenant_name.casefold(): row for row in self._rows if row.tenant_name}
         resolved: list[str] = []
         unknown: list[str] = []
         for name in names:

@@ -1,9 +1,9 @@
 """Deployment təhlükəsizliyi — `v2backlog.md` Faza 11.
 
-  11.1 — canary: `app_version_tenant_targets`-də sətri olan tenant KANALINI
-         deyil, HƏDƏFİ görür; sətir yoxdursa davranış DƏYİŞMİR.
-  11.2 — geri-qaytarma: eyni yol köhnə versiyanı da hədəfləyir; «normala
-         qaytar» hədəfi silir (çıxış qapısı).
+11.1 — canary: `app_version_tenant_targets`-də sətri olan tenant KANALINI
+       deyil, HƏDƏFİ görür; sətir yoxdursa davranış DƏYİŞMİR.
+11.2 — geri-qaytarma: eyni yol köhnə versiyanı da hədəfləyir; «normala
+       qaytar» hədəfi silir (çıxış qapısı).
 """
 
 from __future__ import annotations

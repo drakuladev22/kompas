@@ -168,7 +168,6 @@ class SupportRateLimitError(SupportMessageError):
         self.locked_until = locked_until
 
 
-
 class TicketNotFoundError(SupportMessageError):
     user_message = "Müraciət tapılmadı."
 

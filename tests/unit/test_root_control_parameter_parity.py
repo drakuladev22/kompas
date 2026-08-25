@@ -309,3 +309,77 @@ def test_the_hr_operations_expansion_added_its_root_parameters() -> None:
             f"{feature} üçün heç bir `{prefix}*` ROOT parametri yoxdur — "
             "funksiya tam hardcode qalıb."
         )
+
+
+def test_the_v2_backlog_expansion_added_its_root_parameters() -> None:
+    """`v2backlog.md`-nin «ROOT PARAMETRİ» işarəli hər dəyəri açar aldı (Faza 15).
+
+    BURADA PREFİKS DEYİL, DƏQİQ AD YOXLANILIR — yuxarıdakı iki testdən fərqli
+    olaraq. Səbəb sənədin özündədir: `v2backlog.md` hər funksiyanın yanında
+    parametri ADI İLƏ deyil, TƏRİFİ ilə yazır («keçmiş işçi data-saxlama
+    müddəti», «korrelyasiya-həddi»). Prefiks yoxlaması belə tərifi tutmazdı:
+    `BEHAVIOR_` prefiksi Faza 7-dən ƏVVƏL də mövcud idi (davranış anomaliyası),
+    yəni cüt-korrelyasiya heç yazılmasaydı da test YAŞIL qalardı. Dəqiq ad isə
+    məhz həmin sükutlu boşluğu bağlayır.
+
+    Siyahı BAĞLIDIR: yeni parametr bura YALNIZ `v2backlog.md`-nin bir bəndinə
+    cavab verdikdə əlavə olunur — əks halda test «bu genişlənmə tam köçürüldü»
+    sualından «neçə açar var» sualına sürüşərdi.
+    """
+    present = {key.value for key in SystemLimitKey}
+    for feature, keys in (
+        ("Faza 3.2 — keçmiş işçi data-saxlama müddəti", ("FORMER_EMPLOYEE_DATA_RETENTION_MONTHS",)),
+        ("Faza 3.5 — tövsiyə (referral) bonus-balı", ("EMPLOYEE_REFERRAL_BONUS_POINTS",)),
+        (
+            "Faza 4.2 — öz-düzəliş sorğusunun pəncərəsi və tavanı",
+            ("SELF_CORRECTION_REQUEST_WINDOW_DAYS", "SELF_CORRECTION_REQUEST_MAX_COUNT"),
+        ),
+        (
+            "Faza 5.1 — uzatılmış offline rejimin həddi",
+            (
+                "OFFLINE_BACKLOG_MAX_HOURS",
+                "OFFLINE_BACKLOG_MAX_ENTRIES",
+                "OFFLINE_BACKLOG_WARNING_COOLDOWN_HOURS",
+            ),
+        ),
+        (
+            "Faza 5.2 — kiosk/POS aparat-nasazlığı həddi",
+            (
+                "HEALTH_MEMORY_WARNING_PERCENT",
+                "HEALTH_MEMORY_CRITICAL_PERCENT",
+                "HEALTH_HARDWARE_ALERT_COOLDOWN_HOURS",
+            ),
+        ),
+        (
+            "Faza 5.3 — şift-handoff qeydi",
+            ("SHIFT_HANDOFF_NOTE_MAX_CHARS", "SHIFT_HANDOFF_VISIBILITY_HOURS"),
+        ),
+        (
+            "Faza 5.4 — break-glass fövqəladə giriş",
+            (
+                "BREAK_GLASS_MAX_DURATION_MINUTES",
+                "BREAK_GLASS_APPROVAL_WINDOW_MINUTES",
+                "BREAK_GLASS_MAX_GRANTS_PER_MONTH",
+            ),
+        ),
+        ("Faza 6.5 — iş-yükü ədalətliliyi həddi", ("WORKLOAD_FAIRNESS_MAX_GAP",)),
+        (
+            "Faza 7 — davranış-cütü korrelyasiya həddi",
+            (
+                "BEHAVIOR_PAIR_CORRELATION_THRESHOLD",
+                "BEHAVIOR_PAIR_MIN_SHARED_DAYS",
+                "BEHAVIOR_PAIR_SYNC_MINUTES",
+            ),
+        ),
+        ("Faza 8.1 — interfeys dili", ("UI_LANGUAGE",)),
+        (
+            "Faza 12.1 — dəstək-chat sui-istifadə qorunması",
+            ("SUPPORT_CHAT_MAX_MESSAGES_PER_MINUTE", "SUPPORT_CHAT_LOCKOUT_MINUTES"),
+        ),
+    ):
+        missing = sorted(key for key in keys if key not in present)
+        assert not missing, (
+            f"{feature}: `SystemLimitKey`-də olmayan açar(lar) {missing} — "
+            "`v2backlog.md` həmin dəyəri «ROOT PARAMETRİ» kimi işarələyib, "
+            "yəni o, kodda hardcode qala BİLMƏZ."
+        )

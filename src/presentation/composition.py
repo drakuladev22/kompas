@@ -3149,6 +3149,9 @@ class ApplicationContext:
             BulkEmployeeImportUseCase,
             StoreTemplateUseCase,
         )
+        from src.application.use_cases.campaign_periods import (  # noqa: PLC0415
+            CampaignPeriodsUseCase,
+        )
         from src.application.use_cases.catalog_management import (  # noqa: PLC0415
             ChecklistItemTemplateUseCase,
             FineTypeCatalogUseCase,
@@ -3299,6 +3302,7 @@ class ApplicationContext:
         from src.application.use_cases.user_management import (  # noqa: PLC0415
             UserManagementUseCase,
         )
+        from src.application.use_cases.whats_new import WhatsNewUseCase  # noqa: PLC0415
         from src.domain.exception_rules import ExceptionRuleRegistry  # noqa: PLC0415
         from src.infrastructure.backup.service import NightlyBackupService  # noqa: PLC0415
         from src.infrastructure.erp.one_c_connector import (  # noqa: PLC0415

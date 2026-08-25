@@ -4884,9 +4884,7 @@ class KompasApplication:
                 seen = True
             else:
                 with self._context.session(user_id=employee.id) as session:
-                    seen = session.uow.repository("preferences").kiosk_onboarding_done(
-                        employee.id
-                    )
+                    seen = session.uow.repository("preferences").kiosk_onboarding_done(employee.id)
         except Exception:
             _log.warning("KIOSK_ONBOARDING_READ_FAILED", exc_info=True)
             seen = True

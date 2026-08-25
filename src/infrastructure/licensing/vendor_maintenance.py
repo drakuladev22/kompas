@@ -214,9 +214,7 @@ def apply_tier_toggle_defaults(conn: Any, *, tenant_id: str, tier: str) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def find_version_id(
-    conn: Any, *, version_number: str, channel: str = "STABLE"
-) -> str | None:
+def find_version_id(conn: Any, *, version_number: str, channel: str = "STABLE") -> str | None:
     """Versiya nömrəsini `app_versions.id`-yə çevirir; yoxdursa `None`.
 
     Rollback UI-da operator VERSİYA NÖMRƏSİ yazır (`1.3.2`) — cədvəlin açarı

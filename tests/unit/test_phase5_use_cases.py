@@ -1068,6 +1068,28 @@ def test_unknown_language_is_refused() -> None:
     assert not limits.written
 
 
+def test_unknown_language_is_refused_through_the_generic_limit_row() -> None:
+    """Faza 15 auditi — ÜMUMİ limit siyahısı dil qapısını YAN KEÇƏ BİLMİR.
+
+    `UI_LANGUAGE` `SystemLimitKey`-dədir, yəni ROOT ekranının ümumi limit
+    cədvəlində sərbəst mətn sahəsi kimi də görünür. Yoxlama yalnız
+    `set_language`-də qalsaydı, Root eyni ekranda həmin sətrə «ru» yazmaqla
+    kataloqu boş olan dilə keçərdi — qadağa ekranın bir küncündə qüvvədə,
+    digərində isə söndürülmüş olardı.
+    """
+    limits = _Limits()
+    use_case = _root_use_case(limits=limits)
+
+    with pytest.raises(RootControlError):
+        use_case.set_limit(
+            tenant_id=TENANT,
+            actor=_employee(flags=("can_manage_system_limits",)),
+            key=SystemLimitKey.UI_LANGUAGE,
+            value="ru",
+        )
+    assert not limits.written
+
+
 def test_structural_module_needs_a_written_confirmation() -> None:
     toggles = _Toggles(structural=True)
     use_case = _root_use_case(toggles=toggles)

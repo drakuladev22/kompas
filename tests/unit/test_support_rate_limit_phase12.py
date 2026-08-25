@@ -108,9 +108,7 @@ def _chat(throttle: FakeSupportChatThrottle, tickets: _Tickets) -> SupportChatUs
 
 
 def test_locked_user_is_rejected_without_counting() -> None:
-    throttle = FakeSupportChatThrottle(
-        locked_until=NOW + timedelta(minutes=5)
-    )
+    throttle = FakeSupportChatThrottle(locked_until=NOW + timedelta(minutes=5))
     tickets = _Tickets()
     chat = _chat(throttle, tickets)
 

@@ -262,6 +262,22 @@ class RootControlUseCase:
                 user_message="Limit dəyəri boş ola bilməz.",
             )
 
+        # DİL KODU BURADA DA YOXLANILIR — `set_language` KİFAYƏT ETMİR.
+        #
+        # `UI_LANGUAGE` ROOT ekranında İKİ yerdən yazıla bilir: «Dil»
+        # kombinat qutusundan (`set_language`, kataloqu yoxlayır) və ÜMUMİ
+        # limit siyahısından (bu metod — açar `SystemLimitKey`-dədir, yəni
+        # siyahıda görünür və sərbəst mətn qəbul edir). İkinci yol
+        # yoxlamasız qalsaydı, Root eyni ekranda «ru» yazıb kataloqu boş olan
+        # dilə keçə bilərdi və tətbiq tərcüməsiz açarlarda qalardı —
+        # `set_language`-in şərhində yazılan qadağa məhz belə yan keçilərdi.
+        if key is SystemLimitKey.UI_LANGUAGE and cleaned not in AVAILABLE_UI_LANGUAGES:
+            raise RootControlError(
+                f"Naməlum dil kodu: {cleaned}",
+                user_message="Bu dil hazırda mövcud deyil.",
+                context={"language": cleaned},
+            )
+
         previous = self._limits.get_str(tenant_id, key.value, DEFAULT_LIMITS[key])
         self._limits.set_value(tenant_id, key.value, cleaned, changed_by=actor.id)
 
@@ -299,6 +315,11 @@ class RootControlUseCase:
         amma rus kataloqu boşdursa, tətbiq tərcüməsiz açarlarda qalardı —
         spesifikasiyanın «bu fazada rus dilini tərcümə etmə» sözünün kod
         qarşılığı məhz bu yoxlamadır.
+
+        Eyni yoxlama `set_limit`-də DƏ var və bu, təkrar deyil: həmin metod
+        ümumi limit siyahısından birbaşa çağırıla bilir, yəni bu qapı tək
+        başına dursaydı yan keçilərdi (CLAUDE.md §5-in «hər qayda İKİ yerdə»
+        prinsipi).
         """
         if language not in AVAILABLE_UI_LANGUAGES:
             raise RootControlError(
