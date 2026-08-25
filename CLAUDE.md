@@ -480,7 +480,7 @@ qalmır, qərara çevrilir.
 
 | Nə | Harada |
 |---|---|
-| İcazə flag kataloqu — **56 flag** (36 `schema.sql`-də: 34 spesifikasiyadan + `can_publish_fines`, `can_manage_drive_connection`; qalan 20 miqrasiyalarda: 021 +6, 038 +6, 047 +1, 056 +1, 063 +1 `can_manage_devices`, 068 +3 dəstək kanalları, 072 +1 `can_revoke_sessions`, 077 +1 `can_manage_roles`; **069 həmin üçünü MÖVCUD kirayəçilərə də verir** — flag əlavə edən miqrasiya `positions.tenant_id IS NULL` süzgəci İŞLƏTMƏMƏLİDİR) | `database/schema.sql` §22 + miqrasiyalar |
+| İcazə flag kataloqu — **58 flag** (36 `schema.sql`-də: 34 spesifikasiyadan + `can_publish_fines`, `can_manage_drive_connection`; qalan 20 miqrasiyalarda: 021 +6, 038 +6, 047 +1, 056 +1, 063 +1 `can_manage_devices`, 068 +3 dəstək kanalları, 072 +1 `can_revoke_sessions`, 077 +1 `can_manage_roles`, 093 +2 (`can_approve_transfer_request`, `can_manage_webhooks` — sonuncu ROOT_ONLY, çünki ixtiyari xarici URL-ə hadisə göndərir); **069 həmin üçünü MÖVCUD kirayəçilərə də verir** — flag əlavə edən miqrasiya `positions.tenant_id IS NULL` süzgəci İŞLƏTMƏMƏLİDİR) | `database/schema.sql` §22 + miqrasiyalar |
 | Miqrasiya icraçısı və reyestri | `scripts/apply_migrations.py`, `migrations/061` |
 | Özünə-host lisenziya sətri (SEC-023) | `migrations/065`, `tests/unit/test_license_bootstrap_privilege.py` |
 | Server-lövbərli vaxt + manipulyasiya aşkarlaması | `src/infrastructure/timekeeping/server_time.py`, `migrations/062` |

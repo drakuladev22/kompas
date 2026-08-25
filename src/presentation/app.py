@@ -2890,6 +2890,9 @@ class KompasApplication:
         from src.presentation.screens.bulk_operations import (  # noqa: PLC0415
             BulkOperationsScreen,
         )
+        from src.presentation.screens.checklist_templates import (  # noqa: PLC0415
+            ChecklistTemplateScreen,
+        )
         from src.presentation.screens.devices import (  # noqa: PLC0415
             DeviceAdminScreen,
         )
@@ -2911,6 +2914,9 @@ class KompasApplication:
         )
         from src.presentation.screens.sync_conflicts import (  # noqa: PLC0415
             SyncConflictScreen,
+        )
+        from src.presentation.screens.transfer_requests import (  # noqa: PLC0415
+            TransferRequestInboxScreen,
         )
 
         handlers: tuple[tuple[type[QWidget], Callable[[QWidget], None]], ...] = (
@@ -2963,6 +2969,15 @@ class KompasApplication:
             # növbəsi HƏM oxuyur, HƏM yazır və hər qərardan sonra siyahını
             # yenidən oxuyur (bax `controllers/annual_leave.py` başlığı).
             (AnnualLeaveInboxScreen, self._attach_annual_leave),
+            # `v2backlog.md` Faza 3.3 Filiallar-arası Köçürmə — HR_Admin təsdiq
+            # növbəsi `annual_leave` İLƏ EYNİ NAXIŞDIR: HƏM oxuyur, HƏM yazır
+            # (bax `controllers/transfer_requests.py` başlığı).
+            (TransferRequestInboxScreen, self._attach_transfer_requests),
+            # `v2backlog.md` Faza 3.4 + 4.1 Checklist Şablonları — dördüncü
+            # kataloq, `catalog_admin.py` ilə EYNİ "HƏM oxuyur, HƏM yazır"
+            # naxışı, LAKİN AYRI kontroller (`CatalogScreen`-ə SIĞMAYAN altı
+            # sahə, bax `screens/checklist_templates.py` başlığı).
+            (ChecklistTemplateScreen, self._attach_checklist_templates),
             # #21 İşdən Çıxma Riski (kompasos11.md Faza 9) — TAMAMİLƏ oxu
             # ekranıdır, lakin baxış audit-ləndiyi üçün ÖZ kontrolleri var
             # (bax `controllers/attrition_risk.py` başlığı).
@@ -3323,6 +3338,47 @@ class KompasApplication:
         if not isinstance(screen, AnnualLeaveInboxScreen):  # pragma: no cover - tip qoruyucusu
             return
         AnnualLeaveInboxController(self._context, self._current_employee).attach(screen)
+
+    def _attach_transfer_requests(self, screen: QWidget) -> None:
+        """«Köçürmə Sorğuları» ekranını `TransferRequestUseCase`-ə bağlayır (Faza 3.3).
+
+        `_attach_annual_leave` İLƏ EYNİ NAXIŞ — ekran `can_approve_transfer_
+        request` ilə qapılıdır (menyu maddəsi), FAKTİKİ qapı isə use case-dədir
+        (`pending_inbox` → `_require_approver`); menyunun görünməsi əməliyyat
+        icazəsi DEYİL (bax `menu.py` başlığı).
+        """
+        from src.presentation.controllers.transfer_requests import (  # noqa: PLC0415
+            TransferRequestInboxController,
+        )
+        from src.presentation.screens.transfer_requests import (  # noqa: PLC0415
+            TransferRequestInboxScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, TransferRequestInboxScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        TransferRequestInboxController(self._context, self._current_employee).attach(screen)
+
+    def _attach_checklist_templates(self, screen: QWidget) -> None:
+        """Checklist Şablonları ekranını `ChecklistItemTemplateUseCase`-ə bağlayır (Faza 3.4+4.1).
+
+        `_attach_annual_leave` İLƏ EYNİ NAXIŞ — ekran `can_manage_employees`
+        ilə qapılıdır (menyu maddəsi), FAKTİKİ qapı `list_for_management`
+        → `CHECKLIST_TEMPLATES_FLAG` yoxlamasındadır.
+        """
+        from src.presentation.controllers.checklist_templates import (  # noqa: PLC0415
+            ChecklistTemplateController,
+        )
+        from src.presentation.screens.checklist_templates import (  # noqa: PLC0415
+            ChecklistTemplateScreen,
+        )
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, ChecklistTemplateScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        ChecklistTemplateController(self._context, self._current_employee).attach(screen)
 
     def _attach_support_inbox(self, screen: QWidget) -> None:
         """Dəstək gələnlər qutusunu `SupportInboxUseCase`-ə bağlayır (CHAT-1).
@@ -4032,6 +4088,9 @@ class KompasApplication:
         from src.presentation.screens.bulk_operations import (  # noqa: PLC0415
             BulkOperationsScreen,
         )
+        from src.presentation.screens.checklist_templates import (  # noqa: PLC0415
+            ChecklistTemplateScreen,
+        )
         from src.presentation.screens.devices import DeviceAdminScreen  # noqa: PLC0415
         from src.presentation.screens.face_control import (  # noqa: PLC0415
             FaceEnrollmentScreen,
@@ -4051,6 +4110,9 @@ class KompasApplication:
         )
         from src.presentation.screens.sync_conflicts import (  # noqa: PLC0415
             SyncConflictScreen,
+        )
+        from src.presentation.screens.transfer_requests import (  # noqa: PLC0415
+            TransferRequestInboxScreen,
         )
 
         theme = self._theme
@@ -4172,6 +4234,8 @@ class KompasApplication:
             # HƏM yazır — ona görə öz kontrolleri var (`_attach_devices`).
             "devices": lambda: DeviceAdminScreen(theme),
             "annual_leave": lambda: AnnualLeaveInboxScreen(theme),
+            "transfer_requests": lambda: TransferRequestInboxScreen(theme),
+            "checklist_templates": lambda: ChecklistTemplateScreen(theme),
             # CHAT-1: İKİ AÇAR, BİR SİNİF — fərq yalnız `channel` arqumentidir
             # (bax `screens/support_inbox.py` başlığı). `_attach_write_
             # controller` ikisini `isinstance` ilə ayırd edə bilmir, ona görə
@@ -4245,6 +4309,10 @@ class KompasApplication:
             "sync_conflicts": "Offline rejimin izi · hər iki versiya saxlanılır",
             "devices": "Təsdiqlənmiş cihaz lisenziya yeri tutur",
             "annual_leave": "İllik haqq · gündaxili icazədən AYRI mexanizm",
+            "transfer_requests": "Filial dəyişikliyi daimi · HR_Admin təsdiqi tələb edir",
+            "checklist_templates": (
+                "İki dəst (offboarding/sahə hesabatı) · kateqoriya owner_type-a bağlıdır"
+            ),
             "internal_requests": "Şirkətin öz növbəsi · Telegram-a GETMİR",
             "technical_support": "Hazırlayıcıya gedir · Telegram sinxronlaşdırılır",
             "face_enrollment": "Nəzarətli proses · foto saxlanmır, yalnız riyazi təmsil",
@@ -4902,6 +4970,16 @@ class KompasApplication:
 
             EmployeeAnnualLeaveController(self._context, employee).attach(home)
 
+            # `v2backlog.md` Faza 3.3 — "Filiallar-arası Köçürmə" kartının ÖZ
+            # kontrolleri var: `annual_leave` İLƏ EYNİ ƏSASLANDIRMA (yuxarı
+            # bax) — kart həm oxuyur (cari sorğu statusu), həm yazır (sorğu/
+            # geri çəkmə) və `KioskController`-in GÜNÜN AXINI ilə əlaqəsi yoxdur.
+            from src.presentation.controllers.transfer_requests import (  # noqa: PLC0415
+                EmployeeTransferController,
+            )
+
+            EmployeeTransferController(self._context, employee).attach(home)
+
         # ──────────────────────────────────────────────────────────────────
         # «GÖZLƏNİLİR» VƏZİYYƏTİ ÖZÜ YENİLƏNİR (DEEP-GAP UX-2)
         # ──────────────────────────────────────────────────────────────────
@@ -5154,6 +5232,9 @@ class KompasApplication:
             # sözlüyün iki yerdə təkrarı məhz `menu.py` başlığındakı tarixi
             # qüsurun (ad məkanı sürüşməsi) yaranma yoludur.
             home.set_annual_leave_balance(dict(preview_data.ANNUAL_LEAVE_BALANCE))
+            # Faza 3.3 — `annual_leave` İLƏ EYNİ qərar: sözlük ƏL İLƏ yazılmır,
+            # `preview_data`-dan gəlir (CLAUDE.md §6).
+            home.set_transfer_request(dict(preview_data.TRANSFER_REQUEST_STATUS))
             home.logout_requested.connect(lambda: kiosk.set_content(pin_pad))
             kiosk.set_content(home)
 

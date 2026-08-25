@@ -997,6 +997,20 @@ class SystemLimitKey(str, Enum):
     FINE_APPEAL_ESCALATION_DAYS = "FINE_APPEAL_ESCALATION_DAYS"
     #: HR-2 — cərimə nəşr gözləməkdə neçə gün qala bilər.
     FINE_REVIEW_OVERDUE_DAYS = "FINE_REVIEW_OVERDUE_DAYS"
+    # --- HR Lifecycle v2 (`v2backlog.md` Faza 3.2/3.5) ---
+    #
+    # Faza 3.2 — keçmiş (DEAKTİV) işçinin PII sahələrinin (ad, telefon və s.)
+    # neçə AY sonra anonimləşdiriləcəyi. `audit_logs` bu həddən İSTİSNADIR
+    # (migrations/088 başlığı — hüquqi tələb ola bilər). Gecəlik cron bu
+    # müddəti keçmiş, hələ anonimləşdirilməmiş sətirləri tapır
+    # (`employees.data_anonymized_at IS NULL`).
+    FORMER_EMPLOYEE_DATA_RETENTION_MONTHS = "FORMER_EMPLOYEE_DATA_RETENTION_MONTHS"
+    #: Faza 3.5 — yeni işçi `referred_by_employee_id` ilə yaradılanda tövsiyə
+    #: edən işçiyə yazılan bonus-xal sayı (mövcud `points_ledger`,
+    #: `SalesPointsUseCase.award_referral_bonus`). `0` = bonus SÖNDÜRÜLÜB —
+    #: sahə yenə doldurulur (kim tövsiyə etdiyi tarixi fakt kimi qalır),
+    #: yalnız xal YAZILMIR.
+    EMPLOYEE_REFERRAL_BONUS_POINTS = "EMPLOYEE_REFERRAL_BONUS_POINTS"
 
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
@@ -1632,6 +1646,16 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # görünməsin. Root bunu "0"-a endirərsə sayğac YALNIZ fiziki iş günlərini
     # göstərər (ekran etiketi bundan asılı deyil — həmişə "🟣 Məzuniyyətdə").
     SystemLimitKey.ANNUAL_LEAVE_COUNTS_AS_WORKED_DAY: "1",
+    # HR Lifecycle v2 (Faza 3.2) — 24 ay. `v2backlog.md`-nin özü konkret ay
+    # sayı vermir; 2 il HR sənədləşdirmə/əmək mübahisəsi müddətlərində (əmək
+    # kodeksi iddia müddətləri) tipik minimum kimi qəbul edilib. Root
+    # sahədən sahəyə (yurisdiksiyadan asılı) fərqli müddət tələb edə bilər.
+    SystemLimitKey.FORMER_EMPLOYEE_DATA_RETENTION_MONTHS: "24",
+    # HR Lifecycle v2 (Faza 3.5) — 50 xal. Konkret ədəd spesifikasiyada
+    # verilmir; `SalesPointsUseCase`-in orta bir satışdan qazandırdığı xal
+    # dərəcəsi ilə eyni miqyasda (`SALES_POINTS_CURRENCY_PER_POINT`) başlanğıc
+    # nöqtəsi kimi seçilib — Root öz kampaniyasına görə dəyişdirir.
+    SystemLimitKey.EMPLOYEE_REFERRAL_BONUS_POINTS: "50",
 }
 
 

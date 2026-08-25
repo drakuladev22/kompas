@@ -90,6 +90,7 @@ if TYPE_CHECKING:
         StoreTemplateUseCase,
     )
     from src.application.use_cases.catalog_management import (
+        ChecklistItemTemplateUseCase,
         FineTypeCatalogUseCase,
         LeaveTypeCatalogUseCase,
         WorkModeCatalogUseCase,
@@ -100,6 +101,7 @@ if TYPE_CHECKING:
     from src.application.use_cases.device_registry import DeviceRegistryUseCase
     from src.application.use_cases.employee_documents import EmployeeDocumentUseCase
     from src.application.use_cases.employee_profile import EmployeeProfileAccessUseCase
+    from src.application.use_cases.employee_transfer import TransferRequestUseCase
     from src.application.use_cases.erp_connection import ErpConnectionWizardUseCase
     from src.application.use_cases.exception_engine import ExceptionEngineUseCase
     from src.application.use_cases.executive_digest import ExecutiveDigestUseCase
@@ -122,6 +124,9 @@ if TYPE_CHECKING:
     from src.application.use_cases.leave_verification import LeaveVerificationUseCase
     from src.application.use_cases.morning_check_in import MorningCheckInUseCase
     from src.application.use_cases.multi_store_benchmark import MultiStoreBenchmarkUseCase
+    from src.application.use_cases.offboarding_checklist import (
+        EmployeeOffboardingChecklistUseCase,
+    )
     from src.application.use_cases.open_shift_market import OpenShiftMarketUseCase
     from src.application.use_cases.overtime_tracking import OvertimeTrackingUseCase
     from src.application.use_cases.performance_reviews import PerformanceReviewUseCase
@@ -889,6 +894,23 @@ class Session:
     # _on_close_sessions` (uzaqdan ləğv) buradan keçir. `AuthSessionRepository`
     # portu domen tipi (`AuthSession`) qaytardığı üçün `ports.py`-dadır.
     sessions: SessionManagementUseCase
+
+    # --- `v2backlog.md` Faza 3.3/3.4 — HR lifecycle (köçürmə + offboarding) - #
+    #
+    # Filiallar-arası daimi köçürmə sorğusu (`ShiftSwapUseCase` ilə EYNİ
+    # forma) VƏ struktur offboarding checklist-i — EKRANLARI HƏLƏ YOXDUR
+    # (ayrıca tapşırılacaq), bura yalnız obyekt qrafı qurulub ki, gələcək
+    # kontroller onları `Session`-dan bir addımda ala bilsin.
+    #
+    # `offboarding_checklists`: `checklist_templates` İLƏ EYNİ repo-nu
+    # (`checklist_item_templates`) PAYLAŞIR, ad məkanı `owner_type`/
+    # `owner_key` ilə ayrılır (bax `catalog_management.py` başlığı).
+    # `start_checklist()` HƏLƏLİK `users.deactivate_employee()`-dən
+    # ÇAĞIRILMIR — `UserManagementUseCase`-də bu portu qəbul edən açar söz
+    # yoxdur (bax `_build_session`-dəki qurulma yerinin şərhi).
+    transfer_requests: TransferRequestUseCase
+    checklist_templates: ChecklistItemTemplateUseCase
+    offboarding_checklists: EmployeeOffboardingChecklistUseCase
 
     def commit(self) -> None:
         self.uow.commit()
@@ -2112,6 +2134,44 @@ class ApplicationContext:
                 JobCadence.DAILY,
                 JobWeight.LIGHT,
             ),
+            # `v2backlog.md` Faza 3.1/3.2/3.3 — HR lifecycle-in ÜÇ gecəlik işi.
+            # Use case metodları YAZILIB, testlidir və `Session`-a qoşulub
+            # (bax `_build_session`), lakin BU siyahıya salınmamışdı — yəni
+            # `EXCEPTION_ENGINE_RUN`/DEEP-GAP OP-1 ilə EYNİ boşluq növü
+            # (yazılıb, çağıran yoxdur). `DAILY`+`LIGHT`: hər üçü GÜN vahidli
+            # tarix müqayisəsi + tapılan sətir qədər UPDATE-dir, xarici
+            # proses yoxdur (`STAFFING_PATTERN_REFRESH` ilə eyni çəki qərarı).
+            (
+                "TRANSFER_REQUEST_SCHEDULED_APPLY",
+                self._job_scheduled_transfers,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
+            # QAPI SINIĞI (composition-un ÖZÜNÜN sənədləşdirdiyi boşluq) —
+            # bu iki iş HAZIRDA 0 QAYTARIR: `UserManagementUseCase.
+            # deactivate_scheduled_employees`/`anonymize_former_employees`
+            # `scheduled_deactivation_reader`/`retention_candidate_reader`
+            # portlarını oxuyur (bax aşağıdakı `users = UserManagementUseCase
+            # (...)` çağırışı), LAKİN infra bu İKİ Protocol-u (`ports.py`-dakı
+            # `ScheduledDeactivationCandidateReader`/`RetentionAnonymization
+            # CandidateReader`) HƏLƏ HEÇ BİR repo-da İMPLEMENTASİYA ETMƏYİB —
+            # `PostgresEmployeeRepository`-də `list_due_for_scheduled_
+            # deactivation`/`list_pending_anonymization` metodları YOXDUR.
+            # Qeydiyyat qəsdən BURADADIR: adapter gələndə YALNIZ
+            # `composition.py`-da port bağlanmalı olsun, job artıq yerindədir
+            # və o an SÜKUTLA "ölü" qalmayacaq.
+            (
+                "EMPLOYEE_SCHEDULED_DEACTIVATION_RUN",
+                self._job_scheduled_employee_deactivation,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
+            (
+                "FORMER_EMPLOYEE_ANONYMIZATION_RUN",
+                self._job_former_employee_anonymization,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
             ("NIGHTLY_BACKUP", self._job_nightly_backup, JobCadence.DAILY, JobWeight.HEAVY),
         ):
             runner.register(ScheduledJob(key=key, handler=handler, cadence=cadence, weight=weight))
@@ -2502,6 +2562,35 @@ class ApplicationContext:
             session.commit()
         return f"{expired} vaxt düzəlişi təsdiqsiz ləğv olundu"
 
+    def _job_scheduled_transfers(self, context: Any) -> str:
+        """`v2backlog.md` Faza 3.3 — planlaşdırılmış filiallar-arası köçürmələri tətbiq edir."""
+        with self.session() as session:
+            applied = session.transfer_requests.apply_scheduled_transfers(context.tenant_id)
+            session.commit()
+        return f"{applied} köçürmə tətbiq edildi"
+
+    def _job_scheduled_employee_deactivation(self, context: Any) -> str:
+        """`v2backlog.md` Faza 3.1 — planlaşdırılmış tarixi çatan işçiləri deaktiv edir.
+
+        `_register_scheduled_jobs`-dakı QAPI SINIĞI qeydinə bax: oxuyucu
+        portu hələ bağlanmayıb, ona görə bu iş HAZIRDA HƏMİŞƏ 0 qaytarır.
+        """
+        with self.session() as session:
+            deactivated = session.users.deactivate_scheduled_employees(context.tenant_id)
+            session.commit()
+        return f"{deactivated} işçi planlaşdırılmış tarixlə deaktiv edildi"
+
+    def _job_former_employee_anonymization(self, context: Any) -> str:
+        """`v2backlog.md` Faza 3.2 — retensiya müddəti keçmiş keçmiş işçiləri anonimləşdirir.
+
+        `_register_scheduled_jobs`-dakı QAPI SINIĞI qeydinə bax: oxuyucu
+        portu hələ bağlanmayıb, ona görə bu iş HAZIRDA HƏMİŞƏ 0 qaytarır.
+        """
+        with self.session() as session:
+            anonymized = session.users.anonymize_former_employees(context.tenant_id)
+            session.commit()
+        return f"{anonymized} keçmiş işçi anonimləşdirildi"
+
     def _job_executive_digest(self, context: Any) -> str:
         """#30 — planlaşdırılmış icra xülasəsi (bax `_register_scheduled_jobs`).
 
@@ -2745,6 +2834,7 @@ class ApplicationContext:
             StoreTemplateUseCase,
         )
         from src.application.use_cases.catalog_management import (  # noqa: PLC0415
+            ChecklistItemTemplateUseCase,
             FineTypeCatalogUseCase,
             LeaveTypeCatalogUseCase,
             WorkModeCatalogUseCase,
@@ -2772,6 +2862,9 @@ class ApplicationContext:
         )
         from src.application.use_cases.employee_profile import (  # noqa: PLC0415
             EmployeeProfileAccessUseCase,
+        )
+        from src.application.use_cases.employee_transfer import (  # noqa: PLC0415
+            TransferRequestUseCase,
         )
         from src.application.use_cases.erp_connection import (  # noqa: PLC0415
             ErpConnectionWizardUseCase,
@@ -2822,6 +2915,9 @@ class ApplicationContext:
         )
         from src.application.use_cases.multi_store_benchmark import (  # noqa: PLC0415
             MultiStoreBenchmarkUseCase,
+        )
+        from src.application.use_cases.offboarding_checklist import (  # noqa: PLC0415
+            EmployeeOffboardingChecklistUseCase,
         )
         from src.application.use_cases.open_shift_market import (  # noqa: PLC0415
             OpenShiftMarketUseCase,
@@ -2943,6 +3039,20 @@ class ApplicationContext:
         # heç vaxt ödəmir. Kitabxana yüklənə bilmirsə proxy-nin arxasında
         # `UnavailableFaceEngine` durur və axın eskalasiyaya düşür — bənd 5.
         face_engine = _LazyFaceEngine(self.face_engine)
+        # #17 İşçi Sənədləri (Faza 7) — BURAYA (əvvəllər `Session(...)` çağırışının
+        # içində, aşağıda `employee_documents=` açarında idi) köçürüldü ki, EYNİ
+        # instansiya `FaceEnrollmentUseCase`-ə `consent_documents` portu kimi
+        # ötürülə bilsin (Faza 3.6). `BiometricConsentRecorder` Protocol-unu
+        # `EmployeeDocumentUseCase.create_document` strukturla ÖDƏYİR — ayrı
+        # adapter/repo lazım deyil (bax `face_control.py`-dakı Protocol başlığı).
+        employee_documents = EmployeeDocumentUseCase(
+            documents=repo("employee_documents"),
+            employees=repo("employees"),
+            limits=repo("limits"),
+            audit=audit,
+            clock=clock,
+            notifier=notifier,
+        )
         # İKİ YERDƏ LAZIMDIR (`users` ilə eyni naxış): həm `Session.face_
         # enrollment` sahəsi, həm də `FaceReEnrollmentUseCase` onu ALIR —
         # yenidən-qeydiyyat kadr çəkilişi/keyfiyyət süzgəci/orta vektor
@@ -2961,6 +3071,13 @@ class ApplicationContext:
             # yolu (İlk Quraşdırma Sihirbazı) işlədir — bax
             # `FaceEnrollmentUseCase.enroll_first_account`.
             admins=repo("employees"),
+            # Faza 3.6 — razılıq sənədinin arxivi (yuxarıdakı `employee_
+            # documents` instansiyası, `BiometricConsentRecorder` kimi).
+            # BAĞLANMAMIŞDAN ƏVVƏL: `capture_and_store` razılıq sənədini
+            # SÜKUTLA YAZMIRDI (yalnız üz vektorunun ÖZÜ saxlanılırdı) — audit
+            # jurnalında "razılıq soruşuldu, sənəd yaradılmadı" ilə "sənəd
+            # arxivi HEÇ QURULMAYIB" halları eyni görünürdü.
+            consent_documents=employee_documents,
         )
 
         # 1C REPO-LARI `uow.repository`-DƏ DEYİL — bu, qəsdəndir: onlar
@@ -3122,6 +3239,42 @@ class ApplicationContext:
         # nüsxə qursaydıq, eyni Dual-Control deadlock qoruyucusu İKİ AYRI
         # obyektdə yaşayardı (`sales_points`/`overtime_tracking` ilə eyni
         # əsaslandırma).
+        # `v2backlog.md` Faza 3.3 — filiallar-arası daimi köçürmə sorğusu.
+        # `ShiftSwapUseCase` ilə EYNİ FORMA (sorğu → HR_Admin təsdiqi), lakin
+        # AYRI use case: `employees.store_id`-ni DƏYİŞDİRİR, növbə matrisinə
+        # TOXUNMUR (bax `employee_transfer.py` modul başlığı).
+        transfer_requests = TransferRequestUseCase(
+            transfers=repo("employee_transfer_requests"),
+            employees=uow.employees,
+            audit=audit,
+            clock=clock,
+            notifier=notifier,
+            # `limits`: tarixçə səhifə ölçüsü — `SHIFT_SWAP_HISTORY_PAGE_SIZE`
+            # bölüşülür, `employee_transfer.py` YENİ açar YARATMIR (bax
+            # `_history_page_size`).
+            limits=repo("limits"),
+        )
+
+        # `v2backlog.md` Faza 3.4 — struktur offboarding checklist. HƏR İKİSİ
+        # EYNİ `checklist_item_templates` repo-suna gedir — ad məkanı
+        # `owner_type`/`owner_key` ilə ayrılır, TƏK cədvəl İKİ domenin
+        # infrastrukturudur (bax `catalog_management.py` başlığı, migrations/088).
+        # YUXARIDA QURULUR (`users`-dən ƏVVƏL) — `offboarding_checklists`
+        # aşağıda `UserManagementUseCase`-in `OffboardingChecklistStarter`
+        # portuna EYNİ instansiya kimi ötürülür (bax orada).
+        checklist_templates = ChecklistItemTemplateUseCase(
+            repository=repo("checklist_item_templates"),
+            audit=audit,
+            clock=clock,
+        )
+        offboarding_checklists = EmployeeOffboardingChecklistUseCase(
+            checklists=repo("employee_offboarding_checklists"),
+            templates=repo("checklist_item_templates"),
+            audit=audit,
+            clock=clock,
+            notifier=notifier,
+        )
+
         users = UserManagementUseCase(
             employees=uow.employees,
             credentials=uow.employees,
@@ -3161,6 +3314,36 @@ class ApplicationContext:
             # admin qərar verməzdən ƏVVƏL siyahını görür, sistem isə qərarı
             # BLOKLAMIR (bax `OffboardingReview` başlığı).
             offboarding_signals=repo("offboarding_signals"),
+            # Faza 3.2 — retensiya müddətinin (`FORMER_EMPLOYEE_DATA_
+            # RETENTION_MONTHS`) mənbəyi. BAĞLANMASAYDI `_retention_months()`
+            # SÜKUTLA `DEFAULT_LIMITS`-ə düşürdü — Root bu müddəti dəyişsə
+            # belə, `anonymize_former_employees` HƏMİŞƏ defolt dəyərlə
+            # işləyərdi.
+            limits=repo("limits"),
+            # Faza 3.5 — `SalesPointsUseCase.award_referral_bonus` `Referral
+            # BonusAwarder`-i strukturla ÖDƏYİR (ayrı adapter LAZIM DEYİL).
+            # `sales_points` YUXARIDA yerli dəyişən kimi qurulub. BAĞLANMASAYDI
+            # `create_employee` `referred_by_employee_id`-ni YENƏ YAZARDI,
+            # LAKİN bonus SÜKUTLA verilməzdi — tövsiyə tarixi qeydə düşür,
+            # mükafat isə itir, ikisi arasındakı uyğunsuzluq görünməz qalardı.
+            referral_bonus=sales_points,
+            # Faza 3.4 — YUXARIDA qurulan `offboarding_checklists` İLƏ EYNİ
+            # instansiya (`OffboardingChecklistStarter`-i `start_checklist()`
+            # strukturla ödəyir). BAĞLANMASAYDI `deactivate_employee`/
+            # `deactivate_scheduled_employees` checklist-i SÜKUTLA
+            # BAŞLATMAZDI — işçi deaktiv olunardı, avadanlıq-qaytarma/son-
+            # hesablaşma bəndləri isə heç vaxt yaranmazdı.
+            offboarding_checklists=offboarding_checklists,
+            # Faza 3.1/3.2 — `infra` hər iki oxucunu MÖVCUD `Postgres
+            # EmployeeRepository`-yə əlavə etdi (yeni sinif/repo açarı YOX,
+            # `employees` strukturla ÖDƏYİR: `list_due_for_scheduled_
+            # deactivation`/`list_pending_anonymization`). BAĞLANMAMIŞDAN
+            # ƏVVƏL: `deactivate_scheduled_employees`/`anonymize_former_
+            # employees` HƏR GECƏ CRON-dan (`_register_scheduled_jobs`)
+            # çağırılırdı, LAKİN `None` oxuyucu ilə HƏMİŞƏ 0 qaytarırdı —
+            # çökmürdü, sadəcə heç nə etmirdi.
+            scheduled_deactivation_reader=repo("employees"),
+            retention_candidate_reader=repo("employees"),
         )
 
         def _bulk_create_employee_row(
@@ -3516,6 +3699,12 @@ class ApplicationContext:
             # `users` YUXARIDA yerli dəyişən kimi qurulub — bax orada
             # ("İKİ yerdə lazımdır", toplu CSV idxalı ilə paylaşılır).
             users=users,
+            # `transfer_requests`/`checklist_templates`/`offboarding_
+            # checklists` YUXARIDA yerli dəyişən kimi qurulub (Faza 3.3/3.4,
+            # bax orada) — üçü də `users`-dən HƏMİN blokun içindəcə qurulur.
+            transfer_requests=transfer_requests,
+            checklist_templates=checklist_templates,
+            offboarding_checklists=offboarding_checklists,
             permission_guard=PermissionHierarchyGuardUseCase(
                 audit=audit,
                 clock=clock,
@@ -3730,14 +3919,9 @@ class ApplicationContext:
             # #17 İşçi Sənədləri (Faza 7) — audit EYNİ tranzaksiyada.
             # `notify_expiring_documents` gecəlik iş üçün ELƏCƏ DƏ əlçatandır
             # (`behavior_baselines`/`overtime` ilə eyni naxış, yuxarı bax).
-            employee_documents=EmployeeDocumentUseCase(
-                documents=repo("employee_documents"),
-                employees=repo("employees"),
-                limits=repo("limits"),
-                audit=audit,
-                clock=clock,
-                notifier=notifier,
-            ),
+            # İnstansiya YUXARIDA, `face_enrollment`-dən ƏVVƏL qurulub (bax
+            # həmin bloku) — EYNİ obyekt `consent_documents` portuna da gedir.
+            employee_documents=employee_documents,
             # #19 Elan (Broadcast, Faza 8) — `Notifier` QƏSDƏN ÖTÜRÜLMÜR (bax
             # use case başlığı: çatdırılma store-scoping sorğusu ÜZƏRİNDƏN
             # gedir, `notifications` cədvəlinin mağaza süzgəci yoxdur).

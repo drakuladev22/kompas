@@ -40,10 +40,12 @@ from __future__ import annotations
 
 from dataclasses import InitVar, dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Final
 
 from src.domain.policies import DEFAULT_LIMITS, BreakKind, SystemLimitKey
 from src.domain.value_objects.identifiers import (
+    ChecklistItemTemplateId,
     FineTypeId,
     LeaveTypeId,
     TenantId,
@@ -278,12 +280,133 @@ def active_only(entries: list[CatalogEntry]) -> list[CatalogEntry]:
     return [entry for entry in entries if entry.selectable]
 
 
+#: `checklist_item_templates.owner_key` — DB `CHECK (char_length(trim(owner_key)) >= 2)`.
+MIN_OWNER_KEY_LENGTH: Final[int] = 2
+#: `checklist_item_templates.item_text` — DB `CHECK (char_length(trim(item_text)) >= 3)`.
+MIN_TEMPLATE_ITEM_TEXT_LENGTH: Final[int] = 3
+
+
+class ChecklistOwnerType(str, Enum):
+    """`checklist_item_templates.owner_type` — DB `CHECK` ilə EYNİ (migrations/088)."""
+
+    FIELD_REPORT = "FIELD_REPORT"
+    OFFBOARDING = "OFFBOARDING"
+
+
+#: `owner_key` sentinel-i — offboarding-in TƏK kataloqu var, `field_report_
+#: types.code` kimi çoxsaylı alt-kataloqu YOXDUR (migrations/088 başlığı).
+OFFBOARDING_OWNER_KEY: Final[str] = "OFFBOARDING"
+
+
+class ChecklistItemCategory(str, Enum):
+    """`employee_offboarding_checklist_items.category` — DB `CHECK` ilə EYNİ (migrations/088).
+
+    `checklist_item_templates.category` (migrations/094) EYNİ üç dəyəri
+    daşıyır, LAKİN YALNIZ `owner_type = OFFBOARDING` üçün — `owner_type =
+    FIELD_REPORT` sətirlərdə bu sütun MÜTLƏQ `None`-dır, çünki gündəlik
+    açılış/bağlanış checklist-inin (Faza 4.1) kateqoriya konsepti yoxdur
+    (bax `ChecklistItemTemplate.__post_init__` və `migrations/094` başlığı —
+    CLAUDE.md §5: hər qayda İKİ yerdə, DB `CHECK`-i
+    `chk_checklist_template_category_by_owner`).
+    """
+
+    EQUIPMENT = "EQUIPMENT"
+    SETTLEMENT = "SETTLEMENT"
+    EXIT_INTERVIEW = "EXIT_INTERVIEW"
+
+
+@dataclass(frozen=True)
+class ChecklistItemTemplate:
+    """Root-un ƏVVƏLCƏDƏN təyin etdiyi checklist bənd mətni (Faza 3.4 + 4.1).
+
+    `CatalogEntry`-dən MİRAS ALMIR: struktur fərqlidir (`name` yox, `item_text`
+    + `owner_type`/`owner_key`/`position_no` composite unikallığı) — məcburi
+    miras süni uyğunlaşdırma tələb edərdi (`name` sahəsini `item_text`-ə
+    güzgü etmək kimi), halbuki iki modelin YALNIZ "aktiv/deaktiv" konsepsiyası
+    ortaqdır.
+    """
+
+    template_id: ChecklistItemTemplateId | None
+    tenant_id: TenantId
+    owner_type: ChecklistOwnerType
+    owner_key: str
+    position_no: int
+    item_text: str
+    is_blocking: bool = False
+    photo_required: bool = False
+    is_active: bool = True
+    deactivated_at: datetime | None = None
+    #: YALNIZ `owner_type=OFFBOARDING` üçün doludur, `FIELD_REPORT` üçün
+    #: MÜTLƏQ `None`dır — `__post_init__` bunu MƏCBUR edir (bax aşağı).
+    category: ChecklistItemCategory | None = None
+
+    def __post_init__(self) -> None:
+        # CLAUDE.md §5 — bu qayda İKİNCİ yerdə də var: DB `CHECK
+        # chk_checklist_template_category_by_owner` (migrations/094).
+        # Birini dəyişəndə DİGƏRİ də dəyişməlidir.
+        if self.owner_type is ChecklistOwnerType.OFFBOARDING and self.category is None:
+            raise InvalidCatalogEntryError(
+                "OFFBOARDING şablonu üçün kateqoriya MƏCBURİDİR "
+                "(EQUIPMENT/SETTLEMENT/EXIT_INTERVIEW)",
+                user_message="Kateqoriya seçilməlidir.",
+            )
+        if self.owner_type is ChecklistOwnerType.FIELD_REPORT and self.category is not None:
+            raise InvalidCatalogEntryError(
+                "FIELD_REPORT şablonunda kateqoriya konsepti yoxdur — sahə boş qalmalıdır",
+                user_message="Bu şablon növü üçün kateqoriya seçilə bilməz.",
+            )
+
+        cleaned_key = self.owner_key.strip()
+        if len(cleaned_key) < MIN_OWNER_KEY_LENGTH:
+            raise InvalidCatalogEntryError(
+                f"`owner_key` minimum {MIN_OWNER_KEY_LENGTH} simvol olmalıdır",
+                user_message="Kataloq açarı çox qısadır.",
+            )
+        object.__setattr__(self, "owner_key", cleaned_key)
+
+        cleaned_text = " ".join(self.item_text.split())
+        if len(cleaned_text) < MIN_TEMPLATE_ITEM_TEXT_LENGTH:
+            raise InvalidCatalogEntryError(
+                f"Bənd mətni minimum {MIN_TEMPLATE_ITEM_TEXT_LENGTH} simvol olmalıdır",
+                user_message="Bənd mətni çox qısadır.",
+            )
+        object.__setattr__(self, "item_text", cleaned_text)
+
+        if self.position_no < 1:
+            raise InvalidCatalogEntryError(
+                "Bənd sırası 1-dən kiçik ola bilməz",
+                user_message="Bənd sırası düzgün deyil.",
+            )
+        if self.deactivated_at is not None:
+            require_aware(self.deactivated_at, field="deactivated_at")
+        if self.is_active and self.deactivated_at is not None:
+            raise InvalidCatalogEntryError(
+                "Aktiv şablonun deaktivləşdirmə tarixi ola bilməz — ziddiyyətli vəziyyət saxlanmır"
+            )
+        if not self.is_active and self.deactivated_at is None:
+            raise InvalidCatalogEntryError(
+                "Deaktiv şablon üçün deaktivləşdirmə anı MƏCBURİDİR — "
+                "«nə vaxt çıxarıldı?» sualı auditdə cavablanmalıdır"
+            )
+
+    @property
+    def selectable(self) -> bool:
+        """YENİ checklist yaradılarkən bu bənd köçürülürmü."""
+        return self.is_active
+
+
 __all__ = [
     "MAX_LEAVE_DURATION_MINUTES",
     "MAX_NAME_LENGTH",
     "MIN_NAME_LENGTH",
+    "MIN_OWNER_KEY_LENGTH",
+    "MIN_TEMPLATE_ITEM_TEXT_LENGTH",
+    "OFFBOARDING_OWNER_KEY",
     "CatalogEntry",
     "CatalogEntryInUseError",
+    "ChecklistItemCategory",
+    "ChecklistItemTemplate",
+    "ChecklistOwnerType",
     "FineType",
     "InvalidCatalogEntryError",
     "LeaveType",

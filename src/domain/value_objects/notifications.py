@@ -298,6 +298,18 @@ TENANT_NOTIFICATION_AUDIENCE: Final[dict[str, tuple[str, ...]]] = {
     # cəriməsinin açıldığından və sayğacın başladığından XƏBƏRSİZ qalar —
     # yəni etiraz hüququ formal olaraq var, praktikada isə yoxdur. Cədvəldə
     # olmaması onu HAMIYA görünən saxlayır və bu, tələb olunan davranışdır.
+    #
+    # --- HR Lifecycle v2 (`v2backlog.md` Faza 3.3/3.4) ---
+    #
+    # `employee_transfer.submit`: `SHIFT_SWAP_PENDING` ilə EYNİ naxış — sətri
+    # görməli olan şəxs onu QAPADA bilən şəxsdir: `can_approve_transfer_request`.
+    "TRANSFER_REQUEST_PENDING": ("can_approve_transfer_request",),
+    # `user_management.deactivate_scheduled_employees` (Faza 3.1): planlaşdırılmış
+    # tarix keçdi, işçi avtomatik deaktiv edildi. Auditoriya `can_manage_employees`
+    # — manual deaktivasiya ilə EYNİ (`EMPLOYEE_DEACTIVATED_WITH_OPEN_ITEMS`
+    # cədvəl sətri) — HR bunu GÖZLƏMƏDƏN öyrənməlidir, çünki hərəkəti insan
+    # başlatmayıb.
+    "EMPLOYEE_SCHEDULED_DEACTIVATION": ("can_manage_employees",),
 }
 
 

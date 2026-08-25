@@ -56,6 +56,23 @@ commit edilir. `show_error(...)`-dan sonra `refresh()` ÇAĞIRILMIR
 (`announcements.py::_on_withdraw`-da tapılan eyni qüsurdan qaçmaq üçün) —
 yenidən yükləmə lazım olan yerdə `on_retry` ilə istifadəçinin qərarına
 buraxılır.
+
+──────────────────────────────────────────────────────────────────────────────
+OFFBOARDING CHECKLIST DİALOQU DEAKTİVASİYADAN DƏRHAL SONRA AÇILIR (Faza 3.4)
+──────────────────────────────────────────────────────────────────────────────
+`UserManagementUseCase.deactivate_employee()` checklist-i ARTIQ backend
+tərəfdə başladır (`offboarding_checklists` portu, bax `composition.py`-dakı
+qurulma yeri) — bu kontroller yalnız ONU GÖSTƏRİR: `deactivate_employee()`
+uğurla bitdikdən SONRA `session.offboarding_checklists.get_active_for_
+employee()` ilə TƏZƏ oxunur (checklist ID `deactivate_employee()`-in
+qaytardığı `OffboardingReview`-da YOXDUR, bax use case-in `_start_offboarding_
+checklist` şərhi — yalnız `bool | None` daşıyır). `None` qayıdarsa (Root heç
+bir OFFBOARDING bəndi yazmayıb) dialoq AÇILMIR, sükutla keçilir.
+
+`[Checklist-i Bağla]` düyməsi `ChecklistNotCompletableError` alanda SÖNDÜRÜLMÜR
+— dialoq açıq qalır, `OffboardingChecklistDialog.set_message()` ilə hansı
+bağlayıcı bəndlərin çatışmadığı göstərilir (`team-lead`-in AÇIQ göstərişi,
+bax həmin dialoqun modul başlığı).
 """
 
 from __future__ import annotations
@@ -68,9 +85,11 @@ from src.shared.logger import LogChannel, get_logger
 
 if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
-    from src.domain.value_objects.identifiers import EmployeeId
+    from src.domain.entities.offboarding_checklist import OffboardingChecklistItem
+    from src.domain.value_objects.identifiers import EmployeeId, OffboardingChecklistId
     from src.presentation.composition import ApplicationContext, Session
     from src.presentation.screens.group_c import UsersScreen
+    from src.presentation.screens.offboarding_checklist import OffboardingChecklistDialog
 
 _error_log = get_logger(__name__, channel=LogChannel.ERROR)
 
@@ -369,6 +388,110 @@ class UserLifecycleController:
             return
 
         self._refresh(screen)
+        self._open_offboarding_checklist(screen, employee_id=employee_id, full_name=full_name)
+
+    def _open_offboarding_checklist(
+        self, screen: UsersScreen, *, employee_id: EmployeeId, full_name: str
+    ) -> None:
+        """Deaktivasiyadan DƏRHAL SONRA checklist-i göstərir (modul başlığı).
+
+        Oxu KÖMƏKÇİDİR: uğursuz olsa (şablon yoxdur, port bağlanmayıb, sorğu
+        xətası) dialoq sadəcə AÇILMIR — deaktivasiya ARTIQ commit olunub,
+        bunu geri qaytarmaq YANLIŞ olardı.
+        """
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                checklist = session.offboarding_checklists.get_active_for_employee(
+                    actor=self._actor, employee_id=employee_id
+                )
+        except Exception:
+            _error_log.warning("USER_LIFECYCLE_OFFBOARDING_CHECKLIST_READ_FAILED", exc_info=True)
+            return
+        if checklist is None:
+            return
+
+        from src.presentation.screens.offboarding_checklist import (  # noqa: PLC0415
+            OffboardingChecklistDialog,
+        )
+
+        dialog = OffboardingChecklistDialog(
+            screen.theme,
+            employee_name=full_name,
+            items=[_to_checklist_row(item) for item in checklist.items],
+            parent=screen,
+        )
+        checklist_id = checklist.id
+        dialog.item_answered.connect(
+            lambda item_id, passed, notes: self._answer_checklist_item(
+                dialog, checklist_id=checklist_id, item_id=item_id, passed=passed, notes=notes
+            )
+        )
+        dialog.complete_requested.connect(
+            lambda: self._complete_checklist(dialog, checklist_id=checklist_id)
+        )
+        dialog.exec()
+
+    def _answer_checklist_item(
+        self,
+        dialog: OffboardingChecklistDialog,
+        *,
+        checklist_id: OffboardingChecklistId,
+        item_id: str,
+        passed: bool,
+        notes: str,
+    ) -> None:
+        """Hər Keçdi/Uğursuz seçimi DƏRHAL yazılır (dialoqun modul başlığı)."""
+        from uuid import UUID  # noqa: PLC0415
+
+        from src.domain.value_objects.identifiers import (  # noqa: PLC0415
+            OffboardingChecklistItemId,
+        )
+
+        try:
+            parsed_item_id = OffboardingChecklistItemId(UUID(item_id))
+        except ValueError:
+            dialog.set_message("Bənd identifikatoru düzgün deyil.")
+            return
+
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                session.offboarding_checklists.answer_item(
+                    tenant_id=session.tenant_id,
+                    actor=self._actor,
+                    checklist_id=checklist_id,
+                    item_id=parsed_item_id,
+                    passed=passed,
+                    notes=notes or None,
+                )
+                session.commit()
+        except KompasOSError as error:
+            dialog.set_message(error.user_message)
+        except Exception:
+            _error_log.exception("USER_LIFECYCLE_OFFBOARDING_ITEM_ANSWER_FAILED")
+            dialog.set_message("Cavab yazılmadı. Yenidən cəhd edin.")
+
+    def _complete_checklist(
+        self, dialog: OffboardingChecklistDialog, *, checklist_id: OffboardingChecklistId
+    ) -> None:
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                session.offboarding_checklists.complete(
+                    tenant_id=session.tenant_id, actor=self._actor, checklist_id=checklist_id
+                )
+                session.commit()
+        except KompasOSError as error:
+            # `ChecklistNotCompletableError` BURAYA düşür — düymə SÜKUTLA
+            # söndürülmür (modul başlığı), dialoq AÇIQ qalır, HR AÇIQ mesaj
+            # görür (`error.user_message`, bax `entities/offboarding_
+            # checklist.py::ChecklistNotCompletableError`).
+            dialog.set_message(error.user_message)
+            return
+        except Exception:
+            _error_log.exception("USER_LIFECYCLE_OFFBOARDING_COMPLETE_FAILED")
+            dialog.set_message("Checklist bağlanmadı. Yenidən cəhd edin.")
+            return
+
+        dialog.accept()
 
     def _offboarding_preview(self, full_name: str) -> str:
         """Təsdiq dialoquna əlavə olunan «açıq qalanlar» mətni (HR-4).
@@ -444,6 +567,26 @@ def _active_position_choices(session: Session) -> list[tuple[str, str]]:
     """
     positions = session.uow.positions.list_for_tenant(session.tenant_id)
     return [(str(position.id), position.name_az) for position in positions if position.is_active]
+
+
+def _to_checklist_row(item: OffboardingChecklistItem) -> dict[str, str]:
+    """`OffboardingChecklistItem` → dialoqun FAKTİKİ gözlədiyi açarlar.
+
+    Açarlar `screens/offboarding_checklist.py::OffboardingChecklistDialog`-un
+    `items` docstring-i ilə EYNİDİR (CLAUDE.md §6). Bu ekranın maket yolu
+    YOXDUR (`preview_screens.py`) — checklist YALNIZ canlı deaktivasiya
+    axınının nəticəsidir, `AnnualLeaveRequestDialog`/`TransferRequestDialog`-
+    dan FƏRQLİ olaraq önizləmədə müstəqil açıla bilməz.
+    """
+    return {
+        "id": str(item.id),
+        "position_no": str(item.position_no),
+        "category": item.category.value,
+        "item_text": item.item_text,
+        "is_blocking": "1" if item.is_blocking else "0",
+        "passed": "" if item.passed is None else ("1" if item.passed else "0"),
+        "notes": item.notes or "",
+    }
 
 
 __all__ = [

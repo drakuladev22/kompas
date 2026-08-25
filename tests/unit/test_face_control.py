@@ -1246,12 +1246,24 @@ def test_the_module_toggle_gate_reuses_the_existing_camera_verification_key() ->
 # --------------------------------------------------------------------------- #
 
 
+class _ConsentDocuments:
+    """`BiometricConsentRecorder` — yaddaşda (`v2backlog.md` Faza 3.6)."""
+
+    def __init__(self) -> None:
+        self.created: list[dict[str, Any]] = []
+
+    def create_document(self, **kwargs: Any) -> object:
+        self.created.append(kwargs)
+        return object()
+
+
 def _enrollment(
     *,
     samples: list[FaceSample],
     profiles: list[FaceProfile],
     limits: dict[str, str] | None = None,
     camera_available: bool = True,
+    consent_documents: _ConsentDocuments | None = None,
 ) -> tuple[FaceEnrollmentUseCase, InMemoryFaceProfiles, FakeCamera, RecordingAudit]:
     clock = FakeClock(NOW)
     repository = InMemoryFaceProfiles(profiles)
@@ -1264,6 +1276,7 @@ def _enrollment(
         limits=FakeSystemLimits(limits),
         audit=audit,
         clock=clock,
+        consent_documents=consent_documents,
     )
     return use_case, repository, camera, audit
 
@@ -1465,6 +1478,136 @@ def test_re_enrollment_requires_a_reason() -> None:
 
     with pytest.raises(FaceControlError, match="səbəb"):
         use_case.re_enroll(tenant_id=TENANT, actor=admin, subject_id=worker.id, reason="   ")
+
+
+# --------------------------------------------------------------------------- #
+# 9b. RAZILIQ SƏNƏDİ HOOK-U (`v2backlog.md` Faza 3.6)
+# --------------------------------------------------------------------------- #
+#
+# `_record_consent` İKİ SƏBƏBDƏN "yazmır" — fayl verilməyib, YA DA port
+# qoşulmayıb — VƏ bu ikisi qəsdən eyni nəticəyə (`None`) yığılır (bax
+# `_record_consent` docstring-i). Aşağıdakı testlər HƏR İKİ yolu ayrı-ayrı
+# yoxlayır ki, «əslində yazılmalı idi, sükutla yazılmadı» halı gizlənməsin.
+
+
+def test_consent_document_is_recorded_when_a_file_ref_and_port_are_both_present() -> None:
+    admin = _employee(flags=(ENROLLMENT_FLAG,))
+    worker = _employee()
+    consent_documents = _ConsentDocuments()
+    use_case, _repo, _camera, audit = _enrollment(
+        samples=[FaceSample(embedding=REFERENCE, quality=0.9)],
+        profiles=[_profile(worker, embedding=None)],
+        consent_documents=consent_documents,
+    )
+
+    use_case.enroll(
+        tenant_id=TENANT, actor=admin, subject_id=worker.id, consent_file_ref="drive://consent/1"
+    )
+
+    assert len(consent_documents.created) == 1
+    draft = consent_documents.created[0]["draft"]
+    assert draft.doc_type == "BIOMETRIC_CONSENT"
+    assert draft.file_ref == "drive://consent/1"
+    assert draft.is_blocking is False
+    assert audit.entries[-1]["after_state"]["biometric_consent_recorded"] is True
+
+
+def test_consent_document_is_not_recorded_without_a_file_ref() -> None:
+    """Port QOŞULUB, lakin fayl verilməyib — köhnə davranış SÜKUTLA qalır."""
+    admin = _employee(flags=(ENROLLMENT_FLAG,))
+    worker = _employee()
+    consent_documents = _ConsentDocuments()
+    use_case, _repo, _camera, audit = _enrollment(
+        samples=[FaceSample(embedding=REFERENCE, quality=0.9)],
+        profiles=[_profile(worker, embedding=None)],
+        consent_documents=consent_documents,
+    )
+
+    use_case.enroll(tenant_id=TENANT, actor=admin, subject_id=worker.id)
+
+    assert consent_documents.created == []
+    assert audit.entries[-1]["after_state"]["biometric_consent_recorded"] is None
+
+
+def test_consent_document_is_not_recorded_without_the_port_even_with_a_file_ref() -> None:
+    """Fayl VERİLİB, lakin port qoşulmayıb (`consent_documents=None`) — YENƏ yazılmır."""
+    admin = _employee(flags=(ENROLLMENT_FLAG,))
+    worker = _employee()
+    use_case, _repo, _camera, audit = _enrollment(
+        samples=[FaceSample(embedding=REFERENCE, quality=0.9)],
+        profiles=[_profile(worker, embedding=None)],
+        consent_documents=None,
+    )
+
+    use_case.enroll(
+        tenant_id=TENANT, actor=admin, subject_id=worker.id, consent_file_ref="drive://consent/1"
+    )
+
+    assert audit.entries[-1]["after_state"]["biometric_consent_recorded"] is None
+
+
+def test_re_enrollment_forwards_the_consent_file_ref_too() -> None:
+    """`FaceReEnrollmentUseCase.re_enroll` — EYNİ hook, `enrollment`-in ÖZÜ üzərindən."""
+    admin = _employee(flags=(ENROLLMENT_FLAG,))
+    worker = _employee()
+    consent_documents = _ConsentDocuments()
+    clock = FakeClock(NOW)
+    repository = InMemoryFaceProfiles([_profile(worker)])
+    enrollment = FaceEnrollmentUseCase(
+        profiles=repository,
+        camera=FakeCamera(),
+        matcher=FakeFaceMatcher([FaceSample(embedding=REFERENCE, quality=0.9)], clock=clock),
+        limits=FakeSystemLimits(),
+        audit=RecordingAudit(),
+        clock=clock,
+        consent_documents=consent_documents,
+    )
+    use_case = FaceReEnrollmentUseCase(
+        enrollment=enrollment, profiles=repository, audit=RecordingAudit(), clock=clock
+    )
+
+    use_case.re_enroll(
+        tenant_id=TENANT,
+        actor=admin,
+        subject_id=worker.id,
+        reason="İşçi yenidən qeydiyyat istədi",
+        consent_file_ref="drive://consent/2",
+    )
+
+    assert len(consent_documents.created) == 1
+    assert consent_documents.created[0]["draft"].file_ref == "drive://consent/2"
+
+
+class _SingleAdmin:
+    """`AdminCounter` — SEC-025 bootstrap yolunun "yeganə admin" şərtini ödəyir."""
+
+    def count_active_with_flag(self, tenant_id: TenantId, flag_code: str) -> int:
+        return 1
+
+
+def test_bootstrap_enrollment_forwards_the_consent_file_ref_too() -> None:
+    """`enroll_first_account` (SEC-025) — EYNİ hook, `capture_and_store` üzərindən."""
+    ceo = _employee(flags=(ENROLLMENT_FLAG,))
+    consent_documents = _ConsentDocuments()
+    clock = FakeClock(NOW)
+    repository = InMemoryFaceProfiles([_profile(ceo, embedding=None)])
+    use_case = FaceEnrollmentUseCase(
+        profiles=repository,
+        camera=FakeCamera(),
+        matcher=FakeFaceMatcher([FaceSample(embedding=REFERENCE, quality=0.9)], clock=clock),
+        limits=FakeSystemLimits(),
+        audit=RecordingAudit(),
+        clock=clock,
+        admins=_SingleAdmin(),
+        consent_documents=consent_documents,
+    )
+
+    use_case.enroll_first_account(
+        tenant_id=TENANT, actor=ceo, subject_id=ceo.id, consent_file_ref="drive://consent/3"
+    )
+
+    assert len(consent_documents.created) == 1
+    assert consent_documents.created[0]["draft"].file_ref == "drive://consent/3"
 
 
 # --------------------------------------------------------------------------- #

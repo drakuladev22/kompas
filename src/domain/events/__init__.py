@@ -220,6 +220,30 @@ class ShiftSwapDecidedEvent(DomainEvent):
 
 
 @dataclass(frozen=True, kw_only=True)
+class TransferRequestedEvent(DomainEvent):
+    """Filiallar-arası daimi köçürmə sorğusu göndərildi (`v2backlog.md` Faza 3.3).
+
+    `ShiftSwapRequestedEvent` İLƏ QARIŞDIRILMAMALIDIR: bu, BİR GÜNLÜK rejim
+    dəyişikliyi deyil, `employees.store_id`-nin DAİMİ dəyişikliyidir
+    (`entities/employee_transfer.py` başlığı).
+    """
+
+    request_id: uuid.UUID
+    employee_id: uuid.UUID
+    from_store_id: uuid.UUID
+    to_store_id: uuid.UUID
+    reason: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class TransferDecidedEvent(DomainEvent):
+    request_id: uuid.UUID
+    approver_id: uuid.UUID
+    approved: bool
+    reason: str | None
+
+
+@dataclass(frozen=True, kw_only=True)
 class AnnualLeaveRequestedEvent(DomainEvent):
     """#28: işçi İLLİK məzuniyyət sorğusu göndərdi.
 
@@ -740,6 +764,8 @@ __all__ = [
     "TaskEvidenceReviewedEvent",
     "TaskEvidenceSubmittedEvent",
     "TimeDriftDetectedEvent",
+    "TransferDecidedEvent",
+    "TransferRequestedEvent",
     "UnauthorizedAbsenceDetectedEvent",
     "VerificationTimeoutEscalatedEvent",
 ]

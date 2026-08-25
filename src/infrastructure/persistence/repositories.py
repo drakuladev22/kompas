@@ -372,19 +372,39 @@ class PostgresEmployeeRepository(_BaseRepository):
         `username` DƏ BURADA YAZILMIR: giriş identifikatorunun dəyişməsi
         ayrıca, audit-lənən əməliyyatdır (`rename_username()`) — adi profil
         yeniləməsi ilə birlikdə sükutla baş verməməlidir.
+
+        `referred_by_employee_id` BURADA YAZILMIR: Faza 3.5 (`entities/
+        employee.py` şərhi) bunu "tarixi fakt olaraq daimi qalır" deyə
+        təyin edir — yalnız `insert()`-də (yaranış anında) yazılır.
+
+        `deactivated_at` BURADA YAZILMIR: TIME-1 trigger-i (migrations/096)
+        `is_active` keçidindən avtomatik hesablayır — client dəyəri qəbul
+        edilmir, ötürülsə belə görməzdən gəlinərdi.
+
+        `profile_photo_url`/`date_of_birth`/`scheduled_deactivation_date`/
+        `data_anonymized_at` YENİ ƏLAVƏ OLUNUB (migrations/096 tapıntısı):
+        ilk ikisi ARTIQ domen entity-sində mövcud idi, lakin `save()` onları
+        HEÇ VAXT yazmırdı — `Employee.anonymize_personal_data()` (Faza 3.2)
+        məhz bu iki sahəni SIFIRLAYIR, yəni onlarsız anonimləşdirmə
+        `data_anonymized_at`-ı doldurub HƏQİQİ PII-ni (şəkil, doğum tarixi)
+        bazada SAXLAYARDI — yanlış uyğunluq siqnalı.
         """
         self._execute(
             """
             UPDATE employees SET
-                store_id             = %s,
-                position_id          = %s,
-                first_name           = %s,
-                last_name            = %s,
-                notification_email   = %s,
-                must_change_password = %s,
-                pin_failed_attempts  = %s,
-                pin_locked_until     = %s,
-                is_active            = %s
+                store_id                    = %s,
+                position_id                 = %s,
+                first_name                  = %s,
+                last_name                   = %s,
+                notification_email          = %s,
+                must_change_password        = %s,
+                pin_failed_attempts         = %s,
+                pin_locked_until             = %s,
+                is_active                   = %s,
+                profile_photo_url           = %s,
+                date_of_birth               = %s,
+                scheduled_deactivation_date = %s,
+                data_anonymized_at          = %s
             WHERE id = %s AND tenant_id = %s
             """,
             (
@@ -397,6 +417,10 @@ class PostgresEmployeeRepository(_BaseRepository):
                 employee.pin_security.failed_attempts,
                 employee.pin_security.locked_until,
                 employee.is_active,
+                employee.profile_photo_url,
+                employee.date_of_birth,
+                employee.scheduled_deactivation_date,
+                employee.data_anonymized_at,
                 employee.id,
                 self._tenant,
             ),

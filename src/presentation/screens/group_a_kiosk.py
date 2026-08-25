@@ -54,6 +54,16 @@ if TYPE_CHECKING:
 #: PIN uzunluğu (bölmə 9 — 4 rəqəm).
 PIN_LENGTH: Final = 4
 
+#: "Filiallar-arası Köçürmə" kartının status nişanı — Azərbaycanca mətn
+#: `controllers/transfer_requests.py::_to_status_row`-dan gəlir, TON isə
+#: burada həll olunur (kontroller Qt tipini tanımır).
+_TRANSFER_STATUS_TONE: Final[dict[str, ChipTone]] = {
+    "Təsdiq gözləyir": "warning",
+    "Təsdiqləndi": "success",
+    "Rədd edildi": "danger",
+    "Geri çəkildi": "neutral",
+}
+
 #: PIN siyasətinin ekran tərəfi — HƏR İKİSİ FALLBACK-dır, HƏQİQİ MƏNBƏ
 #: `system_limits` (`PIN_MAX_FAILED_ATTEMPTS`, `PIN_LOCKOUT_MINUTES`;
 #: `schema.sql` §24 seed edir, `authentication.PinHandshakeUseCase` oxuyur).
@@ -482,6 +492,8 @@ class EmployeeHomeScreen(QWidget):
         open_shift_claim_requested: `[Bu Növbəni Götür]` (#16 — elan id-si).
         open_shift_release_requested: `[Geri Ver]` (OP-4 — tutulmuş elan id-si).
         annual_leave_request_requested: `[Məzuniyyət Sorğusu]` (#28).
+        transfer_request_requested: `[Köçürmə Sorğusu]` (`v2backlog.md` Faza 3.3).
+        transfer_withdraw_requested: `[Sorğunu Geri Çək]` (sorğu id-si).
 
     ──────────────────────────────────────────────────────────────────────────
     "AÇIQ NÖVBƏLƏR" KARTI NİYƏ STATUS DÜYMƏSİNDƏN AYRIDIR
@@ -511,6 +523,9 @@ class EmployeeHomeScreen(QWidget):
     #: DEEP-GAP OP-4 — tutduğu növbəni geri verən işçi (elan id-si).
     open_shift_release_requested = Signal(str)
     annual_leave_request_requested = Signal()
+    #: `v2backlog.md` Faza 3.3 — Filiallar-arası Köçürmə.
+    transfer_request_requested = Signal()
+    transfer_withdraw_requested = Signal(str)
 
     def __init__(
         self,
@@ -524,6 +539,9 @@ class EmployeeHomeScreen(QWidget):
         super().__init__(parent)
         self._theme = theme
         self._status = WorkerStatus.VERIFIED
+        #: `set_transfer_request()`-in son sətrindəki `id` — `[Geri Çək]`
+        #: `_emit_transfer_withdraw`-da bu dəyəri yayır (Faza 3.3).
+        self._transfer_request_id: str = ""
         set_surface_color(self, theme.color("--color-content-bg"))
 
         layout = QVBoxLayout(self)
@@ -757,6 +775,11 @@ class EmployeeHomeScreen(QWidget):
         # "bugün → bu ay → gələcək" ritmi qorunur (tapşırıq/xal/cərimə cari
         # dövrə, açıq növbə yaxın günlərə, məzuniyyət isə bütün ilə aiddir).
         layout.addWidget(self._build_annual_leave_card(), 1)
+        # `v2backlog.md` Faza 3.3 — Filiallar-arası Köçürmə. SIRADA SONUNCU,
+        # İllik Məzuniyyətdən DƏRHAL SONRA: hər ikisi "GÜN/AY miqyaslı struktur
+        # dəyişiklik" sinfindəndir (bugünkü status/xal/cərimə axınına aid
+        # DEYİL), ona görə "bugün → gələcək" ritminin son pilləsində dayanır.
+        layout.addWidget(self._build_transfer_request_card(), 1)
         return container
 
     def _build_tasks_card(self) -> Card:
@@ -1154,6 +1177,97 @@ class EmployeeHomeScreen(QWidget):
         """
         self._annual_leave_message.setText(message)
         self._annual_leave_message.setVisible(bool(message))
+
+    # ------------------- filiallar-arası köçürmə (Faza 3.3) ------------------- #
+
+    def _build_transfer_request_card(self) -> Card:
+        """ "Filiallar-arası Köçürmə" kartı — `v2backlog.md` Faza 3.3.
+
+        `_build_annual_leave_card` İLƏ EYNİ STRUKTUR (başlıq + status sətri +
+        tək düymə) — SƏLAHİYYƏT BURADA DA TƏLƏB OLUNMUR
+        (`TransferRequestUseCase.my_requests` başlığı: "səlahiyyət tələb
+        olunmur"), çünki bu, işçinin ÖZ sorğu tarixçəsidir.
+
+        Rəqəm KARTI DEYİL (`Xal Balansım`/`İllik Məzuniyyət`-dən FƏRQLİ) —
+        köçürmənin "böyük ədədi" yoxdur, ona görə status `Chip` + mətn
+        sətri ilə göstərilir, `title_label(size=32)` YOX.
+        """
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+
+        head = QWidget()
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(0, 0, 0, 0)
+        head_layout.addWidget(title_label("Filiallar-arası Köçürmə", size=metrics.FONT_CARD_TITLE))
+        head_layout.addWidget(stretch())
+        self._transfer_status_chip = Chip("", "neutral")
+        self._transfer_status_chip.setVisible(False)
+        head_layout.addWidget(self._transfer_status_chip)
+        card.add(head)
+
+        self._transfer_status_text = body_label("Hazırda gözləyən sorğunuz yoxdur.", size=13)
+        card.add(self._transfer_status_text)
+
+        card.body().addStretch(1)
+
+        self._transfer_message = body_label("", size=12)
+        self._transfer_message.setVisible(False)
+        card.add(self._transfer_message)
+
+        # İKİ DÜYMƏ EYNİ ANDA GÖRÜNMÜR (görmək = səlahiyyət, kompasos-ui
+        # bənd 3): `[Geri Çək]` YALNIZ `PENDING_APPROVAL` sorğu varkən
+        # `set_transfer_request` tərəfindən görünən edilir — statik "boz
+        # düymə" YOXDUR.
+        self._transfer_withdraw = secondary_button("Sorğunu Geri Çək")
+        self._transfer_withdraw.setProperty("variant", "danger")
+        self._transfer_withdraw.setMinimumHeight(44)
+        self._transfer_withdraw.setVisible(False)
+        self._transfer_withdraw.clicked.connect(self._emit_transfer_withdraw)
+        card.add(self._transfer_withdraw)
+
+        request = action_button("Köçürmə Sorğusu")
+        request.setMinimumHeight(44)  # bölmə 9 — toxunma hədəfinin minimumu
+        request.clicked.connect(self.transfer_request_requested)
+        card.add(request)
+        return card
+
+    def _emit_transfer_withdraw(self) -> None:
+        if self._transfer_request_id:
+            self.transfer_withdraw_requested.emit(self._transfer_request_id)
+
+    def set_transfer_request(self, row: dict[str, str]) -> None:
+        """Cari (ən son) köçürmə sorğusunun statusunu göstərir (Faza 3.3).
+
+        Args:
+            row: `id`, `to_store`, `status`, `withdrawable` (`"1"`/`"0"`),
+                `decision_reason` açarları olan sözlük. Açarlar maket
+                (`preview_screens`) və canlı yolda (`controllers/
+                transfer_requests.py::_to_status_row`) EYNİDİR (CLAUDE.md §6).
+                BOŞ sözlük — işçi HEÇ VAXT sorğu göndərməyib, kart defolt
+                mətni göstərir.
+        """
+        self._transfer_request_id = row.get("id", "")
+        to_store = row.get("to_store", "")
+        status = row.get("status", "")
+
+        if not to_store:
+            self._transfer_status_text.setText("Hazırda gözləyən sorğunuz yoxdur.")
+            self._transfer_status_chip.setVisible(False)
+            self._transfer_withdraw.setVisible(False)
+            return
+
+        self._transfer_status_text.setText(f"Hədəf filial: {to_store}")
+        self._transfer_status_chip.setText(status)
+        self._transfer_status_chip.set_tone(_TRANSFER_STATUS_TONE.get(status, "neutral"))
+        self._transfer_status_chip.setVisible(True)
+        self._transfer_withdraw.setVisible(row.get("withdrawable") == "1")
+
+    def set_transfer_request_message(self, message: str) -> None:
+        """Sorğunun/geri çəkmənin nəticəsi — kioskda İSTİSNA EKRANA ÇIXMIR.
+
+        `set_annual_leave_message` ilə eyni qərar (bax orada).
+        """
+        self._transfer_message.setText(message)
+        self._transfer_message.setVisible(bool(message))
 
     # -------------------------------- elanlar (#19) ---------------------------- #
 

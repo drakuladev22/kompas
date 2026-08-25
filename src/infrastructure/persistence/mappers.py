@@ -132,6 +132,18 @@ def employee_from_row(row: Row, position: Position) -> Employee:
         profile_photo_url=row.get("profile_photo_url"),
         hire_date=row.get("hire_date"),
         date_of_birth=row.get("date_of_birth"),
+        # `v2backlog.md` Faza 3.1/3.2/3.5 — miqrasiya 088 sütunları. Əvvəllər
+        # BURADA YOX idi, yəni hər hidratasiya bu sahələri sükutla `None`-a
+        # sıfırlayırdı (schema-migration-engineer tapıntısı, migrations/096
+        # başlığı — retensiya/planlaşdırılmış-deaktivasiya oxucuları BU
+        # SƏBƏBDƏN "ölü yol" idi).
+        scheduled_deactivation_date=row.get("scheduled_deactivation_date"),
+        referred_by_employee_id=(
+            EmployeeId(row["referred_by_employee_id"])
+            if row.get("referred_by_employee_id")
+            else None
+        ),
+        data_anonymized_at=row.get("data_anonymized_at"),
     )
     employee.pin_security.failed_attempts = row.get("pin_failed_attempts", 0)
     employee.pin_security.locked_until = row.get("pin_locked_until")

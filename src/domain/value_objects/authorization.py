@@ -347,7 +347,7 @@ DUAL_CONTROL_APPROVAL_FLAG: Final[str] = "can_approve_dual_control_override"
 #: ──────────────────────────────────────────────────────────────────────────
 #: Bura YALNIZ o flag düşür ki, (1) bir iş axınının YEGANƏ qapısı olsun və
 #: (2) daşıyıcısı qalmayanda həmin axın ÖZ-ÖZÜNƏ bağlana bilməsin — yəni
-#: gözləyən sətirlər başqa yolla son hala çatmasın. Hər dördü layihədə
+#: gözləyən sətirlər başqa yolla son hala çatmasın. İlk dördü layihədə
 #: ARTIQ bu rolda sənədlidir (`TENANT_NOTIFICATION_AUDIENCE`, bax
 #: `value_objects/notifications.py`): bildiriş məhz həmin flagın sahibinə
 #: ünvanlanır, çünki sətri BAĞLAYA BİLƏN yeganə şəxs odur.
@@ -355,6 +355,34 @@ DUAL_CONTROL_APPROVAL_FLAG: Final[str] = "can_approve_dual_control_override"
 #: `can_manage_employees` və s. BURADA YOXDUR: onların itirilməsi əməliyyatı
 #: çətinləşdirir, lakin GÖZLƏYƏN sətir yaratmır — Root/CEO həmişə bərpa edə
 #: bilir və heç bir qeyd aralıq vəziyyətdə qalmır.
+#:
+#: ──────────────────────────────────────────────────────────────────────────
+#: `can_approve_shift_swap` (v2backlog Faza 2 auditi, 2026-08-25) — MÖVCUD,
+#: GİZLİ QÜSUR TAPILDI
+#: ──────────────────────────────────────────────────────────────────────────
+#: Əvvəllər BURADA YOX idi — bu, unudulma idi, qəsdən buraxılma DEYİL.
+#: Yoxlanıldı: `ShiftSwapUseCase`-də sorğunu geri çəkmək/ləğv etmək metodu
+#: yoxdur, `job_runner.py`-da (leave-appeal və points-dispute-dən fərqli
+#: olaraq) shift-swap üçün SLA-timeout/expire mexanizmi yoxdur — yəni
+#: daşıyıcısı qalmayanda gözləyən sorğu HEÇ BİR yolla son hala çatmır: işçi
+#: geri çəkə bilmir, sistem bağlamır, Root/CEO isə flag-i bərpa etməyincə
+#: sorğu əbədi "gözləyir" qalır. `can_manage_employees`-dən fərqli olaraq bu,
+#: "çətinləşən əməliyyat" deyil, "son hala çatmayan sətir"dir.
+#:
+#: ──────────────────────────────────────────────────────────────────────────
+#: `can_approve_transfer_request` BURAYA QƏSDƏN DÜŞMÜR — presedent
+#: ──────────────────────────────────────────────────────────────────────────
+#: Eyni auditdə YOXLANILDI, amma NƏTİCƏ FƏRQLİ ÇIXDI: `domain`
+#: `TransferRequestUseCase`-ə `withdraw()` metodu YAZDI (Faza 3.3) — işçi öz
+#: köçürmə sorğusunu ÖZÜ geri çəkə bilir. Bu, meyarın 2-ci şərtini
+#: ("gözləyən sətirlər başqa yolla son hala çatmasın") YERİNƏ YETİRMİR:
+#: sətir `WITHDRAWN` halına keçərək son hala çatır, sadəcə TƏLƏB OLUNAN
+#: biznes nəticəsi (köçürmənin özü) baş vermir. Bu fərq `can_manage_employees`
+#: istisnası ilə EYNİ məntiqdədir — "əməliyyat əlçatmaz olur" ilə "sətir əbədi
+#: asılı qalır" AYRI şeylərdir, meyar YALNIZ İKİNCİSİNƏ aiddir. NƏTİCƏ:
+#: gələcəkdə yeni təsdiq flag-i əlavə edən şəxs ƏVVƏLCƏ soruşmalıdır —
+#: "sorğunu YARADAN tərəfin özü onu ləğv edə bilirmi?" Cavab "bəli"dirsə,
+#: flag BURAYA DÜŞMÜR, hətta təsdiq gecikməsi biznes üçün zərərli olsa belə.
 DEADLOCK_CRITICAL_FLAGS: Final[dict[str, str]] = {
     DUAL_CONTROL_APPROVAL_FLAG: (
         "30 dəqiqədən çox fərq yaradan manual vaxt düzəlişləri təsdiqsiz qalacaq"
@@ -366,6 +394,10 @@ DEADLOCK_CRITICAL_FLAGS: Final[dict[str, str]] = {
         "aylıq icmal keçirilə bilməyəcək — cərimələr nəşr olunmayacaq və işçi onları görməyəcək"
     ),
     "can_verify_returns": "icazədən qayıdışlar təsdiqlənməyəcək və sorğular açıq qalacaq",
+    "can_approve_shift_swap": (
+        "növbə dəyişmə sorğuları qərarsız qalacaq, işçi öz standart "
+        "növbəsinə çıxmağa məcbur qalacaq"
+    ),
 }
 
 

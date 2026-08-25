@@ -31,6 +31,7 @@ SHADOW_CARD_BASELINE: frozenset[ShadowCardKey] = frozenset(
         ("bulk_operations.py", "BulkImportResultDialog", "__init__", 0),
         ("bulk_operations.py", "StoreTemplateApplyDialog", "__init__", 0),
         ("bulk_operations.py", "StoreTemplateCaptureDialog", "__init__", 0),
+        ("checklist_templates.py", "ChecklistTemplateDialog", "__init__", 0),
         ("devices.py", "DeviceAdminScreen", "__init__", 0),
         ("devices.py", "DevicePendingScreen", "__init__", 0),
         ("field_reports.py", "FieldReportScreen", "_build_actions_card", 0),
@@ -58,10 +59,12 @@ SHADOW_CARD_BASELINE: frozenset[ShadowCardKey] = frozenset(
         ("group_h.py", "ReportExportScreen", "__init__", 0),
         ("group_h.py", "ReportExportScreen", "_build_card", 0),
         ("group_i.py", "MigrationConfirmDialog", "__init__", 0),
+        ("offboarding_checklist.py", "OffboardingChecklistDialog", "__init__", 0),
         ("open_shift.py", "OpenShiftPostDialog", "__init__", 0),
         ("performance_review.py", "PerformanceReviewScreen", "_build_form_card", 0),
         ("performance_review.py", "PerformanceReviewScreen", "_build_history_card", 0),
         ("support_inbox.py", "SupportInboxScreen", "_build_list_panel", 0),
         ("sync_conflicts.py", "SyncConflictScreen", "_build_list_card", 0),
+        ("transfer_requests.py", "TransferRequestDialog", "__init__", 0),
     }
 )

@@ -26,10 +26,12 @@ from src.domain.entities.attendance_sheet import AttendanceFact, DailyAttendance
 from src.domain.entities.auth_session import AuthSession
 from src.domain.entities.employee import Employee
 from src.domain.entities.employee_document import EmployeeDocument
+from src.domain.entities.employee_transfer import EmployeeTransferRequest
 from src.domain.entities.exception_record import ExceptionRecord
 from src.domain.entities.field_report import FieldReport
 from src.domain.entities.fine import Fine
 from src.domain.entities.leave_request import LeaveRequest
+from src.domain.entities.offboarding_checklist import EmployeeOffboardingChecklist
 from src.domain.entities.open_shift import OpenShiftPosting, OpenShiftSlot
 from src.domain.entities.performance_review import PerformanceReview
 from src.domain.entities.pos_threshold import POSPermissionThreshold
@@ -42,7 +44,13 @@ from src.domain.policies import BreakKind
 from src.domain.value_objects.authorization import PermissionFlag, RolePriority
 from src.domain.value_objects.behavior_signals import BehaviorBaseline, CheckInObservation
 from src.domain.value_objects.branding import TenantBranding
-from src.domain.value_objects.catalogs import FineType, LeaveType, WorkMode
+from src.domain.value_objects.catalogs import (
+    ChecklistItemTemplate,
+    ChecklistOwnerType,
+    FineType,
+    LeaveType,
+    WorkMode,
+)
 from src.domain.value_objects.credentials import Username
 from src.domain.value_objects.erp import (
     ConnectionTestResult,
@@ -81,6 +89,7 @@ from src.domain.value_objects.identifiers import (
     AppealId,
     AttendanceRecordId,
     BulkImportLogId,
+    ChecklistItemTemplateId,
     DeviceId,
     EmployeeDocumentId,
     EmployeeId,
@@ -94,6 +103,7 @@ from src.domain.value_objects.identifiers import (
     FineTypeId,
     LeaveRequestId,
     LeaveTypeId,
+    OffboardingChecklistId,
     OpenShiftPostingId,
     PointsEntryId,
     PositionId,
@@ -105,6 +115,7 @@ from src.domain.value_objects.identifiers import (
     StoreTemplateId,
     TaskId,
     TenantId,
+    TransferRequestId,
     WorkModeId,
 )
 from src.domain.value_objects.infrastructure import (
@@ -1349,6 +1360,96 @@ class ShiftSwapRepository(Protocol):
         ...
 
     def save(self, request: ShiftSwapRequest) -> None: ...
+
+
+@runtime_checkable
+class EmployeeTransferRequestRepository(Protocol):
+    """`employee_transfer_requests` (`v2backlog.md` Faza 3.3, migrations/088).
+
+    `ShiftSwapRepository` İLƏ EYNİ FORMA — modul başlığındakı əsaslandırma:
+    struktur şüurlu təkrarlanır, cədvəl özü yox.
+    """
+
+    def get(self, request_id: TransferRequestId) -> EmployeeTransferRequest | None: ...
+
+    def list_pending(
+        self, tenant_id: TenantId, *, to_store_id: StoreId | None = None
+    ) -> list[EmployeeTransferRequest]: ...
+
+    def list_for_employee(
+        self, employee_id: EmployeeId, *, limit: int
+    ) -> list[EmployeeTransferRequest]:
+        """İşçinin sorğu tarixçəsi — `limit` MƏCBURİ.
+
+        Mənbə: `SystemLimitKey.SHIFT_SWAP_HISTORY_PAGE_SIZE` (eyni səhifə
+        ölçüsü — ikisi eyni ekran ailəsidir, ayrıca açar mənasız təkrar yaradardı).
+        """
+        ...
+
+    def find_open_for_employee(self, employee_id: EmployeeId) -> EmployeeTransferRequest | None:
+        """İşçinin İKİNCİ açıq köçürmə sorğusunun qarşısını almaq üçün."""
+        ...
+
+    def list_due_for_effect(
+        self, tenant_id: TenantId, *, as_of: date
+    ) -> list[EmployeeTransferRequest]:
+        """`APPROVED`, `effective_date <= as_of`, VƏ HƏLƏ İCRA OLUNMAYIB.
+
+        İDEMPOTENTLİK KONTRAKTI (`use_cases/employee_transfer.py` başlığı):
+        ayrıca "tətbiq olundu" sütunu YOXDUR — implementasiya bu siyahını
+        `employees.store_id <> employee_transfer_requests.to_store_id` şərti
+        ilə (JOIN) süzməlidir. Əks halda cron eyni köçürməni hər gecə TƏKRAR
+        tətbiq edər (məs. işçi sonradan ÜÇÜNCÜ filiala köçürülübsə, köhnə
+        sorğu onu YENİDƏN ikinci filiala qaytarardı).
+        """
+        ...
+
+    def save(self, request: EmployeeTransferRequest) -> None: ...
+
+
+@runtime_checkable
+class EmployeeOffboardingChecklistRepository(Protocol):
+    """`employee_offboarding_checklists` + `..._items` (Faza 3.4, migrations/088)."""
+
+    def get(self, checklist_id: OffboardingChecklistId) -> EmployeeOffboardingChecklist | None: ...
+
+    def get_active_for_employee(
+        self, employee_id: EmployeeId
+    ) -> EmployeeOffboardingChecklist | None:
+        """`uq_offboarding_active_per_employee` qismən indeksinin güzgüsü —
+        eyni işçi üçün eyni anda YALNIZ bir `IN_PROGRESS` checklist ola bilər."""
+        ...
+
+    def list_for_employee(self, employee_id: EmployeeId) -> list[EmployeeOffboardingChecklist]:
+        """İşçinin BÜTÜN offboarding tarixçəsi (işə qayıdıb yenidən çıxan işçi daxil)."""
+        ...
+
+    def save(self, checklist: EmployeeOffboardingChecklist) -> None: ...
+
+
+@runtime_checkable
+class ChecklistItemTemplateRepository(Protocol):
+    """`checklist_item_templates` — Root-un idarə etdiyi ORTAQ şablon kataloqu
+    (Faza 3.4 + 4.1, migrations/088)."""
+
+    def get(self, template_id: ChecklistItemTemplateId) -> ChecklistItemTemplate | None: ...
+
+    def list_for_owner(
+        self,
+        tenant_id: TenantId,
+        *,
+        owner_type: ChecklistOwnerType,
+        owner_key: str,
+        include_inactive: bool = False,
+    ) -> list[ChecklistItemTemplate]:
+        """`position_no` sırası ilə — checklist instansiyası bu sıranı köçürür."""
+        ...
+
+    def save(self, template: ChecklistItemTemplate, *, changed_by: EmployeeId) -> None: ...
+
+    def deactivate(
+        self, tenant_id: TenantId, template_id: ChecklistItemTemplateId, *, changed_by: EmployeeId
+    ) -> None: ...
 
 
 @runtime_checkable

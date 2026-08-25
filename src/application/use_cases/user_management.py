@@ -71,6 +71,7 @@ if TYPE_CHECKING:
         FaceEmbeddingRepository,
         Notifier,
         PermissionFlagRepository,
+        SystemLimits,
     )
     from src.domain.value_objects.authorization import PermissionFlag
     from src.domain.value_objects.credentials import EmailAddress, Username
@@ -198,6 +199,16 @@ class EmployeeDraft:
     profile_photo_url: str | None = None
     #: Kamera Operatoru üçün çox-seçimli mağaza təyinatı (bölmə 4).
     camera_store_ids: tuple[StoreId, ...] = ()
+    #: `v2backlog.md` Faza 3.1 — mövsümi/müvəqqəti işçi üçün istəyə-bağlı
+    #: planlaşdırılmış deaktivasiya tarixi. Həm `create_employee`, həm
+    #: `update_employee`-də yazılır (məs. müvəqqəti müqavilə uzadılanda HR
+    #: tarixi dəyişdirə/silə bilməlidir) — `hire_date`/`date_of_birth` ilə
+    #: EYNİ rəftar.
+    scheduled_deactivation_date: date | None = None
+    #: Faza 3.5 — işçi yaradılarkən "kim tövsiyə etdi". YALNIZ `create_employee`-də
+    #: oxunur; sonradan DƏYİŞDİRİLƏ BİLMƏZ (bax `Employee.referred_by_employee_id`
+    #: şərhi: bonus bir dəfə yazılır, sahə sonra tarixi fakt kimi qalır).
+    referred_by_employee_id: EmployeeId | None = None
 
 
 @dataclass(frozen=True)
@@ -291,6 +302,56 @@ class OffboardingSignalReader(Protocol):
     def read_offboarding_signals(self, employee_id: EmployeeId) -> OffboardingSignals: ...
 
 
+class ReferralBonusAwarder(Protocol):
+    """`v2backlog.md` Faza 3.5 — `SalesPointsUseCase.award_referral_bonus` ödəyir.
+
+    `OpenFineExposureReader` İLƏ EYNİ naxış: `UserManagementUseCase` xal
+    ledger-ini birbaşa TANIMIR, yalnız bu dar sualı verir. Xal MODULU
+    söndürülmüş quraşdırmada HEÇ vaxt yaradılmır (`composition.py`) — məcburi
+    asılılıq `UserManagementUseCase`-i xal modulundan ASILI edərdi, halbuki HR
+    işçi yaratma axını xal sistemindən tamamilə müstəqil işləməlidir.
+    """
+
+    def award_referral_bonus(
+        self,
+        *,
+        tenant_id: TenantId,
+        referrer_id: EmployeeId,
+        referrer_store_id: StoreId | None,
+        new_employee_id: EmployeeId,
+    ) -> int | None: ...
+
+
+class ScheduledDeactivationCandidateReader(Protocol):
+    """`v2backlog.md` Faza 3.1 — `scheduled_deactivation_date` keçmiş aktiv işçilər."""
+
+    def list_due_for_scheduled_deactivation(
+        self, tenant_id: TenantId, *, as_of: date
+    ) -> list[Employee]: ...
+
+
+class RetentionAnonymizationCandidateReader(Protocol):
+    """`v2backlog.md` Faza 3.2 — retensiya müddəti keçmiş, hələ anonimləşdirilməyən
+    deaktiv işçilər."""
+
+    def list_pending_anonymization(
+        self, tenant_id: TenantId, *, deactivated_before: datetime
+    ) -> list[Employee]: ...
+
+
+class OffboardingChecklistStarter(Protocol):
+    """`EmployeeOffboardingChecklistUseCase.start_checklist` ödəyir (Faza 3.4).
+
+    Qaytarılan dəyər İSTİFADƏ OLUNMUR (`None`-lə eyni cür rəftar olunur) —
+    `UserManagementUseCase` checklist-in DAXİLİ vəziyyətini idarə etmir,
+    yalnız onu TƏTİKLƏYİR.
+    """
+
+    def start_checklist(
+        self, *, tenant_id: TenantId, initiated_by: EmployeeId, employee_id: EmployeeId
+    ) -> object | None: ...
+
+
 @dataclass(frozen=True)
 class OffboardingReview:
     """Deaktivasiyanın TAM mənzərəsi — işçi + açıq bağlantılar (HR-4).
@@ -375,6 +436,11 @@ class UserManagementUseCase:
         face_embeddings: FaceEmbeddingRepository | None = None,
         fine_exposure: OpenFineExposureReader | None = None,
         offboarding_signals: OffboardingSignalReader | None = None,
+        limits: SystemLimits | None = None,
+        referral_bonus: ReferralBonusAwarder | None = None,
+        scheduled_deactivation_reader: ScheduledDeactivationCandidateReader | None = None,
+        retention_candidate_reader: RetentionAnonymizationCandidateReader | None = None,
+        offboarding_checklists: OffboardingChecklistStarter | None = None,
     ) -> None:
         self._employees = employees
         self._credentials = credentials
@@ -419,6 +485,20 @@ class UserManagementUseCase:
         # DEMƏK DEYİL və `OffboardingReview` bunu `signals.has_any` ilə
         # ayırd edə bilir — ekran «yoxlanılmadı» halını göstərməlidir.
         self._offboarding_signals = offboarding_signals
+        # Faza 3.2 (retensiya müddəti) VƏ digər ROOT parametrlərin oxunması
+        # üçün. `None` = köhnə kompozisiya — `deactivate_scheduled_employees`/
+        # `anonymize_former_employees` YALNIZ öz oxuyucu portları da qoşulubsa
+        # çağırıla bilər (aşağıya bax).
+        self._limits = limits
+        # Faza 3.5 — `None` olduqda referral bonusu YAZILMIR, `referred_by_
+        # employee_id` sahəsi isə yenə DOLUR (tarixi fakt).
+        self._referral_bonus = referral_bonus
+        self._scheduled_deactivation_reader = scheduled_deactivation_reader
+        self._retention_candidate_reader = retention_candidate_reader
+        # Faza 3.4 — `None` olduqda checklist BAŞLADILMIR, deaktivasiya isə
+        # köhnə davranışında qalır (`_offboarding_signals` ilə EYNİ fəlsəfə:
+        # yeni funksiya mövcud axını SÜKUTLA dəyişməməlidir).
+        self._offboarding_checklists = offboarding_checklists
 
     # ------------------------------- yaratma --------------------------------- #
 
@@ -457,6 +537,8 @@ class UserManagementUseCase:
             profile_photo_url=draft.profile_photo_url,
             hire_date=draft.hire_date,
             date_of_birth=draft.date_of_birth,
+            scheduled_deactivation_date=draft.scheduled_deactivation_date,
+            referred_by_employee_id=draft.referred_by_employee_id,
         )
         self._apply_camera_stores(employee, draft.camera_store_ids, actor=actor)
         # `save()` DEYİL: o, `UPDATE`-dir və olmayan sətri yaratmır — yeni işçi
@@ -464,6 +546,14 @@ class UserManagementUseCase:
         # `must_change_password` entity-dədir və `create()` onu yazır, yəni
         # köhnə `set_password(must_change=True)` çağırışı ilə eyni nəticə verir.
         self._employees.create(employee, raw_password=initial_password, raw_pin=initial_pin)
+
+        # Faza 3.5 — bonus SAVE-DƏN SONRA: referrer-in mövcud işçi olduğu
+        # onsuz da tələb olunur (`referred_by_employee_id` FK), lakin yeni
+        # işçinin ÖZÜ bazaya yazılmadan bonusu vermək, uğursuz `create()`
+        # zamanı "referrer mükafatlandı, referal yoxdur" ziddiyyətini yaradardı.
+        referral_bonus_points = self._award_referral_bonus(
+            tenant_id=tenant_id, draft=draft, new_employee_id=employee_id
+        )
 
         self._audit.record(
             tenant_id=tenant_id,
@@ -477,9 +567,40 @@ class UserManagementUseCase:
                 "has_password": employee.has_password,
                 "has_pin": employee.has_pin,
                 "camera_stores": len(draft.camera_store_ids),
+                "scheduled_deactivation_date": (
+                    draft.scheduled_deactivation_date.isoformat()
+                    if draft.scheduled_deactivation_date
+                    else None
+                ),
+                "referred_by_employee_id": (
+                    str(draft.referred_by_employee_id) if draft.referred_by_employee_id else None
+                ),
+                "referral_bonus_points": _audited(
+                    referral_bonus_points,
+                    checked=self._referral_bonus is not None,
+                ),
             },
         )
         return employee
+
+    def _award_referral_bonus(
+        self, *, tenant_id: TenantId, draft: EmployeeDraft, new_employee_id: EmployeeId
+    ) -> int | None:
+        """`referral_bonus` portu yoxdursa (`None`) YOXLAMA APARILMIR — köhnə davranış (AF-5)."""
+        if self._referral_bonus is None or draft.referred_by_employee_id is None:
+            return None
+        referrer = self._employees.get(draft.referred_by_employee_id)
+        if referrer is None:
+            # Tövsiyə edən artıq mövcud deyil (silinib/köçürülüb) — sükutla
+            # buraxılır, çünki bu, YENİ işçinin yaranmasını bloklamamalıdır
+            # (`_check_deadlock`-un "BLOKLAMIR" fəlsəfəsi ilə eyni).
+            return None
+        return self._referral_bonus.award_referral_bonus(
+            tenant_id=tenant_id,
+            referrer_id=referrer.id,
+            referrer_store_id=referrer.store_id,
+            new_employee_id=new_employee_id,
+        )
 
     # ------------------------------- redaktə --------------------------------- #
 
@@ -524,6 +645,7 @@ class UserManagementUseCase:
         employee.notification_email = draft.notification_email
         employee.hire_date = draft.hire_date
         employee.date_of_birth = draft.date_of_birth
+        employee.scheduled_deactivation_date = draft.scheduled_deactivation_date
         if draft.profile_photo_url is not None:
             employee.profile_photo_url = draft.profile_photo_url
 
@@ -712,6 +834,14 @@ class UserManagementUseCase:
         employee.deactivate()
         self._employees.save(employee)
         purged = self._purge_face_embedding(actor=actor, employee_id=employee_id, reason=reason)
+        # Faza 3.4 — checklist DEAKTİVASİYADAN SONRA başladılır, çünki
+        # `entities/offboarding_checklist.py` başlığı: bu, deaktivasiyanı
+        # BLOKLAMIR, əksinə ONUN NƏTİCƏSİDİR. Uğursuz `save()` yuxarıda ARTIQ
+        # istisna atmışdı, yəni bura yalnız HƏQİQƏTƏN deaktiv edilmiş işçi üçün
+        # çatır.
+        checklist_started = self._start_offboarding_checklist(
+            tenant_id=tenant_id, initiated_by=actor.id, employee_id=employee_id
+        )
         review = OffboardingReview(
             employee=employee,
             # Üz şablonu ARTIQ silinibsə siyahıda görünməməlidir: `purged`
@@ -765,6 +895,11 @@ class UserManagementUseCase:
                     list(review_checklist),
                     checked=self._offboarding_signals is not None,
                 ),
+                # Faza 3.4 — checklist BAŞLADILDIMI (şablon boşdursa `False`,
+                # port qoşulmayıbsa `PORT_NOT_WIRED`).
+                "offboarding_checklist_started": _audited(
+                    checklist_started, checked=self._offboarding_checklists is not None
+                ),
             },
             reason=reason,
         )
@@ -781,6 +916,143 @@ class UserManagementUseCase:
                 tenant_id=tenant_id, employee=employee, checklist=review_checklist
             )
         return review
+
+    # ------------------------------ planlanmış -------------------------------- #
+
+    def deactivate_scheduled_employees(self, tenant_id: TenantId) -> int:
+        """`v2backlog.md` Faza 3.1 — `scheduled_deactivation_date` keçmiş işçiləri deaktiv edir.
+
+        PLANLAŞDIRILMIŞ İŞDİR (`employee_documents.notify_expiring_documents`,
+        `fine_management.expire_stale` ilə EYNİ forma) — actor YOXDUR, aktoru
+        insan yox, `job_runner.py` başladır (CLAUDE.md §5, `SƏLAHİYYƏT QEYDİ`).
+
+        `deactivate_employee()`-i ÇAĞIRMIR: o, `actor: Employee` VƏ iyerarxiya
+        yoxlaması (`_assert_may_manage`) tələb edir — planlaşdırılmış işdə
+        aktor yoxdur. Ona görə minimum lazımi addımlar (deaktivasiya, üz
+        təmizliyi, checklist başlatma, bildiriş) burada TƏKRARLANIR, LAKİN
+        `_check_deadlock`/`_check_open_fine_exposure`/`OffboardingReview`
+        SİYAHISI YOXDUR — bu, EKRAN üçün hazırlanan qərar-öncəsi məlumatdır
+        (bax `OffboardingReview` şərhi: "siyahı QƏRARDAN ƏVVƏL faydalıdır"),
+        avtomatik axında isə qərarı artıq VERİLİB (planlaşdırılmış tarix).
+
+        Returns:
+            Deaktiv edilən işçi sayı.
+        """
+        if self._scheduled_deactivation_reader is None:
+            return 0
+        now = self._clock.now()
+        today = now.date()
+        candidates = self._scheduled_deactivation_reader.list_due_for_scheduled_deactivation(
+            tenant_id, as_of=today
+        )
+        deactivated = 0
+        for employee in candidates:
+            if not employee.is_active:
+                # İDEMPOTENTLİK: `at-least-once` icra eyni işçini iki dəfə
+                # gətirə bilər (`job_runner.py` başlığı) — artıq deaktiv
+                # işçini YENİDƏN "deaktiv edildi" kimi audit-ə yazmaq jurnalı
+                # yanıldardı.
+                continue
+            employee.deactivate()
+            self._employees.save(employee)
+            self._purge_face_embedding(
+                actor=None,
+                employee_id=employee.id,
+                reason="Planlaşdırılmış deaktivasiya tarixi çatdı",
+            )
+            self._start_offboarding_checklist(
+                tenant_id=tenant_id, initiated_by=employee.id, employee_id=employee.id
+            )
+            deactivated += 1
+            self._audit.record(
+                tenant_id=tenant_id,
+                actor_id=None,
+                action="EMPLOYEE_SCHEDULED_DEACTIVATION",
+                entity_type="employee",
+                entity_id=employee.id,
+                before_state={"is_active": True},
+                after_state={"is_active": False},
+                reason=(
+                    f"Planlaşdırılmış deaktivasiya tarixi çatdı: "
+                    f"{employee.scheduled_deactivation_date}"
+                ),
+            )
+            if self._notifier is not None:
+                self._notifier.notify(
+                    tenant_id=tenant_id,
+                    recipient_id=None,  # `can_manage_employees` sahibləri
+                    category="EMPLOYEE_SCHEDULED_DEACTIVATION",
+                    title_az="İşçi avtomatik deaktiv edildi",
+                    body_az=(
+                        f"{employee.full_name} planlaşdırılmış tarix "
+                        f"({employee.scheduled_deactivation_date}) çatdığı üçün avtomatik "
+                        f"deaktiv edildi."
+                    ),
+                    is_critical=False,
+                )
+        return deactivated
+
+    def anonymize_former_employees(self, tenant_id: TenantId) -> int:
+        """`v2backlog.md` Faza 3.2 — retensiya müddəti keçmiş deaktiv işçilərin PII-ni təmizləyir.
+
+        Müddət ROOT PARAMETRİDİR (`FORMER_EMPLOYEE_DATA_RETENTION_MONTHS`,
+        `policies.py`). `audit_logs` bu prosesdən İSTİSNADIR — sütun YALNIZ
+        `employees` sətrinə toxunur (`Employee.anonymize_personal_data`
+        şərhi, migrations/088 başlığı).
+
+        Returns:
+            Anonimləşdirilən işçi sayı.
+        """
+        if self._retention_candidate_reader is None:
+            return 0
+        from src.domain.value_objects.face_recognition import add_months  # noqa: PLC0415
+
+        now = self._clock.now()
+        retention_months = self._retention_months(tenant_id)
+        cutoff = add_months(now, -retention_months)
+        candidates = self._retention_candidate_reader.list_pending_anonymization(
+            tenant_id, deactivated_before=cutoff
+        )
+        anonymized = 0
+        for employee in candidates:
+            if not employee.anonymize_personal_data(now=now):
+                # İDEMPOTENTLİK: artıq anonimləşdirilib (`data_anonymized_at`
+                # doludur) — `at-least-once` icra eyni sətri təkrar görə bilər.
+                continue
+            self._employees.save(employee)
+            anonymized += 1
+            # `audit_logs`-a YAZILMIR (modul başlığı) — anonimləşdirmənin ÖZÜ
+            # audit sətrinin "kim, nə vaxt, hansı adla" sualını cavablandırdığı
+            # köhnə sətirlərə TOXUNMUR, sadəcə YENİ sətir açılmır.
+            _security_log.info(
+                "EMPLOYEE_DATA_ANONYMIZED",
+                extra={"employee_id": str(employee.id), "tenant_id": str(tenant_id)},
+            )
+        return anonymized
+
+    def _retention_months(self, tenant_id: TenantId) -> int:
+        from src.application.root_limits import limit_int  # noqa: PLC0415
+        from src.domain.policies import SystemLimitKey  # noqa: PLC0415
+
+        return limit_int(
+            self._limits, tenant_id, SystemLimitKey.FORMER_EMPLOYEE_DATA_RETENTION_MONTHS
+        )
+
+    def _start_offboarding_checklist(
+        self, *, tenant_id: TenantId, initiated_by: EmployeeId, employee_id: EmployeeId
+    ) -> bool | None:
+        """Checklist-i başladır (Faza 3.4). `None` = port qoşulmayıb.
+
+        `bool`: şablon var idi VƏ checklist yarandımı (`False` = Root hələ
+        heç bir OFFBOARDING bəndi yazmayıb — `EmployeeOffboardingChecklistUseCase.
+        start_checklist` bu halda `None` qaytarır, bax həmin metodun docstring-i).
+        """
+        if self._offboarding_checklists is None:
+            return None
+        checklist = self._offboarding_checklists.start_checklist(
+            tenant_id=tenant_id, initiated_by=initiated_by, employee_id=employee_id
+        )
+        return checklist is not None
 
     def _read_offboarding_signals(self, employee_id: EmployeeId) -> OffboardingSignals:
         """`offboarding_signals` portu yoxdursa BOŞ siqnal — köhnə davranış (HR-4)."""
@@ -842,9 +1114,13 @@ class UserManagementUseCase:
         )
 
     def _purge_face_embedding(
-        self, *, actor: Employee, employee_id: EmployeeId, reason: str
+        self, *, actor: Employee | None, employee_id: EmployeeId, reason: str
     ) -> bool | None:
         """Üz vektorunu HƏMİN ANDA silir (`facecontrol.md` bənd 8).
+
+        `actor=None` — `deactivate_scheduled_employees` (Faza 3.1) çağırır:
+        planlaşdırılmış iş insan aktoru olmadan işləyir, `purge()` portu
+        bunun üçün `purged_by: EmployeeId | None` qəbul edir (`ports.py`).
 
         ──────────────────────────────────────────────────────────────────────
         NİYƏ İSTİSNA UDULMUR
@@ -868,7 +1144,7 @@ class UserManagementUseCase:
             return None
         return self._face_embeddings.purge(
             employee_id,
-            purged_by=actor.id,
+            purged_by=actor.id if actor is not None else None,
             reason=f"İşçi deaktiv edildi: {reason}",
             purged_at=self._clock.now(),
         )

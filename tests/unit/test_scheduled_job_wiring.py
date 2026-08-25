@@ -141,6 +141,16 @@ EXPECTED_JOBS: Final = (
     # iki indeksli `DELETE`. TƏK iş, çünki hər ikisi EYNİ sualın cavabıdır
     # və EYNİ Root açarından oxuyur (bax `composition.py::_job_retention_purge`).
     ("RETENTION_PURGE", JobCadence.DAILY, JobWeight.LIGHT),
+    # `v2backlog.md` Faza 3.1/3.2/3.3 — HR lifecycle-in ÜÇ gecəlik işi
+    # (`composition.py::_register_scheduled_jobs` şərhi ilə EYNİ əsaslandırma:
+    # `DAILY`+`LIGHT`, hər üçü GÜN vahidli tarix müqayisəsi + tapılan sətir
+    # qədər UPDATE-dir, xarici proses yoxdur). Sonuncu ikisi (deaktivasiya,
+    # anonimləşdirmə) HAZIRDA HƏMİŞƏ `0` qaytarır — oxuyucu portları hələ
+    # heç bir repo-da implementasiya olunmayıb (`composition.py`-dakı «QAPI
+    # SINIĞI» qeydi) — bu, planlayıcı QEYDİYYATININ ÖZÜNÜN natamamlığı deyil.
+    ("TRANSFER_REQUEST_SCHEDULED_APPLY", JobCadence.DAILY, JobWeight.LIGHT),
+    ("EMPLOYEE_SCHEDULED_DEACTIVATION_RUN", JobCadence.DAILY, JobWeight.LIGHT),
+    ("FORMER_EMPLOYEE_ANONYMIZATION_RUN", JobCadence.DAILY, JobWeight.LIGHT),
     ("NIGHTLY_BACKUP", JobCadence.DAILY, JobWeight.HEAVY),
 )
 
@@ -264,6 +274,29 @@ class _MorningCheckIn(_RecordingUseCase):
 class _Tasks(_RecordingUseCase):
     def escalate_overdue(self, *, tenant_id: TenantId) -> Any:
         return self._record("tasks.escalate_overdue", tenant_id=tenant_id)
+
+
+class _TransferRequests(_RecordingUseCase):
+    """`v2backlog.md` Faza 3.3 — planlaşdırılmış filiallar-arası köçürmə tətbiqi."""
+
+    def apply_scheduled_transfers(self, tenant_id: TenantId) -> Any:
+        return self._record("transfer_requests.apply_scheduled_transfers", tenant_id=tenant_id)
+
+
+class _UserLifecycle(_RecordingUseCase):
+    """`v2backlog.md` Faza 3.1/3.2 — `UserManagementUseCase`-in İKİ gecəlik metodu.
+
+    `_composition.py::_job_scheduled_employee_deactivation`/`_job_former_
+    employee_anonymization` HƏR İKİSİ `session.users`-ə müraciət edir — bu
+    sahtə HƏR İKİ metodu daşıyır (`_TransferRequests` ilə fərqli, çünki
+    real `UserManagementUseCase` da iki metodu EYNİ obyektdə saxlayır).
+    """
+
+    def deactivate_scheduled_employees(self, tenant_id: TenantId) -> Any:
+        return self._record("users.deactivate_scheduled_employees", tenant_id=tenant_id)
+
+    def anonymize_former_employees(self, tenant_id: TenantId) -> Any:
+        return self._record("users.anonymize_former_employees", tenant_id=tenant_id)
 
 
 class _Devices(_RecordingUseCase):
@@ -414,6 +447,9 @@ class _FakeSession:
         # örtüyü lazım deyil.
         self.face_exemptions = _FaceExemptions(calls, result=2)
         self.face_log_retention = _FaceLogRetention(calls, result=140)
+        # `v2backlog.md` Faza 3.1/3.2/3.3 — HR lifecycle-in ÜÇ gecəlik işi.
+        self.transfer_requests = _TransferRequests(calls, result=1)
+        self.users = _UserLifecycle(calls, result=0)
         # SAAS-6 — saxlama müddəti işi: limit oxusu + iki təmizləmə çağırışı.
         self.limits = _SessionLimits()
         self.evidence_queue = _EvidenceQueue()

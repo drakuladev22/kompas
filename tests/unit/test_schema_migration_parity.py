@@ -120,9 +120,19 @@ _MISSING_TABLE_GROUP: Final[dict[str, str]] = {
     "trg_app_job_runs_updated": "app_scheduled_job_runs",
     "trg_attrition_scores_updated": "attrition_risk_scores",
     "trg_behavior_baseline_updated": "employee_behavior_baseline",
+    # v2backlog.md (miqrasiyalar 088–091) — YENİ cədvəllər, hələ `schema.sql`-ə
+    # köçürülməyib. Eyni sinifdən: D4-ün 39-cədvəl tapıntısının davamıdır.
+    "trg_campaign_periods_updated": "campaign_periods",
+    "trg_checklist_item_templates_updated": "checklist_item_templates",
     "trg_daily_break_usage_updated": "daily_break_usage",
     "trg_drive_connections_updated": "drive_connections",
     "trg_employee_documents_updated": "employee_documents",
+    # v2backlog.md (miqrasiya 088) — bax yuxarıdakı campaign_periods/
+    # checklist_item_templates şərhi, EYNİ səbəb.
+    "trg_server_created_at_offboarding": "employee_offboarding_checklists",
+    "trg_offboarding_checklists_updated": "employee_offboarding_checklists",
+    "trg_offboarding_items_updated": "employee_offboarding_checklist_items",
+    "trg_server_created_at_transfer_requests": "employee_transfer_requests",
     "trg_exception_sources_updated": "exception_sources",
     "trg_exceptions_updated": "exceptions",
     "trg_executive_digest_updated": "executive_digest_config",
@@ -151,8 +161,17 @@ _MISSING_TABLE_GROUP: Final[dict[str, str]] = {
     "enforce_store_pin_throttle_lockout": "store_pin_throttle",
     "trg_store_pin_throttle_lockout": "store_pin_throttle",
     "trg_store_templates_updated": "store_templates",
+    # v2backlog.md (miqrasiya 090) — bax `trg_campaign_periods_updated` şərhi,
+    # EYNİ səbəb. Funksiya AF-2/PIN cütü ilə EYNİ naxışdadır (`enforce_*` +
+    # `trg_*`, ikisi də CƏDVƏLİ `schema.sql`-də olmayan `support_chat_
+    # throttle`-a bağlıdır).
+    "enforce_support_chat_throttle_lockout": "support_chat_throttle",
+    "trg_support_chat_throttle_lockout": "support_chat_throttle",
     "trg_telegram_config_updated": "telegram_config",
     "trg_tenant_branding_updated": "tenant_branding",
+    # v2backlog.md (miqrasiya 091) — bax `trg_campaign_periods_updated` şərhi,
+    # EYNİ səbəb.
+    "trg_webhook_endpoints_updated": "webhook_endpoints",
 }
 
 #: `seed_*_for_new_tenant` funksiyaları ilə onların `trg_seed_*` trigger-ləri
@@ -192,6 +211,19 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
             "`KOMPASOS_PRIVATE_SERVER_DSN` yolunda mənası fərqlidir, AYRICA "
             "təhlil tələb edir. #4-cü qrup, bax modul-səviyyəli şərh."
         ),
+        "enforce_server_employee_deactivated_at": (
+            "TIME-1 (migrations/096): `employees.deactivated_at`-ı `is_active` "
+            "keçidinə görə SERVER vaxtı ilə möhürləyir/sıfırlayır — "
+            "`v2backlog.md` Faza 3.2 retensiya hesablamasının lövbəri. "
+            "`schema.sql` QƏSDƏN yenilənmir (migrasiyanın ÖZÜ başlığı): sütun "
+            "artıq bazis sxemdə var, YALNIZ YENİ trigger əlavə olunur — "
+            '`CLAUDE.md` §7 "qayda qatlanmır" prinsipinə görə köçürmə '
+            "TƏLƏB OLUNMUR, çünki bu, mövcud qaydanın YENİDƏN yazılması "
+            "DEYİL, tamam YENİ obyektdir."
+        ),
+        "trg_server_employee_deactivated_at": (
+            "Yuxarıdakı `enforce_server_employee_deactivated_at`-ın trigger-i — EYNİ səbəb."
+        ),
     }
     | dict.fromkeys(
         (
@@ -220,6 +252,9 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
                 # Miqrasiya 084 — dörd yeni Root açarı (saxlama müddəti, üz
                 # qeydiyyatı möhləti, etiraz eskalasiyası, nəşr gecikməsi).
                 "seed_hr_and_retention_limits_for_new_tenant",
+                # Miqrasiya 095 — `v2backlog.md` Faza 3.2/3.5 üçün iki yeni
+                # Root açarı (deaktiv işçi retensiyası, tövsiyə bonusu).
+                "seed_hr_lifecycle_v2_limits_for_new_tenant",
                 "seed_history_page_size_limits_for_new_tenant",
                 "seed_infrastructure_runtime_limits_for_new_tenant",
                 "seed_labor_and_staffing_limits_for_new_tenant",
@@ -254,6 +289,7 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
                 "trg_seed_export_preflight_limits",
                 "trg_seed_face_control_limits",
                 "trg_seed_hr_and_retention_limits",
+                "trg_seed_hr_lifecycle_v2_limits",
                 "trg_seed_field_report_limits",
                 "trg_seed_history_page_size_limits",
                 "trg_seed_infrastructure_runtime_limits",

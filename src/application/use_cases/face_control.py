@@ -138,6 +138,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from datetime import datetime
 
+    from src.application.use_cases.employee_documents import EmployeeDocumentDraft
     from src.domain.entities.employee import Employee
     from src.domain.interfaces.ports import (
         AuditTrail,
@@ -414,6 +415,33 @@ class AdminCounter(Protocol):
     def count_active_with_flag(self, tenant_id: TenantId, flag_code: str) -> int: ...
 
 
+class BiometricConsentRecorder(Protocol):
+    """`EmployeeDocumentUseCase.create_document` ödəyir (`v2backlog.md` Faza 3.6).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ DAR PROTOKOL, `EmployeeDocumentUseCase` BİRBAŞA DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    `AdminCounter` İLƏ EYNİ əsaslandırma: `FaceEnrollmentUseCase` sənəd
+    modulunun QALAN funksiyalarını (bitmə xəbərdarlığı, deaktivasiya) nə
+    çağırır, nə bilməlidir — yalnız "razılıq sənədini YARAT" sualı lazımdır.
+    Tam sinfi asılılıq kimi almaq test sahtələrini `EmployeeDocumentUseCase`-in
+    BÜTÜN səthini (limits, employees portu və s.) təqlid etməyə məcbur edərdi.
+
+    `doc_type="BIOMETRIC_CONSENT"` ÇAĞIRAN tərəfdə (bax `capture_and_store`)
+    sabitlənir — `EmployeeDocument.doc_type` sərbəst mətndir (infra təsdiqi,
+    `employee_documents.py` şərhi), yeni sütun/miqrasiya TƏLƏB OLUNMUR.
+    """
+
+    def create_document(
+        self,
+        *,
+        tenant_id: TenantId,
+        actor: Employee,
+        employee_id: EmployeeId,
+        draft: EmployeeDocumentDraft,
+    ) -> object: ...
+
+
 @dataclass(frozen=True)
 class FaceEnrollmentGrace:
     """«Üz qeydiyyatına nə qədər qalıb?» oxu-modeli (UX-7).
@@ -472,6 +500,7 @@ class FaceEnrollmentUseCase:
         audit: AuditTrail,
         clock: Clock,
         admins: AdminCounter | None = None,
+        consent_documents: BiometricConsentRecorder | None = None,
     ) -> None:
         self._profiles = profiles
         self._camera = camera
@@ -483,9 +512,19 @@ class FaceEnrollmentUseCase:
         # adi qeydiyyat yolunun ona ehtiyacı yoxdur; verilməyibsə bootstrap
         # yolu FAIL-CLOSED şəkildə bağlanır (bax həmin metod).
         self._admins = admins
+        # `v2backlog.md` Faza 3.6 — razılıq sənədinin arxivi. İSTƏYƏ BAĞLIDIR:
+        # `None` = köhnə davranış (razılıq sənədi YAZILMIR, yalnız qeydiyyatın
+        # ÖZÜ baş verir) — mövcud testlər və bu portu qurmayan kompozisiyalar
+        # SÜKUTLA pozulmasın deyə. Bax `capture_and_store`-un docstring-i.
+        self._consent_documents = consent_documents
 
     def enroll_first_account(
-        self, *, tenant_id: TenantId, actor: Employee, subject_id: EmployeeId
+        self,
+        *,
+        tenant_id: TenantId,
+        actor: Employee,
+        subject_id: EmployeeId,
+        consent_file_ref: str | None = None,
     ) -> FaceEnrollmentResult:
         """SEC-025 — tenant-ın İLK admini öz üzünü qeydiyyata sala bilər.
 
@@ -567,10 +606,16 @@ class FaceEnrollmentUseCase:
             action="FACE_ENROLLED_BOOTSTRAP",
             reason=None,
             archived=False,
+            consent_file_ref=consent_file_ref,
         )
 
     def enroll(
-        self, *, tenant_id: TenantId, actor: Employee, subject_id: EmployeeId
+        self,
+        *,
+        tenant_id: TenantId,
+        actor: Employee,
+        subject_id: EmployeeId,
+        consent_file_ref: str | None = None,
     ) -> FaceEnrollmentResult:
         """İLK qeydiyyat. Mövcud qeydiyyat varsa RƏDD edilir (bax bənd 2).
 
@@ -599,6 +644,7 @@ class FaceEnrollmentUseCase:
             action="FACE_ENROLLED",
             reason=None,
             archived=False,
+            consent_file_ref=consent_file_ref,
         )
 
     def enrollment_grace(
@@ -702,11 +748,21 @@ class FaceEnrollmentUseCase:
         action: str,
         reason: str | None,
         archived: bool,
+        consent_file_ref: str | None = None,
     ) -> FaceEnrollmentResult:
         """Kadr çəkilişi → keyfiyyət süzgəci → orta vektor → yazı + audit.
 
         Həm ilk qeydiyyat, həm yenidən-qeydiyyat bu metoddan keçir (bax
         yuxarıdakı bölmə şərhi).
+
+        Args:
+            consent_file_ref: `v2backlog.md` Faza 3.6 — razılıq sənədinin
+                artıq yüklənmiş faylının istinadı. YÜKLƏMƏ MƏNTİQİ BURADA
+                DEYİL (`EmployeeDocumentDraft.file_ref` şərhi ilə eyni
+                qərar) — kontroller `EvidenceStorageProvider.upload()`-u ÖZÜ
+                çağırır, bura yalnız nəticəni ötürür. `None` = razılıq
+                sənədi YAZILMIR (köhnə davranış, `consent_documents` portu
+                qoşulmayıbsa da eyni nəticə).
         """
         if not self._camera.is_available():
             raise FaceCameraUnavailableError(
@@ -749,6 +805,12 @@ class FaceEnrollmentUseCase:
         reference = FaceEmbedding.average(accepted)
         enrolled_at = self._clock.now()
         self._profiles.save_enrollment(subject_id, embedding=reference, enrolled_at=enrolled_at)
+        consent_recorded = self._record_consent(
+            tenant_id=tenant_id,
+            actor=actor,
+            subject_id=subject_id,
+            consent_file_ref=consent_file_ref,
+        )
 
         self._audit.record(
             tenant_id=tenant_id,
@@ -764,6 +826,9 @@ class FaceEnrollmentUseCase:
                 "frames_accepted": len(accepted),
                 "minimum_quality": minimum_quality,
                 "archived_previous": archived,
+                # Faza 3.6 — razılıq sənədi YAZILDIMI. `None` = fayl
+                # verilmədi/port qoşulmayıb (AF-5: bax `_record_consent`).
+                "biometric_consent_recorded": consent_recorded,
             },
             reason=reason,
         )
@@ -786,6 +851,44 @@ class FaceEnrollmentUseCase:
             enrolled_at=enrolled_at,
             archived_previous=archived,
         )
+
+    def _record_consent(
+        self,
+        *,
+        tenant_id: TenantId,
+        actor: Employee,
+        subject_id: EmployeeId,
+        consent_file_ref: str | None,
+    ) -> bool | None:
+        """Razılıq sənədini `EmployeeDocument` kimi yazır (`v2backlog.md` Faza 3.6).
+
+        `None` qaytarır (YAZMIR) iki fərqli halda — `_purge_face_embedding`
+        (`user_management.py`) ilə EYNİ AF-5 fəlsəfəsi, LAKİN İKİ SƏBƏB
+        BURADA BİRLƏŞDİRİLİR (fayl YOXDUR / port YOXDUR): hər ikisi eyni
+        nəticəyə (yazılmadı) gətirir və çağıran tərəf üçün fərqi yoxdur —
+        `capture_and_store`-un öz audit sətri artıq `consent_file_ref is None`
+        ilə bu iki halı ayırd edə bilir (arqumentin özü loglanmır, LAKİN
+        `enroll()`/`enroll_first_account()`-un çağırış konteksti bunu göstərir).
+        """
+        if self._consent_documents is None or consent_file_ref is None:
+            return None
+        from src.application.use_cases.employee_documents import (  # noqa: PLC0415
+            EmployeeDocumentDraft,
+        )
+
+        self._consent_documents.create_document(
+            tenant_id=tenant_id,
+            actor=actor,
+            employee_id=subject_id,
+            draft=EmployeeDocumentDraft(
+                doc_type="BIOMETRIC_CONSENT",
+                doc_number=None,
+                expiry_date=None,
+                is_blocking=False,
+                file_ref=consent_file_ref,
+            ),
+        )
+        return True
 
     def _limit_int(self, tenant_id: TenantId, key: SystemLimitKey) -> int:
         return self._limits.get_int(tenant_id, key.value, int(DEFAULT_LIMITS[key]))
@@ -831,6 +934,7 @@ class FaceReEnrollmentUseCase:
         actor: Employee,
         subject_id: EmployeeId,
         reason: str,
+        consent_file_ref: str | None = None,
     ) -> FaceEnrollmentResult:
         """Köhnə vektoru ARXİVLƏYİR (`REPLACED`), sonra yenisini yazır.
 
@@ -870,6 +974,7 @@ class FaceReEnrollmentUseCase:
             action="FACE_RE_ENROLLED",
             reason=cleaned_reason,
             archived=archived,
+            consent_file_ref=consent_file_ref,
         )
         if not result.accepted:
             # KADRLAR KEÇMƏDİ: arxiv sətri artıq yazılıb, lakin yeni vektor

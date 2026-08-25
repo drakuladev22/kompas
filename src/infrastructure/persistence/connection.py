@@ -767,6 +767,11 @@ class PostgresUnitOfWork:
         from src.infrastructure.persistence.fine_review_repository import (  # noqa: PLC0415
             PostgresFineReviewBatchRepository,
         )
+        from src.infrastructure.persistence.hr_lifecycle_v2_repositories import (  # noqa: PLC0415
+            PostgresChecklistItemTemplateRepository,
+            PostgresEmployeeOffboardingChecklistRepository,
+            PostgresEmployeeTransferRequestRepository,
+        )
         from src.infrastructure.persistence.migration import (  # noqa: PLC0415
             PostgresMigrationEventLog,
             SessionReadOnlyController,
@@ -1000,6 +1005,22 @@ class PostgresUnitOfWork:
             # digəri yazılmayan vəziyyət mümkün deyil.
             "field_reports": PostgresFieldReportRepository(conn, self._context),
             "field_report_catalog": PostgresFieldReportCatalog(conn, self._context),
+            # --- HR Lifecycle v2 (v2backlog.md Faza 3.3/3.4) -------------------
+            # `checklist_item_templates` `field_report_catalog` ilə EYNİ RUHDADIR
+            # (Root-authored kataloq, yazı yolu yoxdur) — LAKİN AYRICA repo-dur,
+            # çünki İKİ domenin (`FIELD_REPORT`/`OFFBOARDING`) ORTAQ cədvəlidir
+            # (migrations/088 başlığı). Offboarding checklist-i (başlıq + bəndlər)
+            # `field_reports` ilə EYNİ "vahid aqreqat, bir tranzaksiya" naxışını
+            # təkrarlayır (`hr_lifecycle_v2_repositories.py` başlığı).
+            "employee_transfer_requests": PostgresEmployeeTransferRequestRepository(
+                conn, self._context
+            ),
+            "employee_offboarding_checklists": PostgresEmployeeOffboardingChecklistRepository(
+                conn, self._context
+            ),
+            "checklist_item_templates": PostgresChecklistItemTemplateRepository(
+                conn, self._context
+            ),
             # --- #28 İllik məzuniyyət balansı (kompas1.md Faza 4) --------------
             # Eyni bağlantıda: sorğunun statusu, balansın azalması və audit BİR
             # tranzaksiyada olmalıdır. Ayrı bağlantılarda təsdiq yazılıb balans

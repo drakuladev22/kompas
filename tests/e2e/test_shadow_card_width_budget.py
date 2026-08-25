@@ -207,6 +207,27 @@ _EXTRA_ARGS: dict[str, dict[str, Any]] = {
         "days": [("2026-08-25", "Çərşənbə")],
         "work_modes": [("m1", "Səhər")],
     },
+    # `v2backlog.md` Faza 3.3 — `screens/transfer_requests.py::TransferRequestDialog`.
+    "TransferRequestDialog": {"stores": [("s1", "Mağaza 1")]},
+    # `v2backlog.md` Faza 3.4 — `screens/offboarding_checklist.py::
+    # OffboardingChecklistDialog`. `items` sxemi kontrollerin `_to_checklist_
+    # row`-una uyğundur (bax dialoqun docstring-i).
+    "OffboardingChecklistDialog": {
+        "employee_name": "Test İşçi",
+        "items": [
+            {
+                "id": "i1",
+                "position_no": "1",
+                "category": "EQUIPMENT",
+                "item_text": "Noutbuku geri qaytar",
+                "is_blocking": "1",
+                "passed": "",
+                "notes": "",
+            }
+        ],
+    },
+    # `v2backlog.md` Faza 3.4 — `screens/checklist_templates.py::ChecklistTemplateDialog`.
+    "ChecklistTemplateDialog": {"owner_type": "OFFBOARDING", "title": "Yeni Bənd"},
 }
 
 

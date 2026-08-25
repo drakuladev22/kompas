@@ -16,7 +16,11 @@ məhz Python tərəfindəki qərarları (fallback, çevirmə, sayğac) bağlayı
 
 from __future__ import annotations
 
+import ast
+import inspect
 import json
+import re
+import textwrap
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
@@ -37,11 +41,13 @@ from src.domain.entities.attendance_sheet import (
     DailyAttendanceSheet,
     SheetLine,
 )
+from src.domain.entities.employee import Employee
 from src.domain.entities.exception_record import ExceptionRecord
 from src.domain.entities.fine import Fine, FineSource
 from src.domain.entities.position import Position
 from src.domain.entities.shift import ShiftSwapRequest
 from src.domain.value_objects.authorization import RolePriority
+from src.domain.value_objects.credentials import Username
 from src.domain.value_objects.exception_signals import ExceptionSeverity
 from src.domain.value_objects.identifiers import (
     AppealId,
@@ -1751,3 +1757,139 @@ def test_unsynced_evidence_ids_returns_empty_set_when_everything_is_synced() -> 
     result = repo.unsynced_evidence_ids([FineId(uuid.uuid4())])
 
     assert result == set()
+
+
+# --------------------------------------------------------------------------- #
+# `PostgresEmployeeRepository.save()` × `Employee.anonymize_personal_data()` —
+# PII REQRESSİYA QIFILI (migrations/096 ətrafında `infra`-nın tapdığı qüsur)
+# --------------------------------------------------------------------------- #
+#
+# QÜSUR SİNFİ: `anonymize_personal_data()` altı sahəni dəyişirdi
+# (`first_name`, `last_name`, `notification_email`, `profile_photo_url`,
+# `date_of_birth`, `data_anonymized_at`), `save()`-in `UPDATE` siyahısı isə
+# YALNIZ ilk üçünü yazırdı. Nəticə: `data_anonymized_at` möhürlənir (sistem
+# "anonimləşdirildi" sayır), LAKİN şəkil və doğum tarixi bazada QALIR —
+# yalançı uyğunluq siqnalı, PII kontekstində qüsurun ən pis növü.
+#
+# Saxta repository (`tests/fixtures/fakes.py::InMemoryEmployees`) bunu HEÇ
+# VAXT görməzdi: entity düzgün dəyişir, saxta repo isə HƏR ŞEYİ saxlayır.
+# Qüsur YALNIZ SQL-in faktiki sütun siyahısındadır — ona görə bu test
+# `PostgresEmployeeRepository`-nin ÖZÜNÜ, `_FakeConnection` üzərindən, işlədir.
+#
+# SİYAHI ƏL İLƏ YAZILMIR: `anonymize_personal_data`-nın AST-i oxunur və
+# gövdəsindəki hər `self.<sahə> = ...` təyinatı çıxarılır. Gələcəkdə metoda
+# YENİ sahə əlavə olunub `save()`-ə unudularsa, bu siyahı AVTOMATİK böyüyür
+# və test sükutla yaşıl qalmır — məhz əl-ilə-siyahı YAZILMASI bu qüsurun kök
+# səbəbi idi.
+
+
+def _self_assigned_attributes(func: Any) -> set[str]:
+    """Metodun BİRBAŞA gövdəsindəki `self.<attr> = ...` təyinatlarının adları."""
+    source = textwrap.dedent(inspect.getsource(func))
+    func_def = ast.parse(source).body[0]
+    assigned: set[str] = set()
+    for node in ast.walk(func_def):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "self"
+            ):
+                assigned.add(target.attr)
+    return assigned
+
+
+def _column_value_map(sql: str, params: tuple[Any, ...]) -> dict[str, Any]:
+    """`col = %s` cütlərini (SET VƏ WHERE) sırayla `params`-a uyğunlaşdırır."""
+    columns = re.findall(r"(\w+)\s*=\s*%s", sql)
+    assert len(columns) == len(params), (
+        f"SQL-dəki `col = %s` sayı ({len(columns)}) parametr sayına "
+        f"({len(params)}) uyğun gəlmir — sorğunu əl ilə yoxlayın."
+    )
+    return dict(zip(columns, params, strict=True))
+
+
+def _employee_update_sql(conn: _FakeConnection) -> tuple[str, tuple[Any, ...]]:
+    """`save()` `UPDATE`-dən SONRA `_sync_overrides`/`_sync_store_assignments`
+    ÇAĞIRIR — `conn.executed[-1]` ONLARIN sorğusu ola bilər, ona görə DƏQİQ
+    `UPDATE employees SET` sətri axtarılır."""
+    for sql, params in conn.executed:
+        if "UPDATE employees SET" in sql:
+            return sql, params
+    raise AssertionError("`UPDATE employees SET` heç icra olunmadı")
+
+
+def _anonymized_employee() -> Employee:
+    employee = Employee(
+        employee_id=EmployeeId(uuid.uuid4()),
+        tenant_id=TENANT,
+        position=Position(
+            position_id=PositionId(uuid.uuid4()),
+            code="SATICI",
+            name_az="Satıcı",
+            priority=RolePriority.OPERATIONAL,
+            tenant_id=TENANT,
+        ),
+        first_name="Ad",
+        last_name="Soyad",
+        username=Username("anonim.test"),
+        has_password=True,
+        profile_photo_url="https://example.com/photo.jpg",
+        date_of_birth=date(1990, 1, 1),
+    )
+    employee.deactivate()
+    changed = employee.anonymize_personal_data(now=NOW)
+    assert changed is True, "Sahtə entity artıq anonimləşdirilmiş gəlir — ssenari qurulmayıb"
+    return employee
+
+
+def test_anonymize_personal_data_fields_are_all_persisted_by_save() -> None:
+    """Metodun dəyişdiyi HƏR sahə `save()`-in `UPDATE`-ində olmalıdır."""
+    assigned_fields = _self_assigned_attributes(Employee.anonymize_personal_data)
+    assert assigned_fields, "AST heç bir `self.<sahə> = ...` tapmadı — introspeksiya qırılıb"
+
+    employee = _anonymized_employee()
+    repo, conn = _build(PostgresEmployeeRepository)
+
+    repo.save(employee)
+
+    sql, params = _employee_update_sql(conn)
+    column_values = _column_value_map(sql, params)
+
+    missing = sorted(assigned_fields - column_values.keys())
+    assert missing == [], (
+        "`anonymize_personal_data()` bu sahələri dəyişir, lakin `save()`-in "
+        f"UPDATE-ində YOXDUR: {missing}. Nəticə: `data_anonymized_at` "
+        "möhürlənir (sistem 'təmizləndi' sayır), əsl PII isə bazada QALIR — "
+        "yalançı uyğunluq siqnalı."
+    )
+
+    # Sütun adının SQL-də olması KİFAYƏT ETMİR — yazılan DƏYƏR də
+    # anonimləşdirilmiş entity-nin CARİ vəziyyəti ilə üst-üstə düşməlidir
+    # (əks halda sütun "var" görünə bilər, halbuki başqa sahənin yerinə
+    # yazılıb və ya köhnə dəyəri daşıyır).
+    mismatched = {
+        field: (column_values[field], getattr(employee, field))
+        for field in assigned_fields
+        if column_values[field] != getattr(employee, field)
+    }
+    assert mismatched == {}, (
+        f"SQL-ə yazılan dəyər entity-nin cari sahəsi ilə UYĞUN GƏLMİR: {mismatched}"
+    )
+
+
+def test_anonymize_personal_data_scrubs_the_photo_and_birth_date_in_the_database() -> None:
+    """Konkret reqressiya: infra-nın tapdığı ssenari — ikisi ARTIQ SÜKUTLA itməməlidir."""
+    employee = _anonymized_employee()
+    repo, conn = _build(PostgresEmployeeRepository)
+
+    repo.save(employee)
+
+    sql, params = _employee_update_sql(conn)
+    column_values = _column_value_map(sql, params)
+
+    assert column_values["profile_photo_url"] is None
+    assert column_values["date_of_birth"] is None
+    assert column_values["data_anonymized_at"] == employee.data_anonymized_at

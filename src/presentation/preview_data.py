@@ -126,6 +126,9 @@ _ADMIN_FLAGS: Final = (
     # Nəzarətçisinə (`excludes_camera_role`) aiddir — ADMIN real sistemdə DƏ
     # sahibdir (056: "ROOT, CEO, ADMIN, HR_ADMIN"), ona görə QRUP 1-dədir.
     "can_resolve_sync_conflicts",  # SEC-018, migrations/056 — ADMIN defolt
+    # `v2backlog.md` Faza 3.3, migrations/093 — ROOT/CEO/ADMIN/HR_ADMIN defolt
+    # sahibdir (`can_approve_shift_swap` naxışı) — ADMIN-də DA var, güzgü.
+    "can_approve_transfer_request",
     #
     # QRUP 2 — Real `ADMIN` rolunda DEFOLT YOXDUR, lakin hardlock NONE/
     # DELEGABLE olduğu üçün Root/CEO onu Permission Matrisindən DATADAN verə
@@ -1732,6 +1735,74 @@ ANNUAL_LEAVE_BALANCE: Final = {
     ),
     "carryover_expired": "0",
 }
+
+#: `v2backlog.md` Faza 3.3 — kiosk kartının "cari sorğu" sətri. Açarlar
+#: `controllers/transfer_requests.py::_to_status_row` ilə EYNİDİR (CLAUDE.md
+#: §6). `PENDING_APPROVAL` seçilib (`ANNUAL_LEAVE_PENDING`-in "Gözləyir"
+#: vəziyyəti ilə eyni məntiq) ki, maket `[Sorğunu Geri Çək]` düyməsini DƏ
+#: göstərsin — boş sorğu tarixçəsi bu düyməni ekrandan gizlədərdi.
+TRANSFER_REQUEST_STATUS: Final = {
+    "id": "00000000-0000-0000-0000-000000000093",
+    "to_store": "Yataş Xətai",
+    "status": "Təsdiq gözləyir",
+    "withdrawable": "1",
+    "decision_reason": "",
+}
+
+#: HR_Admin-in «Köçürmə Sorğuları» ekranı — açarlar `controllers/
+#: transfer_requests.py::_to_inbox_row` ilə EYNİDİR (CLAUDE.md §6).
+TRANSFER_REQUESTS: Final = [
+    {
+        "id": "t1",
+        "employee": "Rəvan İsmayılov",
+        "from_store": "Bellona 28 May",
+        "to_store": "Yataş Xətai",
+        "reason": "Yaşayış yeri dəyişdi, yeni ünvana yaxın filialda işləmək istəyir.",
+        "submitted": "12.08.2026 09:15",
+    },
+    {
+        "id": "t2",
+        "employee": "Nigar Səfərova",
+        "from_store": "Yataş Xətai",
+        "to_store": "Bellona 28 May",
+        "reason": "Ailə vəziyyətinə görə mərkəzə daha yaxın filial tələb olunur.",
+        "submitted": "11.08.2026 14:40",
+    },
+]
+
+#: `v2backlog.md` Faza 3.4 — Checklist Şablonları (OFFBOARDING dəsti, ekranın
+#: DEFOLT açılış sekması). Açarlar `controllers/checklist_templates.py::
+#: _to_row` ilə EYNİDİR (CLAUDE.md §6). `category` HƏR sətirdə DOLUDUR —
+#: OFFBOARDING-də bu sahə MƏCBURİDİR (`migrations/094`).
+CHECKLIST_TEMPLATES_OFFBOARDING: Final = [
+    {
+        "id": "ct1",
+        "position_no": "1",
+        "category": "EQUIPMENT",
+        "item_text": "Noutbuk, telefon və giriş kartı geri qaytarılıb",
+        "is_blocking": "1",
+        "photo_required": "0",
+        "is_active": "1",
+    },
+    {
+        "id": "ct2",
+        "position_no": "2",
+        "category": "SETTLEMENT",
+        "item_text": "Son maaş və istifadə olunmamış məzuniyyət haqqı hesablanıb",
+        "is_blocking": "1",
+        "photo_required": "0",
+        "is_active": "1",
+    },
+    {
+        "id": "ct3",
+        "position_no": "3",
+        "category": "EXIT_INTERVIEW",
+        "item_text": "Çıxış müsahibəsi aparılıb",
+        "is_blocking": "0",
+        "photo_required": "0",
+        "is_active": "1",
+    },
+]
 
 ANNUAL_LEAVE_PENDING: Final = [
     {

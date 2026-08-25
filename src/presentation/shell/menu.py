@@ -137,6 +137,24 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         icon="calendar",
     ),
     MenuEntry(
+        key="transfer_requests",
+        title_az="Köçürmə Sorğuları",
+        # `v2backlog.md` Faza 3.3 — filiallar-arası DAİMİ köçürmə sorğusu.
+        #
+        # NİYƏ «Məzuniyyət Sorğuları»DAN (52) DƏRHAL SONRA: BU DA eyni
+        # formada işləyən TƏSDİQ NÖVBƏSİDİR (`PENDING_APPROVAL →
+        # APPROVED/REJECTED`), yalnız GÜN/AY miqyaslı struktur dəyişikliyi
+        # üçün — «Növbə Dəyişmə» (50) İLƏ QARIŞDIRILMIR: o, BİR GÜNLÜK rejim
+        # dəyişikliyidir, bu isə `employees.store_id`-nin DAİMİ dəyişikliyi
+        # (bax `use_cases/employee_transfer.py` modul başlığı).
+        #
+        # FEATURE TOGGLE YOXDUR — `annual_leave` İLƏ EYNİ qərar: struktur HR
+        # qərarıdır, "iş-prosesi modulu" (bölmə 3) DEYİL.
+        required_flag="can_approve_transfer_request",
+        order=53,
+        icon="refresh",
+    ),
+    MenuEntry(
         key="fines",
         title_az="Cərimələr",
         required_flag="can_issue_fines",
@@ -525,6 +543,21 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         required_flag="can_manage_leave_types",
         feature_module=MODULE_CAMERA,
         order=184,
+        icon="checklist",
+    ),
+    MenuEntry(
+        key="checklist_templates",
+        title_az="Checklist Şablonları",
+        # `v2backlog.md` Faza 3.4 + 4.1 — DÖRDÜNCÜ kataloq, `leave_types`-dən
+        # DƏRHAL SONRA (bu qrupun QALAN üzvü). `CHECKLIST_TEMPLATES_FLAG`
+        # (`catalog_management.py`) `can_manage_employees`-in QƏSDƏN eynisidir
+        # — yeni flag YARADILMIR (offboarding checklist-in HR-in işdən çıxarma
+        # səlahiyyətinin bir hissəsi olması qərarı, həmin faylın başlığı).
+        #
+        # FEATURE TOGGLE YOXDUR — `work_modes` ilə eyni: konfiqurasiya
+        # səthidir, iş-prosesi modulu deyil (bölmə 3).
+        required_flag="can_manage_employees",
+        order=185,
         icon="checklist",
     ),
     MenuEntry(

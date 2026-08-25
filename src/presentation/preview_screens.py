@@ -770,6 +770,22 @@ def _annual_leave(screen: Any) -> None:
     screen.set_requests(list(data.ANNUAL_LEAVE_PENDING))
 
 
+def _transfer_requests(screen: Any) -> None:
+    """`v2backlog.md` Faza 3.3 — açarlar `controllers/transfer_requests.py::
+    _to_inbox_row` ilə EYNİDİR (CLAUDE.md §6)."""
+    screen.set_requests(list(data.TRANSFER_REQUESTS))
+
+
+def _checklist_templates(screen: Any) -> None:
+    """`v2backlog.md` Faza 3.4 — ekranın DEFOLT sekması (OFFBOARDING) doldurulur.
+
+    FIELD_REPORT sekması maketdə BOŞ-VƏZİYYƏT göstərir (`ChecklistTemplateScreen.
+    _set_owner_type`-in özü qurur) — canlı yolda da EYNİ, açar axtarılana qədər
+    heç bir sorğu getmir (bax `controllers/checklist_templates.py` başlığı).
+    """
+    screen.set_entries(list(data.CHECKLIST_TEMPLATES_OFFBOARDING))
+
+
 def _fine_review(screen: Any) -> None:
     """Aylıq Cərimə İcmalı (miqrasiya 003) — maket və canlı yol EYNİ tiplərlə.
 
@@ -1004,6 +1020,8 @@ _POPULATORS: dict[str, Callable[[Any], None]] = {
     "attrition_risk": _attrition_risk,
     "sync_conflicts": _sync_conflicts,
     "annual_leave": _annual_leave,
+    "transfer_requests": _transfer_requests,
+    "checklist_templates": _checklist_templates,
     "fine_review": _fine_review,
     "bulk_operations": _bulk_operations,
     # Face Control (facecontrol.md Faza 4) — hər ikisi ÖZ kontrollerinə

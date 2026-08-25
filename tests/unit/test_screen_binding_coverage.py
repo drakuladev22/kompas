@@ -74,6 +74,17 @@ CONTROLLER_BOUND: Final[dict[str, str]] = {
     # yenidən oxunur, çünki qərar verilmiş sorğu `list_pending`-dən çıxır
     # (bax `controllers/annual_leave.py` başlığı).
     "annual_leave": "_attach_annual_leave",
+    # `v2backlog.md` Faza 3.3 — filiallar-arası köçürmə sorğusu. `annual_leave`
+    # İLƏ EYNİ NAXIŞ: təsdiq növbəsi HƏM oxuyur, HƏM yazır (təsdiqlə / rədd et
+    # / geri çək), FAKTİKİ qapı isə `_attach_transfer_requests`-in çağırdığı
+    # use case-dədir (`pending_inbox` → `_require_approver`), menyunun
+    # görünməsi əməliyyat icazəsi DEYİL (bax `menu.py` başlığı).
+    "transfer_requests": "_attach_transfer_requests",
+    # `v2backlog.md` Faza 3.4+4.1 — checklist bənd şablonları kataloqu.
+    # `annual_leave` İLƏ EYNİ NAXIŞ: menyu görünməsi `can_manage_employees`-lə
+    # qapılıdır, FAKTİKİ qapı isə `list_for_management` → `CHECKLIST_
+    # TEMPLATES_FLAG` yoxlamasındadır (bax `menu.py` başlığı).
+    "checklist_templates": "_attach_checklist_templates",
     # #26+#27 Sahə hesabatları (kompas1.md Faza 3) — İKİ açar, BİR ekran sinfi
     # və BİR `_attach_*` metodu (üç kataloq ekranı ilə eyni naxış): forma HƏM
     # oxuyur (açıq hesabatlar, kataloq, ROOT limitləri), HƏM yazır (təqdim et /

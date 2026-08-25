@@ -722,6 +722,71 @@ class SalesPointsUseCase:
         self._points.save(entry)
         return entry
 
+    # ---------------------------- işçi tövsiyəsi (referral) ------------------- #
+
+    def award_referral_bonus(
+        self,
+        *,
+        tenant_id: TenantId,
+        referrer_id: EmployeeId,
+        referrer_store_id: StoreId | None,
+        new_employee_id: EmployeeId,
+    ) -> int | None:
+        """`v2backlog.md` Faza 3.5 — yeni işçi tövsiyə edən işçiyə bonus-xal.
+
+        `UserManagementUseCase.create_employee` bunu `draft.referred_by_
+        employee_id` doludursa çağırır. Bonus MƏBLƏĞİ ROOT PARAMETRİDİR
+        (`EMPLOYEE_REFERRAL_BONUS_POINTS`, `policies.py`) — çağıran tərəf
+        onu BİLMİR, çünki xal siyasəti bu domendə (satış xalları) yaşayır,
+        HR use case-ində YOX.
+
+        `None` qaytarır və HEÇ NƏ yazmır üç halda: bonus söndürülüb (`0`),
+        yönləndirən işçinin `store_id`-si YOXDUR (`PointsEntry.store_id`
+        MƏCBURİDİR — bax `entities/sales_points.py`; çoxlu-mağazalı Kamera
+        Nəzarətçisi kimi rollarda bu, real ssenaridir), və ya modul
+        söndürülüb. `award_for_sale`-in "sıfır xallı sətir yaratmaq
+        mənasızdır" qərarı ilə EYNİ fəlsəfə.
+        """
+        if self._toggles is not None and not self._toggles.is_enabled(
+            tenant_id, FeatureModule.SALES_POINTS.value
+        ):
+            return None
+        if referrer_store_id is None:
+            _app_log.warning(
+                "REFERRAL_BONUS_SKIPPED_NO_STORE",
+                extra={"referrer_id": str(referrer_id), "new_employee_id": str(new_employee_id)},
+            )
+            return None
+
+        points = limit_int(self._limits, tenant_id, SystemLimitKey.EMPLOYEE_REFERRAL_BONUS_POINTS)
+        if points <= 0:
+            return None
+
+        entry = PointsEntry(
+            entry_id=new_points_entry_id(),
+            tenant_id=tenant_id,
+            employee_id=referrer_id,
+            store_id=referrer_store_id,
+            points=points,
+            awarded_at=self._clock.now(),
+            dispute_window_hours=self._dispute_window_hours(tenant_id),
+        )
+        self._points.save(entry)
+        self._audit.record(
+            tenant_id=tenant_id,
+            actor_id=None,
+            action="REFERRAL_BONUS_AWARDED",
+            entity_type="points_entry",
+            entity_id=entry.id,
+            after_state={
+                "referrer_id": str(referrer_id),
+                "new_employee_id": str(new_employee_id),
+                "points": points,
+            },
+            reason="İşçi tövsiyəsi bonusu",
+        )
+        return points
+
     # ---------------------------- sıfırlanma bildirişi ----------------------- #
 
     def send_reset_notices(

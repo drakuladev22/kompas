@@ -96,6 +96,9 @@ class Employee(AggregateRoot):
         profile_photo_url: str | None = None,
         hire_date: date | None = None,
         date_of_birth: date | None = None,
+        scheduled_deactivation_date: date | None = None,
+        referred_by_employee_id: EmployeeId | None = None,
+        data_anonymized_at: datetime | None = None,
     ) -> None:
         super().__init__()
         self.id = employee_id
@@ -118,6 +121,19 @@ class Employee(AggregateRoot):
         #: `can_view_employee_reports` ilə göstərilir — bax
         #: `EmployeeProfileAccessUseCase`.
         self.date_of_birth = date_of_birth
+        #: `v2backlog.md` Faza 3.1 — mövsümi/müvəqqəti işçi üçün istəyə-bağlı
+        #: planlaşdırılmış deaktivasiya tarixi. `None` = müddətsiz. Gecəlik
+        #: cron (`UserManagementUseCase.deactivate_scheduled_employees`) bu
+        #: tarixi keçmiş aktiv işçini tapıb deaktiv edir (migrations/088).
+        self.scheduled_deactivation_date = scheduled_deactivation_date
+        #: Faza 3.5 — işçi yaradılarkən "kim tövsiyə etdi" sahəsi. Bonus-xal
+        #: `UserManagementUseCase.create_employee`-də YALNIZ BİR DƏFƏ, yaranış
+        #: anında yazılır — sahənin ÖZÜ isə tarixi fakt olaraq daimi qalır.
+        self.referred_by_employee_id = referred_by_employee_id
+        #: Faza 3.2 — retensiya müddəti (ROOT PARAMETRİ) keçmiş DEAKTİV işçinin
+        #: PII sahələrinin anonimləşdirildiyi AN. `None` = hələ
+        #: anonimləşdirilməyib. `anonymize_personal_data()` bunu doldurur.
+        self.data_anonymized_at = data_anonymized_at
 
         self.pin_security = PinSecurityState()
         self._overrides: dict[str, PermissionOverride] = {}
@@ -361,6 +377,51 @@ class Employee(AggregateRoot):
         if self.is_active:
             return False
         self.is_active = True
+        return True
+
+    def anonymize_personal_data(self, *, now: datetime) -> bool:
+        """`v2backlog.md` Faza 3.2 — retensiya müddəti keçmiş PII-ni təmizləyir.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ YALNIZ DEAKTİV İŞÇİ
+        ──────────────────────────────────────────────────────────────────────
+        Aktiv işçinin adı hər ekranda göstərilir; onu anonimləşdirmək tətbiqi
+        işlətdiyi HALDA istifadəçini adsız qoyardı. Retensiya siyasəti YALNIZ
+        "artıq sistemdən çıxmış" işçiyə aiddir (migrations/088 başlığı).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ İDEMPOTENTDİR (`bool` qaytarır, istisna atmır)
+        ──────────────────────────────────────────────────────────────────────
+        Gecəlik cron eyni işçini iki dəfə görə bilər (icarəsi bitmiş instansiya
+        — `job_runner.py` `at-least-once` zəmanəti). İkinci çağırış xəta
+        versəydi, bütün gecə dövrəsi bir sətrə görə dayanardı (`activate()`
+        ilə eyni naxış).
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ `username`/`hire_date`/`position` TOXUNULMUR
+        ──────────────────────────────────────────────────────────────────────
+        Migrations/088: "FK-lar saxlanılır, aqreqat statistika (say, məbləğ,
+        tarix) qorunur, YALNIZ şəxsi identifikasiya itir". `username` giriş
+        identifikatorudur (UNIQUE) və deaktiv işçi onsuz da giriş edə bilmir
+        (`assert_admin_login_allowed`) — onu boşaltmaq gələcəkdə eyni adın
+        YENİDƏN istifadəsinə mane olardı, heç bir PII faydası vermədən.
+        `hire_date`/`position` fərdi identifikasiya deyil, statistik fakt kimi
+        qalır (məs. rotasiya hesabatları).
+        """
+        if self.is_active:
+            raise DomainRuleError(
+                "Aktiv işçinin şəxsi məlumatı anonimləşdirilə bilməz",
+                user_message="Yalnız deaktiv işçinin məlumatı anonimləşdirilə bilər.",
+                context={"employee_id": str(self.id)},
+            )
+        if self.data_anonymized_at is not None:
+            return False
+        self.first_name = "Anonimləşdirilib"
+        self.last_name = ""
+        self.notification_email = None
+        self.profile_photo_url = None
+        self.date_of_birth = None
+        self.data_anonymized_at = require_aware(now, field="now")
         return True
 
     def __repr__(self) -> str:

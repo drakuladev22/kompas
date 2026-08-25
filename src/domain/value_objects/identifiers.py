@@ -125,6 +125,31 @@ ExportCorrectionId = NewType("ExportCorrectionId", uuid.UUID)
 #: qalardı (bir işçinin ardıcıl bir neçə istisnası ola bilər — sətirlər heç vaxt
 #: silinmir, yalnız `EXPIRED`/`REVOKED` olur).
 FaceExemptionId = NewType("FaceExemptionId", uuid.UUID)
+#: Filiallar-arası daimi köçürmə sorğusu (`v2backlog.md` Faza 3.3,
+#: `employee_transfer_requests`, migrations/088). Ayrıca tip: sətir EYNİ ANDA
+#: `employee_id`, `requested_by` və `decided_by` daşıyır — dördüncü, sətir-
+#: səviyyəli ID olmasaydı audit `entity_id`-si bunlardan biri ilə qarışar və
+#: "hansı köçürmə sorğusu qərar aldı?" sualı cavabsız qalardı (bir işçinin
+#: keçmişdə bir neçə köçürmə sorğusu ola bilər — sətir SİLİNMİR, tarixçə qalır).
+TransferRequestId = NewType("TransferRequestId", uuid.UUID)
+#: Struktur offboarding checklist-in valideyn sətri (`v2backlog.md` Faza 3.4,
+#: `employee_offboarding_checklists`, migrations/088). Ayrıca tip: bir işçinin
+#: TARİXÇƏSİNDƏ bir neçə offboarding cəhdi ola bilər (işə qayıdıb yenidən
+#: çıxan işçi) — `EmployeeId` ilə qarışdırılsaydı "hansı DÖVRƏNİN checklist-i
+#: tamamlandı?" sualı cavabsız qalardı.
+OffboardingChecklistId = NewType("OffboardingChecklistId", uuid.UUID)
+#: Offboarding checklist bəndinin İNSTANSİYA sətri (Faza 3.4,
+#: `employee_offboarding_checklist_items`). Ayrıca tip: valideyn checklist
+#: ID-si ilə EYNİ çağırışda gəzir (bənd nəticəsi valideynə bağlanır) və
+#: birini digərinin yerinə ötürmək səhv checklist-in bəndini "keçdi"
+#: işarələmək demək olardı (`FieldReportItemId` ilə EYNİ əsaslandırma).
+OffboardingChecklistItemId = NewType("OffboardingChecklistItemId", uuid.UUID)
+#: Checklist bənd ŞABLONU (Faza 3.4 + 4.1 ORTAQ, `checklist_item_templates`).
+#: Ayrıca tip: instansiya sətirləri (`OffboardingChecklistItemId`,
+#: `FieldReportItemId`) ilə EYNİ ekranda yan-yana gəzə bilər — şablonun ÖZÜ
+#: dəyişdirilir (Root), instansiya isə dəyişmir (`field_report_checklist_
+#: items` ilə eyni prinsip: keçmiş sətir "o an nə yazılmışdı"-nın sübutudur).
+ChecklistItemTemplateId = NewType("ChecklistItemTemplateId", uuid.UUID)
 
 # --- Dəstək (bölmə 8) ------------------------------------------------------- #
 SupportTicketId = NewType("SupportTicketId", uuid.UUID)
@@ -286,6 +311,22 @@ def new_face_exemption_id() -> FaceExemptionId:
     return FaceExemptionId(uuid.uuid4())
 
 
+def new_transfer_request_id() -> TransferRequestId:
+    return TransferRequestId(uuid.uuid4())
+
+
+def new_offboarding_checklist_id() -> OffboardingChecklistId:
+    return OffboardingChecklistId(uuid.uuid4())
+
+
+def new_offboarding_checklist_item_id() -> OffboardingChecklistItemId:
+    return OffboardingChecklistItemId(uuid.uuid4())
+
+
+def new_checklist_item_template_id() -> ChecklistItemTemplateId:
+    return ChecklistItemTemplateId(uuid.uuid4())
+
+
 __all__ = [
     "AnnouncementId",
     "AnnualLeaveBalanceId",
@@ -293,6 +334,7 @@ __all__ = [
     "AppealId",
     "AttendanceRecordId",
     "BulkImportLogId",
+    "ChecklistItemTemplateId",
     "DailySheetId",
     "DeviceId",
     "EmployeeDocumentId",
@@ -309,6 +351,8 @@ __all__ = [
     "FineTypeId",
     "LeaveRequestId",
     "LeaveTypeId",
+    "OffboardingChecklistId",
+    "OffboardingChecklistItemId",
     "OpenShiftPostingId",
     "OverrideId",
     "PerformanceReviewId",
@@ -328,6 +372,7 @@ __all__ = [
     "SupportTicketId",
     "TaskId",
     "TenantId",
+    "TransferRequestId",
     "WorkModeId",
     "new_announcement_id",
     "new_annual_leave_balance_id",
@@ -335,6 +380,7 @@ __all__ = [
     "new_appeal_id",
     "new_attendance_record_id",
     "new_bulk_import_log_id",
+    "new_checklist_item_template_id",
     "new_daily_sheet_id",
     "new_device_id",
     "new_employee_document_id",
@@ -348,6 +394,8 @@ __all__ = [
     "new_fine_id",
     "new_fine_review_batch_id",
     "new_leave_request_id",
+    "new_offboarding_checklist_id",
+    "new_offboarding_checklist_item_id",
     "new_open_shift_posting_id",
     "new_override_id",
     "new_performance_review_id",
@@ -364,4 +412,5 @@ __all__ = [
     "new_support_ticket_id",
     "new_task_id",
     "new_tenant_id",
+    "new_transfer_request_id",
 ]
