@@ -125,7 +125,9 @@ class BreakGlassScreen(Screen):
         status_card = Card(
             padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True
         )
-        status_card.add(title_label("Fövqəladə Giriş (break-glass)", size=17))
+        # 19 = kart titulluğunun şkaladakı yeri — 17 şkaladan kənar idi
+        # (`test_design_symmetry.py::test_off_grid_values_do_not_grow`).
+        status_card.add(title_label("Fövqəladə Giriş (break-glass)", size=19))
         status_card.add(
             muted_label(
                 "Root əlçatmaz olanda, ƏVVƏLCƏDƏN təyin edilmiş ehtiyat-admin "

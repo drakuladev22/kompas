@@ -565,7 +565,9 @@ class KioskOnboardingOverlay(QWidget):
         self._step_title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         card.add(self._step_title)
 
-        self._step_body = body_label(self._steps[0][1], size=14)
+        # 15 = gövdə şkalası — 14 şkaladan kənar idi və Kiosk məsafəsindən
+        # oxunmurdu (`test_design_symmetry.py::test_off_grid_values_do_not_grow`).
+        self._step_body = body_label(self._steps[0][1], size=15)
         self._step_body.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         card.add(self._step_body)
 
