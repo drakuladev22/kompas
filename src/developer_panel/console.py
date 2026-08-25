@@ -195,6 +195,36 @@ def confirmation_text(rows: Sequence[TenantRow]) -> str:
     return f"{len(rows)} müştərinin lisenziyası {EXTENSION_DAYS} gün uzadılacaq. Davam edilsin?"
 
 
+def tier_change_confirmation_text(row: TenantRow, target_tier: str) -> str:
+    """`[Tier Dəyiş]` təsdiq modalının mətni (Faza 9.2) — GUI/konsol EYNİ.
+
+    NƏ DƏYİŞƏCƏYİNİ AÇIQ yazır: tier dəyişikliyi yalnız sütunu yeniləmir,
+    Feature Toggle defolt-dəstini də tətbiq edir. Root sonradan modulları
+    öz panelindən dəyişə bilər — mətn bunu da bildirir ki, "tier-i geri
+    qaytardım, amma toggle-lar qayitmadı" çaşqınlığı olmasın.
+    """
+    from src.domain.value_objects.licensing import (  # noqa: PLC0415
+        SERVICE_TIER_LABELS,
+        SERVICE_TIER_MODULE_DEFAULTS,
+    )
+
+    label = SERVICE_TIER_LABELS.get(target_tier, target_tier)
+    disabled = sorted(SERVICE_TIER_MODULE_DEFAULTS.get(target_tier, frozenset()))
+    lines = [
+        f"«{row.tenant_name}» xidmət səviyyəsi → {label}.",
+    ]
+    if disabled:
+        lines.append("Defolt söndürüləcək modullar: " + ", ".join(disabled) + ".")
+    else:
+        lines.append("Bu tier-də defolt söndürülən modul YOXDUR.")
+    lines += [
+        "",
+        "Qeyd: Root sonrakı toggle dəyişiklikləri bu dəsti əvəz edir.",
+        "Davam edilsin?",
+    ]
+    return "\n".join(lines)
+
+
 def publish_confirmation_text(
     version: str, inspection: PackageInspection, *, is_mandatory: bool
 ) -> str:

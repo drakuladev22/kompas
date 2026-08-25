@@ -56,6 +56,7 @@ from src.application.use_cases.developer_console import CrashRecord, TicketRecor
 from src.domain.policies import SystemLimitKey
 from src.domain.value_objects.authorization import RolePriority
 from src.domain.value_objects.licensing import (
+    SERVICE_TIER_ESAS,
     LicenseStatus,
     extend_by_month,
 )
@@ -96,6 +97,7 @@ _LIST_SQL: Final[str] = """
            t.company_contact_email,
            t.company_contact_phone,
            t.app_version,
+           t.service_tier,
            GREATEST(t.last_check_in_at, c.last_seen) AS last_check_in_at
       FROM license_tenants t
       LEFT JOIN (
@@ -133,6 +135,9 @@ class TenantRow:
     company_contact_email: str = ""
     company_contact_phone: str = ""
     app_version: str = ""
+    #: Xidmət səviyyəsi (`v2backlog.md` Faza 9.2, migrations/092). Yalnız OXU:
+    #: dəyişikliyi `vendor_maintenance.set_service_tier` edir (admin DSN).
+    service_tier: str = SERVICE_TIER_ESAS
 
     def days_left(self, now: datetime) -> int | None:
         """Qalan gün; müddət yoxdursa `None`, keçibsə mənfi."""
@@ -719,6 +724,9 @@ def _row_from_record(record: dict[str, Any]) -> TenantRow:
         company_contact_email=str(record.get("company_contact_email") or ""),
         company_contact_phone=str(record.get("company_contact_phone") or ""),
         app_version=str(record.get("app_version") or ""),
+        # Sütun migrations/092 ilə gəldi — köhnə snapshot-da olmaya bilər;
+        # defolt «Əsas»-dır (DB DEFAULT ilə eyni), yalan məlumat deyil.
+        service_tier=str(record.get("service_tier") or SERVICE_TIER_ESAS),
     )
 
 

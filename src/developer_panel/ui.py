@@ -72,9 +72,24 @@ from src.developer_panel.console import (
     SYNC_NOTE_AZ,
     confirmation_text,
     publish_confirmation_text,
+    tier_change_confirmation_text,
 )
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
-from src.domain.value_objects.licensing import LicenseStatus
+from src.domain.value_objects.licensing import (
+    SERVICE_TIER_LABELS,
+    VALID_SERVICE_TIERS,
+    LicenseStatus,
+)
+from src.infrastructure.licensing.vendor_maintenance import (
+    VendorMaintenanceError,
+    apply_tier_toggle_defaults,
+    dumps_export,
+    export_tenant_json,
+    open_admin_connection,
+)
+from src.infrastructure.licensing.vendor_maintenance import (
+    set_service_tier as set_service_tier_admin,
+)
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import get_logger
 
@@ -92,7 +107,7 @@ _log = get_logger(__name__)
 #: `_run_busy` çağırılan əməliyyatın nəticə tipini olduğu kimi qaytarır.
 _T = TypeVar("_T")
 
-COLUMNS = ("Şirkət", "Vəziyyət", "Son əlaqə", "Versiya", "", "")
+COLUMNS = ("Şirkət", "Vəziyyət", "Son əlaqə", "Versiya", "Tier", "", "", "")
 
 #: Çökmə panelinin sütunları (bölmə 8 — tezliyə görə qruplaşdırma).
 CRASH_COLUMNS = ("Xəta növü", "Təkrar", "Quraşdırma", "Versiya", "Sonuncu")
@@ -410,17 +425,34 @@ class DeveloperPanelWindow(QMainWindow):
             self._set_cell(index, 1, row.badge_az(now), highlight=needs)
             self._set_cell(index, 2, _seen_text(row.last_check_in_at, now))
             self._set_cell(index, 3, row.app_version or "—")
+            # `v2backlog.md` Faza 9.2 — xidmət səviyyəsi KOD deyil, AD göstərilir.
+            self._set_cell(index, 4, SERVICE_TIER_LABELS.get(row.service_tier, row.service_tier))
 
             button = QPushButton("1 Ay Uzat", self.table)
             button.clicked.connect(lambda _=False, target=row: self.extend(target))
-            self.table.setCellWidget(index, 4, button)
+            self.table.setCellWidget(index, 5, button)
 
             # Bölmə 8: hər sətirdə TƏK toggle — vəziyyətə görə etiketi dəyişir.
             # İki ayrı düymə (Aktivləşdir + Deaktiv Et) qoyulsaydı, onlardan
             # biri həmişə mənasız olardı və səhv klik riski artardı.
             toggle = QPushButton(_toggle_label(row), self.table)
             toggle.clicked.connect(lambda _=False, target=row: self.toggle_status(target))
-            self.table.setCellWidget(index, 5, toggle)
+            self.table.setCellWidget(index, 6, toggle)
+
+            # Faza 9.1/9.2 — data-portativliyi + tier idarəsi.
+            actions = QWidget(self.table)
+            actions_layout = QHBoxLayout(actions)
+            actions_layout.setContentsMargins(0, 0, 0, 0)
+            actions_layout.setSpacing(4)
+
+            export_btn = QPushButton("İxrac Et", actions)
+            export_btn.clicked.connect(lambda _=False, target=row: self.export_data(target))
+            actions_layout.addWidget(export_btn)
+
+            tier_btn = QPushButton("Tier Dəyiş", actions)
+            tier_btn.clicked.connect(lambda _=False, target=row: self.change_tier(target))
+            actions_layout.addWidget(tier_btn)
+            self.table.setCellWidget(index, 7, actions)
 
         self.status_label.setText(f"Cəmi: {len(rows)} müştəri · diqqət tələb edən: {attention}")
 
@@ -538,6 +570,87 @@ class DeveloperPanelWindow(QMainWindow):
         self.reload()
 
     # -------------------------------- yayım ---------------------------------- #
+
+    def export_data(self, row: TenantRow) -> None:
+        """`[İxrac Et]` — müştərinin TAM datasını JSON fayla yazır (Faza 9.1).
+
+        Admin bağlantısı ƏMƏLİYYAT ANINDA açılır: panel açılışında DSN
+        yoxlanılsa, sonradan silinmiş dəyərlə yarımçıq ixrac mümkün olardı.
+        Fail-closed yoxlama eyni səhv mesajını verir (`open_admin_connection`).
+        """
+        default_name = f"kompasos-{row.tenant_name or 'tenant'}-{self._clock():%Y%m%d}.json"
+        target, _ = QFileDialog.getSaveFileName(
+            self, "Tam data ixracı", default_name, "JSON (*.json);;Bütün fayllar (*)"
+        )
+        if not target:
+            return
+
+        try:
+            with open_admin_connection() as conn:
+                document = export_tenant_json(conn, row.tenant_id)
+        except VendorMaintenanceError as exc:
+            QMessageBox.warning(self, "İxrac mümkün deyil", exc.user_message)
+            return
+        except KompasOSError as exc:
+            QMessageBox.critical(self, "İxrac alınmadı", exc.user_message)
+            return
+
+        path = Path(target)
+        try:
+            path.write_text(dumps_export(document), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.critical(self, "Fayla yazıla bilmədi", str(exc))
+            return
+
+        table_count = len(document["tables"])
+        self.status_label.setText(
+            f"«{row.tenant_name}» ixrac edildi: {path.name} ({table_count} cədvəl)."
+        )
+        _log.info(
+            "DEVELOPER_PANEL_TENANT_EXPORTED",
+            extra={"tenant_id": row.tenant_id, "tables": table_count},
+        )
+
+    def change_tier(self, row: TenantRow) -> None:
+        """`[Tier Dəyiş]` — Əsas↔Tam (Faza 9.2), təsdiq modalı ilə.
+
+        Hədəf CARİ tier-in ƏKSİDİR: iki tier var, üçüncü seçim yoxdur —
+        dropdown açmaq yerinə bir klik + təsdiq kifayətdir (`toggle_status`
+        ilə eyni qərar).
+        """
+        current = row.service_tier
+        target = next((t for t in VALID_SERVICE_TIERS if t != current), current)
+
+        answer = QMessageBox.question(
+            self,
+            "Xidmət səviyyəsini dəyiş",
+            tier_change_confirmation_text(row, target),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer is not QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            with open_admin_connection() as conn:
+                found = set_service_tier_admin(conn, tenant_id=row.tenant_id, tier=target)
+                if not found:
+                    QMessageBox.critical(self, "Tapılmadı", "Müştəri artıq mövcud deyil.")
+                    return
+                apply_tier_toggle_defaults(conn, tenant_id=row.tenant_id, tier=target)
+        except VendorMaintenanceError as exc:
+            QMessageBox.warning(self, "Dəyişiklik mümkün deyil", exc.user_message)
+            return
+        except KompasOSError as exc:
+            QMessageBox.critical(self, "Dəyişiklik alınmadı", exc.user_message)
+            return
+
+        QMessageBox.information(
+            self,
+            "Dəyişdirildi",
+            f"«{row.tenant_name}» → {SERVICE_TIER_LABELS.get(target, target)}.\n{SYNC_NOTE_AZ}",
+        )
+        self.reload()
 
     def browse_package(self) -> None:
         """Fayl seçici dialoqu (drag-drop ilə eyni sahəni doldurur)."""

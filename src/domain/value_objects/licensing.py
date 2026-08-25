@@ -811,6 +811,36 @@ def _parse_int(value: Any, *, default: int) -> int:
         return default
 
 
+# --------------------------------------------------------------------------- #
+# Xidmət-Səviyyəsi (Tier) — v2backlog.md Faza 9.2
+# --------------------------------------------------------------------------- #
+
+SERVICE_TIER_ESAS: Final[str] = "ESAS"
+SERVICE_TIER_TAM: Final[str] = "TAM"
+
+#: `license_tenants.service_tier` CHECK-inin güzgüsü (migrations/092).
+VALID_SERVICE_TIERS: Final[tuple[str, ...]] = (SERVICE_TIER_ESAS, SERVICE_TIER_TAM)
+
+#: Panel/kombinatda KOD deyil, AD görünür.
+SERVICE_TIER_LABELS: Final[dict[str, str]] = {
+    SERVICE_TIER_ESAS: "Əsas",
+    SERVICE_TIER_TAM: "Tam",
+}
+
+#: TIER-ƏSASLI FEATURE TOGGLE DEFOLT-DƏSTİ (spesifikasiyanın açıq sözü).
+#:
+#: Dəyər semantikası: hər tier üçün DEFAOLT OLARAQ SÖNDÜRÜLMÜŞ modulların
+#: çoxluğu («qara-siyahı»). «TAM» boşdur — bütün modullar açıq; «ƏSAS» yalnız
+#: premium-analitika modulunu söndürür. Siyahı BURADA data kimi saxlanılır,
+#: kodda `if` zənciri yoxdur; Root sonradan İSTƏNİLƏN modulu öz panelindən
+#: açıb-bağlaya bilər — tier dəsti yalnız DƏYİŞİM ANINDA başlanğıc vəziyyəti
+#: yazır, qaydanı əvəz ETMİR (`FeatureToggle` retroaktivlik qaydası, bölmə 3).
+SERVICE_TIER_MODULE_DEFAULTS: Final[dict[str, frozenset[str]]] = {
+    SERVICE_TIER_ESAS: frozenset({"DASHBOARD_BUILDER"}),
+    SERVICE_TIER_TAM: frozenset(),
+}
+
+
 __all__ = [
     "BLOCKED_RECHECK_INTERVAL_SECONDS",
     "CLOCK_ROLLBACK_TOLERANCE_SECONDS",
@@ -821,6 +851,11 @@ __all__ = [
     "MAX_OFFLINE_GRACE_DAYS",
     "MIN_OFFLINE_GRACE_DAYS",
     "RETRY_INTERVAL_SECONDS",
+    "SERVICE_TIER_ESAS",
+    "SERVICE_TIER_LABELS",
+    "SERVICE_TIER_MODULE_DEFAULTS",
+    "SERVICE_TIER_TAM",
+    "VALID_SERVICE_TIERS",
     "CheckInRequest",
     "CrashReport",
     "LicenseError",
