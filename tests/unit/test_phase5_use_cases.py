@@ -1039,6 +1039,35 @@ def test_empty_limit_value_is_refused() -> None:
         )
 
 
+def test_language_change_writes_the_ui_language_key() -> None:
+    """Faza 8.1 — dil seçimi `UI_LANGUAGE` açarına yazılır və audit-lənir."""
+    limits, audit = _Limits(), _Audit()
+    use_case = _root_use_case(limits=limits, audit=audit)
+
+    saved = use_case.set_language(
+        tenant_id=TENANT,
+        actor=_employee(flags=("can_manage_system_limits",)),
+        language="az",
+    )
+
+    assert saved == "az"
+    assert limits.written == [("UI_LANGUAGE", "az")]
+
+
+def test_unknown_language_is_refused() -> None:
+    """Spesifikasiya: «bu fazada rus dilini tərcümə etmə» — kod qarşılığı."""
+    limits = _Limits()
+    use_case = _root_use_case(limits=limits)
+
+    with pytest.raises(RootControlError):
+        use_case.set_language(
+            tenant_id=TENANT,
+            actor=_employee(flags=("can_manage_system_limits",)),
+            language="ru",
+        )
+    assert not limits.written
+
+
 def test_structural_module_needs_a_written_confirmation() -> None:
     toggles = _Toggles(structural=True)
     use_case = _root_use_case(toggles=toggles)

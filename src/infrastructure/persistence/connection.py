@@ -838,6 +838,9 @@ class PostgresUnitOfWork:
         from src.infrastructure.persistence.telegram_repositories import (  # noqa: PLC0415
             PostgresTelegramConfigRepository,
         )
+        from src.infrastructure.persistence.whats_new_repositories import (  # noqa: PLC0415
+            PostgresWhatsNewRepository,
+        )
         from src.infrastructure.persistence.workflow_repositories import (  # noqa: PLC0415
             PostgresAttendanceFactProvider,
             PostgresDailyAttendanceSheetRepository,
@@ -1041,6 +1044,10 @@ class PostgresUnitOfWork:
             # Kampaniya dövrləri + audit BİR tranzaksiyada: tarixin yazılıb
             # jurnalda izsiz qalması planlama qərarının sübutunu itirərdi.
             "campaign_periods": PostgresCampaignPeriodRepository(conn, self._context),
+            # --- v2backlog.md Faza 8.2 (migrations/104) ------------------------
+            # Versiya-qeydləri + audit BİR tranzaksiyada — `campaign_periods`
+            # ilə eyni əsaslandırma.
+            "whats_new": PostgresWhatsNewRepository(conn, self._context),
             # --- #28 İllik məzuniyyət balansı (kompas1.md Faza 4) --------------
             # Eyni bağlantıda: sorğunun statusu, balansın azalması və audit BİR
             # tranzaksiyada olmalıdır. Ayrı bağlantılarda təsdiq yazılıb balans

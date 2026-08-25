@@ -1640,6 +1640,36 @@ CAMPAIGN_PERIOD_ROWS: Final = [
 ]
 
 # --------------------------------------------------------------------------- #
+# v2backlog.md Faza 8.2 — «Nə Yeni?» versiya-qeydlərinin maket sətirləri.
+# Açarlar `controllers/whats_new.py::_to_row` ilə EYNİDİR (CLAUDE.md §6).
+# --------------------------------------------------------------------------- #
+WHATS_NEW_ROWS: Final = [
+    {
+        "entry_id": "wn1",
+        "version": "0.3.0 (avqust)",
+        "title": "Analitika widget-ləri",
+        "body": (
+            "Panel Qurucusuna beş yeni widget əlavə olundu: Xərc Mərkəzi, "
+            "Dublikat İşçi Şübhəsi, Operator Performansı, Kampaniya Təsiri "
+            "və İş-Yükü Ədalətliliyi."
+        ),
+        "date": "25.08.2026",
+        "is_active": "1",
+    },
+    {
+        "entry_id": "wn2",
+        "version": "0.2.0 (iyul)",
+        "title": "Break-Glass fövqəladə giriş",
+        "body": (
+            "Root əlçatmaz olduqda əvvəlcədən təyin edilmiş ehtiyat-admin "
+            "vaxt-məhdud səlahiyyət ala bilər; hər istifadə audit-lənir."
+        ),
+        "date": "12.07.2026",
+        "is_active": "1",
+    },
+]
+
+# --------------------------------------------------------------------------- #
 # #26 Mağaza Auditi + #27 İnsident Bildirişi — kompas1.md Faza 3
 # --------------------------------------------------------------------------- #
 # Açarlar `controllers/field_reports.py`-dakı `_template_row` / `_category_row`

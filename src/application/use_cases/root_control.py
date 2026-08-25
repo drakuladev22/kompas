@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from src.domain.policies import (
+    AVAILABLE_UI_LANGUAGES,
     DEFAULT_LIMITS,
     FACE_EXEMPTION_COMPENSATING_MODULE,
     FeatureModule,
@@ -278,6 +279,42 @@ class RootControlUseCase:
             extra={"actor_id": str(actor.id), "key": key.value, "value": cleaned},
         )
         return LimitView(key=key.value, value=cleaned)
+
+    def language(self, *, tenant_id: TenantId) -> str:
+        """Kirayəçinin cari interfeys dili — Faza 8.1 (Root panelinin «Dil» kartı).
+
+        Oxu yolu SƏLAHİYYƏT TƏLİB ETMİR: dil məlumatı deyil və Ayarlar ekranı
+        onsuz da hər istifadəçiyə açıqdır. Yazı yolu (`set_language`) qapılıdır.
+        """
+        return self._limits.get_str(
+            tenant_id,
+            SystemLimitKey.UI_LANGUAGE.value,
+            DEFAULT_LIMITS[SystemLimitKey.UI_LANGUAGE],
+        )
+
+    def set_language(
+        self, *, tenant_id: TenantId, actor: Employee, language: str
+    ) -> str:
+        """İnterfeys dilini dəyişir — YALNIZ kataloqda olan dilə.
+
+        `AVAILABLE_UI_LANGUAGES`-də olmayan kod RƏDD EDİLİR: Root «ru» yazsa
+        amma rus kataloqu boşdursa, tətbiq tərcüməsiz açarlarda qalardı —
+        spesifikasiyanın «bu fazada rus dilini tərcümə etmə» sözünün kod
+        qarşılığı məhz bu yoxlamadır.
+        """
+        if language not in AVAILABLE_UI_LANGUAGES:
+            raise RootControlError(
+                f"Naməlum dil kodu: {language}",
+                user_message="Bu dil hazırda mövcud deyil.",
+                context={"language": language},
+            )
+        view = self.set_limit(
+            tenant_id=tenant_id,
+            actor=actor,
+            key=SystemLimitKey.UI_LANGUAGE,
+            value=language,
+        )
+        return view.value
 
     # ---------------------------- feature toggles ---------------------------- #
 

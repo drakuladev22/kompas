@@ -287,6 +287,9 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
                 "seed_pos_threshold_limits_for_new_tenant",
                 "seed_presentation_runtime_limits_for_new_tenant",
                 "seed_report_range_limits_for_new_tenant",
+                # Miqrasiya 104 — `v2backlog.md` Faza 8.1 üçün interfeys-dili
+                # açarı (hazırda yalnız «az»; rus tərcüməsi QADAĞDIR).
+                "seed_ui_language_limit_for_new_tenant",
                 # Miqrasiya 100 — `v2backlog.md` Faza 5 üçün doqquz yeni
                 # Root açarı (offline bufer, təhvil qeydi, break-glass).
                 "seed_resilience_limits_for_new_tenant",
@@ -339,6 +342,8 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
                 "trg_seed_session_limits",
                 "trg_seed_telegram_limits",
                 "trg_seed_tenant_branding",
+                # Miqrasiya 104 — interfeys dili açarı (Faza 8.1).
+                "trg_seed_ui_language_limits",
                 "trg_seed_ui_surface_limits",
             )
         ),

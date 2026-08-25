@@ -1088,6 +1088,13 @@ class SystemLimitKey(str, Enum):
     BEHAVIOR_PAIR_MIN_SHARED_DAYS = "BEHAVIOR_PAIR_MIN_SHARED_DAYS"
     BEHAVIOR_PAIR_SYNC_MINUTES = "BEHAVIOR_PAIR_SYNC_MINUTES"
 
+    # --- Lokallaşdırma (`v2backlog.md` Faza 8.1) ---
+    #
+    # Kirayəçi-səviyyəli interfeys dili. DƏYƏR TƏK SÖZDÜR ("az") — açar
+    # indi yaradılır ki, ikinci dil gələndə KOD deyil, YALNIZ data dəyişsin:
+    # Root seçimi bu açara yazılır, `configure_i18n` isə yeganə oxu nöqtəsidir.
+    UI_LANGUAGE = "UI_LANGUAGE"
+
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.MONTHLY_LEAVE_MINUTES_LIMIT: "240",
@@ -1774,7 +1781,22 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.BEHAVIOR_PAIR_CORRELATION_THRESHOLD: "90",
     SystemLimitKey.BEHAVIOR_PAIR_MIN_SHARED_DAYS: "10",
     SystemLimitKey.BEHAVIOR_PAIR_SYNC_MINUTES: "5",
+    # v2backlog.md Faza 8.1 — kirayəçinin interfeys dili. Yeganə dəyər
+    # `AVAILABLE_UI_LANGUAGES`-dədir; DB CHECK yoxdur, çünki yeni dil
+    # əlavəsi MİQRASİYA deyil, kataloq faylıdır.
+    SystemLimitKey.UI_LANGUAGE: "az",
 }
+
+
+#: Faza 8.1 — mövcud interfeys dilləri. SPESİFİKASİYANIN AÇIQ SÖZÜ: «BU FAZADA
+#: RUS DİLİNİ TƏRCÜMƏ ETMƏ» — strukturu qur, doldurma YOX. Ona görə korteq
+#: TƏKDİR: `RootControlUseCase.set_language` bu korteqlə yoxlayır, Root paneli
+#: isə hər element üçün ad göstərir. İkinci dil = bu korteqi + `catalog_<kod>.
+#: py` faylını genişləndirmək; heç bir imza dəyişmir.
+AVAILABLE_UI_LANGUAGES: Final[tuple[str, ...]] = ("az",)
+
+#: Dil kodlarının ekran adları — kombinat qutusunda KOD deyil, AD görünür.
+UI_LANGUAGE_NAMES: Final[dict[str, str]] = {"az": "Azərbaycan"}
 
 
 # --------------------------------------------------------------------------- #

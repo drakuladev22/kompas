@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.domain.policies import AVAILABLE_UI_LANGUAGES, UI_LANGUAGE_NAMES
 from src.domain.value_objects.erp import (
     MIN_SYNC_INTERVAL_SECONDS,
     ConnectorConfig,
@@ -2300,9 +2301,16 @@ class RootControlScreen(Screen):
     #: token-i ümumi «Tətbiq Et» sözlüyünə qatmaq onu hər tətbiq
     #: əməliyyatında ötürərdi.
     telegram_saved = Signal(dict)
-    #: Aktiv/Deaktiv keçidi — token TOXUNULMUR (bax use case).
+    #: Aktiv/Deaktiv keçidi — token TOXUNMUR (bax use case).
     telegram_active_changed = Signal(bool)
     telegram_test_requested = Signal()
+    #: İnterfeys dili (`v2backlog.md` Faza 8.1) — dil kodu ("az").
+    #:
+    #: `applied` SÖZLÜYÜNƏ QOŞULMADI — `face_scope_changed` ilə eyni səbəb:
+    #: `collected()["limits"]` yalnız `SystemLimitKey` DƏYƏRLƏRİNI daşıyır,
+    #: dil seçimi isə öz kartında dərhal tətbiq olunur (bir kombinat + bir
+    #: düymə; toplu «Tətbiq Et» ritmi burada anlaşılmazlıq yaradardı).
+    language_changed = Signal(str)
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(theme, parent=parent)
@@ -2356,6 +2364,7 @@ class RootControlScreen(Screen):
         self.add(self._build_break_card())
         self.add(self._build_face_card())
         self.add(self._build_branding_card())
+        self.add(self._build_language_card())
         self.add(self._build_telegram_card())
 
         self._modules = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
@@ -2728,6 +2737,52 @@ class RootControlScreen(Screen):
                 "clear_accent": not accent,
             }
         )
+
+    def _build_language_card(self) -> Card:
+        """«Dil» bölməsi — `v2backlog.md` Faza 8.1.
+
+        SPESİFİKASİYANIN AÇIQ SÖZÜ: «BU FAZADA RUS DİLİNİ TƏRCÜMƏ ETMƏ —
+        yalnız strukturu qur». Ona görə kombinat TƏK elementlə qurulur və
+        elementlər `AVAILABLE_UI_LANGUAGES`-dən DOLDURULUR (hardcode siyahı
+        yoxdur): ikinci dil kataloqa düşəndə kombinat ÖZÜ genişlənir, bu
+        fayla toxunmaq lazım deyil.
+        """
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+        card.add(title_label("Dil", size=15))
+        card.add(
+            muted_label(
+                "Tətbiqin interfeys dili. Yeni dillər tərcümə kataloqu "
+                "hazırlandıqca burada görünəcək."
+            )
+        )
+
+        self._language_combo = QComboBox()
+        self._language_combo.setProperty("variant", "form")
+        for code in AVAILABLE_UI_LANGUAGES:
+            self._language_combo.addItem(UI_LANGUAGE_NAMES.get(code, code), userData=code)
+        card.add(self._language_combo)
+
+        self._language_status = muted_label("")
+        self._language_status.setVisible(False)
+        card.add(self._language_status)
+
+        save = action_button("Dili Yadda Saxla")
+        save.clicked.connect(self._on_language_apply)
+        card.add(save)
+        return card
+
+    def _on_language_apply(self) -> None:
+        code = self._language_combo.currentData()
+        if code:
+            self.language_changed.emit(str(code))
+
+    def set_language(self, code: str, message: str = "") -> None:
+        """Cari dili seçir; `message` boşdursa status sətri gizli qalır."""
+        index = self._language_combo.findData(code)
+        if index >= 0:
+            self._language_combo.setCurrentIndex(index)
+        self._language_status.setText(message)
+        self._language_status.setVisible(bool(message))
 
     def set_branding(self, *, company_name: str, accent_color: str, warning: str = "") -> None:
         """Cari brendinqi göstərir; `warning` boşdursa xəbərdarlıq gizlənir."""

@@ -585,6 +585,9 @@ def _root_control(screen: group_d.RootControlScreen) -> None:
     # görünməlidir — burada `#F5A623` yazsaydıq, maket «rəng təyin edilib»
     # təəssüratı yaradar və Root paneli açan adam onu silməyə çalışardı.
     screen.set_branding(company_name="Yataş Group", accent_color="")
+    # `v2backlog.md` Faza 8.1 — maket də DEFOLTU göstərir ("az"): canlı yol
+    # `RootControlUseCase.language()` ilə eyni açarı oxuyur.
+    screen.set_language("az")
 
 
 def _settings(screen: group_d.SettingsScreen) -> None:
@@ -701,6 +704,16 @@ def _announcements(screen: Any) -> None:
     """#19 (kompasos11.md Faza 8) — açarlar `controllers/announcements.py::
     _to_admin_row` ilə EYNİDİR (CLAUDE.md §6)."""
     screen.set_announcements(list(data.ANNOUNCEMENTS))
+
+
+def _whats_new(screen: Any) -> None:
+    """`v2backlog.md` Faza 8.2 — açarlar `controllers/whats_new.py::_to_row`
+    ilə EYNİDİR (CLAUDE.md §6). Maket ROOT görünüşünü təkrarlayır: nəşr
+    forması AÇIQ göstərilir ki, dizayn bir yerdə yoxlanılsın (MƏRKƏZİ
+    TƏLƏB #2); canlı yolda flag-siz istifadəçidə HEÇ render olunmur."""
+    screen.set_entries([dict(row) for row in data.WHATS_NEW_ROWS])
+    screen.set_publish_visible(True)
+    screen.set_publish_message("")
 
 
 def _performance_reviews(screen: Any) -> None:
@@ -1073,6 +1086,7 @@ _POPULATORS: dict[str, Callable[[Any], None]] = {
     "announcements": _announcements,
     "performance_reviews": _performance_reviews,
     "attrition_risk": _attrition_risk,
+    "whats_new": _whats_new,
     "sync_conflicts": _sync_conflicts,
     "annual_leave": _annual_leave,
     "transfer_requests": _transfer_requests,

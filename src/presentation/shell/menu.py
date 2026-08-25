@@ -631,6 +631,18 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         icon="chat",
     ),
     MenuEntry(
+        key="whats_new",
+        title_az="Nə Yeni?",
+        # `v2backlog.md` Faza 8.2 — kirayəçi-daxili versiya-qeydləri.
+        # OXU flag-i menyunun açarıdır (`can_view_whats_new`, migrations/104);
+        # NƏŞR ayrıca `can_publish_whats_new` ilə ekranda qapılanır —
+        # iki rolu bir flag-da birləşdirmək HR-a nəşr hüququ verərdi (bax
+        # `use_cases/whats_new.py` başlığı).
+        required_flag="can_view_whats_new",
+        order=187,
+        icon="help",
+    ),
+    MenuEntry(
         key="technical_support",
         title_az="Texniki Dəstək",
         required_flag="can_view_technical_support",

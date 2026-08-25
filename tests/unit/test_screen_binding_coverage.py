@@ -128,6 +128,17 @@ CONTROLLER_BOUND: Final[dict[str, str]] = {
     # `PENDING_REVIEW`-dan çıxır, yəni siyahı hər göndərmədən sonra yenidən
     # oxunmalıdır (bax `controllers/fine_review.py` başlığı).
     "fine_review": "_attach_fine_review",
+    # `v2backlog.md` Faza 8.2 «Nə Yeni?» — HƏM oxuyur (versiya qeydləri),
+    # HƏM yazır (Root nəşr edir / söndürür); nəşrdən sonra siyahı yenidən
+    # oxunur, çünki yeni qeyd siyahının başına düşür (bax
+    # `controllers/whats_new.py` başlığı).
+    "whats_new": "_attach_whats_new",
+    # `v2backlog.md` Faza 5.4 Break-Glass — HƏM oxuyur (grant siyahısı +
+    # gözləyən təsdiqlər), HƏM yazır (sorğu / təsdiq / aktivləşdirmə);
+    # hər yazıdan sonra bölmələr yenidən oxunmalıdır. Faza 5 commitində bu
+    # sətir ƏSKİK QALMIŞDI və yuxarıdakı test onu tutdu — reyestr onsuz da
+    # məhz bunu tələb edir (bax `controllers/break_glass.py` başlığı).
+    "break_glass": "_attach_break_glass",
 }
 
 #: Həm `_binders()`-də, HƏM DƏ `_attach_*` ilə bağlanan açarlar.

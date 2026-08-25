@@ -157,6 +157,7 @@ if TYPE_CHECKING:
     from src.application.use_cases.telegram_config import TelegramConfigUseCase
     from src.application.use_cases.tenant_branding import TenantBrandingUseCase
     from src.application.use_cases.user_management import EmployeeDraft, UserManagementUseCase
+    from src.application.use_cases.whats_new import WhatsNewUseCase
     from src.domain.entities.employee import Employee
     from src.domain.interfaces.ports import Clock, NtpVerifier
     from src.domain.value_objects.identifiers import EmployeeId, TenantId
@@ -939,6 +940,10 @@ class Session:
     # `Session`-dadır, çünki repo bağlantıya bağlıdır və audit EYNI
     # tranzaksiyada olmalıdır (`shift_handoffs` ilə eyni əsaslandırma).
     campaign_periods: CampaignPeriodsUseCase
+
+    # `v2backlog.md` Faza 8.2 — «Nə Yeni?» versiya-qeydləri (Root yazır,
+    # CEO/HR_Admin oxuyur). Eyni əsaslandırma: repo bağlantıya bağlıdır.
+    whats_new: WhatsNewUseCase
 
     def commit(self) -> None:
         self.uow.commit()
@@ -3633,6 +3638,13 @@ class ApplicationContext:
             clock=clock,
         )
 
+        # `v2backlog.md` Faza 8.2 — «Nə Yeni?» versiya-qeydləri.
+        whats_new = WhatsNewUseCase(
+            repository=repo("whats_new"),
+            audit=audit,
+            clock=clock,
+        )
+
         # `v2backlog.md` Faza 3.4 — struktur offboarding checklist. HƏR İKİSİ
         # EYNİ `checklist_item_templates` repo-suna gedir — ad məkanı
         # `owner_type`/`owner_key` ilə ayrılır, TƏK cədvəl İKİ domenin
@@ -4087,6 +4099,7 @@ class ApplicationContext:
             shift_handoffs=shift_handoffs,
             break_glass=break_glass,
             campaign_periods=campaign_periods,
+            whats_new=whats_new,
             permission_guard=PermissionHierarchyGuardUseCase(
                 audit=audit,
                 clock=clock,

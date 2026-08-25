@@ -2929,6 +2929,9 @@ class KompasApplication:
         from src.presentation.screens.transfer_requests import (  # noqa: PLC0415
             TransferRequestInboxScreen,
         )
+        from src.presentation.screens.whats_new import (  # noqa: PLC0415
+            WhatsNewScreen,
+        )
 
         handlers: tuple[tuple[type[QWidget], Callable[[QWidget], None]], ...] = (
             # Ayarlar ekranı tema seçimini örtüyə bağlayır — bu, önizləmə
@@ -2997,6 +3000,9 @@ class KompasApplication:
             # ekranıdır, lakin baxış audit-ləndiyi üçün ÖZ kontrolleri var
             # (bax `controllers/attrition_risk.py` başlığı).
             (AttritionRiskScreen, self._attach_attrition_risk),
+            # `v2backlog.md` Faza 8.2 «Nə Yeni?» — HƏM oxuyur, HƏM yazır
+            # (Root nəşr edir; `controllers/whats_new.py` başlığı).
+            (WhatsNewScreen, self._attach_whats_new),
             # Face Control (facecontrol.md Faza 4) — hər ikisi HƏM oxuyur,
             # HƏM yazır: qeydiyyatdan sonra işçinin vəziyyəti dəyişir, istisna
             # verildikdən sonra siyahıya düşür (bax `controllers/
@@ -3593,6 +3599,19 @@ class KompasApplication:
             return
         AttritionRiskController(self._context, self._current_employee).attach(screen)
 
+    def _attach_whats_new(self, screen: QWidget) -> None:
+        """«Nə Yeni?» ekranını `WhatsNewUseCase`-ə bağlayır (Faza 8.2)."""
+        from src.presentation.controllers.whats_new import (  # noqa: PLC0415
+            WhatsNewController,
+        )
+        from src.presentation.screens.whats_new import WhatsNewScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, WhatsNewScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        WhatsNewController(self._context, self._current_employee).attach(screen)
+
     def _attach_sync_conflicts(self, screen: QWidget) -> None:
         """«Sinxronizasiya Konfliktləri» ekranını use case-ə bağlayır (G-1).
 
@@ -4176,6 +4195,9 @@ class KompasApplication:
         from src.presentation.screens.transfer_requests import (  # noqa: PLC0415
             TransferRequestInboxScreen,
         )
+        from src.presentation.screens.whats_new import (  # noqa: PLC0415
+            WhatsNewScreen,
+        )
 
         theme = self._theme
 
@@ -4290,6 +4312,9 @@ class KompasApplication:
             "announcements": lambda: AnnouncementsScreen(theme),
             "performance_reviews": lambda: PerformanceReviewScreen(theme),
             "attrition_risk": lambda: AttritionRiskScreen(theme),
+            # `v2backlog.md` Faza 8.2 — «Nə Yeni?» versiya-qeydləri. Ekran
+            # HƏM oxuyur HƏM yazır (Root nəşr edir) — öz kontrolleri var.
+            "whats_new": lambda: WhatsNewScreen(theme),
             # G-1 (bölmə 5) — «Sistem Sağlamlığı» xəbərdarlığının GEDƏCƏYİ yer.
             "sync_conflicts": lambda: SyncConflictScreen(theme),
             # DEVICE-1: hansı PC hansı filiala aiddir. Ekran HƏM oxuyur,

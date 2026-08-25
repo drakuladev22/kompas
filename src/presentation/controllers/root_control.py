@@ -216,6 +216,9 @@ class RootControlController:
             lambda active: self._on_telegram_active(screen, active=active)
         )
         screen.telegram_test_requested.connect(lambda: self._on_telegram_test(screen))
+        # `v2backlog.md` Faza 8.1 — dil seçimi `applied` sözlüyündən AYRI
+        # gedir (bax `RootControlScreen.language_changed` şərhi).
+        screen.language_changed.connect(lambda code: self._on_language_changed(screen, code))
         self.refresh(screen)
 
     def refresh(self, screen: RootControlScreen) -> None:
@@ -318,6 +321,16 @@ class RootControlController:
         )
         screen.set_branding_status("")
 
+        # `v2backlog.md` Faza 8.1 — dil oxunuşu İCAZƏ TƏLİB ETMİR (bax
+        # `RootControlUseCase.language`). Bölmə DÜŞÜR, paneli BAĞLAMIR —
+        # brendinq ilə eyni qərar: miqrasiya tətbiq olunmamış quraşdırmada
+        # sorğu xəta verər və o halda Root paneli TAMAMİLƏ açılmazdı.
+        try:
+            screen.set_language(control.language(tenant_id=tenant_id))
+        except Exception:
+            _error_log.exception("ROOT_LANGUAGE_SECTION_UNAVAILABLE")
+            screen.set_language("")
+
         # TELEGRAM KARTI SONDA: brendinq bölməsi ilə eyni qərar — bir kartın
         # oxunmaması qalan bölmələri görünməz etməməlidir.
         try:
@@ -329,6 +342,23 @@ class RootControlController:
             )
 
     # ------------------------------ yazı yolu -------------------------------- #
+
+    def _on_language_changed(self, screen: RootControlScreen, code: str) -> None:
+        """Dil seçimi — `system_limits.UI_LANGUAGE`-a yazılır (Faza 8.1)."""
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                saved = session.root_control.set_language(
+                    tenant_id=session.tenant_id, actor=self._actor, language=code
+                )
+                session.commit()
+        except KompasOSError as error:
+            screen.set_language(code, message=error.user_message)
+            return
+        except Exception:
+            _error_log.exception("ROOT_LANGUAGE_SAVE_FAILED")
+            screen.set_language(code, message="Dil yazılmadı. Yenidən cəhd edin.")
+            return
+        screen.set_language(saved, message="Dil yadda saxlanıldı.")
 
     def _on_applied(self, screen: RootControlScreen, payload: Any) -> None:
         """ "Tətbiq Et" — yalnız DƏYİŞMİŞ limitlər yazılır (bax modul başlığı)."""
