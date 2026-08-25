@@ -216,6 +216,12 @@ class _AdminShellPreload:
     admin_panel_idle_timeout_minutes: int | None
     admin_panel_absolute_timeout_hours: int | None
     camera_dashboard_absolute_timeout_hours: int | None
+    #: `v2backlog.md` Faza 5.4 — daxil olan işçi AKTİV ehtiyat-admindirmi?
+    #: Menyu görünürlüyünün «alternate_admission» faktoru (bax `navigation.py`
+    #: başlığı). `None` = OXUNMAYIB (fallback canlı oxunuş edir); oxunuşun ÖZÜ
+    #: `_preload_break_glass_trustee`-dədir və eyni `read_batch()`-ın İÇİNDƏ
+    #: gedir — ayrıca sessiya açmaq PERF-1 büdcəsini yeyərdi.
+    break_glass_admitted: bool | None
 
 
 #: Splash ekranının minimum görünmə müddəti.
@@ -1812,6 +1818,10 @@ class KompasApplication:
             employee=employee,
             now=now,
             enabled_modules=enabled_modules,
+            alternate_admission=self._break_glass_admission(
+                employee,
+                preload_admitted=preload.break_glass_admitted if preload is not None else None,
+            ),
         )
         shell.theme_toggle_requested.connect(self.toggle_theme)
         shell.logout_requested.connect(self.logout)
@@ -2887,6 +2897,7 @@ class KompasApplication:
         from src.presentation.screens.attrition_risk import (  # noqa: PLC0415
             AttritionRiskScreen,
         )
+        from src.presentation.screens.break_glass import BreakGlassScreen  # noqa: PLC0415
         from src.presentation.screens.bulk_operations import (  # noqa: PLC0415
             BulkOperationsScreen,
         )
@@ -2973,6 +2984,10 @@ class KompasApplication:
             # növbəsi `annual_leave` İLƏ EYNİ NAXIŞDIR: HƏM oxuyur, HƏM yazır
             # (bax `controllers/transfer_requests.py` başlığı).
             (TransferRequestInboxScreen, self._attach_transfer_requests),
+            # `v2backlog.md` Faza 5.4 Fövqəladə Giriş — HƏM oxuyur, HƏM yazır;
+            # bölmə görünürlüyü use case-in ÖZ istisnalarından oxunur (bax
+            # `controllers/break_glass.py` başlığı).
+            (BreakGlassScreen, self._attach_break_glass),
             # `v2backlog.md` Faza 3.4 + 4.1 Checklist Şablonları — dördüncü
             # kataloq, `catalog_admin.py` ilə EYNİ "HƏM oxuyur, HƏM yazır"
             # naxışı, LAKİN AYRI kontroller (`CatalogScreen`-ə SIĞMAYAN altı
@@ -3359,6 +3374,52 @@ class KompasApplication:
         if not isinstance(screen, TransferRequestInboxScreen):  # pragma: no cover - tip qoruyucusu
             return
         TransferRequestInboxController(self._context, self._current_employee).attach(screen)
+
+    def _break_glass_admission(
+        self, employee: Employee, *, preload_admitted: bool | None
+    ) -> Callable[[Any], bool] | None:
+        """«Fövqəladə Giriş» maddəsinin ƏLAVƏ QƏBULU (Faza 5.4) — və ya `None`.
+
+        Ehtiyat-admin HEÇ BİR flag daşımadığı üçün menyu qapısı onu ekrana
+        buraxmır; bu callable reyestr faktını menyuya ÖTÜRÜR (bax
+        `navigation.NavigationRegistry.is_visible` başlığı). Dəyər preload-da
+        gəlibsə ONDAN oxunur — ayrıca sessiya PERF-1 büdcəsini yeyərdi;
+        gəlməyibsə (fallback yolu) canlı oxunuş edilir.
+
+        `None` = əlavə qəbul YOXDUR: hər şey köhnə qaydada davam edir.
+        Callable yalnız ÖZ açarına `True` deyir — başqa maddələrə təsiri sıfırdır.
+        """
+        if self._preview or self._context is None:
+            return None
+        admitted = preload_admitted
+        if admitted is None:
+            admitted = _preload_break_glass_trustee(self._context, employee)
+        if not admitted:
+            return None
+
+        def admit(entry: Any) -> bool:
+            return bool(entry.key == "break_glass")
+
+        return admit
+
+    def _attach_break_glass(self, screen: QWidget) -> None:
+        """«Fövqəladə Giriş» ekranını `BreakGlassUseCase`-ə bağlayır (Faza 5.4).
+
+        `_attach_transfer_requests` İLƏ EYNİ NAXIŞ — menyu maddəsi iki yolla
+        görünür (flag VƏ ya ehtiyat-admin reyestri, bax `alternate_admission`),
+        FAKTİKİ qapılar isə use case-dədir; bölmələrə görünürlük bayraqlarını
+        kontroller use case-in istisnalarından oxuyur.
+        """
+        from src.presentation.controllers.break_glass import (  # noqa: PLC0415
+            BreakGlassController,
+        )
+        from src.presentation.screens.break_glass import BreakGlassScreen  # noqa: PLC0415
+
+        if self._preview or self._context is None or self._current_employee is None:
+            return
+        if not isinstance(screen, BreakGlassScreen):  # pragma: no cover - tip qoruyucusu
+            return
+        BreakGlassController(self._context, self._current_employee).attach(screen)
 
     def _attach_checklist_templates(self, screen: QWidget) -> None:
         """Checklist Şablonları ekranını `ChecklistItemTemplateUseCase`-ə bağlayır (Faza 3.4+4.1).
@@ -4085,6 +4146,7 @@ class KompasApplication:
         from src.presentation.screens.attrition_risk import (  # noqa: PLC0415
             AttritionRiskScreen,
         )
+        from src.presentation.screens.break_glass import BreakGlassScreen  # noqa: PLC0415
         from src.presentation.screens.bulk_operations import (  # noqa: PLC0415
             BulkOperationsScreen,
         )
@@ -4235,6 +4297,7 @@ class KompasApplication:
             "devices": lambda: DeviceAdminScreen(theme),
             "annual_leave": lambda: AnnualLeaveInboxScreen(theme),
             "transfer_requests": lambda: TransferRequestInboxScreen(theme),
+            "break_glass": lambda: BreakGlassScreen(theme),
             "checklist_templates": lambda: ChecklistTemplateScreen(theme),
             # CHAT-1: İKİ AÇAR, BİR SİNİF — fərq yalnız `channel` arqumentidir
             # (bax `screens/support_inbox.py` başlığı). `_attach_write_
@@ -4310,6 +4373,7 @@ class KompasApplication:
             "devices": "Təsdiqlənmiş cihaz lisenziya yeri tutur",
             "annual_leave": "İllik haqq · gündaxili icazədən AYRI mexanizm",
             "transfer_requests": "Filial dəyişikliyi daimi · HR_Admin təsdiqi tələb edir",
+            "break_glass": "İkinci-etibarlı şəxs · vaxt-məhdud · hər addım auditdə",
             "checklist_templates": (
                 "İki dəst (offboarding/sahə hesabatı) · kateqoriya owner_type-a bağlıdır"
             ),
@@ -4980,6 +5044,18 @@ class KompasApplication:
 
             EmployeeTransferController(self._context, employee).attach(home)
 
+            # `v2backlog.md` Faza 5.3 — "Növbə Təhvili" kartı. ÖZ kontrolleri
+            # var, EYNİ əsaslandırma ilə (kart həm oxuyur, həm yazır) —
+            # LAKİN `KioskController`-dən fərqi burada daha kəskindir:
+            # təhvil qeydi işçinin ÖZ davamiyyət sətrinə DEYİL, MAĞAZANIN
+            # növbə sırasına aiddir (bax `use_cases/shift_handoff.py` başlığı),
+            # yəni günün axını ilə eyni sessiyada olması SƏHV olardı.
+            from src.presentation.controllers.shift_handoff import (  # noqa: PLC0415
+                ShiftHandoffController,
+            )
+
+            ShiftHandoffController(self._context, employee).attach(home)
+
         # ──────────────────────────────────────────────────────────────────
         # «GÖZLƏNİLİR» VƏZİYYƏTİ ÖZÜ YENİLƏNİR (DEEP-GAP UX-2)
         # ──────────────────────────────────────────────────────────────────
@@ -5235,6 +5311,9 @@ class KompasApplication:
             # Faza 3.3 — `annual_leave` İLƏ EYNİ qərar: sözlük ƏL İLƏ yazılmır,
             # `preview_data`-dan gəlir (CLAUDE.md §6).
             home.set_transfer_request(dict(preview_data.TRANSFER_REQUEST_STATUS))
+            # Faza 5.3 — EYNİ qərar: siyahı `preview_data`-dan gəlir və
+            # açarlar `controllers/shift_handoff.py::_to_row` ilə eynidir.
+            home.set_handoff_notes([dict(row) for row in preview_data.SHIFT_HANDOFF_NOTES])
             home.logout_requested.connect(lambda: kiosk.set_content(pin_pad))
             kiosk.set_content(home)
 
@@ -5734,6 +5813,7 @@ def _fetch_admin_shell_preload(
             admin_panel_absolute_timeout_hours,
             camera_dashboard_absolute_timeout_hours,
         ) = _preload_session_guard_limits(context)
+        break_glass_admitted = _preload_break_glass_trustee(context, employee)
 
     return _AdminShellPreload(
         theme_mode=theme_mode,
@@ -5751,7 +5831,31 @@ def _fetch_admin_shell_preload(
         admin_panel_idle_timeout_minutes=admin_panel_idle_timeout_minutes,
         admin_panel_absolute_timeout_hours=admin_panel_absolute_timeout_hours,
         camera_dashboard_absolute_timeout_hours=camera_dashboard_absolute_timeout_hours,
+        break_glass_admitted=break_glass_admitted,
     )
+
+
+def _preload_break_glass_trustee(context: ApplicationContext, employee: Employee) -> bool | None:
+    """6) EHTİYAT-ADMİN YOXLAMASI — `v2backlog.md` Faza 5.4.
+
+    Daxil olan işçinin AKTİV ehtiyat-admin reyestrində olub-olmadığı — menyu
+    maddəsinin «alternate_admission» faktoru. Yalnız bir qismən indeksli
+    SELECT-dir və `read_batch()`-ın İÇİNDƏ gedir; nəticə login boyu keşlənir,
+    çünki reyestr dəyişikliyi (Root təyinati ləğv edir) NÖVBƏTİ girişdə
+    əks olunur — panelin canlı özü üçün bu, qəbul edilən gecikmədir.
+
+    FAIL-SOFT: oxunuş uğursuzsa `None` — maddə flag daşımayanlara görünməz
+    qalır (ehtiyat-admin öz maddəsini itirir, amma başqası heç nə qazanmir;
+    baza onsuz da işləmirsə ekran onsuz da açılmır).
+    """
+    try:
+        with context.session(user_id=employee.id) as session:
+            return session.break_glass.is_active_trustee(
+                tenant_id=context.tenant_id, employee_id=employee.id
+            )
+    except Exception:
+        _log.exception("BREAK_GLASS_TRUSTEE_PRELOAD_FAILED")
+        return None
 
 
 def _load_context_behind_splash(

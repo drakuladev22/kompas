@@ -24,6 +24,7 @@ from src.domain.entities.appeal import FineAppeal
 from src.domain.entities.attendance_record import AttendanceRecord
 from src.domain.entities.attendance_sheet import AttendanceFact, DailyAttendanceSheet
 from src.domain.entities.auth_session import AuthSession
+from src.domain.entities.break_glass import BreakGlassGrant, BreakGlassTrustee
 from src.domain.entities.employee import Employee
 from src.domain.entities.employee_document import EmployeeDocument
 from src.domain.entities.employee_transfer import EmployeeTransferRequest
@@ -39,6 +40,7 @@ from src.domain.entities.position import Position
 from src.domain.entities.registered_device import RegisteredDevice
 from src.domain.entities.sales_points import PointsEntry, RewardRedemption
 from src.domain.entities.shift import ShiftAssignment, ShiftSwapRequest
+from src.domain.entities.shift_handoff import ShiftHandoffNote
 from src.domain.entities.task import Task
 from src.domain.policies import BreakKind
 from src.domain.value_objects.authorization import PermissionFlag, RolePriority
@@ -88,6 +90,7 @@ from src.domain.value_objects.identifiers import (
     AnnualLeaveRequestId,
     AppealId,
     AttendanceRecordId,
+    BreakGlassGrantId,
     BulkImportLogId,
     ChecklistItemTemplateId,
     DeviceId,
@@ -110,6 +113,7 @@ from src.domain.value_objects.identifiers import (
     RedemptionId,
     RewardId,
     SessionId,
+    ShiftHandoffNoteId,
     ShiftSwapRequestId,
     StoreId,
     StoreTemplateId,
@@ -1461,6 +1465,105 @@ class ChecklistItemTemplateRepository(Protocol):
     def deactivate(
         self, tenant_id: TenantId, template_id: ChecklistItemTemplateId, *, changed_by: EmployeeId
     ) -> None: ...
+
+
+@runtime_checkable
+class ShiftHandoffRepository(Protocol):
+    """`shift_handoff_notes` (`v2backlog.md` Faza 5.3, migrations/099)."""
+
+    def get(self, note_id: ShiftHandoffNoteId) -> ShiftHandoffNote | None: ...
+
+    def list_open_for_store(
+        self, tenant_id: TenantId, store_id: StoreId, *, limit: int
+    ) -> list[ShiftHandoffNote]:
+        """Qəbul edilməmiş qeydlər, ƏN YENİSİ ƏVVƏLDƏ.
+
+        GÖRÜNMƏ PƏNCƏRƏSİ BURADA TƏTBİQ OLUNMUR — o, Root parametridir
+        (`SHIFT_HANDOFF_VISIBILITY_HOURS`) və `ShiftHandoffNote.is_visible_at()`
+        ilə TƏTBİQ QATINDA süzülür. Repo-ya SQL şərti kimi qoyulsaydı, Root
+        həddi dəyişəndə köhnə sorğu planı ilə fərqli nəticə alına bilərdi və
+        qayda İKİ yerdə (SQL + domen) yaşayardı — CLAUDE.md §5-in tələb
+        etdiyi ikilik BU qayda üçün nəzərdə tutulmayıb (o, təhlükəsizlik
+        zəmanətlərinə aiddir, görünüş filtrinə yox).
+
+        `limit` MƏCBURİ: `PANEL_LIMIT` naxışı — kiosk kartı sonsuz siyahı
+        göstərə bilməz.
+        """
+        ...
+
+    def save(self, note: ShiftHandoffNote) -> None: ...
+
+
+@runtime_checkable
+class BreakGlassRepository(Protocol):
+    """`break_glass_trustees` + `break_glass_grants` (Faza 5.4, migrations/099).
+
+    İKİ CƏDVƏL, BİR PORT: reyestr ilə qrant HƏMİŞƏ birlikdə oxunur (sorğu
+    verən şəxsin reyestrdə olub-olmaması qrant yaratmağın ÖN ŞƏRTİDİR) və
+    ayrı portlara bölünsəydi, use case iki portu sinxron saxlamaq
+    məcburiyyətində qalardı — `EmployeeOffboardingChecklistRepository`-nin
+    valideyn+bənd birləşdirməsi ilə eyni qərar.
+    """
+
+    # --- reyestr ---
+    def active_trustees(self, tenant_id: TenantId) -> list[BreakGlassTrustee]: ...
+
+    def find_trustee(
+        self, tenant_id: TenantId, employee_id: EmployeeId
+    ) -> BreakGlassTrustee | None:
+        """AKTİV sətir; ləğv edilmiş təyinat `None` qaytarır."""
+        ...
+
+    def save_trustee(self, trustee: BreakGlassTrustee) -> None: ...
+
+    # --- qrantlar ---
+    def get_grant(self, grant_id: BreakGlassGrantId) -> BreakGlassGrant | None: ...
+
+    def find_open_for_employee(
+        self, tenant_id: TenantId, employee_id: EmployeeId
+    ) -> BreakGlassGrant | None:
+        """İşçinin GÖZLƏYƏN və ya AKTİV qrantı — ikinci paralel sorğunu bloklayır."""
+        ...
+
+    def list_pending(self, tenant_id: TenantId) -> list[BreakGlassGrant]:
+        """Təsdiq gözləyən sorğular (təsdiqləyicinin ekranı + planlayıcı)."""
+        ...
+
+    def list_active(self, tenant_id: TenantId) -> list[BreakGlassGrant]:
+        """Qüvvədə olan qrantlar — planlayıcı vaxtı çatanları bağlayır."""
+        ...
+
+    def count_since(self, tenant_id: TenantId, *, since: datetime) -> int:
+        """Aylıq tavan (`BREAK_GLASS_MAX_GRANTS_PER_MONTH`) üçün say.
+
+        RƏDD EDİLMİŞ VƏ ÖLMÜŞ SORĞULAR DA SAYILIR: tavan «neçə dəfə
+        səlahiyyət verildi» deyil, «neçə dəfə İSTƏNİLDİ» sualını qorumalıdır
+        — əks halda təkrar-təkrar rədd edilən şəxs limitsiz cəhd edə bilərdi.
+        """
+        ...
+
+    def list_vendor_unsynced(self, tenant_id: TenantId, *, limit: int) -> list[BreakGlassGrant]:
+        """Mərkəzi vendor bazasına hələ yazılmamış sətirlər (gecəlik təkrar-cəhd)."""
+        ...
+
+    def save_grant(self, grant: BreakGlassGrant) -> None: ...
+
+
+@runtime_checkable
+class VendorBreakGlassReporter(Protocol):
+    """Fövqəladə girişin MƏRKƏZİ vendor bazasına bildirilməsi (Faza 5.4).
+
+    NİYƏ AYRI PORT: `BreakGlassRepository` KİRAYƏÇİ bazasına yazır, bu isə
+    VENDOR bazasına — iki fərqli bağlantı, iki fərqli uğursuzluq rejimi.
+    Bir portda birləşdirilsəydi, vendor bazasının əlçatmazlığı yerli yazını
+    da geri qaytarardı və fövqəladə giriş məhz fövqəladə halda işləməzdi.
+
+    `report()` İSTİSNA ATMAMALIDIR — uğursuzluğu `False` ilə bildirir;
+    çağıran sətri `vendor_synced_at IS NULL` saxlayır və gecəlik iş yenidən
+    cəhd edir.
+    """
+
+    def report(self, grant: BreakGlassGrant) -> bool: ...
 
 
 @runtime_checkable
@@ -3122,6 +3225,7 @@ __all__ = [
     "AuditTrail",
     "AuthSessionRepository",
     "BehaviorBaselineRepository",
+    "BreakGlassRepository",
     "BulkImportLogRepository",
     "CameraAssignmentRepository",
     "CameraCapture",
@@ -3175,12 +3279,14 @@ __all__ = [
     "SalesPointsRepository",
     "ScheduledJobRepository",
     "SecurityEventRepository",
+    "ShiftHandoffRepository",
     "ShiftRepository",
     "ShiftSwapRepository",
     "StoreTemplateRepository",
     "SystemLimits",
     "TaskRepository",
     "UnitOfWork",
+    "VendorBreakGlassReporter",
     "WorkModeRepository",
     "WorkedHoursProvider",
 ]

@@ -45,6 +45,17 @@ class NotificationCategory(str, Enum):
     SHIFT_SWAP = "SHIFT_SWAP"
     POINTS_RESET_UPCOMING = "POINTS_RESET_UPCOMING"
     ERP_SYNC_FAILED = "ERP_SYNC_FAILED"
+    # `v2backlog.md` Faza 5. Üçü də `ALWAYS_CRITICAL_CATEGORIES`-ə
+    # DÜŞMÜR: həmin siyahı spesifikasiyanın adbaad sadaladığı altılıqdır
+    # və onu genişləndirmək «spesifikasiyada belə yazılıb» arqumentini
+    # yalan edərdi. Kritiklik ÇAĞIRIŞ yerində yüksəldilir (`Notifier`
+    # `is_critical`-i YÜKSƏLDƏ bilir, endirə bilmir) — break-glass
+    # bildirişləri məhz belə həmişə kritik göndərilir.
+    OFFLINE_BACKLOG = "OFFLINE_BACKLOG"
+    HARDWARE_HEALTH = "HARDWARE_HEALTH"
+    BREAK_GLASS_PENDING = "BREAK_GLASS_PENDING"
+    BREAK_GLASS_DECIDED = "BREAK_GLASS_DECIDED"
+    BREAK_GLASS_TRUSTEE = "BREAK_GLASS_TRUSTEE"
 
     @property
     def is_always_critical(self) -> bool:
@@ -81,6 +92,11 @@ _LABELS_AZ: Final[dict[NotificationCategory, str]] = {
     NotificationCategory.SHIFT_SWAP: "Növbə dəyişikliyi",
     NotificationCategory.POINTS_RESET_UPCOMING: "Xal sıfırlanması yaxınlaşır",
     NotificationCategory.ERP_SYNC_FAILED: "1C sinxronizasiya xətası",
+    NotificationCategory.OFFLINE_BACKLOG: "Uzun-müddətli offline",
+    NotificationCategory.HARDWARE_HEALTH: "Aparat nasazlığı",
+    NotificationCategory.BREAK_GLASS_PENDING: "Fövqəladə giriş sorğusu",
+    NotificationCategory.BREAK_GLASS_DECIDED: "Fövqəladə giriş qərarı",
+    NotificationCategory.BREAK_GLASS_TRUSTEE: "Ehtiyat-admin təyinatı",
 }
 
 

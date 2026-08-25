@@ -464,6 +464,57 @@ class OfflineBuffer:
             counts[row["sync_status"]] = row["n"]
         return counts
 
+    def oldest_pending_queued_at(self, *, tenant_id: str | None = None) -> datetime | None:
+        """Ən köhnə GÖZLƏYƏN yazının növbəyə düşmə anı — Faza 5.1.
+
+        `counts()` «neçə sətir» sualına cavab verir, bu isə «nə qədərdir»
+        sualına. İKİSİ AYRIDIR VƏ HƏR İKİSİ LAZIMDIR: bir kassa səhəri boyu
+        şəbəkəsiz işləyən mağaza AZ sətirlə UZUN müddət, bir günlük
+        inventarizasiya isə QISA müddətdə ÇOX sətir yığır — biri digərini
+        görmür (`OFFLINE_BACKLOG_MAX_HOURS` / `..._MAX_ENTRIES`).
+
+        `next_attempt_at` YOX, `queued_at` ölçülür: təkrar cəhd cədvəli
+        (backoff) uğursuzluqda gələcəyə sürüşür və o rəqəmlə yaş HƏMİŞƏ
+        kiçik görünərdi — halbuki sual «bu məlumat nə vaxtdan bəri serverə
+        çatmayıb».
+        """
+        clause, clause_params = self._tenant_clause(tenant_id)
+        with self._lock:
+            row = self._conn.execute(
+                # `clause` sabit İKİ variantdan biridir (`_tenant_clause`).
+                f"""
+                SELECT MIN(queued_at) AS oldest FROM outbox
+                 WHERE sync_status = 'PENDING'{clause}
+                """,  # noqa: S608 — şərtlər sabit siyahıdandır
+                clause_params,
+            ).fetchone()
+        if row is None or row["oldest"] is None:
+            return None
+        return datetime.fromisoformat(row["oldest"])
+
+    def read_meta(self, key: str) -> str | None:
+        """`outbox_meta` — bufer faylının öz kiçik açar/dəyər yaddaşı.
+
+        NİYƏ BURADA: xəbərdarlıq təkrar-susma anı (Faza 5.1) OFFLINE
+        vəziyyətdə YAZILMALIDIR — Postgres-dəki bir sütun məhz o an əlçatmaz
+        olur. `outbox_meta` cədvəli sxemdə ARTIQ var idi (`_SCHEMA`), yalnız
+        oxuyucusu yox idi.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM outbox_meta WHERE key = ?", (key,)
+            ).fetchone()
+        return str(row["value"]) if row else None
+
+    def write_meta(self, key: str, value: str) -> None:
+        """`outbox_meta`-ya UPSERT."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO outbox_meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
     def get(self, entry_id: str) -> BufferedWrite | None:
         with self._lock:
             row = self._conn.execute("SELECT * FROM outbox WHERE id = ?", (entry_id,)).fetchone()

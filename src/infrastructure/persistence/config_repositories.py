@@ -833,6 +833,36 @@ class PostgresStoreWriter(_BaseRepository):
             (store_id, tenant_id, code, name, brand, address or None),
         )
 
+    def technical_contact(self, tenant_id: TenantId, store_id: StoreId) -> EmployeeId | None:
+        """Filialın texniki-məsul şəxsi (`v2backlog.md` Faza 5.2, migrations/089).
+
+        `None` NORMAL haldır — sahə İSTƏYƏ BAĞLIDIR. Çağıran tərəf onu
+        «bildiriş defolt kanala getsin» kimi oxumalıdır (migrations/089
+        sütun şərhi), «xəta» kimi yox.
+        """
+        row = self._fetch_one(
+            "SELECT technical_contact_employee_id FROM stores WHERE id = %s AND tenant_id = %s",
+            (store_id, tenant_id),
+        )
+        if row is None:
+            return None
+        value: EmployeeId | None = row["technical_contact_employee_id"]
+        return value
+
+    def set_technical_contact(
+        self, tenant_id: TenantId, store_id: StoreId, *, employee_id: EmployeeId | None
+    ) -> None:
+        """Texniki-məsul şəxsi təyin edir və ya (None ilə) təmizləyir.
+
+        AUDİT BURADA YAZILMIR: bu, sırf yazma portudur (`PostgresStoreWriter`
+        sinfinin bütün metodları belədir) — audit sətrini çağıran use case
+        yazır, çünki «kim dəyişdi» sualının cavabı yalnız orada var.
+        """
+        self._execute(
+            "UPDATE stores SET technical_contact_employee_id = %s WHERE id = %s AND tenant_id = %s",
+            (employee_id, store_id, tenant_id),
+        )
+
     def get_id_by_code(self, tenant_id: TenantId, code: str) -> StoreId | None:
         """Toplu idxal CSV-sindəki insan-oxunaqlı mağaza kodunu UUID-ə çevirir.
 

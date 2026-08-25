@@ -150,6 +150,21 @@ OffboardingChecklistItemId = NewType("OffboardingChecklistItemId", uuid.UUID)
 #: dəyişdirilir (Root), instansiya isə dəyişmir (`field_report_checklist_
 #: items` ilə eyni prinsip: keçmiş sətir "o an nə yazılmışdı"-nın sübutudur).
 ChecklistItemTemplateId = NewType("ChecklistItemTemplateId", uuid.UUID)
+#: Şift-handoff qeydi (`v2backlog.md` Faza 5.3, `shift_handoff_notes`,
+#: migrations/099). Ayrıca tip: qeyd `StoreId` və İKİ `EmployeeId` (yazan,
+#: qəbul edən) ilə eyni çağırışda gəzir — sətir-səviyyəli ID olmasaydı
+#: "hansı təhvil qəbul edildi?" sualı bir mağazanın günlük bir neçə qeydi
+#: arasında cavabsız qalardı.
+ShiftHandoffNoteId = NewType("ShiftHandoffNoteId", uuid.UUID)
+#: Fövqəladə (break-glass) səlahiyyət sətri (Faza 5.4, `break_glass_grants`).
+#: Ayrıca tip: audit sorğularında `EmployeeId` (sorğuçu, təsdiqçi) ilə
+#: yan-yana gəzir və birini digərinin yerinə ötürmək «kimin səlahiyyəti
+#: dayandırıldı» sualında SƏHV adama işarə edərdi.
+BreakGlassGrantId = NewType("BreakGlassGrantId", uuid.UUID)
+#: Ehtiyat-admin reyestri sətri (Faza 5.4, `break_glass_trustees`). Qrant
+#: ID-sindən AYRIDIR, çünki reyestr TƏYİNATDIR, qrant isə İSTİFADƏDİR —
+#: miqrasiya 099-un iki cədvəl ayırmasının kod tərəfdəki güzgüsü.
+BreakGlassTrusteeId = NewType("BreakGlassTrusteeId", uuid.UUID)
 
 # --- Dəstək (bölmə 8) ------------------------------------------------------- #
 SupportTicketId = NewType("SupportTicketId", uuid.UUID)
@@ -315,6 +330,18 @@ def new_transfer_request_id() -> TransferRequestId:
     return TransferRequestId(uuid.uuid4())
 
 
+def new_shift_handoff_note_id() -> ShiftHandoffNoteId:
+    return ShiftHandoffNoteId(uuid.uuid4())
+
+
+def new_break_glass_grant_id() -> BreakGlassGrantId:
+    return BreakGlassGrantId(uuid.uuid4())
+
+
+def new_break_glass_trustee_id() -> BreakGlassTrusteeId:
+    return BreakGlassTrusteeId(uuid.uuid4())
+
+
 def new_offboarding_checklist_id() -> OffboardingChecklistId:
     return OffboardingChecklistId(uuid.uuid4())
 
@@ -333,6 +360,8 @@ __all__ = [
     "AnnualLeaveRequestId",
     "AppealId",
     "AttendanceRecordId",
+    "BreakGlassGrantId",
+    "BreakGlassTrusteeId",
     "BulkImportLogId",
     "ChecklistItemTemplateId",
     "DailySheetId",
@@ -365,6 +394,7 @@ __all__ = [
     "SalesTransactionId",
     "SessionId",
     "ShiftAssignmentId",
+    "ShiftHandoffNoteId",
     "ShiftSwapRequestId",
     "StoreId",
     "StoreTemplateId",
@@ -379,6 +409,8 @@ __all__ = [
     "new_annual_leave_request_id",
     "new_appeal_id",
     "new_attendance_record_id",
+    "new_break_glass_grant_id",
+    "new_break_glass_trustee_id",
     "new_bulk_import_log_id",
     "new_checklist_item_template_id",
     "new_daily_sheet_id",
@@ -405,6 +437,7 @@ __all__ = [
     "new_redemption_id",
     "new_session_id",
     "new_shift_assignment_id",
+    "new_shift_handoff_note_id",
     "new_shift_swap_request_id",
     "new_store_id",
     "new_store_template_id",

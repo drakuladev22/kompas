@@ -66,6 +66,12 @@ INFRA_LIMIT_BOUNDS: Final[dict[SystemLimitKey, tuple[Decimal, Decimal]]] = {
     SystemLimitKey.HEALTH_DISK_WARNING_PERCENT: (Decimal(50), Decimal(99)),
     SystemLimitKey.HEALTH_DISK_CRITICAL_PERCENT: (Decimal(55), Decimal(100)),
     SystemLimitKey.HEALTH_DB_PING_SLOW_MS: (Decimal(50), Decimal(60000)),
+    # Faza 5.2 (RAM) — disk cütü ilə EYNİ məntiq, lakin yuxarı hüdud 99.9:
+    # 100 icazəli olsaydı kritik hədd heç vaxt keçilməzdi (100%-də tətbiq
+    # onsuz da dayanmış olur) və xəbərdarlıq mərhələsi mənasız qalardı.
+    SystemLimitKey.HEALTH_MEMORY_WARNING_PERCENT: (Decimal("50.0"), Decimal("99.9")),
+    SystemLimitKey.HEALTH_MEMORY_CRITICAL_PERCENT: (Decimal("50.0"), Decimal("99.9")),
+    SystemLimitKey.HEALTH_HARDWARE_ALERT_COOLDOWN_HOURS: (Decimal(1), Decimal(168)),
     SystemLimitKey.DRIVE_QUOTA_WARNING_RATIO: (Decimal("0.50"), Decimal("1.00")),
     SystemLimitKey.DRIVE_QUOTA_WARNING_COOLDOWN_DAYS: (Decimal(1), Decimal(90)),
     SystemLimitKey.NTP_POLL_INTERVAL_SECONDS: (Decimal(30), Decimal(86400)),
@@ -103,6 +109,13 @@ INFRA_LIMIT_BOUNDS: Final[dict[SystemLimitKey, tuple[Decimal, Decimal]]] = {
     SystemLimitKey.OFFLINE_SYNC_BATCH_SIZE: (Decimal(1), Decimal(5000)),
     SystemLimitKey.OFFLINE_RETRY_BACKOFF_SECONDS: (Decimal(1), Decimal(86400)),
     SystemLimitKey.OFFLINE_SQLITE_TIMEOUT_SECONDS: (Decimal("1.0"), Decimal("120.0")),
+    # Faza 5.1 — uzun-müddətli offline xəbərdarlığı. Aşağı hüdudlar
+    # QORUYUCUDUR: 0 saat hər kəsintini nasazlıq elan edərdi, 0 sətir isə
+    # ilk yazıda xəbərdarlıq göndərərdi — hər ikisi bildirişi səs-küyə
+    # çevirib əsl nasazlığı gizlədərdi.
+    SystemLimitKey.OFFLINE_BACKLOG_MAX_HOURS: (Decimal(1), Decimal(720)),
+    SystemLimitKey.OFFLINE_BACKLOG_MAX_ENTRIES: (Decimal(10), Decimal(100000)),
+    SystemLimitKey.OFFLINE_BACKLOG_WARNING_COOLDOWN_HOURS: (Decimal(1), Decimal(168)),
     # Hovuzun minimumu 1-dən aşağı düşə BİLMƏZ: `0` yazılsa ilk sorğu yeni
     # bağlantı gözləyər və `timeout` bitənə qədər ekran donardı.
     SystemLimitKey.DB_POOL_MIN_SIZE: (Decimal(1), Decimal(32)),

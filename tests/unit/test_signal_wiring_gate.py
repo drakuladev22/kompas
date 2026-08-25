@@ -71,6 +71,13 @@ LOCAL_ONLY: Final[dict[str, str]] = {
     "group_e.SupportChatWidget.closed": "`close_panel` paneli özü gizlədir",
     "group_f.TaskCard.approved": "`TasksScreen` onu öz siqnalına relay edir",
     "group_f.TaskCard.rejected": "`TasksScreen` onu öz siqnalına relay edir",
+    # Faza 4.2 — «Geri Çək» üçü də EYNİ relay ilə işləyir: `card.withdrawn` →
+    # `TasksScreen.withdraw_requested` → `controllers/kiosk_self_service.py`
+    # (`withdraw_self_correction`-a yazır). Relay EYNI faylda olduğu üçün
+    # xarici-istehlakçı axtarışı onu görmür — `approved`/`rejected` ilə EYNİ
+    # vəziyyət, yalnız fərq odur ki, `withdrawn` adı TƏKRİSİZDİR və ona görə
+    # ada-görə qarışıqlıq yolundan keçmir.
+    "group_f.TaskCard.withdrawn": "`TasksScreen` onu öz siqnalına relay edir",
     "group_i.WidgetRow.moved": "`DashboardBuilderScreen` eyni faylda dinləyir",
     "group_i.WidgetRow.placement_changed": (
         "`DashboardBuilderScreen` eyni faylda dinləyir (audit G-5)"

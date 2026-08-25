@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from src.domain.entities.employee import Employee
-    from src.presentation.navigation import NavigationRegistry
+    from src.presentation.navigation import MenuEntry, NavigationRegistry
     from src.presentation.theme.manager import ThemeManager
 
 _log = get_logger(__name__)
@@ -81,6 +81,7 @@ class AdminShell(QWidget):
         employee: Employee,
         now: datetime,
         enabled_modules: frozenset[str] | None = None,
+        alternate_admission: Callable[[MenuEntry], bool] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -89,6 +90,12 @@ class AdminShell(QWidget):
         self._employee = employee
         self._now = now
         self._enabled_modules = enabled_modules
+        #: Əlavə qəbul — flag yoxlaması alınmayanda çağırılır. Login-də BİR
+        #: dəfə hesablanır (`v2backlog.md` Faza 5.4: ehtiyat-admin reyestr
+        #: sətri daşıyır, flag deyil; bax `navigation.NavigationRegistry.
+        #: is_visible` başlığı). Örtük yenidən qurulanda (hər girişdə) təzə
+        #: dəyər alır, köhnə işçinin cavabı yeni işçiyə sızmır.
+        self._alternate_admission = alternate_admission
         self._factories: dict[str, Callable[[], QWidget]] = {}
         self._screens: dict[str, QWidget] = {}
         self._titles: dict[str, tuple[str, str]] = {}
@@ -187,6 +194,7 @@ class AdminShell(QWidget):
             self._employee,
             now=self._now,
             enabled_modules=self._enabled_modules,
+            alternate_admission=self._alternate_admission,
         ):
             _log.warning(
                 "NAVIGATION_DENIED",
@@ -332,6 +340,7 @@ class AdminShell(QWidget):
             self._employee,
             now=self._now,
             enabled_modules=self._enabled_modules,
+            alternate_admission=self._alternate_admission,
         )
         self._sidebar.set_entries(visible)
         _log.info(

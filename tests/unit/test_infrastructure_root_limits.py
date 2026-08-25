@@ -63,6 +63,8 @@ _MIGRATIONS_DIR: Final[Path] = Path(__file__).resolve().parents[2] / "database" 
 _MIGRATIONS: Final[tuple[Path, ...]] = (
     _MIGRATIONS_DIR / "032_infrastructure_runtime_limits.sql",
     _MIGRATIONS_DIR / "062_server_time_integrity.sql",
+    # v2backlog Faza 5 — offline-backlog / shift-handoff / break-glass açarları
+    _MIGRATIONS_DIR / "100_break_glass_flags_and_resilience_limits.sql",
 )
 
 #: Açar → Faza 10.2-dən ƏVVƏL kodda oturan HƏRFİ dəyər.
@@ -138,6 +140,18 @@ _ORIGINAL_HARDCODES: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.SERVER_TIME_MAX_OFFLINE_TRUST_SECONDS: "14400",
     SystemLimitKey.LOCAL_CLOCK_MANIPULATION_THRESHOLD_SECONDS: "60",
     SystemLimitKey.LOCAL_CLOCK_MANIPULATION_NOTIFY: "1",
+    # ----------------------------------------------------------------------- #
+    # SİSTEM DAVAMLILIĞI (v2backlog.md Faza 5.1/5.2) — BUNLAR DA YENİDİR
+    # ----------------------------------------------------------------------- #
+    # TIME-1 dördlüyü ilə eyni hal: köçürüləcək köhnə sabit yox idi, açar
+    # funksiya ilə birlikdə doğulub. Dəyər sütunu «modulun fallback
+    # sabiti» mənasını daşıyır (`backlog.py`, `system_health.py`).
+    SystemLimitKey.OFFLINE_BACKLOG_MAX_HOURS: "24",
+    SystemLimitKey.OFFLINE_BACKLOG_MAX_ENTRIES: "500",
+    SystemLimitKey.OFFLINE_BACKLOG_WARNING_COOLDOWN_HOURS: "12",
+    SystemLimitKey.HEALTH_MEMORY_WARNING_PERCENT: "85.0",
+    SystemLimitKey.HEALTH_MEMORY_CRITICAL_PERCENT: "95.0",
+    SystemLimitKey.HEALTH_HARDWARE_ALERT_COOLDOWN_HOURS: "12",
 }
 
 

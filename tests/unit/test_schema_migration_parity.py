@@ -224,6 +224,22 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
         "trg_server_employee_deactivated_at": (
             "Yuxarıdakı `enforce_server_employee_deactivated_at`-ın trigger-i — EYNİ səbəb."
         ),
+        "trg_server_created_at_handoff_notes": (
+            "TIME-1 (migrations/099): `shift_handoff_notes.created_at`-ı mövcud "
+            "ORTAQ funksiya `enforce_server_created_at()` ilə server vaxtına "
+            "möhürləyir — təhvil qeydini İŞÇİ yazır və «mən bunu vaxtında "
+            "təhvil vermişdim» mübahisəsi üçün vaxt-hövməsi SÜBUT olunmalıdır. "
+            "`schema.sql` QƏSDƏN yenilənmir: bu, mövcud qaydanın YENİDƏN "
+            "yazılması DEYİL, yeni cədvələ TAM YENİ trigger bağlantısıdır "
+            "(096-nın `trg_server_employee_deactivated_at` pretsedenti)."
+        ),
+        "trg_server_created_at_break_glass": (
+            "TIME-1 (migrations/099): `break_glass_grants.created_at`-ı eyni "
+            "ortaq funksiya ilə server vaxtına möhürləyir — fövqəladə giriş "
+            "səlahiyyətinin VAXTI hüquqi-audit əsəridir və client saatından "
+            "asılı OLA BİLMƏZ. 096/099 pretsedenti: yeni cədvəl, yeni trigger, "
+            "ortaq funksiya toxunulmadan."
+        ),
     }
     | dict.fromkeys(
         (
@@ -265,6 +281,13 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
                 "seed_pos_threshold_limits_for_new_tenant",
                 "seed_presentation_runtime_limits_for_new_tenant",
                 "seed_report_range_limits_for_new_tenant",
+                # Miqrasiya 100 — `v2backlog.md` Faza 5 üçün doqquz yeni
+                # Root açarı (offline bufer, təhvil qeydi, break-glass).
+                "seed_resilience_limits_for_new_tenant",
+                # Miqrasiya 101 — öz-düzəliş sorğusunun sui-istifadə tavan
+                # cütü (`v2backlog.md` Faza 4.2; 084 pretsedenti: seed
+                # unudulması YENİ miqrasiya ilə bağlanır, 097 redaktə OLUNMUR).
+                "seed_self_correction_limits_for_new_tenant",
                 "seed_scheduler_limits_for_new_tenant",
                 "seed_server_time_limits_for_new_tenant",
                 "seed_session_limits_for_new_tenant",
@@ -301,6 +324,8 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
                 "trg_seed_pos_threshold_limits",
                 "trg_seed_presentation_runtime_limits",
                 "trg_seed_report_range_limits",
+                "trg_seed_resilience_limits",
+                "trg_seed_self_correction_limits",
                 "trg_seed_scheduler_limits",
                 "trg_seed_server_time_limits",
                 "trg_seed_session_limits",

@@ -244,6 +244,40 @@ class TransferDecidedEvent(DomainEvent):
 
 
 @dataclass(frozen=True, kw_only=True)
+class BreakGlassRequestedEvent(DomainEvent):
+    """Fövqəladə (break-glass) səlahiyyət SORĞUSU verildi (`v2backlog.md` Faza 5.4).
+
+    SORĞU DA HADİSƏDİR, təsdiq gözləməz: mexanizmin bütün mənası «kimsə
+    Root-səviyyəli səlahiyyət istədi» faktının DƏRHAL görünməsidir. Yalnız
+    təsdiq anında hadisə yayılsaydı, RƏDD EDİLMİŞ və ya təsdiq pəncərəsində
+    ölmüş sorğular heç bir izsiz qalardı — halbuki təkrar-təkrar rədd edilən
+    sorğu ən vacib təhlükəsizlik siqnallarından biridir.
+    """
+
+    grant_id: uuid.UUID
+    requested_by: uuid.UUID
+    reason: str
+    approval_expires_at: datetime
+
+
+@dataclass(frozen=True, kw_only=True)
+class BreakGlassDecidedEvent(DomainEvent):
+    """Fövqəladə səlahiyyət təsdiqləndi, rədd edildi və ya dayandırıldı.
+
+    `TransferDecidedEvent`-in strukturu təkrarlanır (`approved` + səbəb),
+    ƏLAVƏ `expires_at` ilə: təsdiq halında hadisəni oxuyan tərəf (vendor
+    sinxronizasiyası, audit ekranı) səlahiyyətin NƏ VAXT bitəcəyini ayrıca
+    sorğu ETMƏDƏN bilməlidir.
+    """
+
+    grant_id: uuid.UUID
+    approver_id: uuid.UUID
+    approved: bool
+    reason: str | None
+    expires_at: datetime | None
+
+
+@dataclass(frozen=True, kw_only=True)
 class AnnualLeaveRequestedEvent(DomainEvent):
     """#28: işçi İLLİK məzuniyyət sorğusu göndərdi.
 
@@ -723,6 +757,8 @@ __all__ = [
     "AnnualLeaveDecidedEvent",
     "AnnualLeaveEarlyReturnEvent",
     "AnnualLeaveRequestedEvent",
+    "BreakGlassDecidedEvent",
+    "BreakGlassRequestedEvent",
     "DailyAttendanceSheetConfirmedEvent",
     "DailyAttendanceSheetReopenedEvent",
     "DeviceApprovedEvent",

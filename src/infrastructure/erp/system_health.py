@@ -11,6 +11,9 @@ Dörd göstəricinin İKİSİ artıq mövcud idi:
 Bu modul qalan ikisini (DB ping, disk) əlavə edir və dördünü BİR görünüşdə
 birləşdirir ki, ekran dörd ayrı mənbəyi özü yığmasın.
 
+BEŞİNCİ GÖSTƏRİCİ — YADDAŞ (RAM), `v2backlog.md` Faza 5.2: «System Health
+Monitor-a disk/RAM-monitorinqi əlavə et». Disk ARTIQ var idi, RAM yox idi.
+
 ──────────────────────────────────────────────────────────────────────────────
 DİSK NİYƏ MÜHÜMDÜR
 ──────────────────────────────────────────────────────────────────────────────
@@ -18,10 +21,22 @@ Mağaza PC-sində üç şey diskə yazır: offline SQLite buferi, gündəlik log
 şəkil yükləmə növbəsi. Disk dolduqda ÜÇÜ də sükutla dayanır — PIN handshake
 işləyir, amma yazı getmir. Bu, ən çətin aşkarlanan nasazlıq növüdür, ona görə
 xəbərdarlıq həddi (85%) faktiki dolmadan xeyli əvvəldədir.
+
+──────────────────────────────────────────────────────────────────────────────
+RAM NİYƏ `psutil` OLMADAN ÖLÇÜLÜR
+──────────────────────────────────────────────────────────────────────────────
+`psutil` bu layihənin asılılıqlarında YOXDUR və yalnız bir metrik üçün
+əlavə edilməsi paketlənmiş `.exe`-ni (SETUP-1) böyüdər, üstəlik binar
+uzantı olduğu üçün PyInstaller tərəfində ayrıca hook tələb edərdi. Windows-da
+eyni rəqəm `kernel32.GlobalMemoryStatusEx` ilə, Linux-da (CI və test mühiti)
+`/proc/meminfo` ilə ONSUZ DA əlçatandır — hər ikisi standart kitabxana ilə
+oxunur. Heç biri işləməzsə metrik `UNKNOWN` olur: SÜKUTLA «hər şey qaydasında»
+göstərmək ən pis cavabdır.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 from dataclasses import dataclass
 from enum import Enum
@@ -38,6 +53,8 @@ from src.shared.data_paths import default_data_dir
 from src.shared.logger import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from src.infrastructure.erp.health import ServerHealthRow
     from src.infrastructure.persistence.connection import Database
 
@@ -57,6 +74,15 @@ FALLBACK_DISK_CRITICAL_PERCENT: Final[float] = fallback_float(
 )
 FALLBACK_DB_PING_SLOW_MS: Final[int] = fallback_int(SystemLimitKey.HEALTH_DB_PING_SLOW_MS)
 FALLBACK_MAX_DRIFT_SECONDS: Final[int] = fallback_int(SystemLimitKey.NTP_MAX_DRIFT_SECONDS)
+#: Yaddaş hədləri — Faza 5.2. Disk ilə EYNİ səbəbdən Root parametridir
+#: (`migrations/100`): 4 GB-lıq kiosk ilə 32 GB-lıq serverdə eyni faiz tamam
+#: fərqli qalıq deməkdir.
+FALLBACK_MEMORY_WARNING_PERCENT: Final[float] = fallback_float(
+    SystemLimitKey.HEALTH_MEMORY_WARNING_PERCENT
+)
+FALLBACK_MEMORY_CRITICAL_PERCENT: Final[float] = fallback_float(
+    SystemLimitKey.HEALTH_MEMORY_CRITICAL_PERCENT
+)
 
 
 class HealthLevel(str, Enum):
@@ -189,6 +215,127 @@ def disk_metric(
     )
 
 
+def read_memory_usage() -> tuple[float, float] | None:
+    """(istifadə faizi, boş GB) və ya ölçülə bilmirsə `None`.
+
+    İKİ YOL, PLATFORMAYA GÖRƏ (bax modul başlığı). Heç biri işləməzsə `None`
+    qaytarılır — istisna ATILMIR, çünki bu funksiya sağlamlıq ekranının
+    çəkilmə yolundadır və orada atılan istisna «monitorun özü çökdü»
+    deməkdir: ən çox lazım olan anda ekran açılmazdı.
+    """
+    # `os.name` işlədilir, `sys.platform` YOX: `sys.platform == "win32"`
+    # müqayisəsini mypy PLATFORMAYA GÖRƏ həll edir və Windows-da yoxlanışda
+    # Linux yolu «əlçatmaz kod» kimi işarələnir — halbuki hər iki yol
+    # istehsalatda da, testdə də canlıdır.
+    if os.name == "nt":
+        return _windows_memory()
+    return _proc_meminfo_memory()
+
+
+def _windows_memory() -> tuple[float, float] | None:
+    """`GlobalMemoryStatusEx` — `psutil`-in Windows-da oxuduğu EYNİ mənbə."""
+    import ctypes  # noqa: PLC0415 — yalnız Windows yolunda lazımdır
+
+    class _MemoryStatusEx(ctypes.Structure):
+        # `ctypes.Structure` sahə cədvəlinin TƏLƏB etdiyi formadır.
+        _fields_ = (
+            ("dwLength", ctypes.c_ulong),
+            ("dwMemoryLoad", ctypes.c_ulong),
+            ("ullTotalPhys", ctypes.c_ulonglong),
+            ("ullAvailPhys", ctypes.c_ulonglong),
+            ("ullTotalPageFile", ctypes.c_ulonglong),
+            ("ullAvailPageFile", ctypes.c_ulonglong),
+            ("ullTotalVirtual", ctypes.c_ulonglong),
+            ("ullAvailVirtual", ctypes.c_ulonglong),
+            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+        )
+
+    status = _MemoryStatusEx()
+    status.dwLength = ctypes.sizeof(_MemoryStatusEx)
+    try:
+        kernel32 = ctypes.WinDLL("kernel32")  # type: ignore[attr-defined,unused-ignore]
+        ok = kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
+    except (AttributeError, OSError) as exc:  # pragma: no cover — yalnız Windows-da
+        _log.warning("MEMORY_USAGE_UNAVAILABLE", extra={"error": str(exc)})
+        return None
+    if not ok:  # pragma: no cover — API uğursuzluğu
+        return None
+    return float(status.dwMemoryLoad), status.ullAvailPhys / (1024**3)
+
+
+def _proc_meminfo_memory() -> tuple[float, float] | None:
+    """Linux/`/proc/meminfo` — CI və test mühiti bu yolu işlədir.
+
+    `MemAvailable` seçilir, `MemFree` YOX: `MemFree` keş və buferləri «dolu»
+    sayır və Linux-da praktik olaraq HƏMİŞƏ kiçikdir — o rəqəmlə hər sistem
+    daim KRİTİK görünərdi.
+    """
+    try:
+        raw = Path("/proc/meminfo").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    values: dict[str, int] = {}
+    for line in raw.splitlines():
+        name, _, rest = line.partition(":")
+        parts = rest.split()
+        if parts and parts[0].isdigit():
+            values[name] = int(parts[0])  # kB
+    total = values.get("MemTotal", 0)
+    available = values.get("MemAvailable")
+    if not total or available is None:
+        return None
+    used_percent = (total - available) / total * 100
+    return used_percent, available / (1024**2)
+
+
+def memory_metric(
+    *,
+    limits: InfrastructureLimits | None = None,
+    reader: Callable[[], tuple[float, float] | None] | None = None,
+) -> HealthMetric:
+    """Yaddaş (RAM) istifadəsi — `v2backlog.md` Faza 5.2.
+
+    `reader` YALNIZ test üçün deyil: kiosk PC-lərində gələcəkdə fərqli ölçmə
+    mənbəyi (məs. aparat agentindən gələn dəyər) qoşula bilər və o zaman bu
+    funksiya dəyişmir. `disk_metric`-in `path` parametri ilə eyni növ giriş.
+    """
+    resolved = limits or InfrastructureLimits()
+    warning_percent = resolved.float_of(SystemLimitKey.HEALTH_MEMORY_WARNING_PERCENT)
+    critical_percent = resolved.float_of(SystemLimitKey.HEALTH_MEMORY_CRITICAL_PERCENT)
+    measured = (reader or read_memory_usage)()
+    if measured is None:
+        return HealthMetric(
+            key="memory",
+            title_az="Yaddaş (RAM)",
+            level=HealthLevel.UNKNOWN,
+            value_az="Ölçülə bilmədi",
+            detail_az="Bu platformada yaddaş ölçüsü oxunmur.",
+        )
+
+    used_percent, free_gb = measured
+    if used_percent >= critical_percent:
+        level = HealthLevel.CRITICAL
+        detail = (
+            "Yaddaş demək olar ki, doludur. Tətbiq yavaşlayacaq və ya "
+            "əməliyyat sistemi tərəfindən dayandırıla bilər — PC-ni yenidən "
+            "başladın və artıq proqramları bağlayın."
+        )
+    elif used_percent >= warning_percent:
+        level = HealthLevel.WARNING
+        detail = "Yaddaş dolmağa yaxındır — açıq proqramları bağlayın."
+    else:
+        level = HealthLevel.OK
+        detail = ""
+
+    return HealthMetric(
+        key="memory",
+        title_az="Yaddaş (RAM)",
+        level=level,
+        value_az=f"{used_percent:.0f}% dolu · {free_gb:.1f} GB boş",
+        detail_az=detail,
+    )
+
+
 def database_metric(
     database: Database, *, limits: InfrastructureLimits | None = None
 ) -> HealthMetric:
@@ -297,12 +444,17 @@ def build_snapshot(
     max_drift: int | None = None,
     disk_path: Path | None = None,
     limits: InfrastructureLimits | None = None,
+    memory_reader: Callable[[], tuple[float, float] | None] | None = None,
 ) -> SystemHealthSnapshot:
-    """Dörd göstəricini bir mənzərədə birləşdirir (bölmə 6).
+    """BEŞ göstəricini bir mənzərədə birləşdirir (bölmə 6 + Faza 5.2 RAM).
 
-    `limits` BİR DƏFƏ həll olunur və üç göstəriciyə ötürülür: eyni anlıq
+    `limits` BİR DƏFƏ həll olunur və dörd göstəriciyə ötürülür: eyni anlıq
     mənzərənin sətirləri EYNİ konfiqurasiyanı görməlidir (Root ölçmə
     ortasında dəyəri dəyişsə, ekranda yarısı köhnə hədlə hesablanardı).
+
+    RAM sətri diskin DƏRHAL ARDINCA gəlir — ikisi eyni sualın («bu PC-nin
+    resursu tükənirmi?») iki üzüdür və ekranda ayrı yerlərə düşsəydi operator
+    onları bir problem kimi oxumazdı.
     """
     resolved = limits or InfrastructureLimits()
     return SystemHealthSnapshot(
@@ -310,6 +462,7 @@ def build_snapshot(
             database_metric(database, limits=resolved),
             ntp_metric(drift_seconds, max_drift=max_drift, limits=resolved),
             disk_metric(disk_path, limits=resolved),
+            memory_metric(limits=resolved, reader=memory_reader),
             _sync_summary(servers),
         ],
         servers=servers,
@@ -349,11 +502,15 @@ __all__ = [
     "FALLBACK_DISK_CRITICAL_PERCENT",
     "FALLBACK_DISK_WARNING_PERCENT",
     "FALLBACK_MAX_DRIFT_SECONDS",
+    "FALLBACK_MEMORY_CRITICAL_PERCENT",
+    "FALLBACK_MEMORY_WARNING_PERCENT",
     "HealthLevel",
     "HealthMetric",
     "SystemHealthSnapshot",
     "build_snapshot",
     "database_metric",
     "disk_metric",
+    "memory_metric",
     "ntp_metric",
+    "read_memory_usage",
 ]

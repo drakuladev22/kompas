@@ -391,6 +391,18 @@ class SystemLimitKey(str, Enum):
     HEALTH_DISK_WARNING_PERCENT = "HEALTH_DISK_WARNING_PERCENT"
     HEALTH_DISK_CRITICAL_PERCENT = "HEALTH_DISK_CRITICAL_PERCENT"
     HEALTH_DB_PING_SLOW_MS = "HEALTH_DB_PING_SLOW_MS"
+    # Yaddaş (RAM) hədləri — `v2backlog.md` Faza 5.2. Disk ilə EYNİ səbəbdən
+    # Root parametridir: 4 GB RAM-lı kiosk ilə 32 GB-lıq mağaza serverində
+    # "85% doludur" tamam fərqli qalıq deməkdir. Disk hədləri ilə EYNİ
+    # defoltlar seçilib — ikisi də "faktiki tükənmədən xeyli əvvəl xəbər ver"
+    # məntiqindədir və fərqli ədəd seçmək üçün ölçülmüş səbəb yoxdur.
+    HEALTH_MEMORY_WARNING_PERCENT = "HEALTH_MEMORY_WARNING_PERCENT"
+    HEALTH_MEMORY_CRITICAL_PERCENT = "HEALTH_MEMORY_CRITICAL_PERCENT"
+    # Aparat-nasazlığı bildirişinin təkrar-susma pəncərəsi (Faza 5.2):
+    # `DRIVE_QUOTA_WARNING_COOLDOWN_DAYS` ilə eyni naxış, lakin SAAT vahidli —
+    # dolu disk gün ərzində həll olunmalı nasazlıqdır, kvota isə həftələrlə
+    # dözə bilər.
+    HEALTH_HARDWARE_ALERT_COOLDOWN_HOURS = "HEALTH_HARDWARE_ALERT_COOLDOWN_HOURS"
     # Google Drive kvota xəbərdarlığı: hansı doluluqda və nə qədər seyrək.
     DRIVE_QUOTA_WARNING_RATIO = "DRIVE_QUOTA_WARNING_RATIO"
     DRIVE_QUOTA_WARNING_COOLDOWN_DAYS = "DRIVE_QUOTA_WARNING_COOLDOWN_DAYS"
@@ -477,6 +489,15 @@ class SystemLimitKey(str, Enum):
     OFFLINE_SYNC_BATCH_SIZE = "OFFLINE_SYNC_BATCH_SIZE"
     OFFLINE_RETRY_BACKOFF_SECONDS = "OFFLINE_RETRY_BACKOFF_SECONDS"
     OFFLINE_SQLITE_TIMEOUT_SECONDS = "OFFLINE_SQLITE_TIMEOUT_SECONDS"
+    # Uzatılmış offline rejim (`v2backlog.md` Faza 5.1). Yuxarıdakı ÜÇ açar
+    # buferin NECƏ işlədiyini deyir (paket, təkrar cəhd, kilid) — bu ÜÇÜ isə
+    # "nə vaxt artıq NORMAL deyil" sualına cavab verir və HR-ə xəbərdarlıq
+    # göndərir. İKİ ayrı hədd QƏSDƏNDİR: bir kassa səhəri boyu şəbəkəsiz işlə-
+    # yən mağaza AZ sətirlə UZUN müddət (yaş həddi), bir günlük inventarizasiya
+    # isə QISA müddətdə ÇOX sətir (say həddi) yığır — biri digərini görmür.
+    OFFLINE_BACKLOG_MAX_HOURS = "OFFLINE_BACKLOG_MAX_HOURS"
+    OFFLINE_BACKLOG_MAX_ENTRIES = "OFFLINE_BACKLOG_MAX_ENTRIES"
+    OFFLINE_BACKLOG_WARNING_COOLDOWN_HOURS = "OFFLINE_BACKLOG_WARNING_COOLDOWN_HOURS"
     # PostgreSQL bağlantı hovuzu. ƏN HƏSSAS ÜÇLÜKDÜR: hovuz ölçüsü 0 olsa
     # tətbiq heç bir sorğu edə bilməz. Miqrasiyadakı aralıq (1–32 / 1–64 /
     # 1–300 san) və koddakı klamp məhz buna görə SƏRTDİR.
@@ -1020,6 +1041,30 @@ class SystemLimitKey(str, Enum):
     # səbəbi (bir açar «nə vaxt», digəri «nə qədər»).
     SELF_CORRECTION_REQUEST_WINDOW_DAYS = "SELF_CORRECTION_REQUEST_WINDOW_DAYS"
     SELF_CORRECTION_REQUEST_MAX_COUNT = "SELF_CORRECTION_REQUEST_MAX_COUNT"
+    # --- Sistem davamlılığı (`v2backlog.md` Faza 5.3/5.4) ---
+    #
+    # Şift-handoff qeydi: mətn uzunluğu və qeydin növbəti işçiyə NEÇƏ SAAT
+    # göstərilməsi. Uzunluq Root parametridir, çünki kiosk ekranının ölçüsü
+    # quraşdırmadan-quraşdırmaya dəyişir (10" tablet ilə 24" monitor);
+    # görünmə pəncərəsi isə mağazanın növbə uzunluğunu izləyir — 24 saatlıq
+    # mağazada 8 saat, gündüz mağazasında 16 saat mənalıdır.
+    SHIFT_HANDOFF_NOTE_MAX_CHARS = "SHIFT_HANDOFF_NOTE_MAX_CHARS"
+    SHIFT_HANDOFF_VISIBILITY_HOURS = "SHIFT_HANDOFF_VISIBILITY_HOURS"
+    #
+    # Break-glass fövqəladə giriş. ÜÇ açar, ÜÇ FƏRQLİ sual:
+    #   * `..._MAX_DURATION_MINUTES` — səlahiyyət NƏ QƏDƏR yaşayır;
+    #   * `..._APPROVAL_WINDOW_MINUTES` — ikinci-etibarlı şəxs təsdiqi NƏ
+    #     QƏDƏR müddətdə verməlidir (verməzsə sorğu ölür);
+    #   * `..._MAX_GRANTS_PER_MONTH` — ayda neçə dəfə. Sonuncu təhlükəsizlik
+    #     həddidir: break-glass NADİR olmalıdır, tez-tez işlənirsə bu, artıq
+    #     "fövqəladə hal" deyil, gizli daimi səlahiyyətdir.
+    # HEÇ BİRİ struktur zəmanət DEYİL (§5) — zəmanət olan hissə "ikinci şəxs
+    # TƏLƏB OLUNUR" və "hər istifadə audit olunur" qaydalarıdır, onlar KODDA
+    # sabitdir və Root tərəfindən söndürülə bilmir. Root yalnız ƏDƏDLƏRİ
+    # tənzimləyir.
+    BREAK_GLASS_MAX_DURATION_MINUTES = "BREAK_GLASS_MAX_DURATION_MINUTES"
+    BREAK_GLASS_APPROVAL_WINDOW_MINUTES = "BREAK_GLASS_APPROVAL_WINDOW_MINUTES"
+    BREAK_GLASS_MAX_GRANTS_PER_MONTH = "BREAK_GLASS_MAX_GRANTS_PER_MONTH"
 
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
@@ -1248,6 +1293,9 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.HEALTH_DISK_WARNING_PERCENT: "85.0",
     SystemLimitKey.HEALTH_DISK_CRITICAL_PERCENT: "95.0",
     SystemLimitKey.HEALTH_DB_PING_SLOW_MS: "500",
+    SystemLimitKey.HEALTH_MEMORY_WARNING_PERCENT: "85.0",
+    SystemLimitKey.HEALTH_MEMORY_CRITICAL_PERCENT: "95.0",
+    SystemLimitKey.HEALTH_HARDWARE_ALERT_COOLDOWN_HOURS: "12",
     # `storage/quota_monitor.py`: 90% doluluq, 7 günlük təkrar-susma.
     SystemLimitKey.DRIVE_QUOTA_WARNING_RATIO: "0.90",
     SystemLimitKey.DRIVE_QUOTA_WARNING_COOLDOWN_DAYS: "7",
@@ -1311,6 +1359,13 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.OFFLINE_SYNC_BATCH_SIZE: "100",
     SystemLimitKey.OFFLINE_RETRY_BACKOFF_SECONDS: "30,120,600",
     SystemLimitKey.OFFLINE_SQLITE_TIMEOUT_SECONDS: "10.0",
+    # Faza 5.1 — 24 saat / 500 sətir. Bir iş günü (növbə + gecə) şəbəkəsiz
+    # keçə bilər və bu, hələ nasazlıq deyil; İKİNCİ gün artıq nasazlıqdır.
+    # 500 sətir isə bir mağazanın normal günlük yazı həcminin (davamiyyət +
+    # cərimə + fasilə ≈ 100-150 sətir) təxminən dörd qatıdır.
+    SystemLimitKey.OFFLINE_BACKLOG_MAX_HOURS: "24",
+    SystemLimitKey.OFFLINE_BACKLOG_MAX_ENTRIES: "500",
+    SystemLimitKey.OFFLINE_BACKLOG_WARNING_COOLDOWN_HOURS: "12",
     # `persistence/connection.py`: hovuz 1–8, 15 san. bağlantı taymautu.
     SystemLimitKey.DB_POOL_MIN_SIZE: "1",
     SystemLimitKey.DB_POOL_MAX_SIZE: "8",
@@ -1673,6 +1728,22 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # (gündə neçə dəfə eyni bəhanəni sınamaq) əngəlləyən tavandır.
     SystemLimitKey.SELF_CORRECTION_REQUEST_WINDOW_DAYS: "30",
     SystemLimitKey.SELF_CORRECTION_REQUEST_MAX_COUNT: "3",
+    # Faza 5.3 — 1000 simvol / 12 saat. 1000 simvol bir ekran mətnidir
+    # (`FIELD_REPORT_NOTE_MAX_CHARS` ilə eyni miqyas); 12 saat isə tipik
+    # növbə uzunluğudur — bundan sonra qeyd KÖHNƏDİR və növbəti-növbəti
+    # işçini yanılda bilər.
+    SystemLimitKey.SHIFT_HANDOFF_NOTE_MAX_CHARS: "1000",
+    SystemLimitKey.SHIFT_HANDOFF_VISIBILITY_HOURS: "12",
+    # Faza 5.4 — 120 dəqiqə / 30 dəqiqə / ayda 2 dəfə.
+    # 120 dəq.: fövqəladə hal həll etmək üçün bir iş seansıdır, bir GÜN yox.
+    # 30 dəq.: ikinci şəxs telefonla çağırılır — bu, cavab vermək üçün real
+    # pəncərədir, `DUAL_CONTROL_APPROVAL_TIMEOUT_MINUTES`-in 480 dəqiqəsi isə
+    # burada TƏHLÜKƏLİDİR (unudulmuş sorğu gecə təsdiqlənə bilərdi).
+    # 2 dəfə/ay: Root-un əlçatmazlığı NADİR hadisədir; üçüncü dəfə sistemin
+    # özündə problem var deməkdir və o, break-glass ilə həll olunmur.
+    SystemLimitKey.BREAK_GLASS_MAX_DURATION_MINUTES: "120",
+    SystemLimitKey.BREAK_GLASS_APPROVAL_WINDOW_MINUTES: "30",
+    SystemLimitKey.BREAK_GLASS_MAX_GRANTS_PER_MONTH: "2",
 }
 
 

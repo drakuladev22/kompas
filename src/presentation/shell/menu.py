@@ -512,6 +512,35 @@ DEFAULT_ENTRIES: Final[tuple[MenuEntry, ...]] = (
         icon="desktop",
     ),
     MenuEntry(
+        key="break_glass",
+        title_az="Fövqəladə Giriş",
+        # `v2backlog.md` Faza 5.4 — break-glass fövqəladə giriş.
+        #
+        # NİYƏ «Cihazlar» (167) İLƏ «ROOT İdarə Mərkəzi» (170) ARASINDA:
+        # ekrana normal yolla çatan YALNIZ iki növ insandır — təsdiqləyici
+        # (`can_approve_break_glass`, Root/CEO; ROOT panelin qonşusudur) və
+        # EHTİYAT-ADMİN. İkincisi HEÇ BİR flag daşımır: onun səlahiyyəti
+        # reyestr sətridir (`break_glass_trustees`, migrations/099) və menyu
+        # onu `alternate_admission` mexanizmi ilə görür (bax `navigation.py`
+        # başlığı — login-də BİR dəfə reyestr oxunur).
+        #
+        # NİYƏ HƏR KƏSƏ GÖRÜNMÜR: bu, YÜKSƏK-RİSKLİ fövqəladə yoldur; bütün
+        # istifadəçilərə görünən «böhran açarı» maddəsi onu gündəlik hala
+        # gətirərdi (eyni səbəb `developer_panel/console.py`-dakı köhnə
+        # qərardadır). Maddəni görən hər kəs artıq ya təsdiqləyicidir, ya da
+        # Root-un ƏVVƏLCƏDƏN seçdiyi şəxsdir.
+        #
+        # FEATURE TOGGLE YOXDUR: fövqəladə giriş infrastruktur qapısıdır —
+        # «Root əlçatmaz olanda işləyən yol»u modul açarı ilə söndürmək
+        # mexanizmin mənasını itirərdi (`health`/`audit` ilə eyni kateqoriya).
+        required_flag="can_approve_break_glass",
+        order=168,
+        # `lock` — mövcud ikon dəstindən. «Açar» sözü burada LİTERAL deyil:
+        # maddənin məzmunu səlahiyyətin KİLİDİNİ açmağın NƏZARƏTLİ yoludur;
+        # `shield` onsuz da `exceptions`(162)/`root_control`(170)-dadır.
+        icon="lock",
+    ),
+    MenuEntry(
         key="root_control",
         title_az="ROOT İdarə Mərkəzi",
         required_flag="can_manage_system_limits",

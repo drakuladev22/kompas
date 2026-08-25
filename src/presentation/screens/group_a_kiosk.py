@@ -527,6 +527,9 @@ class EmployeeHomeScreen(QWidget):
     annual_leave_request_requested = Signal()
     #: `v2backlog.md` Faza 3.3 — Filiallar-arası Köçürmə.
     transfer_request_requested = Signal()
+    #: `v2backlog.md` Faza 5.3 — növbə təhvili. `str` = qeydin ID-si.
+    handoff_acknowledge_requested = Signal(str)
+    handoff_note_requested = Signal()
     transfer_withdraw_requested = Signal(str)
 
     def __init__(
@@ -589,6 +592,12 @@ class EmployeeHomeScreen(QWidget):
         # bilər, dörd-sütunlu kartın darlığında kəsilərdi. Genişlənən stretch
         # BURAYA keçib (əvvəl `_build_cards_row`-dadır idi) ki, boş qalan
         # şaquli sahəni bu kart tutsun.
+        # `v2backlog.md` Faza 5.3 — NÖVBƏ TƏHVİLİ. Elanlardan ƏVVƏLDƏDİR və
+        # bu, qəsdlidir: təhvil qeydi İŞÇİNİN ÖZ NÖVBƏSİNƏ aid, DƏRHAL
+        # oxunmalı məlumatdır (kassa vəziyyəti, açıq tapşırıq), elan isə
+        # ümumi məlumatdır. Aşağıda qalsaydı, sürüşdürmə tələb edərdi və
+        # məhz «Başlat zamanı göstərilir» tələbi pozulardı.
+        layout.addWidget(self._build_handoff_card())
         layout.addWidget(self._build_announcements_card(), 1)
 
         scroll.setWidget(content)
@@ -1367,6 +1376,94 @@ class EmployeeHomeScreen(QWidget):
         self._transfer_message.setVisible(bool(message))
 
     # -------------------------------- elanlar (#19) ---------------------------- #
+
+    def _build_handoff_card(self) -> Card:
+        """ "Növbə Təhvili" kartı — `v2backlog.md` Faza 5.3.
+
+        İKİ VƏZİFƏ, BİR KART: əvvəlki növbənin qeydini GÖSTƏRİR və işçiyə öz
+        qeydini QOYMAĞA imkan verir. Ayrı kartlara bölünsəydi, ikisi ekranda
+        bir-birindən uzaq düşərdi — halbuki bunlar EYNİ zəncirin iki ucudur
+        («mən nə təhvil aldım» / «mən nə təhvil verirəm»).
+
+        SƏLAHİYYƏT TƏLƏB OLUNMUR (`_build_transfer_request_card` ilə eyni
+        qərar): öz növbəsini təhvil vermək üçün icazə lazım deyil.
+        """
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)
+
+        head = QWidget()
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(0, 0, 0, 0)
+        head_layout.addWidget(title_label("Növbə Təhvili", size=metrics.FONT_CARD_TITLE))
+        head_layout.addWidget(stretch())
+        self._handoff_count = Chip("0", "info")
+        head_layout.addWidget(self._handoff_count)
+        card.add(head)
+
+        self._handoff_body = QVBoxLayout()
+        self._handoff_body.setSpacing(metrics.SPACE_MS)
+        holder = QWidget()
+        holder.setLayout(self._handoff_body)
+        card.add(holder)
+
+        # Boş vəziyyət mətni solğundur — `set_announcements` ilə eyni səbəb.
+        self._handoff_hint = muted_label("Əvvəlki növbədən qeyd yoxdur.", size=13)
+        card.add(self._handoff_hint)
+
+        self._handoff_message = body_label("", size=12)
+        self._handoff_message.setVisible(False)
+        card.add(self._handoff_message)
+
+        leave_note = action_button("Təhvil Qeydi Yaz")
+        leave_note.setMinimumHeight(44)  # bölmə 9 — toxunma hədəfinin minimumu
+        leave_note.clicked.connect(self.handoff_note_requested)
+        card.add(leave_note)
+        return card
+
+    def set_handoff_notes(self, notes: list[dict[str, str]]) -> None:
+        """Əvvəlki növbə(lər)dən qalan qeydləri göstərir (Faza 5.3).
+
+        Args:
+            notes: `id`, `note`, `author`, `time` açarları olan sözlüklər —
+                ƏN YENİSİ ƏVVƏLDƏ. Açarlar maket (`preview_screens`) və canlı
+                yolda (`controllers/shift_handoff.py`) EYNİDİR (CLAUDE.md §6).
+
+        HƏR QEYDİN ÖZ `[Qəbul edirəm]` DÜYMƏSİ VAR, ümumi bir düymə YOX:
+        qəbul KONKRET qeydə yazılır (`shift_handoff_notes.acknowledged_by`)
+        və toplu qəbul «hamısını oxumadan bağla» davranışını asanlaşdırardı.
+        """
+        clear_layout(self._handoff_body)
+        self._handoff_count.setText(str(len(notes)))
+        self._handoff_hint.setVisible(not notes)
+
+        for entry in notes:
+            row = QWidget()
+            row_layout = QVBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(metrics.SPACE_MS)
+
+            meta = f"{entry.get('author', '')} · {entry.get('time', '')}".strip(" ·")
+            row_layout.addWidget(muted_label(meta, size=12))
+
+            text = body_label(entry.get("note", ""), size=13)
+            text.setWordWrap(True)
+            row_layout.addWidget(text)
+
+            accept = secondary_button("Qəbul edirəm")
+            accept.setMinimumHeight(44)
+            note_id = entry.get("id", "")
+            accept.clicked.connect(
+                lambda _checked=False, nid=note_id: self.handoff_acknowledge_requested.emit(nid)
+            )
+            row_layout.addWidget(accept)
+            self._handoff_body.addWidget(row)
+
+    def set_handoff_message(self, message: str) -> None:
+        """Qeydin yazılması/qəbulu nəticəsi — kioskda İSTİSNA EKRANA ÇIXMIR.
+
+        `set_transfer_request_message` ilə eyni qərar (bax orada).
+        """
+        self._handoff_message.setText(message)
+        self._handoff_message.setVisible(bool(message))
 
     def _build_announcements_card(self) -> Card:
         """ "Elanlar" kartı — #19 (kompasos11.md Faza 8).

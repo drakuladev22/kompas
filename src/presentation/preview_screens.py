@@ -788,6 +788,26 @@ def _transfer_requests(screen: Any) -> None:
     screen.set_requests(list(data.TRANSFER_REQUESTS))
 
 
+def _break_glass(screen: Any) -> None:
+    """`v2backlog.md` Faza 5.4 — açarlar `controllers/break_glass.py`
+    köməkçiləri ilə EYNİDİR (CLAUDE.md §6).
+
+    MAKET «ROOT GÖRÜNÜŞÜ»DÜR: bütün bölmələr görünür. Görünürlük bayraqları
+    canlı yolda use case-in istisnalarından gəlir, maketdə isə TAM DƏST
+    göstərilir ki, dörd bölmənin də dizaynı bir yerdə yoxlanılsın."""
+    screen.set_my_status(True, dict(data.BREAK_GLASS_MY_STATUS))
+    screen.set_request_form_visible(True)
+    screen.set_pending_visible(True)
+    screen.set_pending([dict(row) for row in data.BREAK_GLASS_PENDING])
+    screen.set_active_visible(True)
+    screen.set_active([dict(row) for row in data.BREAK_GLASS_ACTIVE])
+    screen.set_registry(
+        [dict(row) for row in data.BREAK_GLASS_TRUSTEES],
+        can_manage=True,
+        employees=[("e1", "Səbinə Hüseynova"), ("e2", "Elvin Məmmədov")],
+    )
+
+
 def _checklist_templates(screen: Any) -> None:
     """`v2backlog.md` Faza 3.4 — ekranın DEFOLT sekması (OFFBOARDING) doldurulur.
 
@@ -1033,6 +1053,7 @@ _POPULATORS: dict[str, Callable[[Any], None]] = {
     "sync_conflicts": _sync_conflicts,
     "annual_leave": _annual_leave,
     "transfer_requests": _transfer_requests,
+    "break_glass": _break_glass,
     "checklist_templates": _checklist_templates,
     "fine_review": _fine_review,
     "bulk_operations": _bulk_operations,

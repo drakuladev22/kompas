@@ -101,6 +101,17 @@ APP_LIMIT_BOUNDS: Final[dict[SystemLimitKey, tuple[Decimal, Decimal]]] = {
     # Bir admin MİNİMUMDUR: sıfır tövsiyə ilə sihirbaz heç vaxt xəbərdarlıq
     # göstərməzdi və "tək adam bütün sistemi idarə edir" riski görünməz qalardı.
     SystemLimitKey.SETUP_RECOMMENDED_ADMIN_COUNT: (Decimal(1), Decimal(20)),
+    # --- Sistem davamlılığı (v2backlog.md Faza 5.3/5.4), migrations/100 --- #
+    # Aralıqlar miqrasiya ilə HƏRFƏN eynidir (yuxarıdakı qayda).
+    SystemLimitKey.SHIFT_HANDOFF_NOTE_MAX_CHARS: (Decimal(50), Decimal(5000)),
+    SystemLimitKey.SHIFT_HANDOFF_VISIBILITY_HOURS: (Decimal(1), Decimal(72)),
+    # Aşağı hüdud 15 dəq.: daha qısası real bir əməliyyat üçün çatmır və
+    # ehtiyat-admin işini bitirməmiş səlahiyyətini itirərdi.
+    SystemLimitKey.BREAK_GLASS_MAX_DURATION_MINUTES: (Decimal(15), Decimal(1440)),
+    SystemLimitKey.BREAK_GLASS_APPROVAL_WINDOW_MINUTES: (Decimal(5), Decimal(240)),
+    # Aşağı hüdud 1: SIFIR mexanizmi tamamilə söndürərdi — «Root əlçatmaz
+    # olanda işləyən yol» bir dəyər dəyişikliyi ilə yox edilə bilməz.
+    SystemLimitKey.BREAK_GLASS_MAX_GRANTS_PER_MONTH: (Decimal(1), Decimal(10)),
 }
 
 

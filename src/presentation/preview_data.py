@@ -1749,6 +1749,25 @@ TRANSFER_REQUEST_STATUS: Final = {
     "decision_reason": "",
 }
 
+#: İşçi Ana Ekranının «Növbə Təhvili» kartı (`v2backlog.md` Faza 5.3) —
+#: açarlar `controllers/shift_handoff.py::_to_row` ilə EYNİDİR (CLAUDE.md §6).
+#: İKİ SƏTİR: bir qeyd «tək sətir doğru render olunurmu» sualını cavablandırmır
+#: — siyahının boşluğu/sıralaması yalnız ikinci sətirlə görünür.
+SHIFT_HANDOFF_NOTES: Final = [
+    {
+        "id": "00000000-0000-0000-0000-000000000053",
+        "note": "Kassada 120 ₼ qaldı. Səhər inkassasiya gələcək.",
+        "author": "Elvin Məmmədov",
+        "time": "22:40",
+    },
+    {
+        "id": "00000000-0000-0000-0000-000000000054",
+        "note": "Soyuducu vitrin təmirdədir — usta saat 10:00-da gələcək.",
+        "author": "Elvin Məmmədov",
+        "time": "22:38",
+    },
+]
+
 #: HR_Admin-in «Köçürmə Sorğuları» ekranı — açarlar `controllers/
 #: transfer_requests.py::_to_inbox_row` ilə EYNİDİR (CLAUDE.md §6).
 TRANSFER_REQUESTS: Final = [
@@ -1767,6 +1786,57 @@ TRANSFER_REQUESTS: Final = [
         "to_store": "Bellona 28 May",
         "reason": "Ailə vəziyyətinə görə mərkəzə daha yaxın filial tələb olunur.",
         "submitted": "11.08.2026 14:40",
+    },
+]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# `v2backlog.md` Faza 5.4 — FÖVQƏLADƏ GİRİŞ (break-glass)
+# ──────────────────────────────────────────────────────────────────────────────
+#: Vəziyyət kartının şəxsi sətri — açarlar `controllers/break_glass.py::
+#: _to_my_status_row` ilə EYNİDİR. `PENDING_APPROVAL` seçilib ki, maket
+#: «gözləyir» halını da göstərsin (aktiv hal `expires`-i doldurur).
+BREAK_GLASS_MY_STATUS: Final = {
+    "status": "Təsdiq gözləyir",
+    "reason": "Root hesabı kilidlendi, baza konfiqurasiyası dəyişməlidir.",
+    "expires": "25.08.2026 11:30",
+}
+
+#: Təsdiq növbəsi — `_to_inbox_row` açarları.
+BREAK_GLASS_PENDING: Final = [
+    {
+        "id": "bg1",
+        "requester": "Səbinə Hüseynova",
+        "reason": "Root istifadəçisi tətilddədir; ERP server ünvanı dəyişməlidir.",
+        "requested": "12.08.2026 10:02",
+        "window_end": "12.08.2026 10:32",
+    },
+]
+
+#: Qüvvədə olanlar — `_to_active_row` açarları.
+BREAK_GLASS_ACTIVE: Final = [
+    {
+        "id": "bg2",
+        "employee": "Elvin Məmmədov",
+        "approver": "Nigar Səfərova",
+        "started": "05.08.2026 18:44",
+        "expires": "05.08.2026 20:44",
+        "revokable": "1",
+    },
+]
+
+#: Reyestr — `_to_trustee_row` açarları (`revokable` maketdə həmişə "1").
+BREAK_GLASS_TRUSTEES: Final = [
+    {
+        "employee_id": "e1",
+        "name": "Səbinə Hüseynova",
+        "designated_by": "Root İstifadəçi",
+        "designated_at": "01.07.2026 09:00",
+    },
+    {
+        "employee_id": "e2",
+        "name": "Elvin Məmmədov",
+        "designated_by": "Root İstifadəçi",
+        "designated_at": "01.07.2026 09:00",
     },
 ]
 

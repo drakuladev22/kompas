@@ -64,6 +64,7 @@ SHADOW_CARD_BASELINE: frozenset[ShadowCardKey] = frozenset(
         ("open_shift.py", "OpenShiftPostDialog", "__init__", 0),
         ("performance_review.py", "PerformanceReviewScreen", "_build_form_card", 0),
         ("performance_review.py", "PerformanceReviewScreen", "_build_history_card", 0),
+        ("shift_handoff.py", "ShiftHandoffNoteDialog", "__init__", 0),
         ("support_inbox.py", "SupportInboxScreen", "_build_list_panel", 0),
         ("sync_conflicts.py", "SyncConflictScreen", "_build_list_card", 0),
         ("transfer_requests.py", "TransferRequestDialog", "__init__", 0),

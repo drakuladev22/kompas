@@ -814,6 +814,10 @@ class PostgresUnitOfWork:
             PostgresOpenFineExposureReader,
             PostgresPositionRepository,
         )
+        from src.infrastructure.persistence.resilience_repositories import (  # noqa: PLC0415
+            PostgresBreakGlassRepository,
+            PostgresShiftHandoffRepository,
+        )
         from src.infrastructure.persistence.saga_repository import (  # noqa: PLC0415
             PostgresSagaStateRepository,
         )
@@ -1021,6 +1025,17 @@ class PostgresUnitOfWork:
             "checklist_item_templates": PostgresChecklistItemTemplateRepository(
                 conn, self._context
             ),
+            # --- Sistem davamlılığı (v2backlog.md Faza 5.3/5.4) ---------------
+            # `shift_handoff_notes`: qeyd + audit BİR tranzaksiyada olmalıdır —
+            # audit sətri yazılıb qeydin özü yazılmasa, «xəbərdar etmişdim»
+            # iddiası sübutsuz qalardı.
+            #
+            # `break_glass_grants`: BU DAHA SƏRTDİR — qrantın statusu ilə audit
+            # sətri EYNİ tranzaksiyada olmasa, «səlahiyyət verildi, lakin
+            # jurnalda yoxdur» vəziyyəti mümkün olardı və bu, məhz sistemin
+            # ən həssas yolunda auditi mənasız edərdi (CLAUDE.md §5).
+            "shift_handoff_notes": PostgresShiftHandoffRepository(conn, self._context),
+            "break_glass": PostgresBreakGlassRepository(conn, self._context),
             # --- #28 İllik məzuniyyət balansı (kompas1.md Faza 4) --------------
             # Eyni bağlantıda: sorğunun statusu, balansın azalması və audit BİR
             # tranzaksiyada olmalıdır. Ayrı bağlantılarda təsdiq yazılıb balans

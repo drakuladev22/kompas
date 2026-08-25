@@ -19,9 +19,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from src.domain.entities.employee import Employee
 from src.shared.exceptions import KompasOSError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class NavigationConfigError(KompasOSError):
@@ -113,12 +117,18 @@ class NavigationRegistry:
         *,
         now: datetime,
         enabled_modules: frozenset[str] | None = None,
+        alternate_admission: Callable[[MenuEntry], bool] | None = None,
     ) -> tuple[MenuEntry, ...]:
         """İstifadəçinin GÖRDÜYÜ maddələr — qalanları ümumiyyətlə qaytarılmır.
 
         Args:
             enabled_modules: Aktiv Feature Toggle-ların açarları. `None`
                 verildikdə bütün modullar aktiv sayılır (test rahatlığı üçün).
+            alternate_admission: ƏLAVƏ QƏBUL — flag yoxlaması ALINMAYANDA
+                çağırılan son şans (`v2backlog.md` Faza 5.4). Bax `is_visible`
+                başlığındakı tam əsaslandırma; burada YALNIZ imza qaydası:
+                callable MADDƏNİ qaytarmalıdır, istisna atmamalıdır — menyu
+                quruluşu bir pis callable-ın əsiri olmamalıdır.
 
         Returns:
             Sıralanmış maddələr. Valideyni görünməyən alt-maddə də gizlədilir.
@@ -126,7 +136,13 @@ class NavigationRegistry:
         visible: dict[str, MenuEntry] = {}
 
         for entry in self.all_entries:
-            if not self._is_visible(entry, employee, now=now, modules=enabled_modules):
+            if not self._is_visible(
+                entry,
+                employee,
+                now=now,
+                modules=enabled_modules,
+                alternate_admission=alternate_admission,
+            ):
                 continue
             visible[entry.key] = entry
 
@@ -144,21 +160,50 @@ class NavigationRegistry:
         *,
         now: datetime,
         enabled_modules: frozenset[str] | None = None,
+        alternate_admission: Callable[[MenuEntry], bool] | None = None,
     ) -> bool:
         """Tək maddə üçün yoxlama — ekrana birbaşa keçid (deep link) qoruması.
 
         VACİB: menyunun gizlədilməsi TƏHLÜKƏSİZLİK DEYİL. Ekranı açan hər
         əməliyyat öz icazəsini AYRICA yoxlamalıdır — bu metod həmin yoxlama
         üçün də istifadə olunur.
+
+        ──────────────────────────────────────────────────────────────────────
+        `alternate_admission` NİYƏ VAR — «Fövqəladə Giriş» (Faza 5.4)
+        ──────────────────────────────────────────────────────────────────────
+        Ehtiyat-admin (break-glass trustee) HEÇ BİR icazə flag-i daşımır — onun
+        səlahiyyəti REYESTR SƏTRİDİR (`break_glass_trustees`), flag deyil. Flag
+        yoxlaması ilə qapılan maddə təyin edilmiş ehtiyat-admini ekrana
+        buraxmırdı, mexanizm isə məhz o, daxil olanda lazımdır. Ona görə örtük
+        (AdminShell) login-də BİR dəfə reyestr oxuyub bu callable ilə «bu
+        işçi ehtiyat-admindir» faktını menyuya ÖTÜRÜR.
+
+        QAYDALAR QORUNUR:
+        * Feature Toggle yoxlaması (Şərt 1) callable ilə YAN KEÇİLMİR — söndürülmüş
+          modul heç vaxt görünmür;
+        * `required_flags` (hamısı-VƏ) yoxlaması da yan keçilmir;
+        * Bu, GÖRÜNÜRLÜKDÜR, İCAZƏ DEYİL: ekranı açan hər əməliyyat use case-in
+          öz qapısına düşür (`request_access`/`approve`/`revoke`) — callable
+          heç bir yazı yoluna çata bilmir.
         """
         entry = self._entries.get(key)
         if entry is None:
             return False
-        if not self._is_visible(entry, employee, now=now, modules=enabled_modules):
+        if not self._is_visible(
+            entry,
+            employee,
+            now=now,
+            modules=enabled_modules,
+            alternate_admission=alternate_admission,
+        ):
             return False
         if entry.parent_key is not None:
             return self.is_visible(
-                entry.parent_key, employee, now=now, enabled_modules=enabled_modules
+                entry.parent_key,
+                employee,
+                now=now,
+                enabled_modules=enabled_modules,
+                alternate_admission=alternate_admission,
             )
         return True
 
@@ -169,6 +214,7 @@ class NavigationRegistry:
         *,
         now: datetime,
         modules: frozenset[str] | None,
+        alternate_admission: Callable[[MenuEntry], bool] | None = None,
     ) -> bool:
         # Şərt 1 — modul aktivdirmi (ROOT İdarə Mərkəzi)
         if (
@@ -186,7 +232,11 @@ class NavigationRegistry:
             return False
         if entry.required_flag is None:
             return True
-        return employee.has_permission(entry.required_flag, now=now)
+        if employee.has_permission(entry.required_flag, now=now):
+            return True
+        # Şərt 3 — zəng edənin əlavə qəbulu. Yalnız flag ALINMADIQDA çatır və
+        # modul toggle-ını heç vaxt yan keçə bilmir (o, yuxarıda rədd edib).
+        return alternate_admission is not None and alternate_admission(entry)
 
     def clear(self) -> None:
         """Reyestri sıfırlayır — əsasən testlər üçün."""

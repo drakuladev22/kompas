@@ -153,6 +153,17 @@ EXPECTED_JOBS: Final = (
     ("TRANSFER_REQUEST_SCHEDULED_APPLY", JobCadence.DAILY, JobWeight.LIGHT),
     ("EMPLOYEE_SCHEDULED_DEACTIVATION_RUN", JobCadence.DAILY, JobWeight.LIGHT),
     ("FORMER_EMPLOYEE_ANONYMIZATION_RUN", JobCadence.DAILY, JobWeight.LIGHT),
+    # `v2backlog.md` Faza 5 — sistem davamlılığının DÖRD işi
+    # (`composition.py::_register_scheduled_jobs` şərhi ilə EYNİ əsaslandırma).
+    # `BREAK_GLASS_EXPIRY`/`OFFLINE_BACKLOG_CHECK`/`HARDWARE_HEALTH_CHECK` —
+    # `HOURLY`: hədd SAAT/dəqiqə vahidlidir (`FINE_EXPIRE_STALE` naxışı);
+    # `BREAK_GLASS_VENDOR_RETRY` — `DAILY`: sətir yerli bazada tamdır, göndəriş
+    # hesabat məqsədlidir. Hər dördü `LIGHT`: indeksli sorğu + tapılan sətir
+    # qədər yazı / tək bildiriş; `HEAVY` yalnız `pg_dump` üçün ayrılıb.
+    ("BREAK_GLASS_EXPIRY", JobCadence.HOURLY, JobWeight.LIGHT),
+    ("BREAK_GLASS_VENDOR_RETRY", JobCadence.DAILY, JobWeight.LIGHT),
+    ("OFFLINE_BACKLOG_CHECK", JobCadence.HOURLY, JobWeight.LIGHT),
+    ("HARDWARE_HEALTH_CHECK", JobCadence.HOURLY, JobWeight.LIGHT),
     ("NIGHTLY_BACKUP", JobCadence.DAILY, JobWeight.HEAVY),
 )
 
@@ -299,6 +310,20 @@ class _UserLifecycle(_RecordingUseCase):
 
     def anonymize_former_employees(self, tenant_id: TenantId) -> Any:
         return self._record("users.anonymize_former_employees", tenant_id=tenant_id)
+
+
+class _BreakGlass(_RecordingUseCase):
+    """`v2backlog.md` Faza 5.4 — `BreakGlassUseCase`-in İKİ planlayıcı metodu.
+
+    Real use case hər ikisini EYNİ obyektdə saxlayır (`_UserLifecycle`
+    naxışı), ona görə sahtə də hər ikisini daşıyır.
+    """
+
+    def expire_due(self, *, tenant_id: TenantId) -> Any:
+        return self._record("break_glass.expire_due", tenant_id=tenant_id)
+
+    def retry_vendor_reports(self, *, tenant_id: TenantId) -> Any:
+        return self._record("break_glass.retry_vendor_reports", tenant_id=tenant_id)
 
 
 class _Devices(_RecordingUseCase):
@@ -452,6 +477,8 @@ class _FakeSession:
         # `v2backlog.md` Faza 3.1/3.2/3.3 — HR lifecycle-in ÜÇ gecəlik işi.
         self.transfer_requests = _TransferRequests(calls, result=1)
         self.users = _UserLifecycle(calls, result=0)
+        # `v2backlog.md` Faza 5.4 — break-glass planlayıcı işləri.
+        self.break_glass = _BreakGlass(calls, result=1)
         # SAAS-6 — saxlama müddəti işi: limit oxusu + iki təmizləmə çağırışı.
         self.limits = _SessionLimits()
         self.evidence_queue = _EvidenceQueue()

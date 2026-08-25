@@ -135,6 +135,18 @@ class BufferDrainAdapter:
         #: ona görə testdə sabitlənə bilməlidir.
         self._now = now or (lambda: datetime.now(UTC))
 
+    @property
+    def buffer(self) -> OfflineBuffer:
+        """Sarılmış bufer — Faza 5.1 nəzarətçisi onun YAŞINI ölçür.
+
+        AÇIQ ƏLÇATANLIQ QƏSDLİDİR: `OfflineBacklogMonitor` `pending_count()`
+        ilə kifayətlənə bilməz (say həddi yaş həddini GÖRMÜR, bax
+        `offline/backlog.py`), lakin adapteri həmin metodlarla şişirtmək
+        `OfflineBufferDrain` portunu ONA aid olmayan sorğularla doldurardı —
+        port baza KEÇİDİ üçündür, sağlamlıq nəzarəti üçün yox.
+        """
+        return self._buffer
+
     def pending_count(self, tenant_id: TenantId) -> int:
         return len(self._buffer.pending(now=self._now(), tenant_id=str(tenant_id)))
 

@@ -59,7 +59,7 @@ import socket
 import threading
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final
 
@@ -85,6 +85,7 @@ if TYPE_CHECKING:
     from src.application.use_cases.authentication import SessionManagementUseCase
     from src.application.use_cases.backup_access import BackupAccessUseCase
     from src.application.use_cases.behavior_baseline import BehaviorBaselineUseCase
+    from src.application.use_cases.break_glass import BreakGlassUseCase
     from src.application.use_cases.bulk_operations import (
         BulkEmployeeImportUseCase,
         StoreTemplateUseCase,
@@ -140,6 +141,7 @@ if TYPE_CHECKING:
     from src.application.use_cases.root_control import RootControlUseCase
     from src.application.use_cases.sales_points import SalesPointsUseCase
     from src.application.use_cases.sales_review_queue import SalesReviewQueueUseCase
+    from src.application.use_cases.shift_handoff import ShiftHandoffUseCase
     from src.application.use_cases.shift_scheduling import (
         ShiftPlanningUseCase,
         ShiftSwapUseCase,
@@ -488,6 +490,18 @@ class _LazyBufferDrain:
     def flush(self, tenant_id: TenantId) -> int:
         remaining: int = self._ensure().flush(tenant_id)
         return remaining
+
+    @property
+    def opened_buffer(self) -> Any:
+        """ARTIQ açılmış buferi qaytarır, YOXDURSA `None` — AÇMIR.
+
+        `v2backlog.md` Faza 5.1 planlayıcı işi buferin yaşını ölçür, LAKİN
+        onu YARATMAMALIDIR: heç vaxt offline yazı olmamış quraşdırmada boş
+        SQLite faylı yaratmaq «offline rejim var» təəssüratı verərdi və
+        `_ensure()`-in bütün tənbəllik səbəbini (yuxarı) pozardı.
+        """
+        adapter = self._adapter
+        return getattr(adapter, "buffer", None) if adapter is not None else None
 
 
 class _LazyFaceEngine:
@@ -912,6 +926,14 @@ class Session:
     checklist_templates: ChecklistItemTemplateUseCase
     offboarding_checklists: EmployeeOffboardingChecklistUseCase
 
+    # `v2backlog.md` Faza 5.3/5.4 — növbə təhvili qeydi və fövqəladə giriş.
+    # İKİSİ DƏ `Session`-dadır (ayrı, uzun-ömürlü obyekt DEYİL), çünki hər
+    # ikisi YAZI yoludur və repo-lar bağlantıya bağlıdır (CLAUDE.md §6).
+    # Break-glass üçün bu, əlavə məna daşıyır: qrantın statusu ilə audit
+    # sətri EYNİ tranzaksiyada yazılır.
+    shift_handoffs: ShiftHandoffUseCase
+    break_glass: BreakGlassUseCase
+
     def commit(self) -> None:
         self.uow.commit()
 
@@ -968,6 +990,22 @@ class Session:
         key = SystemLimitKey.MAX_UPLOAD_SIZE_BYTES
         limit: int = self.limits.get_int(self.tenant_id, key.value, int(DEFAULT_LIMITS[key]))
         return limit
+
+
+def _cooldown_elapsed(raw: str | None, *, now: datetime, hours: int) -> bool:
+    """Təkrar-susma pəncərəsi bitibmi (Faza 5.2).
+
+    Yazı YOXDURSA və ya OXUNMURSA `True` — naməlum vəziyyətdə xəbərdarlıq
+    göndərmək, göndərməməkdən yaxşıdır (`OfflineBacklogMonitor.should_alert`
+    ilə eyni qərar).
+    """
+    if raw is None:
+        return True
+    try:
+        last = datetime.fromisoformat(raw)
+    except ValueError:
+        return True
+    return now - last >= timedelta(hours=hours)
 
 
 class ApplicationContext:
@@ -1033,6 +1071,17 @@ class ApplicationContext:
         # qurulur, kamera isə fiziki cihazdır — hər sessiyada ikinci
         # `VideoCapture` açmaq cihazı bloklayardı.
         self._face_engine: tuple[Any, Any] | None = None
+        # Vendor break-glass bildiricisi (Faza 5.4). MÜŞTƏRİ QURAŞDIRMASINDA
+        # `None` QALIR VƏ BU, GÖZLƏNİLƏN HALDIR — DB-3 qərarı (bax
+        # `connection_types.py` başlığı): müştəri vendor bazasına nə yazır,
+        # nə oxuyur. Bildirici yalnız `KOMPASOS_VENDOR_DSN` təyin edilmiş
+        # mühitdə (təchizatçının maşını, staging) qurulur.
+        #
+        # BİR DƏFƏ, TƏNBƏL qurulur: `VendorDatabase.from_env()` hovuz açır və
+        # onu hər `Session` üçün təkrarlamaq dəstək tutumunu yeyərdi.
+        # `False` = «cəhd edildi, yoxdur» (təkrar cəhd edilmir); `None` =
+        # «hələ cəhd edilməyib».
+        self._break_glass_reporter_cache: Any = None
         # İnfrastruktur pəncərəsi BİR DƏFƏ qurulur və paylaşılır: obyekt
         # vəziyyət saxlamır (nə keş, nə bağlantı), yalnız `Database` + tenant
         # daşıyır — hər istehlakçı üçün yenisini qurmaq eyni nəticəni verər,
@@ -2172,9 +2221,262 @@ class ApplicationContext:
                 JobCadence.DAILY,
                 JobWeight.LIGHT,
             ),
+            # `v2backlog.md` Faza 5 — sistem davamlılığının ÜÇ gecə/saat işi.
+            #
+            # `BREAK_GLASS_EXPIRY` HOURLY-dir, DƏQİQƏLİK DEYİL və bu, təhlükə
+            # YARATMIR: səlahiyyətin qüvvədə olması `BreakGlassGrant.
+            # is_effective_at()` ilə HƏR yoxlamada vaxta görə hesablanır —
+            # planlayıcı yalnız statusu təmizləyir (audit oxunuşu üçün).
+            # Dəqiqəlik iş eyni nəticəni 60 dəfə artıq sorğu ilə verərdi.
+            (
+                "BREAK_GLASS_EXPIRY",
+                self._job_break_glass_expiry,
+                JobCadence.HOURLY,
+                JobWeight.LIGHT,
+            ),
+            # Vendor bildirişinin təkrar cəhdi — GÜNDƏLİK kifayətdir: sətir
+            # yerli bazada onsuz da tamdır, mərkəzi nüsxə isə hesabat
+            # məqsədlidir (bax `break_glass_reporter.py` başlığı).
+            (
+                "BREAK_GLASS_VENDOR_RETRY",
+                self._job_break_glass_vendor_retry,
+                JobCadence.DAILY,
+                JobWeight.LIGHT,
+            ),
+            # Faza 5.1 — uzun-müddətli offline xəbərdarlığı. HOURLY: hədd
+            # SAAT vahidlidir (`OFFLINE_BACKLOG_MAX_HOURS`), gündəlik yoxlama
+            # 24 saatlıq həddi 24 saat gecikdirə bilərdi.
+            (
+                "OFFLINE_BACKLOG_CHECK",
+                self._job_offline_backlog_check,
+                JobCadence.HOURLY,
+                JobWeight.LIGHT,
+            ),
+            # Faza 5.2 — disk/RAM nasazlığının filialın texniki-məsuluna
+            # bildirilməsi. HOURLY: dolan disk saatlar ərzində dolur, günlərlə
+            # yox (`DRIVE_QUOTA_CHECK`-in GÜNDƏLİK olmasından fərqli səbəb —
+            # kvota həftələrlə dözür).
+            (
+                "HARDWARE_HEALTH_CHECK",
+                self._job_hardware_health_check,
+                JobCadence.HOURLY,
+                JobWeight.LIGHT,
+            ),
             ("NIGHTLY_BACKUP", self._job_nightly_backup, JobCadence.DAILY, JobWeight.HEAVY),
         ):
             runner.register(ScheduledJob(key=key, handler=handler, cadence=cadence, weight=weight))
+
+    @property
+    def _break_glass_reporter(self) -> Any:
+        """Vendor bildiricisi — TƏNBƏL, tapılmazsa `None` (DB-3, bax `__init__`).
+
+        İDXAL DA TƏNBƏLDİR: modul `VendorDatabase`-i idxal edir və açılış
+        yolunda əlavə modul yükləmək açılış sürətinə haqsız qiymət qoyardı —
+        fövqəladə giriş isə nadir yoldur.
+
+        VENDOR BAZASININ ƏLÇATMAZLIĞI TƏTBİQİ DAYANDIRMIR: `VendorConnection
+        Error` udulur və bildirici söndürülür. Fövqəladə giriş həmin anda da
+        işləməlidir — yerli sətir tamdır, `vendor_synced_at` NULL qalır və
+        gecəlik iş yenidən cəhd edir.
+        """
+        if self._break_glass_reporter_cache is None:
+            from src.infrastructure.licensing.break_glass_reporter import (  # noqa: PLC0415
+                VendorGatewayBreakGlassReporter,
+            )
+            from src.infrastructure.persistence.connection_types import (  # noqa: PLC0415
+                VendorDatabase,
+            )
+
+            try:
+                vendor = VendorDatabase.from_env()
+            except Exception as exc:
+                _log.warning("BREAK_GLASS_VENDOR_UNAVAILABLE", extra={"error": str(exc)})
+                vendor = None
+            self._break_glass_reporter_cache = (
+                VendorGatewayBreakGlassReporter(vendor) if vendor is not None else False
+            )
+        return self._break_glass_reporter_cache or None
+
+    def _job_break_glass_expiry(self, context: Any) -> str:
+        """Faza 5.4 — vaxtı keçmiş sorğuları/səlahiyyətləri bağlayır."""
+        with self.session() as session:
+            closed = session.break_glass.expire_due(tenant_id=context.tenant_id)
+            session.commit()
+        return f"{closed} fövqəladə giriş sətri bağlandı"
+
+    def _job_break_glass_vendor_retry(self, context: Any) -> str:
+        """Faza 5.4 — mərkəzi bazaya çatmamış sətirləri yenidən göndərir.
+
+        Bildirici yoxdursa (müştəri quraşdırması, DB-3) use case DƏRHAL 0
+        qaytarır — iş `FAILED` OLMUR: bildiricinin olmaması nasazlıq deyil,
+        gözlənilən vəziyyətdir (`_job_drive_quota_check`-in eyni qərarı).
+        """
+        with self.session() as session:
+            sent = session.break_glass.retry_vendor_reports(tenant_id=context.tenant_id)
+            session.commit()
+        return f"{sent} sətir mərkəzi bazaya göndərildi"
+
+    def _job_offline_backlog_check(self, context: Any) -> str:
+        """Faza 5.1 — offline buferin yaşı/həcmi həddi aşıbsa HR-ə xəbərdarlıq.
+
+        BUFER QURULMAYIBSA İŞ SAKİT DAYANIR (`_job_drive_quota_check` naxışı):
+        offline bufer TƏNBƏLdir və heç vaxt yazı olmamış quraşdırmada SQLite
+        faylı ola bilməz — bu, xəta deyil.
+
+        `mark_alerted()` YALNIZ bildiriş göndərildikdən SONRA çağırılır:
+        `Notifier` istisna atsa təkrar-susma pəncərəsi bağlanmamalıdır (bax
+        `backlog.py`).
+        """
+        buffer = self._offline_buffer_if_present()
+        if buffer is None:
+            return "offline bufer qurulmayıb"
+
+        from src.infrastructure.offline.backlog import (  # noqa: PLC0415
+            OfflineBacklogMonitor,
+        )
+
+        monitor = OfflineBacklogMonitor(buffer, limits=self._infrastructure_limits)
+        tenant_text = str(context.tenant_id)
+        assessment = monitor.assess(tenant_id=tenant_text, now=context.now)
+        if not monitor.should_alert(assessment, tenant_id=tenant_text, now=context.now):
+            return assessment.summary_az
+
+        # `Session` BİLDİRİCİ SAXLAMIR (`notifier` `_build_session`-un yerli
+        # dəyişənidir) — planlayıcı işi onu ÖZÜ qurur. Bu, `_job_nightly_
+        # backup`-ın `DriveConnectionRepository`-ni sessiyadan KƏNARDA
+        # qurmasının eyni naxışıdır: bildiriş yazısı öz qısa iş vahidini açır.
+        self._notify(
+            tenant_id=context.tenant_id,
+            # `can_manage_employees` auditoriyası (HR) — konkret alıcı
+            # YOXDUR, çünki problem MAĞAZANINDIR, bir şəxsin deyil.
+            recipient_id=None,
+            category="OFFLINE_BACKLOG",
+            title_az="Uzun-müddətli offline rejim",
+            body_az=(
+                f"{assessment.summary_az} Giriş və davamiyyət İŞLƏMƏYƏ "
+                "DAVAM EDİR — məlumat serverə hələ çatmayıb."
+            ),
+        )
+        monitor.mark_alerted(tenant_id=tenant_text, now=context.now)
+        return f"XƏBƏRDARLIQ: {assessment.summary_az}"
+
+    def _job_hardware_health_check(self, context: Any) -> str:
+        """Faza 5.2 — disk/RAM həddi aşıbsa filialın texniki-məsuluna bildiriş.
+
+        ALICI SEÇİMİ İKİ PİLLƏLİDİR: bu PC-nin qeydiyyatdan keçmiş cihazı →
+        onun filialı → filialın `technical_contact_employee_id`-si. Zəncirin
+        hər hansı halqası yoxdursa alıcı `None` olur, yəni bildiriş
+        KATEQORİYA auditoriyasına gedir — nasazlıq xəbəri SÜKUTLA İTMİR
+        (`migrations/089`-un `NULL = defolt kanal` şərhi).
+        """
+        from src.infrastructure.erp.system_health import (  # noqa: PLC0415
+            disk_metric,
+            memory_metric,
+        )
+
+        problems = [
+            metric
+            for metric in (
+                disk_metric(limits=self._infrastructure_limits),
+                memory_metric(limits=self._infrastructure_limits),
+            )
+            if metric.level.needs_attention
+        ]
+        if not problems:
+            return "disk/RAM normaldır"
+
+        # Təkrar-susma pəncərəsi offline bufer faylında saxlanılır — SƏBƏB:
+        # aparat nasazlığı MAŞINA aiddir, kirayəçiyə yox, və məhz disk dolu
+        # olanda bazaya yazmaq mümkün olmaya bilər (`backlog.py` naxışı).
+        buffer = self._offline_buffer_if_present()
+        cooldown_hours = self._infrastructure_limits.int_of(
+            SystemLimitKey.HEALTH_HARDWARE_ALERT_COOLDOWN_HOURS
+        )
+        alert_key = f"hardware_alerted_at:{context.tenant_id}"
+        if buffer is not None and not _cooldown_elapsed(
+            buffer.read_meta(alert_key), now=context.now, hours=cooldown_hours
+        ):
+            return "xəbərdarlıq təkrar-susma pəncərəsindədir"
+
+        summary = "; ".join(f"{metric.title_az}: {metric.value_az}" for metric in problems)
+        recipient = self._technical_contact()
+        self._notify(
+            tenant_id=context.tenant_id,
+            recipient_id=recipient,
+            category="HARDWARE_HEALTH",
+            title_az="Kiosk/POS aparat nasazlığı",
+            body_az=(
+                f"{summary}. Ətraflı: "
+                + " ".join(metric.detail_az for metric in problems if metric.detail_az)
+            ),
+        )
+        if buffer is not None:
+            buffer.write_meta(alert_key, context.now.isoformat())
+        return f"XƏBƏRDARLIQ: {summary}"
+
+    def _notify(
+        self,
+        *,
+        tenant_id: Any,
+        recipient_id: Any,
+        category: str,
+        title_az: str,
+        body_az: str,
+    ) -> None:
+        """Planlayıcı işlərinin bildiriş yolu — öz qısa iş vahidi ilə.
+
+        `is_critical=True` SABİTDİR: bu yolu YALNIZ Faza 5-in iki nasazlıq
+        işi çağırır və hər ikisi e-poçt fallback-ı tələb edir (panelə baxan
+        olmaya bilər — nasazlıq iş saatından kənarda baş verir).
+        """
+        from src.infrastructure.notifications.notifier import (  # noqa: PLC0415
+            PostgresNotifier,
+        )
+
+        PostgresNotifier(self._database, limits=self._infrastructure_limits).notify(
+            tenant_id=tenant_id,
+            recipient_id=recipient_id,
+            category=category,
+            title_az=title_az,
+            body_az=body_az,
+            is_critical=True,
+        )
+
+    def _technical_contact(self) -> Any:
+        """Bu PC-nin filialına təyin edilmiş texniki-məsul şəxs, ya `None`.
+
+        HEÇ BİR HALDA İSTİSNA ATMIR: alıcının tapılmaması bildirişi
+        dayandırmamalıdır (bax `_job_hardware_health_check`).
+        """
+        from src.infrastructure.config.device_identity import (  # noqa: PLC0415
+            load_device_id,
+        )
+
+        try:
+            device_id = load_device_id()
+            if device_id is None:
+                return None
+            with self.session() as session:
+                device = session.uow.repository("devices").get(device_id)
+                if device is None or device.store_id is None:
+                    return None
+                return session.uow.repository("stores").technical_contact(
+                    self._tenant_id, device.store_id
+                )
+        except Exception as exc:  # alıcı tapılmaması bildirişi dayandırmır
+            _log.warning("HARDWARE_ALERT_RECIPIENT_UNRESOLVED", extra={"error": str(exc)})
+            return None
+
+    def _offline_buffer_if_present(self) -> Any:
+        """Mövcud offline buferi qaytarır, YOXDURSA QURMUR.
+
+        `offline_drain()`-dən FƏRQİ budur: o, buferi lazım olanda YARADIR
+        (baza keçidi yolu), bu isə yalnız MÖVCUDUNU verir. Planlayıcı işi
+        heç vaxt yazı olmamış quraşdırmada SQLite faylı yaratmamalıdır —
+        yaradılan boş bufer «offline rejim var» təəssüratı verərdi.
+        """
+        drain = self._offline_drain
+        return drain.opened_buffer if drain is not None else None
 
     def _job_drive_quota_check(self, context: Any) -> str:
         """Faza 3.9 — aktiv Drive hesabının kvotasını yoxlayır.
@@ -2829,6 +3131,9 @@ class ApplicationContext:
             BehaviorAnomalyRule,
             BehaviorBaselineUseCase,
         )
+        from src.application.use_cases.break_glass import (  # noqa: PLC0415
+            BreakGlassUseCase,
+        )
         from src.application.use_cases.bulk_operations import (  # noqa: PLC0415
             BulkEmployeeImportUseCase,
             StoreTemplateUseCase,
@@ -2947,6 +3252,9 @@ class ApplicationContext:
         from src.application.use_cases.sales_points import SalesPointsUseCase  # noqa: PLC0415
         from src.application.use_cases.sales_review_queue import (  # noqa: PLC0415
             SalesReviewQueueUseCase,
+        )
+        from src.application.use_cases.shift_handoff import (  # noqa: PLC0415
+            ShiftHandoffUseCase,
         )
         from src.application.use_cases.shift_scheduling import (  # noqa: PLC0415
             ShiftPlanningUseCase,
@@ -3231,6 +3539,10 @@ class ApplicationContext:
             clock=clock,
             notifier=notifier,
             toggles=repo("toggles"),
+            # Faza 4.2 — öz-düzəliş tavanı Root-dan oxunsun: `limits=` olmadan
+            # use case `DEFAULT_LIMITS`-ə düşər və Root dəyişikliyi ona ÇATMAZDı
+            # (`overtime_tracking` ilə eyni qayda).
+            limits=repo("limits"),
         )
 
         # İSTİFADƏÇİ İDARƏETMƏSİ YEREL DƏYİŞƏNDİR, çünki İKİ yerdə lazımdır:
@@ -3253,6 +3565,36 @@ class ApplicationContext:
             # bölüşülür, `employee_transfer.py` YENİ açar YARATMIR (bax
             # `_history_page_size`).
             limits=repo("limits"),
+        )
+
+        # `v2backlog.md` Faza 5.3 — növbə təhvili qeydi. `MorningCheckInUseCase`-in
+        # METODU DEYİL, ayrı use case (səbəb `shift_handoff.py` başlığında) —
+        # lakin EYNİ `Session`-dadır ki, `[İşə Başladım]` ekranı ikisini bir
+        # addımda ala bilsin.
+        shift_handoffs = ShiftHandoffUseCase(
+            handoffs=repo("shift_handoff_notes"),
+            audit=audit,
+            clock=clock,
+            # `limits`: qeydin uzunluğu və görünmə pəncərəsi — İKİSİ DƏ Root
+            # parametridir (migrations/100).
+            limits=repo("limits"),
+        )
+
+        # `v2backlog.md` Faza 5.4 — break-glass fövqəladə giriş.
+        # `vendor_reporter` İSTƏYƏ BAĞLIDIR: özünə-host quraşdırmada mərkəzi
+        # vendor bazası olmaya bilər (`.env.example`-in `KOMPASOS_PRIVATE_
+        # SERVER_DSN` naxışı). `None` olsa sətir YERLİ olaraq tam qalır və
+        # `vendor_synced_at` NULL-da qalır — gecəlik iş onu sonsuz təkrar
+        # cəhdlə yormasın deyə `retry_vendor_reports()` reporter yoxdursa
+        # DƏRHAL 0 qaytarır (bax orada).
+        break_glass = BreakGlassUseCase(
+            grants=repo("break_glass"),
+            employees=uow.employees,
+            audit=audit,
+            clock=clock,
+            notifier=notifier,
+            limits=repo("limits"),
+            vendor_reporter=self._break_glass_reporter,
         )
 
         # `v2backlog.md` Faza 3.4 — struktur offboarding checklist. HƏR İKİSİ
@@ -3705,6 +4047,9 @@ class ApplicationContext:
             transfer_requests=transfer_requests,
             checklist_templates=checklist_templates,
             offboarding_checklists=offboarding_checklists,
+            # Faza 5.3/5.4 — YUXARIDA qurulub (bax orada).
+            shift_handoffs=shift_handoffs,
+            break_glass=break_glass,
             permission_guard=PermissionHierarchyGuardUseCase(
                 audit=audit,
                 clock=clock,
