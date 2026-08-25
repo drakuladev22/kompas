@@ -83,9 +83,12 @@ from src.domain.value_objects.licensing import (
 from src.infrastructure.licensing.vendor_maintenance import (
     VendorMaintenanceError,
     apply_tier_toggle_defaults,
+    clear_version_target,
     dumps_export,
     export_tenant_json,
+    find_version_id,
     open_admin_connection,
+    set_version_target,
 )
 from src.infrastructure.licensing.vendor_maintenance import (
     set_service_tier as set_service_tier_admin,
@@ -100,7 +103,7 @@ if TYPE_CHECKING:
         DeveloperTenantDirectory,
         TenantRow,
     )
-    from src.infrastructure.updates.publisher import ReleasePublisher
+    from src.infrastructure.updates.publisher import PublishResult, ReleasePublisher
 
 _log = get_logger(__name__)
 
@@ -322,6 +325,26 @@ class DeveloperPanelWindow(QMainWindow):
         )
         form.addRow("", self.mandatory_checkbox)
 
+        # `v2backlog.md` Faza 11.1 — CANARY. İşarələnəndə yayım BÜTÜN
+        # müştərilərə deyil, YALNIZ adları vergüllə yazılmış sətirlərə hədəf-
+        # lənir (`app_version_tenant_targets`). Adlar paneldəki cədvəldən
+        # DEYİL, yazı anında bazadan həll olunur: panel açıq qala bilər,
+        # siyahı isə dəyişib.
+        self.canary_checkbox = QCheckBox("Canary: yalnız seçilmiş müştərilərə", box)
+        self.canary_checkbox.setToolTip(
+            "Bu versiya yalnız aşağıda adları yazılan müştərilərə göstəriləcək "
+            "(vergüllə ayrın). Digərləri kanal axınında qalır."
+        )
+        form.addRow("", self.canary_checkbox)
+
+        self.canary_field = QLineEdit(box)
+        self.canary_field.setPlaceholderText(
+            "Bellona 28 May, Yataş Xətai — vergüllə ayrılmış şirkət adları"
+        )
+        self.canary_field.setEnabled(False)
+        self.canary_checkbox.toggled.connect(self.canary_field.setEnabled)
+        form.addRow("Canary auditoriyası:", self.canary_field)
+
         self.publish_button = QPushButton("Yüklə və Yayımla", box)
         self.publish_button.clicked.connect(self.publish)
         form.addRow("", self.publish_button)
@@ -439,7 +462,9 @@ class DeveloperPanelWindow(QMainWindow):
             toggle.clicked.connect(lambda _=False, target=row: self.toggle_status(target))
             self.table.setCellWidget(index, 6, toggle)
 
-            # Faza 9.1/9.2 — data-portativliyi + tier idarəsi.
+            # Faza 9.1/9.2 + 11.2 — data-portativliyi, tier idarəsi və
+            # versiya geri-qaytarması. Dörd düymə BİR hüceyrədədir: sətir
+            # sayı onlarla ola bilər, əlavə sütun cədvəli enində partlardı.
             actions = QWidget(self.table)
             actions_layout = QHBoxLayout(actions)
             actions_layout.setContentsMargins(0, 0, 0, 0)
@@ -452,6 +477,16 @@ class DeveloperPanelWindow(QMainWindow):
             tier_btn = QPushButton("Tier Dəyiş", actions)
             tier_btn.clicked.connect(lambda _=False, target=row: self.change_tier(target))
             actions_layout.addWidget(tier_btn)
+
+            rollback_btn = QPushButton("Geri Qaytar", actions)
+            rollback_btn.clicked.connect(lambda _=False, target=row: self.rollback_version(target))
+            actions_layout.addWidget(rollback_btn)
+
+            restore_btn = QPushButton("Normala", actions)
+            restore_btn.clicked.connect(
+                lambda _=False, target=row: self.restore_channel_update(target)
+            )
+            actions_layout.addWidget(restore_btn)
             self.table.setCellWidget(index, 7, actions)
 
         self.status_label.setText(f"Cəmi: {len(rows)} müştəri · diqqət tələb edən: {attention}")
@@ -713,16 +748,165 @@ class DeveloperPanelWindow(QMainWindow):
         self.publish_status.setText(
             f"Yayımlandı: {result.version} · {result.storage_path} · {inspection.size_mb} MB"
         )
+
+        # Faza 11.1 — canary hədəfləməsi yayımdan SONRA, ayrıca əməliyyat
+        # kimi: yayım uğurlu olsa da auditoriya həlli alınmasa versiya
+        # onsuz da kataloqdadır (kanal axını işləyir) — yəni iki addım
+        # bir tranzaksiya DEYİL və olmamalıdır.
+        canary_note = ""
+        if self.canary_checkbox.isChecked():
+            canary_note = self._apply_canary(result)
+
+        audience = (
+            f"Canary auditoriyası: {canary_note}"
+            if canary_note
+            else "Bütün tenant-lar növbəti yoxlamalarında (max 24 saat) onu görəcək."
+        )
         QMessageBox.information(
             self,
             "Yayımlandı",
-            f"Versiya {result.version} yayımlandı.\n"
-            f"Bütün tenant-lar növbəti yoxlamalarında (max 24 saat) onu görəcək.",
+            f"Versiya {result.version} yayımlandı.\n{audience}",
         )
         self.package_field.clear()
         self.version_field.clear()
         self.notes_field.clear()
         self.mandatory_checkbox.setChecked(False)
+        self.canary_checkbox.setChecked(False)
+        self.canary_field.clear()
+
+    def _apply_canary(self, result: PublishResult) -> str:
+        """Yayımın nəticəsini seçilmiş müştərilərə hədəfləyir (Faza 11.1).
+
+        Qaytarır: hesabat mətni («3/2» forması — həll olunan/həll olunmayan).
+        Ad uyğunluğu EXAKT-dir (böyük-kiçik hərf həssas DEYİL): qismən
+        uyğunluqla hədəfləmə YANLIŞ müştəriyə erkən buraxılış göndərərdi.
+        """
+        names = [part.strip() for part in self.canary_field.text().split(",") if part.strip()]
+        if not names:
+            return "adlar boşdur — kanal axınında qalır"
+
+        rows_by_name = {
+            row.tenant_name.casefold(): row for row in self._rows if row.tenant_name
+        }
+        resolved: list[str] = []
+        unknown: list[str] = []
+        for name in names:
+            row = rows_by_name.get(name.casefold())
+            if row is None:
+                unknown.append(name)
+                continue
+            resolved.append(row.tenant_id)
+        if not resolved:
+            return "heç bir ad tanınmadı — kanal axınında qalır"
+
+        try:
+            with open_admin_connection() as conn:
+                version_id = find_version_id(conn, version_number=str(result.version))
+                if version_id is None:
+                    return "versiya kataloqda tapılmadı — hədəf yazılmadı"
+                matched = 0
+                for tenant_id in resolved:
+                    if set_version_target(
+                        conn,
+                        tenant_id=tenant_id,
+                        version_id=version_id,
+                        reason=f"Canary yayımı ({result.version})",
+                    ):
+                        matched += 1
+        except VendorMaintenanceError as exc:
+            return f"hədəf yazılmadı ({exc.user_message})"
+        except KompasOSError as exc:
+            _log.error("DEVELOPER_PANEL_CANARY_FAILED", extra={"error": str(exc)})
+            return f"hədəf yazılmadı ({exc.user_message})"
+
+        suffix = f" · tanınmadı: {', '.join(unknown)}" if unknown else ""
+        return f"{matched}/{len(names)} hədəfləndi{suffix}"
+
+    def rollback_version(self, row: TenantRow) -> None:
+        """`[Geri Qaytar]` — tenant-a KÖHNƏ buraxılışı hədəfləyir (Faza 11.2).
+
+        İki giriş: VERSİYA NÖMRƏSİ (kataloqda mövcud olmalıdır — yoxsa rədd)
+        və SƏBƏB (`CHECK >= 5 simvol`, migrations/092). Hər ikisi auditin
+        hissəsidir; «səbəbsiz geri-qaytarma» sonrakı araşdırmanı korlayardı.
+        """
+        version_text, accepted = QInputDialog.getText(
+            self,
+            "Versiya geri-qaytarma",
+            f"«{row.tenant_name}» üçün qaytarılacaq versiya (məs. 1.3.2):",
+        )
+        if not accepted or not version_text.strip():
+            return
+
+        reason, accepted = QInputDialog.getMultiLineText(
+            self, "Geri-qaytarma səbəbi", "Səbəb (audit jurnalına yazılır):"
+        )
+        if not accepted:
+            return
+
+        try:
+            with open_admin_connection() as conn:
+                version_id = find_version_id(conn, version_number=version_text.strip())
+                if version_id is None:
+                    QMessageBox.critical(
+                        self,
+                        "Versiya tapılmadı",
+                        f"«{version_text.strip()}» kataloqda yoxdur. Köhnə "
+                        "buraxılışlar yayımlanmış kimi saxlanılır — nömrəni yoxlayın.",
+                    )
+                    return
+                set_version_target(
+                    conn,
+                    tenant_id=row.tenant_id,
+                    version_id=version_id,
+                    reason=reason.strip(),
+                )
+        except VendorMaintenanceError as exc:
+            QMessageBox.warning(self, "Geri-qaytarma mümkün deyil", exc.user_message)
+            return
+        except KompasOSError as exc:
+            QMessageBox.critical(self, "Geri-qaytarma alınmadı", exc.user_message)
+            return
+
+        QMessageBox.information(
+            self,
+            "Hədəf yazıldı",
+            f"«{row.tenant_name}» → {version_text.strip()}.\n{SYNC_NOTE_AZ}",
+        )
+        _log.warning(  # rollback NADİR və vacib əməliyyatdır — WARNING pilləsi
+            "DEVELOPER_PANEL_VERSION_ROLLBACK",
+            extra={"tenant_id": row.tenant_id, "version": version_text.strip()},
+        )
+        self.reload()
+
+    def restore_channel_update(self, row: TenantRow) -> None:
+        """`[Normala Qaytar]` — hədəfi silir; tenant yenidən kanal axınını alır."""
+        answer = QMessageBox.question(
+            self,
+            "Normal yayımı bərpa et",
+            f"«{row.tenant_name}» hədəfi silinəcək və müştəri öz kanalının "
+            f"(STABLE/BETA) ən yeni versiyasına qayıdacaq. Davam edilsin?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer is not QMessageBox.StandardButton.Yes:
+            return
+        try:
+            with open_admin_connection() as conn:
+                removed = clear_version_target(conn, tenant_id=row.tenant_id)
+        except VendorMaintenanceError as exc:
+            QMessageBox.warning(self, "Bərpa mümkün deyil", exc.user_message)
+            return
+        except KompasOSError as exc:
+            QMessageBox.critical(self, "Bərpa alınmadı", exc.user_message)
+            return
+
+        if not removed:
+            QMessageBox.information(self, "Hədəf yox idi", "Bu müştəridə aktiv hədəf yoxdur.")
+            return
+        QMessageBox.information(
+            self, "Bərpa edildi", f"«{row.tenant_name}» kanal axınına qaytdı.\n{SYNC_NOTE_AZ}"
+        )
+        self.reload()
 
     def _run_busy(self, action: Callable[[], _T]) -> _T | None:
         """Əməliyyatı gözləmə kursoru ilə icra edir; xətanı modalda göstərir.

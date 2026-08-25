@@ -101,6 +101,20 @@ _LATEST_SQL: Final[str] = """
      LIMIT %s
 """
 
+#: `v2backlog.md` Faza 11.1/11.2 — kirayəçiyə HƏDƏFLƏNMİŞ buraxılış (canary
+#: və ya geri-qaytarma). Sətir YOXDURSA tenant öz kanalının axınına davam
+#: edir (aşağıdakı `_LATEST_SQL`) — cədvəl yalnız İSTİSNA halları saxlayır
+#: (migrations/092). `app_version_tenant_targets` RLS SELECT siyasəti ilə
+#: öz sətrini oxuyur; yazı vendor tərəfindədir (`vendor_maintenance`).
+_TARGET_SQL: Final[str] = """
+    SELECT av.version_number, av.channel, av.storage_path, av.sha256_hash,
+           av.size_bytes, av.is_mandatory, av.mandatory_below,
+           av.release_notes, av.release_date, av.published_at
+      FROM app_version_tenant_targets t
+      JOIN app_versions av ON av.id = t.target_version_id
+     WHERE t.tenant_id = %s
+"""
+
 #: Miqrasiya 009-dan ƏVVƏLKİ sxem. Klient `.exe` ilə baza miqrasiyası ayrı-ayrı
 #: yayılır — biri digərindən qabaq gedə bilər. Bu ehtiyat sorğu olmasaydı,
 #: miqrasiyası gecikmiş tenant-da yenilənmə SÜKUTLA dayanardı: kataloq oxunmaz,
@@ -154,13 +168,28 @@ class SupabaseReleaseCatalog:
     def latest(
         self, tenant_id: TenantId, *, channel: ReleaseChannel = ReleaseChannel.STABLE
     ) -> ReleaseInfo | None:
-        """Kanalın ən yeni ETİBARLI buraxılışı.
+        """Kanalın ən yeni ETİBARLI buraxılışı — HƏDƏF VARSASA O ÜSTÜNDƏDİR.
 
-        Sorğu son 20 sətri gətirir və İLK OXUNA BİLƏNİ seçir: bir yararsız
-        sətir (məs. səhv yazılmış hash) bütün yenilənmə kanalını
-        dayandırmamalıdır — bu, kataloqa yazan tərəfin bir düzəliş səhvinin
-        21 filialı köhnə versiyada saxlaması demək olardı.
+        ──────────────────────────────────────────────────────────────────────
+        HƏDƏF-ÖNCƏLLİYİ (v2backlog.md Faza 11)
+        ──────────────────────────────────────────────────────────────────────
+        `app_version_tenant_targets`-də sətir varsa, tenant KANALINDAN
+        ASILI OLMAYARAQ həmin buraxılışı görür: hədəf daha YENİdirsə bu,
+        canary-dir («yalnız seçilmişlərə»), daha KÖHNƏdirsə geri-qaytarma.
+        Məntiq eynidir, çünki sual eynidir — «bu tenant HANSI sətri görsün?».
+
+        Cədvəlin OLMAMASI (miqrasiya 092 tətbiq olunmayıb) xəta DEYİL: kanal
+        axınına keçir və logda bir dəfə görünür — köhnə sxemdə yenilənmənin
+        SÜKUTLA dayanması qəbul edilməz (`_fetch_legacy` ilə eyni qayda).
         """
+        targeted = self._targeted_release(tenant_id)
+        if targeted is not None:
+            _log.info(
+                "UPDATE_TARGETED_RELEASE_USED",
+                extra={"tenant_id": str(tenant_id), "version": str(targeted.version)},
+            )
+            return targeted
+
         try:
             # `LIMIT` PARAMETRLƏŞDİRİLİB (`%s`), sətir birləşdirmə YOXDUR —
             # CLAUDE.md §4 SQL qaydası. Dəyər onsuz da klamp edilmiş tam ədəddir.
@@ -178,6 +207,26 @@ class SupabaseReleaseCatalog:
                     extra={"version": str(row.get("version")), "error": str(exc)},
                 )
         return None
+
+    def _targeted_release(self, tenant_id: TenantId) -> ReleaseInfo | None:
+        """Hədəf sətrini oxuyur — cədvəl yoxdursa `None` (kanal axını davam edir)."""
+        try:
+            rows = self._fetch(tenant_id, _TARGET_SQL, (tenant_id,))
+        except UpdateUnavailableError:
+            return None
+        if not rows:
+            return None
+        row = rows[0]
+        try:
+            return ReleaseInfo.from_row(row)
+        except (ValueError, TypeError) as exc:
+            # Səhv yazılmış hədəf kanalı DA BLOKLAMAMALIDIR — `_latest`
+            # dövründəki «ilk oxuna biləni seç» qaydasının eyni üzlüyü.
+            _log.warning(
+                "UPDATE_TARGETED_RELEASE_INVALID",
+                extra={"tenant_id": str(tenant_id), "error": str(exc)},
+            )
+            return None
 
     def forced_version(self, tenant_id: TenantId) -> Version | None:
         """Bu tenant üçün Developer Panelindən təyin edilmiş məcburi versiya."""

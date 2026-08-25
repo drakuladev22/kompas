@@ -209,6 +209,96 @@ def apply_tier_toggle_defaults(conn: Any, *, tenant_id: str, tier: str) -> int:
     return written
 
 
+# --------------------------------------------------------------------------- #
+# Faza 11.1/11.2 — Canary hədəfi + Versiya geri-qaytarma
+# --------------------------------------------------------------------------- #
+
+
+def find_version_id(
+    conn: Any, *, version_number: str, channel: str = "STABLE"
+) -> str | None:
+    """Versiya nömrəsini `app_versions.id`-yə çevirir; yoxdursa `None`.
+
+    Rollback UI-da operator VERSİYA NÖMRƏSİ yazır (`1.3.2`) — cədvəlin açarı
+    isə UUID-dir. Çevirmə BAZADA edilir ki, köhnə buraxılışın mövcudluğu da
+    EYNI anda yoxlanılsın: yoxdursa rollback RƏDD edilməlidir («səssizcə heç
+    nə etmə» operatoru versiyanın qayıtdığını SANARDI).
+    """
+    cleaned = version_number.strip()
+    if not cleaned:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id FROM app_versions
+             WHERE version_number = %s AND channel = %s
+             ORDER BY published_at DESC
+             LIMIT 1
+            """,
+            (cleaned, channel),
+        )
+        row = cur.fetchone()
+        return str(row["id"]) if row else None
+
+
+#: Hədəf səbəbinin minimum uzunluğu — DB `CHECK (char_length(trim(reason))
+#: >= 5)` güzgüsüdür (migrations/092). Sxem məhdudiyyətidir, Root parametri deyil.
+MIN_TARGET_REASON_LENGTH: Final[int] = 5
+
+
+def set_version_target(
+    conn: Any,
+    *,
+    tenant_id: str,
+    version_id: str,
+    reason: str,
+    set_by: str | None = None,
+) -> bool:
+    """Kirayəçinin hədəf buraxılışını yazır — canary VƏ rollback EYNİ yol.
+
+    `UNIQUE (tenant_id)` sayəsində UPSERT bir tenant üçün TƏK AKTİV hədəf
+    saxlayır (migrations/092): yeni hədəf köhnənin YERİNƏ keçir. Səbəb
+    məcburidir — «niyə?» sualsız hədəf audit dəyəri itirirdi.
+    """
+    cleaned_reason = reason.strip()
+    if len(cleaned_reason) < MIN_TARGET_REASON_LENGTH:
+        raise VendorMaintenanceError(
+            "Hədəf səbəbi çox qısadır",
+            user_message="Səbəb ən azı 5 simvol olmalıdır.",
+        )
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO app_version_tenant_targets
+                (tenant_id, target_version_id, reason, set_by)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (tenant_id) DO UPDATE
+                SET target_version_id = EXCLUDED.target_version_id,
+                    reason            = EXCLUDED.reason,
+                    set_by            = EXCLUDED.set_by,
+                    set_at            = now()
+            RETURNING id
+            """,
+            (tenant_id, version_id, cleaned_reason, set_by),
+        )
+        return cur.fetchone() is not None
+
+
+def clear_version_target(conn: Any, *, tenant_id: str) -> bool:
+    """Hədəfi silir — tenant yenidən ÖZ KANALININ axınına qayıdır.
+
+    Bu, «normala qaytarma» addımıdır və spesifikasiyada açıq yazılmasa da,
+    OLMAMASI geri-qaytarmadan ÇIXIŞI bağlayardı: bir dəfə köhnə versiyaya
+    salınan müştəri əbədi orada qalarardı.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM app_version_tenant_targets WHERE tenant_id = %s",
+            (tenant_id,),
+        )
+        return int(cur.rowcount) > 0
+
+
 def _json_default(value: Any) -> str:
     """JSON-a düşməyən tiplərin ISO/mətn forması — data İTMİR.
 
@@ -223,11 +313,15 @@ def _json_default(value: Any) -> str:
 
 __all__ = [
     "ADMIN_URL_ENV",
+    "MIN_TARGET_REASON_LENGTH",
     "VendorMaintenanceError",
     "apply_tier_toggle_defaults",
+    "clear_version_target",
     "discover_tenant_tables",
     "dumps_export",
     "export_tenant_json",
+    "find_version_id",
     "open_admin_connection",
     "set_service_tier",
+    "set_version_target",
 ]
