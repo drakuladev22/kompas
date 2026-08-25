@@ -2932,6 +2932,18 @@ class FaceEmbeddingRepository(Protocol):
         """
         ...
 
+    def list_all_profiles(self, tenant_id: TenantId) -> list[FaceProfile]:
+        """BÜTÜN kirayəçinin qeydiyyatlı profilləri — DUPLICATE aşkarlaması (6.2).
+
+        NİYƏ `list_store_profiles`-dan GENİŞ: canlı uyğunlaşma mağaza-scope-dadır
+        (yuxarıdakı əsaslandırma), lakin v2backlog.md Faza 6.2-nin sualı
+        məhz ŞƏBƏKƏ-MİQYASLIDIR — «bu adam başqa filialda İKİNCİ qeydiyyatla
+        işləyirmi?». Mağaza-sorğusu bu sualı HEÇ VAXT cavablandırmazdı.
+        Gecəlik toplu yoxlama üçündür, ona görə canlı yoldakı yavaşlıq arqumenti
+        burada keçərli deyil.
+        """
+        ...
+
 
 @runtime_checkable
 class FaceVerificationLogRepository(Protocol):

@@ -271,6 +271,9 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
                 # Miqrasiya 095 — `v2backlog.md` Faza 3.2/3.5 üçün iki yeni
                 # Root açarı (deaktiv işçi retensiyası, tövsiyə bonusu).
                 "seed_hr_lifecycle_v2_limits_for_new_tenant",
+                # Miqrasiya 102 — `v2backlog.md` Faza 6.5 üçün «əhəmiyyətli
+                # fərq» həddi (iş-yükü ədalətliliyi widget-i).
+                "seed_analytics_limits_for_new_tenant",
                 "seed_history_page_size_limits_for_new_tenant",
                 "seed_infrastructure_runtime_limits_for_new_tenant",
                 "seed_labor_and_staffing_limits_for_new_tenant",
@@ -294,6 +297,7 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
                 "seed_telegram_limits_for_new_tenant",
                 "seed_ui_surface_limits_for_new_tenant",
                 "trg_seed_annual_leave_limits",
+                "trg_seed_analytics_limits",
                 "trg_seed_application_layer_limits",
                 "trg_seed_attendance_counting_limits",
                 "trg_seed_attrition_risk_limits",

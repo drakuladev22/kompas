@@ -1578,6 +1578,68 @@ ATTRITION_RISK_SCORES: Final = [
 ]
 
 # --------------------------------------------------------------------------- #
+# v2backlog.md Faza 6 — analitika widget-lərinin maket sətirləri
+# --------------------------------------------------------------------------- #
+# Açarlar/sətir formaları `preview_screens._dashboard` çağırışlarındadır —
+# canlı yolun setter imzaları ilə EYNİ (CLAUDE.md §6).
+
+#: 6.1 — Xərc Mərkəzi: (mağaza adı, overtime saatı, göstərilən mətn).
+#: «Maaş fondu» KompasOS-da İZLƏNMİR demək YANLIŞ olardı — qeyd mətni
+#: canlı yoldakı `_dashboard_cost_center_fetch`-in düzünlüyü ilə eyni mövzudadır.
+COST_CENTER_BARS: Final = [
+    ("Bellona 28 May", 14.5, "14.5 saat"),
+    ("Yataş Xətai", 9.0, "9.0 saat"),
+    ("İntermezzo Nizami", 4.5, "4.5 saat"),
+]
+COST_CENTER_NOTE: Final = (
+    "Bonus: bu ay 320 bonus xalı verilib (maaş fondu KompasOS-da izlənmir — "
+    "yalnız əlavə iş və bonus yükü göstərilir)."
+)
+
+#: 6.2 — Dublikat işçi şübhəsi: (işçi, cüt, məsafə, açılıb).
+DUPLICATE_FACES: Final = [
+    ("Nərmin Əliyeva", "Səbinə Quliyeva", "0.31", "24.08.2026"),
+]
+
+#: 6.3 — Kamera operatoru performansı: (operator, təsdiq sayı, orta cavab, gecikmə).
+OPERATOR_PERFORMANCE: Final = [
+    ("Rauf İsmayılov", "412", "6 dəq", "3%"),
+    ("Tural Əhmədov", "388", "9 dəq", "7%"),
+    ("Zaur Məmmədli", "351", "12 dəq", "11%"),
+]
+
+#: 6.4 — Kampaniya təsiri: (kampaniya + tarixlər, fərq mətni).
+CAMPAIGN_IMPACT: Final = [
+    ("Novruz kampaniyası (17.03–31.03)", "▲ 2.4 işçi/gün bazaya görə"),
+    ("Qora bayramı (05.05–12.05)", "▼ 0.8 işçi/gün bazaya görə"),
+]
+
+#: 6.5 — İş-yükü ədalətliliyi: (işçi, mağaza, günlər, nişan).
+WORKLOAD_FAIRNESS: Final = [
+    ("Elvin Məmmədov", "Bellona 28 May", "26", "fərqli"),
+    ("Kamran Hüseynov", "Yataş Xətai", "14", "—"),
+    ("Aygün Rzayeva", "Bellona 28 May", "9", "fərqli"),
+]
+
+#: Faza 6.4 attrition ekranındakı kampaniya cədvəli (Root/CEO görünüşü).
+CAMPAIGN_PERIOD_ROWS: Final = [
+    {
+        "period_id": "cp1",
+        "name": "Novruz kampaniyası",
+        "start": "17.03.2026",
+        "end": "31.03.2026",
+        "is_active": "1",
+    },
+    {
+        "period_id": "cp2",
+        "name": "Quraşdırma endirimi",
+        "start": "10.01.2026",
+        "end": "20.01.2026",
+        "is_active": "0",
+    },
+]
+
+# --------------------------------------------------------------------------- #
 # #26 Mağaza Auditi + #27 İnsident Bildirişi — kompas1.md Faza 3
 # --------------------------------------------------------------------------- #
 # Açarlar `controllers/field_reports.py`-dakı `_template_row` / `_category_row`

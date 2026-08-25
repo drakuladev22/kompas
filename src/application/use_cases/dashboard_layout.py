@@ -208,6 +208,65 @@ WIDGET_CATALOG: Final[tuple[DashboardWidget, ...]] = (
         ),
         required_flag="can_export_reports",
     ),
+    # --- v2backlog.md Faza 6 — Analitika genişlənməsi (BEŞ widget) ----------- #
+    #
+    # AYRI EKRAN YARADILMIR (spesifikasiyanın açıq şərti): hər beşi Panel
+    # Qurucusunun adi maddəsidir. Flag seçimləri:
+    #   * `cost_center` — maliyyə yükü göstəricisi, `can_export_reports`
+    #     (hesabat auditoriyası, yuxarıdakı dörd benchmark ilə EYNİ);
+    #   * `duplicate_faces` — İstisna Motorunun oxunuşudur, `can_view_
+    #     exceptions` (qərar verənlər onsuz da bu flag-dadır, migrations/021);
+    #   * `operator_performance` — YENİ flag (migrations/102): spesifikasiya
+    #     OPERATORUN ÖZÜNÜ bu göstəricidən KƏNAR saxlayır — `can_verify_
+    #     returns` operatorların əlindədir, ona görə işlədilə bilməzdi;
+    #   * `campaign_impact` — attrition ailəsindən planlama məlumatı,
+    #     `can_view_attrition_risk` ilə eyni auditoriya;
+    #   * `workload_fairness` — mağaza-agreqat növbə sayları, fərdi maaş/
+    #     cərimə datası DAŞIMIR — flag tələb etmir (menyu başlığındakı
+    #     self-service qaydasının agregat-analoqu).
+    DashboardWidget(
+        key="cost_center",
+        title_az="Xərc Mərkəzi (filial üzrə)",
+        description_az=(
+            "Bu ayın əlavə iş saatları və bonus xalları filiallara görə — "
+            "maaş fondundan ƏLAVƏ xərc yükü."
+        ),
+        required_flag="can_export_reports",
+    ),
+    DashboardWidget(
+        key="duplicate_faces",
+        title_az="Dublikat İşçi Şübhəsi",
+        description_az=(
+            "Eyni kirayəçidə iki fərqli qeydiyyatın üz vektorları «eyni adam» "
+            "toleransından yaxındır (İstisna Motoru)."
+        ),
+        required_flag="can_view_exceptions",
+    ),
+    DashboardWidget(
+        key="operator_performance",
+        title_az="Kamera Operatoru Performansı",
+        description_az=(
+            "Orta cavab vaxtı və gecikmə tezliyi. OPERATOR ÖZÜ GÖRMÜR (migrations/102)."
+        ),
+        required_flag="can_view_operator_performance",
+    ),
+    DashboardWidget(
+        key="campaign_impact",
+        title_az="Promosyon Dövrü Heyət Fərqi",
+        description_az=(
+            "Root/CEO-nun qeyd etdiyi kampaniya aralıqlarında heyət "
+            "fərqindəliyi — planlama tövsiyəsinə əlavə çəki."
+        ),
+        required_flag="can_view_attrition_risk",
+    ),
+    DashboardWidget(
+        key="workload_fairness",
+        title_az="İş-Yükü Ədalətliliyi",
+        description_az=(
+            "Son 30 gündə işçilər-arası növbə sayı fərqi; «əhəmiyyətli fərq» "
+            "həddi Root parametridir."
+        ),
+    ),
 )
 
 #: Defolt düzülüş — istifadəçi heç nə qurmayıbsa göstərilən sıra.

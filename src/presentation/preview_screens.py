@@ -99,6 +99,23 @@ def _dashboard(screen: group_c.DashboardScreen) -> None:
         rows=list(data.BENCHMARK_OUTLIERS.rows),
     )
 
+    # v2backlog.md Faza 6 — analitika widget-ləri. Canlı yol flag-QAPILIDIR
+    # (`screen_data` fetch-ləri); maketdə isə TAM DƏST göstərilir ki, dizayn
+    # bir yerdə yoxlanılsın (MƏRKƏZİ TƏLƏB #2). Açarlar canlı setter
+    # imzaları ilə EYNİDİR (CLAUDE.md §6).
+    screen.set_cost_center(
+        list(data.COST_CENTER_BARS),
+        period="Avqust 2026",
+        bonus_note=data.COST_CENTER_NOTE,
+    )
+    screen.set_duplicate_faces(list(data.DUPLICATE_FACES))
+    screen.set_operator_performance(list(data.OPERATOR_PERFORMANCE))
+    screen.set_campaign_impact(list(data.CAMPAIGN_IMPACT))
+    screen.set_workload_fairness(
+        list(data.WORKLOAD_FAIRNESS),
+        hint="Son 30 gün · median 12 gün · nişan həddi ±4 gün (Root parametri)",
+    )
+
 
 def _live_queue(screen: group_b.OperatorQueueScreen) -> None:
     from src.presentation.screens.group_b import QueueEntry  # noqa: PLC0415
@@ -888,8 +905,14 @@ def _fine_review(screen: Any) -> None:
 
 def _attrition_risk(screen: Any) -> None:
     """#21 (kompasos11.md Faza 9) — açarlar `controllers/attrition_risk.py::
-    _to_row` ilə EYNİDİR (CLAUDE.md §6)."""
+    _to_row` ilə EYNİDİR (CLAUDE.md §6).
+
+    Kampaniya bölməsi də maketdə GÖRÜNÜR (Faza 6.4) — canlı yolda flag-siz
+    istifadəçidə HEÇ render olunmur, maket isə Root görünüşünü təkrarlayır."""
     screen.set_scores(list(data.ATTRITION_RISK_SCORES))
+    screen.set_campaigns_visible(True)
+    screen.set_campaigns([dict(row) for row in data.CAMPAIGN_PERIOD_ROWS])
+    screen.set_campaign_message("")
 
 
 def _sync_conflicts(screen: Any) -> None:

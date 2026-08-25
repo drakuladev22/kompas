@@ -1066,6 +1066,15 @@ class SystemLimitKey(str, Enum):
     BREAK_GLASS_APPROVAL_WINDOW_MINUTES = "BREAK_GLASS_APPROVAL_WINDOW_MINUTES"
     BREAK_GLASS_MAX_GRANTS_PER_MONTH = "BREAK_GLASS_MAX_GRANTS_PER_MONTH"
 
+    # --- Analitika genişlənməsi (`v2backlog.md` Faza 6.5) ---
+    #
+    # İş-Yükü Ədalətliliyi Göstəricisinin **ROOT PARAMETRİ** (spesifikasiyanın
+    # öz işarəsi): son 30 gündə iki işçinin təyin olunmuş iş günü sayı
+    # arasındakı fərq bu həddi aşarsa, sətir «fərqli» nişanı alır. Defolt 4:
+    # bir həftəlik növbə dövründə hiss edilən ədalətsizlik həddi; daha aşağı
+    # qiymət normal planlamada da siqnal verərdi.
+    WORKLOAD_FAIRNESS_MAX_GAP = "WORKLOAD_FAIRNESS_MAX_GAP"
+
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.MONTHLY_LEAVE_MINUTES_LIMIT: "240",
@@ -1744,6 +1753,9 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.BREAK_GLASS_MAX_DURATION_MINUTES: "120",
     SystemLimitKey.BREAK_GLASS_APPROVAL_WINDOW_MINUTES: "30",
     SystemLimitKey.BREAK_GLASS_MAX_GRANTS_PER_MONTH: "2",
+    # v2backlog.md Faza 6.5 — «əhəmiyyətli fərq» həddi (bax SystemLimitKey
+    # şərhi). Aralıq migrations/102-də: 1..60.
+    SystemLimitKey.WORKLOAD_FAIRNESS_MAX_GAP: "4",
 }
 
 

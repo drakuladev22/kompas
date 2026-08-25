@@ -97,6 +97,12 @@ DASHBOARD_SECTION_KEYS: Final[tuple[str, ...]] = (
     "store_vs_network",
     "metric_trend",
     "benchmark_outliers",
+    # v2backlog.md Faza 6 — analitika genişlənməsi (AYRI ekran YOXDUR).
+    "cost_center",
+    "duplicate_faces",
+    "operator_performance",
+    "campaign_impact",
+    "workload_fairness",
 )
 
 
@@ -291,6 +297,27 @@ class DashboardScreen(Screen):
         self._break_card, self._break_rows = self._build_break_overuse_card()
         self.add(self._break_card)
 
+        # -------- v2backlog.md Faza 6 — analitika widget-ləri (BEŞ kart) ------ #
+        # Hamısı benchmark kartlarının EYNİ «defolt gizli» naxışındadır: flag
+        # sahibi olmayan istifadəçidə fetch çağırılmır (screen_data qapısı) və
+        # kart onsuz da render olunmur — "görmək = səlahiyyət".
+        self._cost_card, self._cost_period, self._cost_chart, self._cost_note = (
+            self._build_cost_center_card(theme)
+        )
+        self.add(self._cost_card)
+
+        self._duplicates_card, self._duplicates_table = self._build_duplicates_card()
+        self.add(self._duplicates_card)
+
+        self._operators_card = self._build_operator_performance_card()
+        self.add(self._operators_card)
+
+        self._campaign_card, self._campaign_rows = self._build_campaign_impact_card()
+        self.add(self._campaign_card)
+
+        self._fairness_card = self._build_workload_fairness_card()
+        self.add(self._fairness_card)
+
         # ---------------- şəbəkə yerləşdirməsi (audit G-5) ------------------ #
         # BURADA HEÇ NƏ DƏYİŞMİR: aşağıdakılar yalnız QEYDİYYATDIR. Şəbəkə
         # `set_layout()` çağırılana qədər TƏTBİQ OLUNMUR, yəni yerləşdirməsi
@@ -306,6 +333,11 @@ class DashboardScreen(Screen):
             "store_vs_network": self._store_vs_network_card,
             "metric_trend": self._trend_card,
             "benchmark_outliers": self._outlier_card,
+            "cost_center": self._cost_card,
+            "duplicate_faces": self._duplicates_card,
+            "operator_performance": self._operators_card,
+            "campaign_impact": self._campaign_card,
+            "workload_fairness": self._fairness_card,
         }
         #: `açar → (sətir, sütun, en)`. Boş = şəbəkə yoxdur.
         self._placements: dict[str, tuple[int, int, int]] = {}
@@ -555,6 +587,119 @@ class DashboardScreen(Screen):
         card.setVisible(False)
         return card, rows_layout
 
+    # ------------------- Faza 6 widget-lərinin qurucuları --------------------- #
+
+    def _build_cost_center_card(self, theme: ThemeManager) -> tuple[Card, QLabel, BarChart, QLabel]:
+        """6.1 — filial üzrə əlavə iş + bonus yükü.
+
+        «MAAŞ FONDU» RƏQƏMİ BURADA YOXDUR və bu, DÜRÜSTLÜK qərarıdır: KompasOS
+        maaş/məzənnə datası DAŞIMIR (sxemdə belə sütun yoxdur) — uydurulmuş AZN
+        rəqəmi hesabat kimi oxunar və qərara əsas edilərdi. Widget YALNIZ
+        sistemin REAL daşıdığı iki xərc-yükünü göstərir: overtime saatları və
+        bonus xalları.
+        """
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
+        head = QWidget()
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(0, 0, 0, 0)
+        head_layout.setSpacing(metrics.SPACE_MS)
+        head_layout.addWidget(title_label("Xərc Mərkəzi — filial üzrə", size=15))
+        self._cost_period = muted_label("")
+        head_layout.addWidget(self._cost_period)
+        head_layout.addWidget(stretch())
+        card.add(head)
+        chart = BarChart(theme, highlight_max=False)
+        card.add(chart)
+        self._cost_note = muted_label("")
+        self._cost_note.setWordWrap(True)
+        card.add(self._cost_note)
+        card.setVisible(False)
+        return card, self._cost_period, chart, self._cost_note
+
+    def _build_duplicates_card(self) -> tuple[Card, DataTable]:
+        """6.2 — dublikat işçi şübhəsi. QƏRAR BU EKRANDA VERİLMİR: istisna
+        axını `exceptions` cədvəlində yaşayır və «İstisnalar» ekranında
+        (`can_view_exceptions`) nəzərdən keçirilir — burada yalnız GÖRÜNÜR."""
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
+        card.add(title_label("Dublikat İşçi Şübhəsi", size=15))
+        card.add(
+            muted_label(
+                "Qərar «İstisnalar» ekranında verilir — burada yalnız cari açıq şübhələr görünür."
+            )
+        )
+        table = DataTable(
+            [
+                Column("İşçi"),
+                Column("Şübhəli cüt"),
+                Column("Məsafə", 90, mono=True),
+                Column("Açılıb", 140, mono=True),
+            ],
+            self.theme,
+        )
+        card.add(table)
+        card.setVisible(False)
+        return card, table
+
+    def _build_operator_performance_card(self) -> Card:
+        """6.3 — operatorların cavab ritmi. Flag qapısı KATALOQDADIR
+        (`can_view_operator_performance`, migrations/102): flag-siz istifadəçi
+        bu maddəni Panel Qurucusunda GÖRMÜR və düzülüşünə əlavə edə bilmir."""
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
+        card.add(title_label("Kamera Operatoru Performansı", size=15))
+        card.add(
+            muted_label(
+                "Gecikmə — təsdiqin sorğudan VERIFICATION_TIMEOUT_MINUTES (Root "
+                "parametri) sonra verilməsi. Operatorlar bu göstəricini GÖRMÜR."
+            )
+        )
+        self._operators_table = DataTable(
+            [
+                Column("Operator"),
+                Column("Təsdiq", 80, mono=True),
+                Column("Orta cavab", 110, mono=True),
+                Column("Gecikmə", 90, mono=True),
+            ],
+            self.theme,
+        )
+        card.add(self._operators_table)
+        card.setVisible(False)
+        return card
+
+    def _build_campaign_impact_card(self) -> tuple[Card, QVBoxLayout]:
+        """6.4 — kampaniya aralıqlarında heyət fərqi. Kampaniyaların DAXİL
+        EDİLMƏSİ bu ekranda deyil — `attrition_risk` ekranındadır (Root/CEO,
+        migrations/102); burada yalnız TƏSİR oxunur."""
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
+        card.add(title_label("Promosyon Dövrü Heyət Fərqi", size=15))
+        rows_layout = QVBoxLayout()
+        rows_layout.setSpacing(8)
+        holder = QWidget()
+        holder.setLayout(rows_layout)
+        card.add(holder)
+        card.setVisible(False)
+        return card, rows_layout
+
+    def _build_workload_fairness_card(self) -> Card:
+        """6.5 — növbə paylanmasının ədalətliliyi. Hədd Root parametridir və
+        mətni FETCH-də gəlir — ekranda İKİNCİ dəfə yazılmır."""
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
+        card.add(title_label("İş-Yükü Ədalətliliyi", size=15))
+        self._fairness_hint = muted_label("")
+        self._fairness_hint.setWordWrap(True)
+        card.add(self._fairness_hint)
+        self._fairness_table = DataTable(
+            [
+                Column("İşçi"),
+                Column("Mağaza", 160),
+                Column("İş günləri", 100, mono=True),
+                Column("Nişan", 120),
+            ],
+            self.theme,
+        )
+        card.add(self._fairness_table)
+        card.setVisible(False)
+        return card
+
     # ------------------------------- doldurma -------------------------------- #
 
     def set_break_overuse(self, rows: list[tuple[str, str]]) -> None:
@@ -580,6 +725,70 @@ class DashboardScreen(Screen):
             layout.addWidget(stretch())
             layout.addWidget(Chip(warning, "warning"))
             self._break_rows.addWidget(row)
+
+    # ---------------------- Faza 6 widget-lərinin doldurulması ---------------- #
+
+    def set_cost_center(
+        self,
+        data: list[tuple[str, float, str]],
+        *,
+        period: str,
+        bonus_note: str,
+    ) -> None:
+        """6.1 — `data`: (mağaza adı, overtime saatı, göstərilən mətn).
+
+        Boş siyahı kartı gizlədir — «heç bir filialda overtime yoxdur» məlumat
+        deyil, normal vəziyyətdir; həmişə görünən boş qrafik ona baxılmamasına
+        səbəb olardı (`set_break_overuse` ilə eyni qərar).
+        """
+        self._cost_period.setText(period)
+        self._cost_chart.set_data([BarDatum(*item) for item in data])
+        self._cost_note.setText(bonus_note)
+        self._cost_card.setVisible(bool(data))
+
+    def set_duplicate_faces(self, rows: list[tuple[str, str, str, str]]) -> None:
+        """6.2 — `(işçi, şübhəli cüt, məsafə, açılıb)`.
+
+        BOŞ SİYAHIDA KART GİZLİDİR: «şübhə yoxdur» xəbər DEYİL, yaxşı
+        vəziyyətdir — boş cədvəllə kart HR-ın diqqətini yayındırardı.
+        QƏRAR BURADA VERİLMİR: istisna sətri «İstisnalar» ekranında
+        nəzərdən keçirilir (`can_view_exceptions`).
+        """
+        self._duplicates_table.clear()
+        self._duplicates_card.setVisible(bool(rows))
+        for employee, pair, distance, opened in rows:
+            self._duplicates_table.add_row([employee, pair, distance, opened])
+
+    def set_operator_performance(self, rows: list[tuple[str, str, str, str]]) -> None:
+        """6.3 — `(operator, təsdiq sayı, orta cavab, gecikmə %)`."""
+        self._operators_table.clear()
+        self._operators_card.setVisible(bool(rows))
+        for name, verified, avg_response, late_share in rows:
+            self._operators_table.add_row([name, verified, avg_response, late_share])
+
+    def set_campaign_impact(self, rows: list[tuple[str, str]]) -> None:
+        """6.4 — `(kampaniya + tarixlər, fərq mətni)`; boş siyahıda gizlidir."""
+        clear_layout(self._campaign_rows)
+        self._campaign_card.setVisible(bool(rows))
+        if not rows:
+            return
+        for title_text, detail in rows:
+            row = QWidget()
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(metrics.SPACE_MS)
+            layout.addWidget(body_label(title_text, size=13, wrap=False))
+            layout.addWidget(stretch())
+            layout.addWidget(Chip(detail, "info"))
+            self._campaign_rows.addWidget(row)
+
+    def set_workload_fairness(self, rows: list[tuple[str, str, str, str]], *, hint: str) -> None:
+        """6.5 — `(işçi, mağaza, günlər, nişan)`; `hint` həddi izah edir."""
+        self._fairness_hint.setText(hint)
+        self._fairness_table.clear()
+        self._fairness_card.setVisible(bool(rows))
+        for employee, store_name, days, badge in rows:
+            self._fairness_table.add_row([employee, store_name, days, badge])
 
     def set_summary(
         self,

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from src.application.use_cases.campaign_periods import CampaignPeriod
 from src.domain.entities.attendance_record import CheckInStatus
 from src.domain.value_objects.identifiers import StoreId, TenantId
 from src.domain.value_objects.staffing_signals import (
@@ -122,6 +123,80 @@ class PostgresStaffingHistoryProvider(_BaseRepository):
         ]
 
 
+class PostgresCampaignPeriodRepository(_BaseRepository):
+    """`campaign_periods` — v2backlog.md Faza 6.4 (migrations/089 sxemi).
+
+    Repo TƏKMİLDİR: ad/tarix yoxlamaları use case-də, `chk_campaign_period_
+    dates` DB-də — burada yalnız oxu/yazı. Soft-delete (`is_active`) use
+    case-in qərarıdır, silmə yoxdur (`catalogs.py` əsaslandırması).
+    """
+
+    def list_periods(self, tenant_id: TenantId, *, include_inactive: bool) -> list[CampaignPeriod]:
+        extra = "" if include_inactive else " AND is_active"
+        rows = self._fetch_all(
+            # f-string yalnız İKİ sabit variantdan birini seçir — dinamik SQL
+            # yoxdur, dəyərlər %s ilə bağlanır (CLAUDE.md §4).
+            f"""
+            SELECT id, name, start_date, end_date, is_active
+            FROM campaign_periods
+            WHERE tenant_id = %s{extra}
+            ORDER BY start_date DESC, name
+            """,  # noqa: S608 - şərtlər sabit siyahıdandır
+            (tenant_id,),
+        )
+        return [
+            CampaignPeriod(
+                period_id=str(row["id"]),
+                name=str(row["name"]),
+                start_date=row["start_date"],
+                end_date=row["end_date"],
+                is_active=bool(row["is_active"]),
+            )
+            for row in rows
+        ]
+
+    def create(
+        self,
+        tenant_id: TenantId,
+        *,
+        name: str,
+        start_date: date,
+        end_date: date,
+        created_by_id: object,
+    ) -> CampaignPeriod:
+        row = self._fetch_one(
+            """
+            INSERT INTO campaign_periods
+                (tenant_id, name, start_date, end_date, created_by)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id, name, start_date, end_date, is_active
+            """,
+            (tenant_id, name, start_date, end_date, created_by_id),
+        )
+        if row is None:  # pragma: no cover — RETURNING həmişə sətir qaytarır
+            raise RuntimeError("campaign_periods INSERT nəticə vermədi")
+        return CampaignPeriod(
+            period_id=str(row["id"]),
+            name=str(row["name"]),
+            start_date=row["start_date"],
+            end_date=row["end_date"],
+            is_active=bool(row["is_active"]),
+        )
+
+    def deactivate(self, tenant_id: TenantId, period_id: str) -> bool:
+        row = self._fetch_one(
+            """
+            UPDATE campaign_periods
+               SET is_active = FALSE,
+                   deactivated_at = now()
+             WHERE tenant_id = %s AND id = %s AND is_active
+            RETURNING id
+            """,
+            (tenant_id, period_id),
+        )
+        return row is not None
+
+
 def _row_to_suggestion(row: dict[str, Any]) -> StaffingPatternSuggestion:
     return StaffingPatternSuggestion(
         tenant_id=TenantId(row["tenant_id"]),
@@ -137,6 +212,7 @@ def _row_to_suggestion(row: dict[str, Any]) -> StaffingPatternSuggestion:
 
 
 __all__ = [
+    "PostgresCampaignPeriodRepository",
     "PostgresStaffingHistoryProvider",
     "PostgresStaffingPatternRepository",
 ]

@@ -25,8 +25,13 @@ səviyyəsində birbaşa SQL, N+1 sorğu YOX).
 
 from __future__ import annotations
 
+from datetime import date
 from typing import TYPE_CHECKING
 
+from src.application.use_cases.campaign_periods import (
+    CampaignPeriod,
+    CampaignPermissionError,
+)
 from src.shared.exceptions import KompasOSError
 from src.shared.logger import LogChannel, get_logger
 
@@ -56,16 +61,41 @@ class AttritionRiskController:
 
     def attach(self, screen: AttritionRiskScreen) -> None:
         screen.refresh_requested.connect(lambda: self.refresh(screen))
+        screen.campaign_add_requested.connect(
+            lambda name, start, end: self._on_campaign_add(screen, name, start, end)
+        )
+        screen.campaign_deactivate_requested.connect(
+            lambda period_id: self._on_campaign_deactivate(screen, period_id)
+        )
         self.refresh(screen)
 
     def refresh(self, screen: AttritionRiskScreen) -> None:
-        """Siyahını yenidən oxuyur — hər çağırış AYRI, audit-lənən sessiyadır."""
+        """Siyahını yenidən oxuyur — hər çağırış AYRI sessiyadır.
+
+        Kampaniya bölməsi EYNI sessiyada oxunur; `CampaignPermissionError`
+        «bölməni gizlət» deməkdir (Root/CEO deyilsə kart ümumiyyətlə
+        render olunmur). Digər xətalar risk siyahısını pozmur — bölmə-xəta
+        banneri yalnız ÖZ hissəsi üçün görünür.
+        """
         try:
             with self._context.session(user_id=self._actor.id) as session:
                 views = session.attrition_risk.list_for_tenant(
                     tenant_id=session.tenant_id, actor=self._actor
                 )
                 names = _employee_labels(session, [view.employee_id for view in views])
+                # `getattr` QORUMASI MÜDAFİƏDİR: test sahtələri və köhnə
+                # sessiya qabığı bu portu daşımaya bilər — bölmə onsuz da
+                # yalnız Root/CEO üçündür və onun olmaması risk siyahısını
+                # POZMAMALIDIR (bax `report_section_error`-ın eyni qərarı).
+                campaigns_port = getattr(session, "campaign_periods", None)
+                campaigns: list[CampaignPeriod] | None = None
+                if campaigns_port is not None:
+                    try:
+                        campaigns = campaigns_port.periods(
+                            tenant_id=session.tenant_id, actor=self._actor
+                        )
+                    except CampaignPermissionError:
+                        campaigns = None
         except KompasOSError as error:
             screen.show_error(title="Siyahı açılmadı", message=error.user_message)
             return
@@ -78,6 +108,58 @@ class AttritionRiskController:
             return
 
         screen.set_scores([_to_row(view, names) for view in views])
+        if campaigns is None:
+            screen.set_campaigns_visible(False)
+            return
+        screen.set_campaigns_visible(True)
+        screen.set_campaigns([_to_campaign_row(period) for period in campaigns])
+
+    # ------------------------------ kampaniya --------------------------------- #
+
+    def _on_campaign_add(
+        self, screen: AttritionRiskScreen, name: str, start_iso: str, end_iso: str
+    ) -> None:
+        try:
+            start_date = date.fromisoformat(start_iso)
+            end_date = date.fromisoformat(end_iso)
+        except ValueError:
+            screen.set_campaign_message("Tarix formatı düzgün deyil.")
+            return
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                session.campaign_periods.create_period(
+                    tenant_id=session.tenant_id,
+                    actor=self._actor,
+                    name=name,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+                session.commit()
+        except KompasOSError as error:
+            screen.set_campaign_message(error.user_message)
+            return
+        except Exception:
+            _error_log.exception("CAMPAIGN_PERIOD_CREATE_FAILED")
+            screen.set_campaign_message("Kampaniya yazılmadı. Yenidən cəhd edin.")
+            return
+        self.refresh(screen)
+        screen.set_campaign_message(f"«{name.strip()}» əlavə olundu.")
+
+    def _on_campaign_deactivate(self, screen: AttritionRiskScreen, period_id: str) -> None:
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                session.campaign_periods.deactivate_period(
+                    tenant_id=session.tenant_id, actor=self._actor, period_id=period_id
+                )
+                session.commit()
+        except KompasOSError as error:
+            screen.set_campaign_message(error.user_message)
+            return
+        except Exception:
+            _error_log.exception("CAMPAIGN_PERIOD_DEACTIVATE_FAILED")
+            screen.set_campaign_message("Ləğv yazılmadı. Yenidən cəhd edin.")
+            return
+        self.refresh(screen)
 
 
 # --------------------------------------------------------------------------- #
@@ -123,6 +205,17 @@ def _to_row(
         "band_text": "Yüksək risk" if view.is_high_risk else "Normal",
         "is_high_risk": "1" if view.is_high_risk else "0",
         "factors_text": " • ".join(factors_lines) or "—",
+    }
+
+
+def _to_campaign_row(period: CampaignPeriod) -> dict[str, str]:
+    """`CampaignPeriod` → `set_campaigns` açarları (maket ilə EYNİ)."""
+    return {
+        "period_id": period.period_id,
+        "name": period.name,
+        "start": period.start_date.strftime("%d.%m.%Y"),
+        "end": period.end_date.strftime("%d.%m.%Y"),
+        "is_active": "1" if period.is_active else "0",
     }
 
 

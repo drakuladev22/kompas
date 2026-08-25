@@ -219,6 +219,25 @@ class PostgresFaceEmbeddingRepository(_BaseRepository):
         )
         return [self._row_to_profile(row) for row in rows]
 
+    def list_all_profiles(self, tenant_id: TenantId) -> list[FaceProfile]:
+        """BÜTÜN kirayəçinin qeydiyyatlı profilləri — dublikat aşkarlaması (6.2).
+
+        Mağaza-scope-lu `list_store_profiles`-dan FƏRQLİ QƏSDƏN GENİŞ sorğudur:
+        «başqa filialda ikinci qeydiyyat» sualı mağaza süzgəci ilə cavablanmazdı
+        (bax port başlığı). Gecəlik toplu yoxlama üçündür — indeks
+        (`idx_employees_face_enrolled`) kifayətdir.
+        """
+        rows = self._fetch_all(
+            f"""{self._PROFILE_SELECT}
+            WHERE tenant_id = %s
+              AND is_active
+              AND face_embedding IS NOT NULL
+            ORDER BY id
+            """,
+            (tenant_id,),
+        )
+        return [self._row_to_profile(row) for row in rows]
+
     # -------------------------------- yazı ----------------------------------- #
 
     def save_enrollment(

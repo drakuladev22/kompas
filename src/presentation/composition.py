@@ -90,6 +90,7 @@ if TYPE_CHECKING:
         BulkEmployeeImportUseCase,
         StoreTemplateUseCase,
     )
+    from src.application.use_cases.campaign_periods import CampaignPeriodsUseCase
     from src.application.use_cases.catalog_management import (
         ChecklistItemTemplateUseCase,
         FineTypeCatalogUseCase,
@@ -933,6 +934,11 @@ class Session:
     # sətri EYNİ tranzaksiyada yazılır.
     shift_handoffs: ShiftHandoffUseCase
     break_glass: BreakGlassUseCase
+
+    # `v2backlog.md` Faza 6.4 — kampaniya dövrləri (Root/CEO yazı yolu).
+    # `Session`-dadır, çünki repo bağlantıya bağlıdır və audit EYNI
+    # tranzaksiyada olmalıdır (`shift_handoffs` ilə eyni əsaslandırma).
+    campaign_periods: CampaignPeriodsUseCase
 
     def commit(self) -> None:
         self.uow.commit()
@@ -3193,6 +3199,9 @@ class ApplicationContext:
             FaceVerificationUseCase,
             OverdueFaceEnrollmentRule,
         )
+        from src.application.use_cases.face_duplicates import (  # noqa: PLC0415
+            DuplicateFaceExceptionRule,
+        )
         from src.application.use_cases.field_reports import (  # noqa: PLC0415
             FieldReportUseCase,
         )
@@ -3511,6 +3520,13 @@ class ApplicationContext:
             # bloklama işçini BAŞQASININ hərəkətsizliyinə görə cəzalandırardı.
             OverdueFaceEnrollmentRule(employees=repo("face_embeddings"))
         )
+        exception_engine.register_rule(
+            # v2backlog.md Faza 6.2 — eyni üzlü ikinci qeydiyyat şübhəsi.
+            # Mənbə kataloqu migrations/102-də seedlənib; seed olmasa motor
+            # tapıntını sükutla ATAR (087 dərsi). Sorğu LAQEYDDİR — bax qayda
+            # başlığı.
+            DuplicateFaceExceptionRule(profiles=repo("face_embeddings"))
+        )
 
         # #15 AŞIM İZLƏYİCİSİ YEREL DƏYİŞƏNDİR, çünki İKİ yerdə lazımdır: həm
         # `Session.overtime` (HR-ın oxu yolu), həm də tabel təsdiqinin yan
@@ -3595,6 +3611,13 @@ class ApplicationContext:
             notifier=notifier,
             limits=repo("limits"),
             vendor_reporter=self._break_glass_reporter,
+        )
+
+        # `v2backlog.md` Faza 6.4 — kampaniya dövrləri (Root/CEO yazı yolu).
+        campaign_periods = CampaignPeriodsUseCase(
+            repository=repo("campaign_periods"),
+            audit=audit,
+            clock=clock,
         )
 
         # `v2backlog.md` Faza 3.4 — struktur offboarding checklist. HƏR İKİSİ
@@ -4050,6 +4073,7 @@ class ApplicationContext:
             # Faza 5.3/5.4 — YUXARIDA qurulub (bax orada).
             shift_handoffs=shift_handoffs,
             break_glass=break_glass,
+            campaign_periods=campaign_periods,
             permission_guard=PermissionHierarchyGuardUseCase(
                 audit=audit,
                 clock=clock,
@@ -4341,6 +4365,11 @@ class ApplicationContext:
                 audit=audit,
                 clock=clock,
                 notifier=notifier,
+                # Faza 4.1 — gündəlik açılış/bağlanış checklist-i EYNİ şablon
+                # kataloqunu işlədir (`checklist_item_templates`, migrations/
+                # 088). Qoşulmadıqda gündəlik tiplər bənd siyahısını GÖRMÜRDÜ —
+                # `test_composition_optional_port_wiring` məhz bunu tutdu.
+                checklist_templates=repo("checklist_item_templates"),
             ),
             # #28 İllik Məzuniyyət Balansı (kompas1.md Faza 4) — ÜÇÜNCÜ, AYRI
             # mexanizm (bax `Session.annual_leave` şərhi).

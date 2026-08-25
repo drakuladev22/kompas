@@ -90,6 +90,12 @@ FINE_HELD_INACTIVE_SOURCE: Final = "FINE_HELD_INACTIVE_EMPLOYEE"
 #: araşdırma, ikincisi sadəcə görüş təyin etmək.
 FACE_ENROLLMENT_OVERDUE_SOURCE: Final = "FACE_ENROLLMENT_OVERDUE"
 
+#: v2backlog.md Faza 6.2 — EYNİ kirayəçidə iki fərqli işçinin üz vektorları
+#: sistemin öz «eyni adam» toleransından yaxındır. `FACE_MISMATCH_SOURCE`-dan
+#: AYRIDIR: orada KAMERADAKI adamın kimliyi şübhəlidir, burada isə QEYDİYYATLARIN
+#: ÖZÜ — yəni sual «bu kimsədir?» deyil, «bunlar eyni adamdırmı?»-dır.
+DUPLICATE_FACE_SOURCE: Final = "DUPLICATE_FACE"
+
 #: `exception_sources.code` üçün minimum uzunluq — DB `CHECK`-inin güzgüsü
 #: (`char_length(trim(code)) >= 3`). Bu, biznes həddi DEYİL, sxem
 #: məhdudiyyətidir; ona görə `system_limits`-ə aid deyil.
@@ -225,6 +231,21 @@ class RuleEvaluationContext:
         except (TypeError, ValueError):
             return default
 
+    def limit_float(self, key: str, default: float) -> float:
+        """`system_limits`-dən kəsr ədəd — tolerans tipli hədlər üçün.
+
+        `limit_int` ilə EYNİ fail-soft qayda; ayrıca metoddur, çünki
+        `int("0.55")` istisna atır və çağıranın hər yerdə try/except
+        yazması ikinci səhv mənbəyi olardı.
+        """
+        raw = self.limits.get(key)
+        if raw is None:
+            return default
+        try:
+            return float(str(raw).strip())
+        except (TypeError, ValueError):
+            return default
+
     def limit_str(self, key: str, default: str) -> str:
         raw = self.limits.get(key)
         if raw is None or not str(raw).strip():
@@ -234,6 +255,7 @@ class RuleEvaluationContext:
 
 __all__ = [
     "BEHAVIOR_ANOMALY_SOURCE",
+    "DUPLICATE_FACE_SOURCE",
     "FACE_ENROLLMENT_OVERDUE_SOURCE",
     "FACE_MISMATCH_SOURCE",
     "FINE_APPEAL_UNANSWERED_SOURCE",

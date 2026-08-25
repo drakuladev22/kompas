@@ -54,6 +54,7 @@ qalır, örtük çökmür), lakin qüsur ölçülə bilən hala gəlir.
 from __future__ import annotations
 
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar
@@ -93,6 +94,12 @@ SECTION_DASHBOARD_LEADERS: Final = "Xal liderləri"
 SECTION_DASHBOARD_HEALTH: Final = "Server sağlamlığı"
 SECTION_DASHBOARD_BENCHMARK: Final = "Mağaza reytinqi"
 SECTION_DASHBOARD_BREAKS: Final = "Fasilə həddini aşanlar"
+# v2backlog.md Faza 6 — analitika widget-lərinin bölmə adları.
+SECTION_DASHBOARD_COST: Final = "Xərc mərkəzi"
+SECTION_DASHBOARD_DUPLICATES: Final = "Dublikat işçi şübhəsi"
+SECTION_DASHBOARD_OPERATORS: Final = "Operator performansı"
+SECTION_DASHBOARD_CAMPAIGN: Final = "Kampaniya təsiri"
+SECTION_DASHBOARD_FAIRNESS: Final = "İş yükü ədalətliliyi"
 SECTION_DAILY_ROSTER: Final = "Gündəlik tabel"
 SECTION_HEALTH_OFFLINE: Final = "Offline bufer sayğacı"
 SECTION_HEALTH_CONFLICTS: Final = "Sinxronizasiya konflikti sayğacı"
@@ -486,7 +493,7 @@ class _DashboardBenchmarkData:
 
 @dataclass(frozen=True, slots=True)
 class _DashboardData:
-    """`_dashboard_fetch`-in nəticəsi (PERF-6 FAZA D) — SƏKKİZ bölmənin HƏR
+    """`_dashboard_fetch`-in nəticəsi (PERF-6 FAZA D) — bölmələrin HƏR
     BİRİ MÜSTƏQİL `SectionResult`-dur.
 
     Sahə SIRASI `_dashboard_apply`-ın çağırış sırası ilə EYNİDİR (bax onun
@@ -502,6 +509,58 @@ class _DashboardData:
     health: SectionResult[_DashboardHealthData]
     benchmark: SectionResult[_DashboardBenchmarkData]
     breaks: SectionResult[list[tuple[str, str]]]
+    cost_center: SectionResult[_DashboardCostData]
+    duplicates: SectionResult[_DashboardDuplicatesData]
+    operators: SectionResult[_DashboardOperatorsData]
+    campaign: SectionResult[_DashboardCampaignData]
+    fairness: SectionResult[_DashboardFairnessData]
+
+
+# ---------------------------------------------------------------------------
+# v2backlog.md Faza 6 widget-lərinin saf məlumat tipləri
+# ---------------------------------------------------------------------------
+# Hər beşi flag-QAPILIDIR: flag yoxdursa fetch `None` qaytarır
+# (`SectionResult(data=None, failure=None)`) — `_dashboard_benchmark_gated_
+# fetch` ilə EYNİ «icazə = sükutlu gizlətmə» qərarı. `None` sahə tipləri buna
+# görə `| None`-dır.
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardCostData:
+    """6.1 — filial üzrə overtime + bonus."""
+
+    period_text: str
+    bars: list[tuple[str, float, str]]
+    bonus_note: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardDuplicatesData:
+    """6.2 — açıq DUPLICATE_FACE istisnaları."""
+
+    rows: list[tuple[str, str, str, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardOperatorsData:
+    """6.3 — operatorların cavab ritmi."""
+
+    rows: list[tuple[str, str, str, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardCampaignData:
+    """6.4 — aktiv kampaniya aralıqlarında heyət fərqi."""
+
+    rows: list[tuple[str, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardFairnessData:
+    """6.5 — işçi üzrə 30 günlük iş günü paylanması."""
+
+    hint: str
+    rows: list[tuple[str, str, str, str]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -948,6 +1007,35 @@ class ScreenDataBinder:
                 event="DASHBOARD_BREAK_OVERUSE_FAILED",
                 fetch=lambda: self._dashboard_break_overuse_fetch(session, today=today),
             ),
+            cost_center=self._fill(
+                label=SECTION_DASHBOARD_COST,
+                event="DASHBOARD_COST_CENTER_FAILED",
+                fetch=lambda: self._dashboard_cost_center_fetch(
+                    session, month_start=month_start, next_month=next_month
+                ),
+            ),
+            duplicates=self._fill(
+                label=SECTION_DASHBOARD_DUPLICATES,
+                event="DASHBOARD_DUPLICATES_FAILED",
+                fetch=lambda: self._dashboard_duplicates_fetch(session),
+            ),
+            operators=self._fill(
+                label=SECTION_DASHBOARD_OPERATORS,
+                event="DASHBOARD_OPERATORS_FAILED",
+                fetch=lambda: self._dashboard_operators_fetch(
+                    session, month_start=month_start, next_month=next_month
+                ),
+            ),
+            campaign=self._fill(
+                label=SECTION_DASHBOARD_CAMPAIGN,
+                event="DASHBOARD_CAMPAIGN_FAILED",
+                fetch=lambda: self._dashboard_campaign_fetch(session, today=today),
+            ),
+            fairness=self._fill(
+                label=SECTION_DASHBOARD_FAIRNESS,
+                event="DASHBOARD_FAIRNESS_FAILED",
+                fetch=lambda: self._dashboard_fairness_fetch(session, today=today),
+            ),
         )
 
     def _dashboard_apply(self, screen: Any, data: _DashboardData) -> None:
@@ -968,6 +1056,21 @@ class ScreenDataBinder:
         )
         self._apply_section(
             screen, data.breaks, lambda d: self._dashboard_break_overuse_apply(screen, d)
+        )
+        self._apply_section(
+            screen, data.cost_center, lambda d: self._dashboard_cost_center_apply(screen, d)
+        )
+        self._apply_section(
+            screen, data.duplicates, lambda d: self._dashboard_duplicates_apply(screen, d)
+        )
+        self._apply_section(
+            screen, data.operators, lambda d: self._dashboard_operators_apply(screen, d)
+        )
+        self._apply_section(
+            screen, data.campaign, lambda d: self._dashboard_campaign_apply(screen, d)
+        )
+        self._apply_section(
+            screen, data.fairness, lambda d: self._dashboard_fairness_apply(screen, d)
         )
 
     def _dashboard_network_fetch(self, session: Session) -> _DashboardNetworkData:
@@ -1004,6 +1107,344 @@ class ScreenDataBinder:
         if data.employees is None or data.stores is None:  # pragma: no cover - bax fetch
             return
         screen.set_network_size(employees=data.employees, stores=data.stores)
+
+    # -------------------- Faza 6 widget-lərinin fetch/apply ------------------- #
+    # HƏR BEŞİ flag-qapılıdır (bax `_DashboardCostData` başlığı): qapı yoxlaması
+    # FETCH-in əvvəlində, `None` = sükutlu gizlətmə. SQL 100% parameterləşdirilmiş.
+
+    def _dashboard_cost_center_fetch(
+        self, session: Session, *, month_start: date, next_month: date
+    ) -> _DashboardCostData | None:
+        """6.1 — filial üzrə overtime saatları + bonus xalları (bu ay).
+
+        «MAAŞ FONDU» RƏQƏMİ YOXDUR və bu DÜRÜSTLÜK qərarıdır: KompasOS maaş/
+        məzənnə datası daşımır (sxemdə belə sütun yoxdur) — uydurulmuş AZN
+        cəmi hesabat kimi oxunar və qərara əsas edilərdi. Widget sistemin
+        REAL daşıdığı İKİ xərc-yükünü göstərir; ad spesifikasiyanın
+        «Xərc-Mərkəzi» sözünə sadiqdir, rəqəmlər isə dürüstdür.
+        """
+        from src.application.use_cases.multi_store_benchmark import (  # noqa: PLC0415
+            VIEW_BENCHMARK_FLAG,
+        )
+
+        now = datetime.now(UTC)
+        if not self._actor.has_permission(VIEW_BENCHMARK_FLAG, now=now):
+            return None
+
+        rows = session.uow.connection.execute(
+            """
+            SELECT st.name AS store_name,
+                   COALESCE(ot.overtime_hours, 0) AS overtime_hours,
+                   COALESCE(bp.bonus_points, 0)   AS bonus_points
+              FROM stores st
+              LEFT JOIN (
+                   SELECT e.store_id AS sid, SUM(o.hours_over_norm) AS overtime_hours
+                     FROM overtime_log o
+                     JOIN employees e ON e.id = o.employee_id
+                    WHERE o.tenant_id = %s AND o.work_date >= %s AND o.work_date < %s
+                    GROUP BY e.store_id
+               ) ot ON ot.sid = st.id
+              LEFT JOIN (
+                   SELECT e.store_id AS sid, SUM(p.delta_points) AS bonus_points
+                     FROM points_ledger p
+                     JOIN employees e ON e.id = p.employee_id
+                    WHERE p.tenant_id = %s AND p.status = 'ACTIVE'
+                      AND p.delta_points > 0
+                      AND p.created_at >= %s AND p.created_at < %s
+                    GROUP BY e.store_id
+               ) bp ON bp.sid = st.id
+             WHERE st.tenant_id = %s AND st.is_active
+             ORDER BY ot.overtime_hours DESC NULLS LAST, st.name
+            """,
+            (
+                session.tenant_id,
+                month_start,
+                next_month,
+                session.tenant_id,
+                month_start,
+                next_month,
+                session.tenant_id,
+            ),
+        ).fetchall()
+        bars = [
+            (
+                str(row["store_name"]),
+                float(row["overtime_hours"]),
+                f"{float(row['overtime_hours']):.1f} saat",
+            )
+            for row in rows
+        ]
+        total_bonus = sum(int(row["bonus_points"]) for row in rows)
+        note = (
+            f"Bonus: bu ay {total_bonus} bonus xalı verilib (maaş fondu KompasOS-da "
+            "izlənmir — yalnız əlavə iş və bonus yükü göstərilir)."
+        )
+        return _DashboardCostData(
+            period_text=month_start.strftime("%B %Y"),
+            bars=bars,
+            bonus_note=note,
+        )
+
+    def _dashboard_cost_center_apply(self, screen: Any, data: _DashboardCostData) -> None:
+        screen.set_cost_center(data.bars, period=data.period_text, bonus_note=data.bonus_note)
+
+    def _dashboard_duplicates_fetch(self, session: Session) -> _DashboardDuplicatesData | None:
+        """6.2 — AÇIQ `DUPLICATE_FACE` istisnaları (son 10).
+
+        Qaydanın ÖZÜ gecəlik motordadır (`face_duplicates.py`); burada yalnız
+        NƏTİCƏSİ oxunur. Cütün ikinci adı `context_json.pair_employee_id`
+        içindədir və Python tərəfdə həll olunur — JSON açarı SQL-də JOIN
+        açarına çevirmək üçün indeks yoxdur, sətir sayı onsuz da azdır.
+        """
+        from src.application.use_cases.exception_engine import (  # noqa: PLC0415
+            VIEW_EXCEPTIONS_FLAG,
+        )
+
+        now = datetime.now(UTC)
+        if not self._actor.has_permission(VIEW_EXCEPTIONS_FLAG, now=now):
+            return None
+
+        import uuid as _uuid  # noqa: PLC0415
+
+        from src.domain.value_objects.identifiers import EmployeeId  # noqa: PLC0415
+
+        rows = session.uow.connection.execute(
+            """
+            SELECT ex.employee_id, ex.context_json, ex.created_at
+            FROM exceptions ex
+            WHERE ex.tenant_id = %s AND ex.source = 'DUPLICATE_FACE'
+              AND ex.status = 'OPEN'
+            ORDER BY ex.created_at DESC
+            LIMIT 10
+            """,
+            (session.tenant_id,),
+        ).fetchall()
+
+        out: list[tuple[str, str, str, str]] = []
+        for row in rows:
+            pair_raw = (row["context_json"] or {}).get("pair_employee_id")
+            distance = (row["context_json"] or {}).get("distance", "—")
+            subject = session.uow.employees.get(EmployeeId(row["employee_id"]))
+            pair_name = "—"
+            if pair_raw:
+                try:
+                    pair_profile = session.uow.employees.get(EmployeeId(_uuid.UUID(str(pair_raw))))
+                except ValueError:
+                    pair_profile = None
+                pair_name = str(pair_profile.full_name) if pair_profile else "—"
+            subject_name = str(subject.full_name) if subject else f"#{str(row['employee_id'])[:8]}"
+            opened = row["created_at"].astimezone().strftime("%d.%m.%Y")
+            out.append((subject_name, pair_name, f"{distance}", opened))
+        return _DashboardDuplicatesData(rows=out)
+
+    def _dashboard_duplicates_apply(self, screen: Any, data: _DashboardDuplicatesData) -> None:
+        screen.set_duplicate_faces(data.rows)
+
+    def _dashboard_operators_fetch(
+        self, session: Session, *, month_start: date, next_month: date
+    ) -> _DashboardOperatorsData | None:
+        """6.3 — operatorların orta cavab vaxtı + gecikmə payı (bu ay).
+
+        «GEÇİKMƏ» TƏRİFİ: təsdiqin sorğudan `VERIFICATION_TIMEOUT_MINUTES`
+        (Root parametri, seed 45 dəq) SONRA verilməsi. Bu açar növbənin
+        taymaut açarıdır və operator performansının ölçüsü ilə EYNİ sualı
+        cavablandırır — yeni bir hədd açarı iki dəyərin ayrılmasına səbəb
+        olardı. Flag migrations/102-dədir: OPERATOR ÖZÜ GÖRMÜR.
+        """
+        now = datetime.now(UTC)
+        flag = "can_view_operator_performance"
+        if not self._actor.has_permission(flag, now=now):
+            return None
+
+        timeout_minutes = int(DEFAULT_LIMITS[SystemLimitKey.VERIFICATION_TIMEOUT_MINUTES])
+        limits_row = session.uow.connection.execute(
+            """
+            SELECT limit_value FROM system_limits
+            WHERE tenant_id = %s AND limit_key = %s
+            """,
+            (session.tenant_id, SystemLimitKey.VERIFICATION_TIMEOUT_MINUTES.value),
+        ).fetchone()
+        if limits_row is not None:
+            with suppress(TypeError, ValueError):
+                timeout_minutes = int(str(limits_row["limit_value"]).strip())
+
+        rows = session.uow.connection.execute(
+            """
+            SELECT op.first_name || ' ' || op.last_name AS operator_name,
+                   COUNT(*)                             AS verified_count,
+                   AVG(EXTRACT(EPOCH FROM (r.verified_at - r.requested_at)) / 60.0)
+                                                        AS avg_minutes,
+                   100.0 * COUNT(*) FILTER (
+                        WHERE EXTRACT(EPOCH FROM (r.verified_at - r.requested_at)) / 60.0
+                              > %s
+                     ) / COUNT(*)                       AS late_share
+            FROM attendance_records r
+            JOIN employees op ON op.id = r.verified_by
+            WHERE r.tenant_id = %s
+              AND r.verified_by IS NOT NULL
+              AND r.verified_at IS NOT NULL
+              AND r.requested_at IS NOT NULL
+              AND r.requested_at >= %s AND r.requested_at < %s
+            GROUP BY op.id, operator_name
+            ORDER BY verified_count DESC
+            LIMIT 15
+            """,
+            (timeout_minutes, session.tenant_id, month_start, next_month),
+        ).fetchall()
+        out = [
+            (
+                str(row["operator_name"]),
+                str(int(row["verified_count"])),
+                f"{float(row['avg_minutes'] or 0):.0f} dəq",
+                f"{float(row['late_share'] or 0):.0f}%",
+            )
+            for row in rows
+        ]
+        return _DashboardOperatorsData(rows=out)
+
+    def _dashboard_operators_apply(self, screen: Any, data: _DashboardOperatorsData) -> None:
+        screen.set_operator_performance(data.rows)
+
+    def _dashboard_campaign_fetch(
+        self, session: Session, *, today: date
+    ) -> _DashboardCampaignData | None:
+        """6.4 — aktiv kampaniya aralıqlarında günlük orta heyət vs baza.
+
+        BAZA (baseline) = kampaniyadan ƏVVƏLKİ eyni-uzunluqlu pəncərənin
+        VERIFIED günlük orta heyəti (bütün şəbəkə). Fərq müsbətdirsə
+        kampaniya heyəti ARTIRIB deməkdir — spesifikasiyanın «tarixi-nümunə-
+        tövsiyəsinə əlavə çəki» məhz bu müşahidədir. Kampaniyaların DAXİL
+        EDİLMƏSİ attrition ekranındadır (Root/CEO), burada yalnız oxu.
+        """
+        from src.application.use_cases.campaign_periods import (  # noqa: PLC0415
+            MANAGE_CAMPAIGNS_FLAG,
+        )
+
+        now = datetime.now(UTC)
+        viewer_flags = (MANAGE_CAMPAIGNS_FLAG, "can_view_attrition_risk")
+        if not any(self._actor.has_permission(f, now=now) for f in viewer_flags):
+            return None
+
+        periods = session.uow.connection.execute(
+            """
+            SELECT name, start_date, end_date
+            FROM campaign_periods
+            WHERE tenant_id = %s AND is_active AND end_date >= %s - INTERVAL '90 days'
+            ORDER BY start_date DESC
+            LIMIT 5
+            """,
+            (session.tenant_id, today),
+        ).fetchall()
+        if not periods:
+            return _DashboardCampaignData(rows=[])
+
+        def avg_headcount(start: date, end: date) -> float | None:
+            row = session.uow.connection.execute(
+                """
+                SELECT AVG(day_count) AS avg_count FROM (
+                    SELECT work_date, COUNT(DISTINCT employee_id) AS day_count
+                    FROM attendance_records
+                    WHERE tenant_id = %s
+                      AND check_in_status = 'VERIFIED'
+                      AND work_date BETWEEN %s AND %s
+                    GROUP BY work_date
+                ) days
+                """,
+                (session.tenant_id, start, end),
+            ).fetchone()
+            if row is None or row["avg_count"] is None:
+                return None
+            return float(row["avg_count"])
+
+        out: list[tuple[str, str]] = []
+        for period in periods:
+            start, end = period["start_date"], period["end_date"]
+            length = max((end - start).days + 1, 1)
+            inside = avg_headcount(start, min(end, today))
+            outside = avg_headcount(start - timedelta(days=length), start - timedelta(days=1))
+            label = f"{period['name']} ({start.strftime('%d.%m')}–{end.strftime('%d.%m')})"
+            if inside is None or outside is None:
+                detail = "məlumat toplanır"
+            else:
+                delta = inside - outside
+                arrow = "▲" if delta > 0 else ("▼" if delta < 0 else "＝")
+                detail = f"{arrow} {abs(delta):.1f} işçi/gün bazaya görə"
+            out.append((label, detail))
+        return _DashboardCampaignData(rows=out)
+
+    def _dashboard_campaign_apply(self, screen: Any, data: _DashboardCampaignData) -> None:
+        screen.set_campaign_impact(data.rows)
+
+    def _dashboard_fairness_fetch(
+        self, session: Session, *, today: date
+    ) -> _DashboardFairnessData | None:
+        """6.5 — işçilər-arası iş günü paylanması (son 30 gün).
+
+        Nişan MEDIANA görə verilir: `|gün sayı − median| > hədd`. Median seçilir,
+        çünki ORTA bir aşkar işçi tərəfindən sürüşdürülə bilir (məs. bir nəfər
+        30 gün işləyibsə orta bütün komandanı «az işləyən» edir) — median isə
+        paylanmanın MƏRKƏZİNİ göstərir. Hədd Root parametridir
+        (`WORKLOAD_FAIRNESS_MAX_GAP`, migrations/102).
+        """
+        gap = self._limit_int_for(session, SystemLimitKey.WORKLOAD_FAIRNESS_MAX_GAP)
+        since = today - timedelta(days=30)
+        rows = session.uow.connection.execute(
+            """
+            SELECT e.first_name || ' ' || e.last_name AS full_name,
+                   COALESCE(st.name, '—')             AS store_name,
+                   COUNT(*)                           AS day_count
+            FROM shift_assignments sa
+            JOIN employees e ON e.id = sa.employee_id
+            LEFT JOIN stores st ON st.id = e.store_id
+            WHERE sa.tenant_id = %s
+              AND sa.is_off_day = FALSE
+              AND sa.shift_date BETWEEN %s AND %s
+            GROUP BY e.id, full_name, store_name
+            """,
+            (session.tenant_id, since, today),
+        ).fetchall()
+        if not rows:
+            return _DashboardFairnessData(hint="", rows=[])
+
+        counts = sorted(int(row["day_count"]) for row in rows)
+        middle = len(counts) // 2
+        median = counts[middle] if len(counts) % 2 else (counts[middle - 1] + counts[middle]) / 2
+        ranked = sorted(
+            rows,
+            key=lambda row: abs(int(row["day_count"]) - median),
+            reverse=True,
+        )[:12]
+        out = []
+        for row in ranked:
+            day_count = int(row["day_count"])
+            deviation = abs(day_count - median)
+            badge = "fərqli" if deviation > gap else "—"
+            out.append((str(row["full_name"]), str(row["store_name"]), str(day_count), badge))
+        hint = f"Son 30 gün · median {median:.0f} gün · nişan həddi ±{gap} gün (Root parametri)"
+        return _DashboardFairnessData(hint=hint, rows=out)
+
+    def _dashboard_fairness_apply(self, screen: Any, data: _DashboardFairnessData) -> None:
+        screen.set_workload_fairness(data.rows, hint=data.hint)
+
+    def _limit_int_for(self, session: Session, key: SystemLimitKey) -> int:
+        """Tək limitin sessiya-sorğusu — `application.root_limits.limit_int` naxışı.
+
+        `system_limits`-də sətir yoxdursa FALLBACK işə düşür (kodda sabit
+        YALNIZ fallback-dir, həqiqi mənbə bazadır).
+        """
+        row = session.uow.connection.execute(
+            """
+            SELECT limit_value FROM system_limits
+            WHERE tenant_id = %s AND limit_key = %s
+            """,
+            (session.tenant_id, key.value),
+        ).fetchone()
+        if row is None:
+            return int(DEFAULT_LIMITS[key])
+        try:
+            return int(str(row["limit_value"]).strip())
+        except (TypeError, ValueError):
+            return int(DEFAULT_LIMITS[key])
 
     def _dashboard_summary_fetch(
         self,

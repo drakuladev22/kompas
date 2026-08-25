@@ -825,6 +825,7 @@ class PostgresUnitOfWork:
             PostgresSecurityEventRepository,
         )
         from src.infrastructure.persistence.staffing_repositories import (  # noqa: PLC0415
+            PostgresCampaignPeriodRepository,
             PostgresStaffingHistoryProvider,
             PostgresStaffingPatternRepository,
         )
@@ -1036,6 +1037,10 @@ class PostgresUnitOfWork:
             # ən həssas yolunda auditi mənasız edərdi (CLAUDE.md §5).
             "shift_handoff_notes": PostgresShiftHandoffRepository(conn, self._context),
             "break_glass": PostgresBreakGlassRepository(conn, self._context),
+            # --- v2backlog.md Faza 6.4 (migrations/089 sxemi) ------------------
+            # Kampaniya dövrləri + audit BİR tranzaksiyada: tarixin yazılıb
+            # jurnalda izsiz qalması planlama qərarının sübutunu itirərdi.
+            "campaign_periods": PostgresCampaignPeriodRepository(conn, self._context),
             # --- #28 İllik məzuniyyət balansı (kompas1.md Faza 4) --------------
             # Eyni bağlantıda: sorğunun statusu, balansın azalması və audit BİR
             # tranzaksiyada olmalıdır. Ayrı bağlantılarda təsdiq yazılıb balans
