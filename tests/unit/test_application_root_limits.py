@@ -9,9 +9,11 @@ kursu, etiraz pəncərəsi, sıfırlanma bildirişi) bağladı. Dörd ayrı qap�
 
   1. DEFOLT = KÖHNƏ HARDCODE — köçürmə DAVRANIŞ dəyişikliyi deyil. Kimsə
      defoltu "yaxşılaşdırsa", test dərhal qırılır.
-  2. ARALIQ PARİTETİ — `APP_LIMIT_BOUNDS` ilə migrations/034-dəki
+  2. ARALIQ PARİTETİ — kodda saxlanan aralıqlar ilə seed miqrasiyalarındakı
      `min_value`/`max_value` eyni olmalıdır. Ayrılsalar, ROOT ekranı "qəbul
-     edilən" göstərən dəyəri kod sükutla kəsərdi.
+     edilən" göstərən dəyəri kod sükutla kəsərdi. Mənbə TƏK FAYL DEYİL —
+     `_MIGRATIONS` dəstinə baxın (034 ilk idi, sonrakı hər genişlənmə öz seed
+     faylını gətirdi).
   3. CANLI OXU — Root dəyəri dəyişdikdə KOD YENİ DƏYƏRİ OXUMALIDIR. Bu, ən
      vacib qapıdır: parametrin `SystemLimitKey`-də, `DEFAULT_LIMITS`-də və SQL
      seed-ində olması onun İŞLƏDİYİNİ SÜBUT ETMİR — istehlakçı hələ də modul

@@ -180,7 +180,15 @@ def test_tesdiqden_sonra_uzatma_icra_olunur(
 
 @requires_qt
 def test_setirde_uzatma_duymesi_var(window: Any) -> None:
-    button = window.table.cellWidget(0, 4)
+    """Sütun indeksi KODDAN gəlir, təkrar yazılmır.
+
+    Əvvəl burada `4` yazılırdı; Faza 9.2 «Tier» sütununu ortaya əlavə edəndə
+    düymə 5-ə sürüşdü və test `None` almağa başladı. Sabit indi `ui.py`-dadır
+    (`EXTEND_COLUMN`), yəni növbəti sütun əlavəsi testi qırmır.
+    """
+    from src.developer_panel.ui import EXTEND_COLUMN
+
+    button = window.table.cellWidget(0, EXTEND_COLUMN)
 
     assert button is not None
     assert button.text() == "1 Ay Uzat"

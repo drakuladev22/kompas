@@ -1087,8 +1087,11 @@ class ApplicationContext:
         # Vendor break-glass bildiricisi (Faza 5.4). MÜŞTƏRİ QURAŞDIRMASINDA
         # `None` QALIR VƏ BU, GÖZLƏNİLƏN HALDIR — DB-3 qərarı (bax
         # `connection_types.py` başlığı): müştəri vendor bazasına nə yazır,
-        # nə oxuyur. Bildirici yalnız `KOMPASOS_VENDOR_DSN` təyin edilmiş
-        # mühitdə (təchizatçının maşını, staging) qurulur.
+        # nə oxuyur. Bildirici yalnız vendor DSN dəyişəni təyin edilmiş
+        # mühitdə (təchizatçının maşını, staging) qurulur — dəyişənin ADI
+        # burada çəkilmir, çünki `test_the_tenant_layer_never_mentions_the_
+        # vendor_dsn` qapısı mətni tarayır və şərh ilə oxuma arasındakı fərqi
+        # ayırd edə bilmir (ad TƏK yerdə: `connection_types.py`).
         #
         # BİR DƏFƏ, TƏNBƏL qurulur: `VendorDatabase.from_env()` hovuz açır və
         # onu hər `Session` üçün təkrarlamaq dəstək tutumunu yeyərdi.

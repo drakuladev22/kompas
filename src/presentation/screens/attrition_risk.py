@@ -38,7 +38,6 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QDateEdit,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QVBoxLayout,
     QWidget,
@@ -134,7 +133,11 @@ class AttritionRiskScreen(Screen):
         name_layout.addWidget(field_label("Ad"))
         self._campaign_name = QLineEdit()
         self._campaign_name.setProperty("variant", "form")
-        self._campaign_name.setPlaceholderText("Məs.: Novruz kampaniyası")
+        # GÖSTƏRİŞ, NÜMUNƏ DEYİL: «Məs.: Novruz kampaniyası» mətni
+        # `test_no_form_field_shows_example_data` qapısını pozurdu — nümunə
+        # dəyər sahəni DOLU göstərir və istifadəçi onu silmədən yazmağa
+        # başlayır (sihirbazdakı «Rəşad Məmmədov» hesabatının eyni səbəbi).
+        self._campaign_name.setPlaceholderText("Kampaniyanın adını yazın")
         self._campaign_name.setAccessibleName("Kampaniya adı")
         name_layout.addWidget(self._campaign_name)
         form_layout.addWidget(name_box, 2)
@@ -148,9 +151,13 @@ class AttritionRiskScreen(Screen):
         start_layout = QVBoxLayout(start_box)
         start_layout.setContentsMargins(0, 0, 0, 0)
         start_layout.setSpacing(4)
-        start_label = QLabel("Başlanğıc")
-        start_label.setObjectName("FieldLabel")
-        start_layout.addWidget(start_label)
+        # `field_label` — «Ad» sahəsi ilə EYNİ helper (yuxarıda). Əvvəl burada
+        # xam Qt etiketi + `setObjectName("FieldLabel")` cütü əl ilə yazılırdı:
+        # nəticə eyni görünür, lakin `test_no_screen_creates_a_bare_qlabel`
+        # qapısı məhz bunu qadağan edir — helper dəyişəndə (məs. `wordWrap`
+        # və ya əlçatanlıq adı əlavə olunanda) əl ilə yazılmış nüsxə arxada
+        # qalar və iki fərqli görünüşlü etiket yaranardı.
+        start_layout.addWidget(field_label("Başlanğıc"))
         start_layout.addWidget(self._start_edit)
         form_layout.addWidget(start_box, 1)
 
@@ -163,9 +170,13 @@ class AttritionRiskScreen(Screen):
         end_layout = QVBoxLayout(end_box)
         end_layout.setContentsMargins(0, 0, 0, 0)
         end_layout.setSpacing(4)
-        end_label = QLabel("Bitmə")
-        end_label.setObjectName("FieldLabel")
-        end_layout.addWidget(end_label)
+        # `field_label` — «Ad» sahəsi ilə EYNİ helper (yuxarıda). Əvvəl burada
+        # xam Qt etiketi + `setObjectName("FieldLabel")` cütü əl ilə yazılırdı:
+        # nəticə eyni görünür, lakin `test_no_screen_creates_a_bare_qlabel`
+        # qapısı məhz bunu qadağan edir — helper dəyişəndə (məs. `wordWrap`
+        # və ya əlçatanlıq adı əlavə olunanda) əl ilə yazılmış nüsxə arxada
+        # qalar və iki fərqli görünüşlü etiket yaranardı.
+        end_layout.addWidget(field_label("Bitmə"))
         end_layout.addWidget(self._end_edit)
         form_layout.addWidget(end_box, 1)
 

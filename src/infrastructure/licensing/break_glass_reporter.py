@@ -7,7 +7,11 @@
 DB-3 QƏRARI İLƏ NECƏ UZLAŞIR — «MÜŞTƏRİ VENDOR BAZASINA YAZMIR»
 ──────────────────────────────────────────────────────────────────────────────
 `connection_types.py` sənədləşdirilmiş qərarı daşıyır: müştəri quraşdırmasında
-`KOMPASOS_VENDOR_DSN` YOXDUR və müştəri vendor bazasına nə yazır, nə oxuyur.
+vendor DSN mühit dəyişəni YOXDUR və müştəri vendor bazasına nə yazır, nə
+oxuyur. (Dəyişənin ADI bu faylda QƏSDƏN çəkilmir — `test_connection_
+separation.py::test_the_tenant_layer_never_mentions_the_vendor_dsn` mətn
+səviyyəsində tarayır və şərhlə oxuma arasındakı fərqi görə bilmir. Ad
+`connection_types.py`-dadır, yəni tək mənbədə.)
 Bu sinif həmin qərarı POZMUR — o, `VendorDatabase` tələb edir və müştəri
 maşınında həmin obyekt `None` olur, yəni bildirici QURULMUR.
 
@@ -22,7 +26,7 @@ O zaman spesifikasiyanın «mərkəzi bazaya yazılsın» tələbi NECƏ ödəni
      müştəri göndərmir. Bu, `crash_reports`-un EYNİ naxışıdır (cədvəl həm
      `schema.sql`-də, həm vendor sxemində var).
   2. **Təchizatçının öz mühiti** (`--developer-mode`, staging, çox-kirayəçili
-     idarəetmə maşını) — orada `KOMPASOS_VENDOR_DSN` MÖVCUDDUR və bu sinif
+     idarəetmə maşını) — orada vendor DSN dəyişəni MÖVCUDDUR və bu sinif
      hadisəni `vendor.break_glass_events`-ə köçürür (migrations/vendor/004).
 
 ──────────────────────────────────────────────────────────────────────────────

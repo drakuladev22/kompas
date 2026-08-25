@@ -90,7 +90,7 @@ _EVENT_TYPE_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9_.]*$")
 #: həll edir, burada riyazi güc.)
 MIN_SECRET_LENGTH = 16
 
-#: `webhook_endpoints.target_url` CHECK-inin güzgüsü (migrations/091).
+#: `target_url` sütununun `CHECK` şərtinin güzgüsü (migrations/091).
 MIN_TARGET_URL_LENGTH = 8
 
 

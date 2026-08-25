@@ -112,6 +112,17 @@ _T = TypeVar("_T")
 
 COLUMNS = ("Şirkət", "Vəziyyət", "Son əlaqə", "Versiya", "Tier", "", "", "")
 
+#: Düymə hüceyrələrinin indeksləri — SON ÜÇ sütun adsızdır (başlığı yoxdur).
+#:
+#: NİYƏ SABİT, ƏDƏD DEYİL: Faza 9.2 «Tier» sütununu ORTAYA əlavə etdi və
+#: düymələr bir sütun sağa sürüşdü — e2e testi isə hələ `cellWidget(0, 4)`
+#: oxuyurdu və `None` alırdı. Ədəd iki yerdə (kod + test) yaşayanda belə
+#: sürüşmə SÜKUTLA baş verir; adlı sabit isə hər iki tərəfi bir mənbədən
+#: qidalandırır.
+EXTEND_COLUMN = 5
+TOGGLE_COLUMN = 6
+ACTIONS_COLUMN = 7
+
 #: Çökmə panelinin sütunları (bölmə 8 — tezliyə görə qruplaşdırma).
 CRASH_COLUMNS = ("Xəta növü", "Təkrar", "Quraşdırma", "Versiya", "Sonuncu")
 #: Dəstək inbox-unun sütunları (bölmə 8 — per-tenant threads + SLA).
@@ -453,14 +464,14 @@ class DeveloperPanelWindow(QMainWindow):
 
             button = QPushButton("1 Ay Uzat", self.table)
             button.clicked.connect(lambda _=False, target=row: self.extend(target))
-            self.table.setCellWidget(index, 5, button)
+            self.table.setCellWidget(index, EXTEND_COLUMN, button)
 
             # Bölmə 8: hər sətirdə TƏK toggle — vəziyyətə görə etiketi dəyişir.
             # İki ayrı düymə (Aktivləşdir + Deaktiv Et) qoyulsaydı, onlardan
             # biri həmişə mənasız olardı və səhv klik riski artardı.
             toggle = QPushButton(_toggle_label(row), self.table)
             toggle.clicked.connect(lambda _=False, target=row: self.toggle_status(target))
-            self.table.setCellWidget(index, 6, toggle)
+            self.table.setCellWidget(index, TOGGLE_COLUMN, toggle)
 
             # Faza 9.1/9.2 + 11.2 — data-portativliyi, tier idarəsi və
             # versiya geri-qaytarması. Dörd düymə BİR hüceyrədədir: sətir
@@ -487,7 +498,7 @@ class DeveloperPanelWindow(QMainWindow):
                 lambda _=False, target=row: self.restore_channel_update(target)
             )
             actions_layout.addWidget(restore_btn)
-            self.table.setCellWidget(index, 7, actions)
+            self.table.setCellWidget(index, ACTIONS_COLUMN, actions)
 
         self.status_label.setText(f"Cəmi: {len(rows)} müştəri · diqqət tələb edən: {attention}")
 

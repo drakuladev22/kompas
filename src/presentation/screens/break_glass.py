@@ -146,9 +146,11 @@ class BreakGlassScreen(Screen):
         request_layout.addWidget(field_label("Səbəb — audit sənədidir, ətraflı yazın"))
         self._reason = QLineEdit()
         self._reason.setProperty("variant", "form")
-        self._reason.setPlaceholderText(
-            "Məs.: Root hesabı kilidlendi, baza konfiqurasiyası dəyişməlidir"
-        )
+        # GÖSTƏRİŞ, NÜMUNƏ DEYİL (bax `attrition_risk.py`-dakı eyni düzəliş).
+        # Burada əlavə səbəb var: mətn AUDİT sənədidir və hazır nümunə
+        # istifadəçini onu olduğu kimi göndərməyə sövq edərdi — audit sətri
+        # isə HƏQİQİ səbəbi saxlamalıdır.
+        self._reason.setPlaceholderText("Fövqəladə girişin səbəbini ətraflı yazın")
         request_layout.addWidget(self._reason)
 
         request_row = QWidget()

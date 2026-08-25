@@ -59,6 +59,23 @@ class WhatsNewScreen(Screen):
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
         super().__init__(theme, parent=parent)
 
+        # «Yenilə» düyməsi SİYAHININ ÜSTÜNDƏDİR və qəsdən belədir: ekran
+        # açıq qalarkən başqa bir Root yeni qeyd nəşr edə bilər, siyahı isə
+        # yalnız açılışda oxunur. Düymə əvvəl UNUDULMUŞDU — siqnal təyin
+        # olunub, kontroller ona qoşulub, lakin heç bir widget onu YAYMIRDI
+        # (`test_signal_wiring_gate` məhz bu boşluğu tutdu: sinif sənədi
+        # «Yenilə düyməsi» yazırdı, ekranda isə düymə yox idi).
+        toolbar = QWidget()
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
+        toolbar_layout.setSpacing(metrics.SPACE_MS)
+        toolbar_layout.addWidget(stretch())
+        refresh = secondary_button("Yenilə")
+        refresh.setAccessibleName("Versiya qeydlərini yenilə")
+        refresh.clicked.connect(self.refresh_requested)
+        toolbar_layout.addWidget(refresh)
+        self.add(toolbar)
+
         self._table_host = QWidget()
         self._table_layout = QVBoxLayout(self._table_host)
         self._table_layout.setContentsMargins(0, 0, 0, 0)
