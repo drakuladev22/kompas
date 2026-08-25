@@ -624,4 +624,52 @@ def _full_name(row: dict[str, Any]) -> str:
     return f"{first} {last}".strip()
 
 
-__all__ = ["PostgresSupportTicketRepository"]
+class PostgresSupportChatThrottleRepository(_BaseRepository):
+    """`support_chat_throttle` — mesaj sürət sayğacı (`v2backlog.md` Faza 12.1).
+
+    Pəncərə/qifləmə RİYAZİYYATI DB trigger-indədir (migrations/090, TIME-1) —
+    repo yalnız İKİ primitiv əməliyyatı bilir: «qiflənibmi?» və «bir mesaj
+    say». Hər ikisində vaxt müqayisəsi SERVER tərəfindədir (`now()`), client
+    saatı bu cədvələ heç vaxt girmir.
+    """
+
+    def lockout_until(self, tenant_id: TenantId, employee_id: EmployeeId) -> datetime | None:
+        """Aktiv qifləmənin bitmə anı — qiflənməyibsə `None`.
+
+        `locked_until > now()` şərti SQL-dədir: keçmiş qifləmə sətri OXUNMUR,
+        yəni tətbiqə «qiflənməyib» çatdır və növbəti `register_message`
+        onsuz da pəncərəni sıfırlayır (trigger).
+        """
+        row = self._fetch_one(
+            """
+            SELECT locked_until FROM support_chat_throttle
+             WHERE tenant_id = %s AND employee_id = %s
+               AND locked_until IS NOT NULL AND locked_until > now()
+            """,
+            (tenant_id, employee_id),
+        )
+        return row["locked_until"] if row else None
+
+    def register_message(self, tenant_id: TenantId, employee_id: EmployeeId) -> None:
+        """Bir mesajı SAYIR — INSERT/UPSERT qətnaməsi trigger-dədir.
+
+        `message_count + 1` yazmaq məcburidir: trigger say dəyişməyən UPDATE-i
+        erkən buraxır («sayaca toxunmayan yazı» optimizasiyası). Yeni sətirdə
+        trigger sayı 1-ə, köhnə pəncərədə isə yenidən 1-ə QOYUR — buradakı
+        ifadə yalnız konflikt yolunun sayını DƏYİŞDİRMƏK üçündür.
+        """
+        self._execute(
+            """
+            INSERT INTO support_chat_throttle (tenant_id, employee_id)
+            VALUES (%s, %s)
+            ON CONFLICT (tenant_id, employee_id) DO UPDATE
+                SET message_count = support_chat_throttle.message_count + 1
+            """,
+            (tenant_id, employee_id),
+        )
+
+
+__all__ = [
+    "PostgresSupportChatThrottleRepository",
+    "PostgresSupportTicketRepository",
+]

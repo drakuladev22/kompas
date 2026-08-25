@@ -112,6 +112,13 @@ APP_LIMIT_BOUNDS: Final[dict[SystemLimitKey, tuple[Decimal, Decimal]]] = {
     # Aşağı hüdud 1: SIFIR mexanizmi tamamilə söndürərdi — «Root əlçatmaz
     # olanda işləyən yol» bir dəyər dəyişikliyi ilə yox edilə bilməz.
     SystemLimitKey.BREAK_GLASS_MAX_GRANTS_PER_MONTH: (Decimal(1), Decimal(10)),
+    # --- Dəstək-chat sui-istifadə qorunması (v2backlog.md Faza 12.1),
+    # --- migrations/107. Aralıqlar miqrasiya ilə HƏRFƏN eynidir.
+    # Aşağı hüdud 3/dəq: daha aşağısı normal yazışmanı da qifləyərdi.
+    SystemLimitKey.SUPPORT_CHAT_MAX_MESSAGES_PER_MINUTE: (Decimal(3), Decimal(200)),
+    # Aşağı hüdud 1 dəq.: sıfır qifləməni söndürərdi; yuxarı 60 dəq. — bir
+    # saati aşan «müvəqqəti» blok artıq cəza kimi qavranılır.
+    SystemLimitKey.SUPPORT_CHAT_LOCKOUT_MINUTES: (Decimal(1), Decimal(60)),
 }
 
 

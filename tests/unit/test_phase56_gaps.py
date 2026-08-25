@@ -75,7 +75,12 @@ from src.domain.value_objects.identifiers import (
     TenantId,
 )
 from src.domain.value_objects.money import Money
-from tests.fixtures.fakes import FakeClock, FakeFeatureToggles, RecordingAudit
+from tests.fixtures.fakes import (
+    FakeClock,
+    FakeFeatureToggles,
+    FakeSupportChatThrottle,
+    RecordingAudit,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -430,6 +435,7 @@ def _support() -> tuple[SupportChatUseCase, _Tickets]:
         tickets=tickets,  # type: ignore[arg-type]
         toggles=FakeFeatureToggles(),  # type: ignore[arg-type]
         clock=FakeClock(NOW),  # type: ignore[arg-type]
+        throttle=FakeSupportChatThrottle(),  # type: ignore[arg-type]
     )
     return use_case, tickets
 

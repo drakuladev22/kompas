@@ -86,6 +86,7 @@ from src.domain.value_objects.identifiers import (
 from tests.fixtures.fakes import (
     FakeClock,
     FakeFeatureToggles,
+    FakeSupportChatThrottle,
     FakeSystemLimits,
     RecordingAudit,
     RecordingNotifier,
@@ -106,6 +107,16 @@ _MIGRATIONS_DIR: Final[Path] = Path(__file__).resolve().parents[2] / "database" 
 _MIGRATIONS: Final[tuple[Path, ...]] = (
     _MIGRATIONS_DIR / "034_application_layer_limits.sql",
     _MIGRATIONS_DIR / "068_support_channels_telegram.sql",
+    # Faza 5 (099/100), Faza 6-8 (102/104) və Faza 12.1 (107) — hər biri
+    # tətbiq açarlarını seed edir. Faza 5-də bu siyahı YENİLƏNMƏMİŞDİ və
+    # aşağıdakı aralıq-pariteti qapısı sükutda qalmışdı; indi tam dəstdir.
+    _MIGRATIONS_DIR / "095_hr_lifecycle_v2_limit_seeds.sql",
+    _MIGRATIONS_DIR / "100_break_glass_flags_and_resilience_limits.sql",
+    _MIGRATIONS_DIR / "101_self_correction_limit_seeds.sql",
+    _MIGRATIONS_DIR / "102_analytics_v2_sources_and_flags.sql",
+    _MIGRATIONS_DIR / "103_behavior_pair_correlation.sql",
+    _MIGRATIONS_DIR / "104_whats_new_and_ui_language.sql",
+    _MIGRATIONS_DIR / "107_support_chat_throttle_seeds.sql",
 )
 
 #: Açar → Faza 10.2-nin ikinci dalğasından ƏVVƏL kodda oturan HƏRFİ dəyər.
@@ -522,6 +533,7 @@ def test_support_thread_page_size_follows_the_root_value() -> None:
         tickets=tickets,  # type: ignore[arg-type]
         toggles=FakeFeatureToggles(),  # type: ignore[arg-type]
         clock=FakeClock(NOW),  # type: ignore[arg-type]
+        throttle=FakeSupportChatThrottle(),  # type: ignore[arg-type]
         limits=limits,  # type: ignore[arg-type]
     )
     actor = _employee(

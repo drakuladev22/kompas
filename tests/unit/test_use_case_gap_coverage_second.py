@@ -68,6 +68,7 @@ from src.domain.value_objects.identifiers import (
 from tests.fixtures.fakes import (
     FakeClock,
     FakeFeatureToggles,
+    FakeSupportChatThrottle,
     InMemoryEmployees,
     RecordingAudit,
     RecordingNotifier,
@@ -853,6 +854,7 @@ def _support(tickets: _Tickets, *, disabled: bool = False) -> SupportChatUseCase
         tickets=tickets,  # type: ignore[arg-type]
         toggles=toggles,  # type: ignore[arg-type]
         clock=FakeClock(NOW),  # type: ignore[arg-type]
+        throttle=FakeSupportChatThrottle(),  # type: ignore[arg-type]
     )
 
 

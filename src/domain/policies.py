@@ -1095,6 +1095,17 @@ class SystemLimitKey(str, Enum):
     # Root seçimi bu açara yazılır, `configure_i18n` isə yeganə oxu nöqtəsidir.
     UI_LANGUAGE = "UI_LANGUAGE"
 
+    # --- Dəstək-chat sui-istifadə qorunması (`v2backlog.md` Faza 12.1) ---
+    #
+    # Spesifikasiyanın **ROOT PARAMETRİ**-dir («dəqiqədə maksimum mesaj
+    # sayı»). Qifləmə müddəti sənəddə AÇIQ yazılmayıb, amma «müvəqqəti
+    # məhdudlaşdırılır» ifadəsi müddət olmadan icra edilə bilməz — ona görə
+    # ikinci açar da buradadır (`security` təsdiqi, migrations/090 başlığı).
+    # Pəncərənin ÖZÜ sabit 1 dəqiqədir və Root-a VERİLMİR — o, tələbin
+    # «sözünün mənasıdır» (`_WEEKLY_DEDUPE_GAP_DAYS` kateqoriyası).
+    SUPPORT_CHAT_MAX_MESSAGES_PER_MINUTE = "SUPPORT_CHAT_MAX_MESSAGES_PER_MINUTE"
+    SUPPORT_CHAT_LOCKOUT_MINUTES = "SUPPORT_CHAT_LOCKOUT_MINUTES"
+
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.MONTHLY_LEAVE_MINUTES_LIMIT: "240",
@@ -1785,6 +1796,11 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # `AVAILABLE_UI_LANGUAGES`-dədir; DB CHECK yoxdur, çünki yeni dil
     # əlavəsi MİQRASİYA deyil, kataloq faylıdır.
     SystemLimitKey.UI_LANGUAGE: "az",
+    # v2backlog.md Faza 12.1 — dəstək-chat sürət sayğacı (bax SystemLimitKey
+    # şərhi). Dəyərlər migrations/090 trigger-inin COALESCE fallback-ları ilə
+    # HƏRFƏN eynidir; seed migrations/107-də.
+    SystemLimitKey.SUPPORT_CHAT_MAX_MESSAGES_PER_MINUTE: "20",
+    SystemLimitKey.SUPPORT_CHAT_LOCKOUT_MINUTES: "5",
 }
 
 

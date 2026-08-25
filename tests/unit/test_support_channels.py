@@ -64,6 +64,7 @@ from src.infrastructure.notifications.telegram import (
 from tests.fixtures.fakes import (
     FakeClock,
     FakeFeatureToggles,
+    FakeSupportChatThrottle,
     FakeSystemLimits,
     RecordingAudit,
     RecordingNotifier,
@@ -477,6 +478,7 @@ def _build(*, disabled: set[str] | None = None, limits: dict[str, str] | None = 
         tickets=tickets,  # type: ignore[arg-type]
         toggles=toggles,  # type: ignore[arg-type]
         clock=clock,  # type: ignore[arg-type]
+        throttle=FakeSupportChatThrottle(),  # type: ignore[arg-type]
         limits=system_limits,  # type: ignore[arg-type]
         telegram=telegram,  # type: ignore[arg-type]
     )
@@ -485,6 +487,7 @@ def _build(*, disabled: set[str] | None = None, limits: dict[str, str] | None = 
         toggles=toggles,  # type: ignore[arg-type]
         clock=clock,  # type: ignore[arg-type]
         audit=audit,  # type: ignore[arg-type]
+        throttle=FakeSupportChatThrottle(),  # type: ignore[arg-type]
         limits=system_limits,  # type: ignore[arg-type]
         telegram=telegram,  # type: ignore[arg-type]
         notifier=notifier,  # type: ignore[arg-type]

@@ -161,6 +161,9 @@ _MISSING_TABLE_GROUP: Final[dict[str, str]] = {
     "enforce_store_pin_throttle_lockout": "store_pin_throttle",
     "trg_store_pin_throttle_lockout": "store_pin_throttle",
     "trg_store_templates_updated": "store_templates",
+    # v2backlog.md (miqrasiya 104) — bax `trg_campaign_periods_updated` şərhi,
+    # EYNİ səbəb: `whats_new_entries` cədvəli də hələ `schema.sql`-də deyil.
+    "trg_whats_new_updated": "whats_new_entries",
     # v2backlog.md (miqrasiya 090) — bax `trg_campaign_periods_updated` şərhi,
     # EYNİ səbəb. Funksiya AF-2/PIN cütü ilə EYNİ naxışdadır (`enforce_*` +
     # `trg_*`, ikisi də CƏDVƏLİ `schema.sql`-də olmayan `support_chat_
@@ -300,6 +303,8 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
                 "seed_scheduler_limits_for_new_tenant",
                 "seed_server_time_limits_for_new_tenant",
                 "seed_session_limits_for_new_tenant",
+                # Miqrasiya 107 — dəstək-chat sürət sayğacı açarları (Faza 12.1).
+                "seed_support_chat_throttle_limits_for_new_tenant",
                 "seed_telegram_limits_for_new_tenant",
                 "seed_ui_surface_limits_for_new_tenant",
                 "trg_seed_annual_leave_limits",
@@ -340,6 +345,7 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
                 "trg_seed_scheduler_limits",
                 "trg_seed_server_time_limits",
                 "trg_seed_session_limits",
+                "trg_seed_support_chat_throttle_limits",
                 "trg_seed_telegram_limits",
                 "trg_seed_tenant_branding",
                 # Miqrasiya 104 — interfeys dili açarı (Faza 8.1).

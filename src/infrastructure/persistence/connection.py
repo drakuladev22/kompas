@@ -829,7 +829,8 @@ class PostgresUnitOfWork:
             PostgresStaffingHistoryProvider,
             PostgresStaffingPatternRepository,
         )
-        from src.infrastructure.persistence.support_repositories import (  # noqa: PLC0415
+        from src.infrastructure.persistence.support_repositories import (  # noqa: PLC0415  # noqa: PLC0415
+            PostgresSupportChatThrottleRepository,
             PostgresSupportTicketRepository,
         )
         from src.infrastructure.persistence.sync_conflict_repository import (  # noqa: PLC0415
@@ -1048,6 +1049,10 @@ class PostgresUnitOfWork:
             # Versiya-qeydləri + audit BİR tranzaksiyada — `campaign_periods`
             # ilə eyni əsaslandırma.
             "whats_new": PostgresWhatsNewRepository(conn, self._context),
+            # --- v2backlog.md Faza 12.1 (migrations/090 sxemi) -----------------
+            # Sürət sayğacı EYNI tranzaksiyada: mesaj yazılsa sayğac da
+            # yazılmalıdır, yoxsa rollback-dan sonra sayğac irəlidə qalar.
+            "chat_throttle": PostgresSupportChatThrottleRepository(conn, self._context),
             # --- #28 İllik məzuniyyət balansı (kompas1.md Faza 4) --------------
             # Eyni bağlantıda: sorğunun statusu, balansın azalması və audit BİR
             # tranzaksiyada olmalıdır. Ayrı bağlantılarda təsdiq yazılıb balans

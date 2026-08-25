@@ -144,6 +144,31 @@ class SupportMessageError(KompasOSError):
     user_message = "Mesaj göndərilə bilmədi."
 
 
+class SupportRateLimitError(SupportMessageError):
+    """Mesaj sürəti həddi aşıb — istifadəçi müvəqqəti qiflənib (Faza 12.1).
+
+    `PIN-lockout` naxışı (SEC-01): qifləmənin MÜDDƏTİ mesajda açıq yazılır —
+    «bir az sonra cəhd edin» kimi qeyri-müəyyən mətn işçini dəfələrlə yenidən
+    cəhd etməyə sövq edər və sayğacı daha da artırardı.
+    """
+
+    def __init__(self, *, locked_until: datetime, now: datetime) -> None:
+        seconds = max((locked_until - now).total_seconds(), 0.0)
+        # TAVAN YOX, TƏQDİR: tam 5 dəqiqəlik qifləmə «5 dəqiqə» deyir — +1
+        # yalanı bir dəqiqə əlavə edərdi.
+        minutes = max(int(-(-seconds // 60)), 1)
+        super().__init__(
+            f"Dəstək-chat sürət həddi aşılıb, {locked_until.isoformat()}-a qədər qiflənib",
+            user_message=(
+                "Çox tez-tez mesaj göndərdiniz. Təxminən "
+                f"{minutes} dəqiqədən sonra yenidən yaza bilərsiniz."
+            ),
+            context={"locked_until": locked_until.isoformat()},
+        )
+        self.locked_until = locked_until
+
+
+
 class TicketNotFoundError(SupportMessageError):
     user_message = "Müraciət tapılmadı."
 
@@ -275,6 +300,24 @@ class SupportTelegramGateway(Protocol):
     """
 
     def send_support_message(self, payload: TelegramOutgoing) -> TelegramDelivery | None: ...
+
+
+@runtime_checkable
+class SupportChatThrottleRepository(Protocol):
+    """Mesaj sürət sayğacının İKİ primitivi (`v2backlog.md` Faza 12.1).
+
+    Riyaziyyat DB trigger-indədir (migrations/090) — port qəsdən BU QƏDƏR
+    kiçikdir: geniş səth sayğacı tətbiq tərəfdən manipulyasiya edilə bilən
+    edərdi.
+    """
+
+    def lockout_until(self, tenant_id: TenantId, employee_id: EmployeeId) -> datetime | None:
+        """Aktiv qifləmənin bitmə anı; qiflənməyibsə `None`."""
+        ...
+
+    def register_message(self, tenant_id: TenantId, employee_id: EmployeeId) -> None:
+        """UĞURLU göndərilmiş mesajı sayır — rədd edilənlər SAYILMIR."""
+        ...
 
 
 @runtime_checkable
@@ -429,6 +472,10 @@ class _SupportBase:
         tickets: SupportTicketRepository,
         toggles: FeatureToggles,
         clock: Clock,
+        # Faza 12.1 — MƏCBURİ arqumentdir (`| None` DEYİL): bu, TƏHLÜKƏSİZLİK
+        # qapısının daşıyıcısıdır və defolt `None` qapını SÜKUTLA söndürərdi
+        # (SEC-020 pretsedenti — unutmaq mypy səhvidir).
+        throttle: SupportChatThrottleRepository,
         limits: SystemLimits | None = None,
         telegram: SupportTelegramGateway | None = None,
     ) -> None:
@@ -438,6 +485,7 @@ class _SupportBase:
         self._tickets = tickets
         self._toggles = toggles
         self._clock = clock
+        self._throttle = throttle
         self._limits = limits
         self._telegram = telegram
 
@@ -654,6 +702,11 @@ class SupportChatUseCase(_SupportBase):
         yazışmanın yarısı CEO-nun, yarısı hazırlayıcının qutusunda görünərdi.
         """
         self._require_access(tenant_id, actor)
+        # Faza 12.1 — sürət qapısı GÖNDƏRMƏDƏN ƏVVƏL: qiflənmiş istifadəçinin
+        # mesajı NE ticket açır, NE də sayğacı artırır.
+        locked_until = self._throttle.lockout_until(tenant_id, actor.id)
+        if locked_until is not None:
+            raise SupportRateLimitError(locked_until=locked_until, now=self._clock.now())
         cleaned_body = _clean(body, MIN_BODY_LENGTH, MAX_BODY_LENGTH, label="Mesaj")
 
         ticket_id = self._tickets.find_open_ticket(tenant_id, channel=channel, opened_by=actor.id)
@@ -683,6 +736,9 @@ class SupportChatUseCase(_SupportBase):
             is_from_developer=False,
             attachment_name=attachment_name,
         )
+        # Faza 12.1 — say YALNIZ UĞURLU mesajdan sonra artır: yoxlama xətası
+        # (mətn qısa, modul bağlı) istifadəçini qifləməyə aparmamalıdır.
+        self._throttle.register_message(tenant_id, actor.id)
         thread = self._require_thread(ticket_id)
         # AVTOMATİK KEÇİD 1 (tg1.md Faza 6): işçi HƏR hansı statusda cavab
         # yazsa söhbət «Açıq»a qayıdır. Bu, `find_open_ticket`-in tapdığı
@@ -792,12 +848,20 @@ class SupportInboxUseCase(_SupportBase):
         toggles: FeatureToggles,
         clock: Clock,
         audit: AuditTrail,
+        # Faza 12.1 — baza sinfi məcburi tutur; inbox (hazırlayıcı ucu) ÖZ
+        # cavablarını SAYMIR (`reply` sayğaca toxunmur), amma portu daşıyır.
+        throttle: SupportChatThrottleRepository,
         limits: SystemLimits | None = None,
         telegram: SupportTelegramGateway | None = None,
         notifier: Notifier | None = None,
     ) -> None:
         super().__init__(
-            tickets=tickets, toggles=toggles, clock=clock, limits=limits, telegram=telegram
+            tickets=tickets,
+            toggles=toggles,
+            clock=clock,
+            throttle=throttle,
+            limits=limits,
+            telegram=telegram,
         )
         self._audit = audit
         # `notifier` İSTƏYƏ BAĞLIDIR: yalnız «Gözləmədə» xatırlatması üçün
@@ -1216,10 +1280,12 @@ __all__ = [
     "InboxFilter",
     "SupportAccessError",
     "SupportChannel",
+    "SupportChatThrottleRepository",
     "SupportChatUseCase",
     "SupportInboxUseCase",
     "SupportMessage",
     "SupportMessageError",
+    "SupportRateLimitError",
     "SupportTelegramGateway",
     "SupportThread",
     "SupportTicketRepository",

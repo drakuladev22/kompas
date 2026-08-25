@@ -102,6 +102,25 @@ class FakeFeatureToggles:
         self.disabled.add(module_key)
 
 
+class FakeSupportChatThrottle:
+    """Dəstək-chat sürət sayğacı (Faza 12.1) — bazasız sahtə.
+
+    Defolt HEÇ VAXT qifləmir; `locked_until` təyin ediləndə qapı işə düşür.
+    Sayğacın özü `registered` siyahısında izlənir ki, «uğurlu mesajdan sonra
+    sayılır» iddiası da yoxlanılsın.
+    """
+
+    def __init__(self, *, locked_until: Any = None) -> None:
+        self.locked_until_value = locked_until
+        self.registered: list[Any] = []
+
+    def lockout_until(self, tenant_id: TenantId, employee_id: Any) -> Any:
+        return self.locked_until_value
+
+    def register_message(self, tenant_id: TenantId, employee_id: Any) -> None:
+        self.registered.append(employee_id)
+
+
 class RecordingNotifier:
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
@@ -728,6 +747,7 @@ __all__ = [
     "FakeLeaveTypes",
     "FakeNtp",
     "FakeShifts",
+    "FakeSupportChatThrottle",
     "FakeSystemLimits",
     "InMemoryAttendance",
     "InMemoryAuthSessions",

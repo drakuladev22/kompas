@@ -4123,6 +4123,9 @@ class ApplicationContext:
                 tickets=repo("support"),
                 toggles=repo("toggles"),
                 clock=clock,
+                # `v2backlog.md` Faza 12.1 — mesaj sürət sayğacı (migrations/
+                # 090 + 107). MƏCBURİ arqumentdir: qapının daşıyıcısıdır.
+                throttle=repo("chat_throttle"),
                 # `SUPPORT_THREAD_PAGE_SIZE` — mesaj lentinin uzunluğu.
                 limits=repo("limits"),
                 telegram=telegram_gateway,
@@ -4132,6 +4135,7 @@ class ApplicationContext:
                 toggles=repo("toggles"),
                 clock=clock,
                 audit=audit,
+                throttle=repo("chat_throttle"),
                 limits=repo("limits"),
                 telegram=telegram_gateway,
                 # «Gözləmədə» xatırlatması işçiyə TƏTBİQ-DAXİLİ bildirişlə
