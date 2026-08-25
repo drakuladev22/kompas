@@ -19,10 +19,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import pytest
 
+from src.application.use_cases.campaign_periods import CampaignPeriod
 from src.application.use_cases.staffing_pattern import StaffingPatternUseCase
 from src.domain.entities.base import DomainRuleError
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
@@ -64,8 +65,14 @@ class FakeClock:
 
 
 class FakeLimits:
-    def __init__(self, values: dict[str, int] | None = None) -> None:
+    def __init__(
+        self,
+        values: dict[str, int] | None = None,
+        *,
+        texts: dict[str, str] | None = None,
+    ) -> None:
         self._values = values or {}
+        self.texts = texts or {}
         self.requested: list[str] = []
 
     def get_int(self, tenant_id: TenantId, key: str, default: int) -> int:
@@ -73,7 +80,9 @@ class FakeLimits:
         return self._values.get(key, default)
 
     def get_str(self, tenant_id: TenantId, key: str, default: str) -> str:
-        return default
+        # Kampaniya çarpanı ONLUQdur, ona görə `get_str`-dən oxunur — `texts`
+        # verilməyibsə defolt (yəni `DEFAULT_LIMITS` fallback-ı) qayıdır.
+        return self.texts.get(key, default)
 
     def all_for(self, tenant_id: TenantId) -> dict[str, str]:
         return {}
@@ -108,10 +117,45 @@ class InMemorySuggestions:
         self.rows[(suggestion.store_id, suggestion.weekday)] = suggestion
 
 
+class FakeCampaigns:
+    """`CampaignPeriodRepository` — YALNIZ `list_periods` işlədilir.
+
+    `include_inactive` arqumenti YADDA SAXLANILIR: use case-in onu `False`
+    ötürdüyünü test təsdiqləyir (söndürülmüş dövr çəkiyə düşməməlidir).
+    """
+
+    def __init__(self, periods: list[tuple[date, date]], *, active: bool = True) -> None:
+        self._periods = periods
+        self._active = active
+        self.include_inactive_calls: list[bool] = []
+
+    def list_periods(self, tenant_id: TenantId, *, include_inactive: bool) -> list[Any]:
+        self.include_inactive_calls.append(include_inactive)
+        if include_inactive is False and not self._active:
+            return []
+        return [
+            CampaignPeriod(
+                period_id=str(uuid.uuid4()),
+                name="Kampaniya",
+                start_date=start,
+                end_date=end,
+                is_active=self._active,
+            )
+            for start, end in self._periods
+        ]
+
+    def create(self, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover - istifadə olunmur
+        raise NotImplementedError
+
+    def deactivate(self, *args: Any, **kwargs: Any) -> bool:  # pragma: no cover
+        raise NotImplementedError
+
+
 def build(
     observations: list[StoreDayHeadcount],
     *,
     limits: FakeLimits | None = None,
+    campaigns: FakeCampaigns | None = None,
 ) -> tuple[StaffingPatternUseCase, InMemorySuggestions, FakeHistory]:
     history = FakeHistory(observations)
     suggestions = InMemorySuggestions()
@@ -120,6 +164,7 @@ def build(
         suggestions=suggestions,
         limits=limits or FakeLimits(),
         clock=FakeClock(),
+        campaigns=campaigns,
     )
     return use_case, suggestions, history
 
@@ -350,6 +395,146 @@ def test_the_headcount_label_rounds_to_one_decimal() -> None:
 
 # --------------------------------------------------------------------------- #
 # 4. 1C SƏRHƏDİ — statik qapı
+# --------------------------------------------------------------------------- #
+# Kampaniya çəkisi (v2backlog.md Faza 6.4)
+# --------------------------------------------------------------------------- #
+
+#: Pəncərədəki ƏN YENİ çərşənbə (`wednesdays` 2026-08-05-dən geriyə addımlayır).
+_CAMPAIGN_WEDNESDAY: Final = date(2026, 8, 5)
+
+
+def test_campaign_days_pull_the_weighted_average_up() -> None:
+    """Kampaniya günü ağır sayılır — adi orta isə TOXUNULMUR.
+
+    Rəqəmlər: [3, 2, 2, 2] (ən yenisi 3 və o, kampaniya günüdür).
+    Adi orta = 2.25. Çəkili (1.5x) = (1.5*3 + 2 + 2 + 2) / 4.5 = 2.33.
+    """
+    use_case, suggestions, _ = build(
+        wednesdays([3, 2, 2, 2]),
+        campaigns=FakeCampaigns([(_CAMPAIGN_WEDNESDAY, _CAMPAIGN_WEDNESDAY)]),
+    )
+    use_case.recalculate_for_store(TENANT, store_id=STORE)
+
+    row = suggestions.rows[(STORE, 3)]
+    assert row.avg_historical_headcount == 2.25, "Faktiki orta DƏYİŞMƏMƏLİDİR"
+    assert row.campaign_adjusted_headcount == 2.33
+
+
+def test_without_campaign_periods_the_adjusted_value_stays_none() -> None:
+    """`None` = «çəkiləcək gün yoxdur» — sıfır və ya nüsxə DEYİL."""
+    use_case, suggestions, _ = build(wednesdays([3, 2]), campaigns=FakeCampaigns([]))
+    use_case.recalculate_for_store(TENANT, store_id=STORE)
+
+    assert suggestions.rows[(STORE, 3)].campaign_adjusted_headcount is None
+
+
+def test_without_the_campaign_port_the_old_behaviour_is_unchanged() -> None:
+    """Port İSTƏYƏ BAĞLIDIR: köhnə çağırışlar eyni nəticəni verir."""
+    use_case, suggestions, _ = build(wednesdays([3, 2]))
+    use_case.recalculate_for_store(TENANT, store_id=STORE)
+
+    row = suggestions.rows[(STORE, 3)]
+    assert row.avg_historical_headcount == 2.5
+    assert row.campaign_adjusted_headcount is None
+
+
+def test_a_neutral_multiplier_turns_the_weighting_off() -> None:
+    """Root `1.0` yazanda ikinci rəqəm GÖSTƏRİLMİR.
+
+    Çəkili orta hesablansaydı, adi ortanın eynisi olardı və Root ekranda iki
+    eyni rəqəm görüb «çəki işləmir» nəticəsinə gələrdi.
+    """
+    limits = FakeLimits(texts={SystemLimitKey.STAFFING_CAMPAIGN_WEIGHT_MULTIPLIER.value: "1.0"})
+    use_case, suggestions, _ = build(
+        wednesdays([3, 2, 2, 2]),
+        limits=limits,
+        campaigns=FakeCampaigns([(_CAMPAIGN_WEDNESDAY, _CAMPAIGN_WEDNESDAY)]),
+    )
+    use_case.recalculate_for_store(TENANT, store_id=STORE)
+
+    assert suggestions.rows[(STORE, 3)].campaign_adjusted_headcount is None
+
+
+@pytest.mark.parametrize("raw", ["0.2", "-3", "yararsiz", ""])
+def test_an_out_of_range_multiplier_never_lowers_the_campaign_weight(raw: str) -> None:
+    """Aralıqdan kənar dəyər NEYTRALDAN aşağı düşə bilmir (`APP_LIMIT_BOUNDS`).
+
+    `0.2` qəbul edilsəydi kampaniya günü adi gündən AZ sayılardı — yəni
+    parametr öz mənasının TƏRSİNİ edərdi.
+    """
+    limits = FakeLimits(texts={SystemLimitKey.STAFFING_CAMPAIGN_WEIGHT_MULTIPLIER.value: raw})
+    use_case, suggestions, _ = build(
+        wednesdays([3, 2, 2, 2]),
+        limits=limits,
+        campaigns=FakeCampaigns([(_CAMPAIGN_WEDNESDAY, _CAMPAIGN_WEDNESDAY)]),
+    )
+    use_case.recalculate_for_store(TENANT, store_id=STORE)
+
+    row = suggestions.rows[(STORE, 3)]
+    adjusted = row.campaign_adjusted_headcount
+    assert adjusted is None or adjusted >= row.avg_historical_headcount
+
+
+def test_only_active_campaign_periods_are_weighted() -> None:
+    """Söndürülmüş dövr «tarixlər səhv idi» deməkdir — çəkidə qalmamalıdır."""
+    campaigns = FakeCampaigns([(_CAMPAIGN_WEDNESDAY, _CAMPAIGN_WEDNESDAY)], active=False)
+    use_case, suggestions, _ = build(wednesdays([3, 2, 2, 2]), campaigns=campaigns)
+    use_case.recalculate_for_store(TENANT, store_id=STORE)
+
+    assert campaigns.include_inactive_calls == [False]
+    assert suggestions.rows[(STORE, 3)].campaign_adjusted_headcount is None
+
+
+def test_a_campaign_outside_the_window_changes_nothing() -> None:
+    """Pəncərədən kənar kampaniya kəsilir — «bir gün sürüşmə» qapısı."""
+    long_ago = date(2020, 1, 1)
+    use_case, suggestions, _ = build(
+        wednesdays([3, 2, 2, 2]),
+        campaigns=FakeCampaigns([(long_ago, long_ago)]),
+    )
+    use_case.recalculate_for_store(TENANT, store_id=STORE)
+
+    assert suggestions.rows[(STORE, 3)].campaign_adjusted_headcount is None
+
+
+def test_the_campaign_label_is_empty_when_there_is_nothing_to_show() -> None:
+    """Ekran `None` yoxlamasını TƏKRAR YAZMIR — boş sətir onun qarşılığıdır."""
+    plain = StaffingPatternSuggestion(
+        tenant_id=TENANT,
+        store_id=STORE,
+        weekday=3,
+        avg_historical_headcount=2.5,
+        based_on_weeks=8,
+        calculated_at=NOW,
+    )
+    weighted = StaffingPatternSuggestion(
+        tenant_id=TENANT,
+        store_id=STORE,
+        weekday=3,
+        avg_historical_headcount=2.5,
+        campaign_adjusted_headcount=3.4,
+        based_on_weeks=8,
+        calculated_at=NOW,
+    )
+
+    assert plain.campaign_label_az() == ""
+    assert weighted.campaign_label_az() == "kampaniyada 3.4 nəfər"
+
+
+def test_a_negative_campaign_average_is_refused_on_restore() -> None:
+    """DB `CHECK`-inin domen güzgüsü (migrations/108)."""
+    with pytest.raises(DomainRuleError):
+        StaffingPatternSuggestion(
+            tenant_id=TENANT,
+            store_id=STORE,
+            weekday=3,
+            avg_historical_headcount=2.5,
+            campaign_adjusted_headcount=-1.0,
+            based_on_weeks=8,
+            calculated_at=NOW,
+        )
+
+
 # --------------------------------------------------------------------------- #
 
 #: Kod mətnində görünməsi struktur qərar D-nin pozulması demək olan adlar.

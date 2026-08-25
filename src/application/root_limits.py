@@ -101,6 +101,12 @@ APP_LIMIT_BOUNDS: Final[dict[SystemLimitKey, tuple[Decimal, Decimal]]] = {
     # Bir admin MİNİMUMDUR: sıfır tövsiyə ilə sihirbaz heç vaxt xəbərdarlıq
     # göstərməzdi və "tək adam bütün sistemi idarə edir" riski görünməz qalardı.
     SystemLimitKey.SETUP_RECOMMENDED_ADMIN_COUNT: (Decimal(1), Decimal(20)),
+    # --- Kampaniya çəkisi (v2backlog.md Faza 6.4), migrations/108 ---------- #
+    # Aşağı hüdud 1.0 = «çəki yoxdur» (neytral element); ondan aşağısı
+    # kampaniya gününü adi gündən AZ sayardı, yəni parametrin mənasını tərsinə
+    # çevirərdi. Yuxarı hüdud 5.0: beş qat çəkidə bir kampaniya günü bütün
+    # pəncərəni əvəz edər və «tarixi nümunə» adı yalan olardı.
+    SystemLimitKey.STAFFING_CAMPAIGN_WEIGHT_MULTIPLIER: (Decimal("1.0"), Decimal("5.0")),
     # --- Sistem davamlılığı (v2backlog.md Faza 5.3/5.4), migrations/100 --- #
     # Aralıqlar miqrasiya ilə HƏRFƏN eynidir (yuxarıdakı qayda).
     SystemLimitKey.SHIFT_HANDOFF_NOTE_MAX_CHARS: (Decimal(50), Decimal(5000)),

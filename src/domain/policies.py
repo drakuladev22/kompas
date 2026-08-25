@@ -161,6 +161,17 @@ class SystemLimitKey(str, Enum):
     # edir (qısa = təsadüfi, uzun = köhnəlmiş), yəni bu, müəssisənin öz
     # mövsümi ritminə görə tənzimlədiyi dəyərdir — koda yazıla bilməz.
     STAFFING_PATTERN_BASED_ON_WEEKS = "STAFFING_PATTERN_BASED_ON_WEEKS"
+    # --- Kampaniya günlərinin çəkisi (v2backlog.md Faza 6.4) ---
+    #
+    # Kampaniya (endirim, satış aksiyası) günlərində mağaza daha çox işçi ilə
+    # işləyir. Adi orta bu günləri qalan günlərlə BƏRABƏR sayır, yəni növbəti
+    # kampaniyaya hazırlıq təklifi sistematik olaraq AZ göstərir.
+    #
+    # Çarpan ROOT PARAMETRİDİR, çünki kampaniyanın yük fərqi biznesə görə
+    # kəskin dəyişir: mebel salonunda «Qara Cümə» ikiqat heyət tələb edə bilər,
+    # başqa bir şəbəkədə isə fərq cüzidir. `1.0` = çəki söndürülüb (BR-002-nin
+    # «defolt sıfırla söndür» naxışının eyni məntiqi, burada neytral element 1-dir).
+    STAFFING_CAMPAIGN_WEIGHT_MULTIPLIER = "STAFFING_CAMPAIGN_WEIGHT_MULTIPLIER"
     # --- #16 Açıq Növbə Bazarı (kompasos11.md Faza 6) ---
     #
     # HƏR İKİSİ ROOT PARAMETRİDİR. `application.use_cases.open_shift_market`
@@ -1199,6 +1210,11 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # qədər uzun, mövsüm dəyişikliyini "orta"ya qatmayacaq qədər qısa. DB
     # sütununun defoltu ilə eyni miqyasdadır (migrations/019 `based_on_weeks`).
     SystemLimitKey.STAFFING_PATTERN_BASED_ON_WEEKS: "8",
+    # Faza 6.4 — 1.5: kampaniya günü adi gündən «yarım gün qədər çox» sayılır.
+    # İkiqat (2.0) defolt seçilmədi, çünki o, bir-iki kampaniya günü olan
+    # pəncərədə ortanı gözlə görünəcək qədər dartar və Root fərqin haradan
+    # gəldiyini anlamazdı; 1.5 fərqi göstərir, lakin siqnalı boğmur.
+    SystemLimitKey.STAFFING_CAMPAIGN_WEIGHT_MULTIPLIER: "1.5",
     # #16 — 30 gün: açıq növbə "boşluğu doldurmaq" alətidir, uzunmüddətli
     # planlama deyil. Bir aydan uzağa elan verilsəydi, işçilər hələ
     # planlaşdırılmamış təqvimi elan siyahısından oxumağa başlayardı.

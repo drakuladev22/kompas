@@ -125,6 +125,13 @@ class StaffingPatternSuggestion:
     #: Sonuncu hesablama anı (tz-aware) — ekranda təklifin yaşı göstərilir,
     #: çünki 3 ay əvvəl hesablanmış "8 həftəlik nümunə" yanıldıcıdır.
     calculated_at: datetime
+    #: Kampaniya günləri ağırlaşdırılmış orta (`v2backlog.md` Faza 6.4).
+    #:
+    #: `None` = pəncərədə HEÇ BİR kampaniya günü olmayıb — yəni sual mənasızdır.
+    #: Sıfır DEYİL (o, "kampaniyada işçi lazım deyil" kimi oxunardı) və adi
+    #: ortanın nüsxəsi də deyil (Root iki eyni rəqəm görüb "çəki işləmir"
+    #: nəticəsinə gələrdi). Üç halın üçü də ekranda FƏRQLİ görünməlidir.
+    campaign_adjusted_headcount: float | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.calculated_at, field="calculated_at")
@@ -137,6 +144,11 @@ class StaffingPatternSuggestion:
             raise DomainRuleError(
                 "Orta işçi sayı mənfi ola bilməz",
                 context={"avg_historical_headcount": self.avg_historical_headcount},
+            )
+        if self.campaign_adjusted_headcount is not None and self.campaign_adjusted_headcount < 0:
+            raise DomainRuleError(
+                "Kampaniya çəkili orta mənfi ola bilməz",
+                context={"campaign_adjusted_headcount": self.campaign_adjusted_headcount},
             )
         if self.based_on_weeks <= 0:
             raise DomainRuleError(
@@ -159,6 +171,18 @@ class StaffingPatternSuggestion:
         təxmini xarakterini oxucuya bildirir.
         """
         return f"{self.avg_historical_headcount:.1f} nəfər"
+
+    def campaign_label_az(self) -> str:
+        """Kampaniya günləri üçün təklif — kampaniya olmayıbsa BOŞ sətir.
+
+        BOŞ SƏTİR `None`-un ekran qarşılığıdır: kontroller onu göstərməməli,
+        lakin bunu qərar vermək üçün `None` yoxlamasını TƏKRAR YAZMAMALIDIR
+        (`headcount_label_az` ilə eyni naxış — formatlaşdırma domendədir,
+        çünki "bir onluq rəqəm" qərarı da burada verilib).
+        """
+        if self.campaign_adjusted_headcount is None:
+            return ""
+        return f"kampaniyada {self.campaign_adjusted_headcount:.1f} nəfər"
 
 
 __all__ = [

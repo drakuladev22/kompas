@@ -117,6 +117,8 @@ _MIGRATIONS: Final[tuple[Path, ...]] = (
     _MIGRATIONS_DIR / "103_behavior_pair_correlation.sql",
     _MIGRATIONS_DIR / "104_whats_new_and_ui_language.sql",
     _MIGRATIONS_DIR / "107_support_chat_throttle_seeds.sql",
+    # Faza 6.4-ün tamamlanması — kampaniya çəkisi (Faza 16 auditi).
+    _MIGRATIONS_DIR / "108_campaign_weighted_staffing.sql",
 )
 
 #: Açar → Faza 10.2-nin ikinci dalğasından ƏVVƏL kodda oturan HƏRFİ dəyər.

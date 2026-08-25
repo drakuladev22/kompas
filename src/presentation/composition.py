@@ -4375,6 +4375,10 @@ class ApplicationContext:
                 suggestions=repo("staffing_patterns"),
                 limits=repo("limits"),
                 clock=clock,
+                # `v2backlog.md` Faza 6.4 — kampaniya günlərinin çəkisi.
+                # EYNİ repo nüsxəsi `campaign_periods` use case-inə də gedir:
+                # Root dövrü söndürən kimi növbəti hesablama onu görməlidir.
+                campaigns=repo("campaign_periods"),
             ),
             # #15 Norma üstü iş saatları (Faza 6) — `daily_attendance` ilə EYNİ
             # nüsxə (yuxarıdakı yerli dəyişən), yəni təsdiqin yazdığı sətirlə

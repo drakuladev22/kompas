@@ -362,6 +362,10 @@ def test_the_v2_backlog_expansion_added_its_root_parameters() -> None:
                 "BREAK_GLASS_MAX_GRANTS_PER_MONTH",
             ),
         ),
+        (
+            "Faza 6.4 — kampaniya günlərinin çəkisi",
+            ("STAFFING_CAMPAIGN_WEIGHT_MULTIPLIER",),
+        ),
         ("Faza 6.5 — iş-yükü ədalətliliyi həddi", ("WORKLOAD_FAIRNESS_MAX_GAP",)),
         (
             "Faza 7 — davranış-cütü korrelyasiya həddi",

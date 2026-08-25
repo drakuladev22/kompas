@@ -280,6 +280,9 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
                 # Miqrasiya 103 — `v2backlog.md` Faza 7 üçün davranış-cüt
                 # açarları (korrelyasiya-həddi + min nümunə + sinxron pəncərə).
                 "seed_behavior_pair_limits_for_new_tenant",
+                # Miqrasiya 108 — `v2backlog.md` Faza 6.4-ün tamamlanması:
+                # kampaniya günlərinin növbə təklifindəki çəkisi.
+                "seed_campaign_weight_limit_for_new_tenant",
                 "seed_history_page_size_limits_for_new_tenant",
                 "seed_infrastructure_runtime_limits_for_new_tenant",
                 "seed_labor_and_staffing_limits_for_new_tenant",
@@ -314,6 +317,7 @@ MISSING_FROM_SCHEMA: Final[dict[str, str]] = (
                 "trg_seed_attrition_risk_limits",
                 "trg_seed_behavior_baseline_limits",
                 "trg_seed_behavior_pair_limits",
+                "trg_seed_campaign_weight_limit",
                 "trg_seed_br_limits",
                 "trg_seed_break_parameters",
                 "trg_seed_bulk_operations_limits",

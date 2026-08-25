@@ -2215,7 +2215,24 @@ class ScreenDataBinder:
         )
         return _ShiftStaffingPatternData(
             rows=[
-                (suggestion.weekday_label_az, suggestion.headcount_label_az())
+                # `v2backlog.md` Faza 6.4 — kampaniya rəqəmi EYNİ SƏTİRDƏ,
+                # ikinci sütun kimi YOX: ekranın `set_staffing_pattern` imzası
+                # (həftə günü, dəyər) cütüdür və onu genişləndirmək maket
+                # yolunu da, «heç nə itmədi» baseline-ını da qırardı. Kampaniya
+                # olmayan həftə günündə əlavə mətn ÜMUMİYYƏTLƏ görünmür
+                # (`campaign_label_az` boş sətir qaytarır) — yəni sətir yalnız
+                # məlumat OLANDA uzanır.
+                (
+                    suggestion.weekday_label_az,
+                    " · ".join(
+                        part
+                        for part in (
+                            suggestion.headcount_label_az(),
+                            suggestion.campaign_label_az(),
+                        )
+                        if part
+                    ),
+                )
                 for suggestion in suggestions
             ],
             store_name=store_name,

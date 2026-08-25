@@ -47,7 +47,7 @@ class PostgresStaffingPatternRepository(_BaseRepository):
 
     _SELECT = """
         SELECT tenant_id, store_id, weekday, avg_historical_headcount,
-               based_on_weeks, calculated_at
+               campaign_adjusted_headcount, based_on_weeks, calculated_at
         FROM staffing_pattern_suggestions
     """
 
@@ -76,18 +76,24 @@ class PostgresStaffingPatternRepository(_BaseRepository):
             """
             INSERT INTO staffing_pattern_suggestions
                 (tenant_id, store_id, weekday, avg_historical_headcount,
-                 based_on_weeks, calculated_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                 campaign_adjusted_headcount, based_on_weeks, calculated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (tenant_id, store_id, weekday) DO UPDATE
-                SET avg_historical_headcount = EXCLUDED.avg_historical_headcount,
-                    based_on_weeks           = EXCLUDED.based_on_weeks,
-                    calculated_at            = EXCLUDED.calculated_at
+                SET avg_historical_headcount    = EXCLUDED.avg_historical_headcount,
+                    -- `NULL` DA YAZILIR (COALESCE YOXDUR): kampaniya dövrü
+                    -- söndürüləndə köhnə çəkili rəqəm sətirdə qalsaydı, ekran
+                    -- artıq mövcud olmayan bir kampaniyanın təklifini
+                    -- göstərməyə davam edərdi (migrations/108).
+                    campaign_adjusted_headcount = EXCLUDED.campaign_adjusted_headcount,
+                    based_on_weeks              = EXCLUDED.based_on_weeks,
+                    calculated_at               = EXCLUDED.calculated_at
             """,
             (
                 suggestion.tenant_id,
                 suggestion.store_id,
                 suggestion.weekday,
                 suggestion.avg_historical_headcount,
+                suggestion.campaign_adjusted_headcount,
                 suggestion.based_on_weeks,
                 suggestion.calculated_at,
             ),
@@ -206,6 +212,14 @@ def _row_to_suggestion(row: dict[str, Any]) -> StaffingPatternSuggestion:
         # seçim `BehaviorBaseline`-dədir) — pul DEYİL, ona görə `Money`-nin
         # dəqiqlik tələbi burada tətbiq olunmur.
         avg_historical_headcount=float(row["avg_historical_headcount"]),
+        # `None` QORUNUR — `float(None)` çökərdi, `float(row.get(...) or 0)` isə
+        # "kampaniya günü olmayıb"ı "kampaniyada 0 nəfər"ə çevirərdi (bax
+        # `staffing_signals.py`-dakı sahə şərhi).
+        campaign_adjusted_headcount=(
+            None
+            if row.get("campaign_adjusted_headcount") is None
+            else float(row["campaign_adjusted_headcount"])
+        ),
         based_on_weeks=int(row["based_on_weeks"]),
         calculated_at=row["calculated_at"],
     )
