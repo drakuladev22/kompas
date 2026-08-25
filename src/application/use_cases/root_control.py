@@ -292,9 +292,7 @@ class RootControlUseCase:
             DEFAULT_LIMITS[SystemLimitKey.UI_LANGUAGE],
         )
 
-    def set_language(
-        self, *, tenant_id: TenantId, actor: Employee, language: str
-    ) -> str:
+    def set_language(self, *, tenant_id: TenantId, actor: Employee, language: str) -> str:
         """İnterfeys dilini dəyişir — YALNIZ kataloqda olan dilə.
 
         `AVAILABLE_UI_LANGUAGES`-də olmayan kod RƏDD EDİLİR: Root «ru» yazsa
