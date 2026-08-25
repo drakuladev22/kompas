@@ -4875,6 +4875,28 @@ class KompasApplication:
             store_name="",
         )
 
+        # `v2backlog.md` Faza 10 — ilk-istifadə bələdçisi. Bayraq OXUNUR və
+        # yalnız `False`-dursa overlay qoşulur; yazı overlay BAĞLANDIQDA
+        # ayrıca sessiyada gedir (aşağıda). Oxu uğursuzluğu girişi BLOKLAMIR:
+        # bələdçi tanışlıqdır, xidmət deyil (fail-soft, SEC-7 istiqaməti).
+        try:
+            if self._context is None:  # pragma: no cover - önizləmə rejimi
+                seen = True
+            else:
+                with self._context.session(user_id=employee.id) as session:
+                    seen = session.uow.repository("preferences").kiosk_onboarding_done(
+                        employee.id
+                    )
+        except Exception:
+            _log.warning("KIOSK_ONBOARDING_READ_FAILED", exc_info=True)
+            seen = True
+        if not seen:
+            face_step = self._kiosk_face_step_needed(employee)
+            overlay = home.show_onboarding(include_face_step=face_step)
+            overlay.finished.connect(
+                lambda emp_id=employee.id: self._mark_kiosk_onboarding_done(emp_id)
+            )
+
         #: Son BİLİNƏN status — `KioskOutcome.status` uğursuzluqda `None` gəlir
         #: (əməliyyat baş tutmayıb, deməli status da dəyişməyib).
         last_status: list[WorkerStatus] = []
@@ -5088,6 +5110,41 @@ class KompasApplication:
 
         refresh(outcome)
         return home
+
+    def _kiosk_face_step_needed(self, employee: Employee) -> bool:
+        """Bələdçiyə «üzünüzü göstərin» addımının qoşulub-qoşulmaması.
+
+        `is_enrollment_required`-ın YALNIZ oxu hissəsidir (Faza 10): qeydiyyat
+        tələbi varsa, işçi üçüncü addımda üz axını da izah olunur. Uğursuzluq
+        `False`-dur — bələdçi onsuz da üç addımla tamdır.
+        """
+        if self._context is None:  # pragma: no cover - önizləmə rejimi
+            return False
+        try:
+            with self._context.session(user_id=employee.id) as session:
+                from src.presentation.controllers.face_setup import (  # noqa: PLC0415
+                    is_enrollment_required,
+                )
+
+                return is_enrollment_required(session, employee)
+        except Exception:
+            _log.warning("KIOSK_ONBOARDING_FACE_STEP_CHECK_FAILED", exc_info=True)
+            return False
+
+    def _mark_kiosk_onboarding_done(self, employee_id: EmployeeId) -> None:
+        """Bələdçinin bayrağını yazır — «Bitir» VƏ «Keç» EYNİ yolla gedir.
+
+        Yazı uğursuz olsa işçi heç nə hiss etmir; növbəti girişdə bələdçi
+        yenidən görünür — bu, zərərsizdir və logda iz qoyur.
+        """
+        if self._context is None:  # pragma: no cover - önizləmə rejimi
+            return
+        try:
+            with self._context.session(user_id=employee_id) as session:
+                session.uow.repository("preferences").mark_kiosk_onboarding_done(employee_id)
+                session.commit()
+        except Exception:
+            _log.warning("KIOSK_ONBOARDING_WRITE_FAILED", exc_info=True)
 
     def _start_kiosk_status_poll(
         self,

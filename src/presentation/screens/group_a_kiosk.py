@@ -483,6 +483,143 @@ class PinPadScreen(QWidget):
 # --------------------------------------------------------------------------- #
 
 
+class KioskOnboardingOverlay(QWidget):
+    """İlk-istifadə bələdçisi — `v2backlog.md` Faza 10.
+
+    "Yeni işçi ilk dəfə Kiosk-da PIN-ekranını görəndə (mövcud «ilk giriş»
+     aşkarlanması ilə), 3-4 addımlı, keçilə-bilən (skip edilə bilən) sadə
+     bir bələdçi («Bura PIN-inizi yazın», «Bura üzünüzü göstərin» və s.)."
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ ANA EKRANIN ÜZƏRİNDƏ OVERLAY, AYRI EKRAN DEYİL
+    ──────────────────────────────────────────────────────────────────────────
+    Bələdçi İŞÇİNİN yolunu DƏYİŞMƏMƏLİDİR: «Keç»-ə basan işçi birbaşa status
+    kartını görməlidir. Ayrı ekran olsaydı, «Keç» navigasiya əməliyyatı
+    olardı və kiosk axını (status poll, saat) iki ekran arasında bölünərdi.
+    Overlay isə ana ekrandan SİLİNDİKDƏ heç bir iz qoymur — `finished`
+    siqnalı yalnız bayrağı yazmaq üçündür (`app.py`).
+
+    ──────────────────────────────────────────────────────────────────────────
+    MÖVCUD DİZAYN SİSTEMİ — YENİ QSS YOXDUR (MƏRKƏZİ TƏLƏB #2)
+    ──────────────────────────────────────────────────────────────────────────
+    Kart `primitives.Card`, düymələr `action_button`/`secondary_button`,
+    mətnlər mövcud etiket fabriklləridir. Rəng/ölçü hardcode YOXDUR.
+    """
+
+    #: Bələdçi bağlandı (tamamlandı VƏYA keçildi) — bayraq bir dəfə yazılır.
+    finished = Signal()
+
+    #: ÜÇ addım — spesifikasiyanın «3-4 addım» aralığının aşağı sərhədi.
+    #: Dördüncü (üz qeydiyyatı) addımı AYRI saxlanılır: yalnız işçinin üzü
+    #: hələ qeydiyyatda deyilsə ƏLAVƏ olunur (`steps_for`).
+    _BASE_STEPS: Final[tuple[tuple[str, str], ...]] = (
+        (
+            "PIN-inizi buraya yazın",
+            "Klaviaturadan 4 rəqəmli kodunuzu daxil edin. Kodunuzu bilmirsinizsə "
+            "mağaza rəhbərinizə müraciət edin.",
+        ),
+        (
+            "Günü «İşə Başladım» ilə açın",
+            "Mağazaya çatanda Ana Ekrandakı yaşıl düyməyə basın — girişiniz "
+            "operatora təsdiq üçün düşəcək.",
+        ),
+        (
+            "Çıxarkən «Nəhayət, Qayıtdım» deyin",
+            "Günün sonunda eyni düymə bitirmə yazır; fasilə üçün ayrıca düymə "
+            "var. Beləliklə, iş vaxtınız düzgün hesablanır.",
+        ),
+    )
+    _FACE_STEP: Final[tuple[str, str]] = (
+        "Bura üzünüzü göstərin",
+        "Üz qeydiyyatınız tamamlanmayıb. Bir dəfə qeydiyyatdan sonra növbəti "
+        "dəfələrdə «Üzlə daxil ol» ilə PIN-siz girə bilərsiniz.",
+    )
+
+    def __init__(
+        self,
+        theme: ThemeManager,
+        *,
+        include_face_step: bool,
+        parent: QWidget,
+    ) -> None:
+        super().__init__(parent)
+        self._theme = theme
+        self._steps: tuple[tuple[str, str], ...] = (
+            (*self._BASE_STEPS, self._FACE_STEP) if include_face_step else self._BASE_STEPS
+        )
+        self._index = 0
+
+        # Ana ekranla EYNI səth tokeni — bələdçi «ayrı pəncərə» kimi oxunmur.
+        set_surface_color(self, theme.color("--color-content-bg"))
+        # Tam örtük — altındakı kartlar kliklənməz qalır.
+        self.setGeometry(parent.rect())
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addStretch(1)
+
+        card = Card(padding=metrics.CARD_PADDING * 2, spacing=metrics.CARD_CONTENT_SPACING)
+        card.setFixedWidth(460)
+
+        self._step_title = title_label(self._steps[0][0], size=19)
+        self._step_title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        card.add(self._step_title)
+
+        self._step_body = body_label(self._steps[0][1], size=14)
+        self._step_body.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        card.add(self._step_body)
+
+        self._progress = muted_label(self._progress_text())
+        self._progress.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        card.add(self._progress)
+
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(metrics.SPACE_MS)
+
+        skip = secondary_button("Keç")
+        skip.clicked.connect(self.finish)
+        row_layout.addWidget(skip)
+        row_layout.addWidget(stretch())
+
+        self._next = action_button("İrəli")
+        self._next.clicked.connect(self.advance)
+        row_layout.addWidget(self._next)
+
+        card.add(row)
+        layout.addWidget(card, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addStretch(1)
+
+    # ------------------------------- nəzarət ---------------------------------- #
+
+    @property
+    def steps(self) -> tuple[tuple[str, str], ...]:
+        """Addımlar — testlər üçün oxu görünüşü."""
+        return self._steps
+
+    def _progress_text(self) -> str:
+        return f"{self._index + 1} / {len(self._steps)}"
+
+    def advance(self) -> None:
+        """«İrəli» — son addımda bələdçini BİTİRİR."""
+        if self._index >= len(self._steps) - 1:
+            self.finish()
+            return
+        self._index += 1
+        title_text, body_text = self._steps[self._index]
+        self._step_title.setText(title_text)
+        self._step_body.setText(body_text)
+        self._next.setText("Bitir" if self._index == len(self._steps) - 1 else "İrəli")
+        self._progress.setText(self._progress_text())
+
+    def finish(self) -> None:
+        """Overlay-i bağlayır və `finished` yayır — «Bitir» VƏ «Keç» BURADA."""
+        self.setParent(None)
+        self.deleteLater()
+        self.finished.emit()
+
+
 class EmployeeHomeScreen(QWidget):
     """PIN-dən sonra açılan işçi ekranı — status, tapşırıqlar, xal, cərimələr.
 
@@ -691,6 +828,25 @@ class EmployeeHomeScreen(QWidget):
         # "Gözlənilir…" vəziyyətində düymə var, amma basıla bilməz — işçi
         # operatorun təsdiqini gözləyir və təkrar sorğu göndərməməlidir.
         self._action.setEnabled(status.is_actionable)
+
+    # --------------------------- ilk-istifadə bələdçisi ----------------------- #
+
+    def show_onboarding(self, *, include_face_step: bool) -> KioskOnboardingOverlay:
+        """Bələdçini bu ekranın ÜZƏRİNƏ qoyur (Faza 10) — overlay-i qaytarır.
+
+        QAYTARMAQ LAZIMDIR, çünki bayraq yazısı (`finished`) `app.py`-dadır:
+        ekran DB-dən XƏBƏRSİZDİR, yalnız göstərmək/qoşmaq onun işidir
+        («görmək = səlahiyyət» deyil — burada «görmək = ekranın işi»).
+        """
+        overlay = KioskOnboardingOverlay(
+            self._theme,
+            include_face_step=include_face_step,
+            parent=self,
+        )
+        overlay.setGeometry(self.rect())
+        overlay.raise_()
+        overlay.show()
+        return overlay
 
     # ---------------------------- fasilə seçimi -------------------------------- #
 

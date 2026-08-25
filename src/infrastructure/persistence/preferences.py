@@ -127,6 +127,41 @@ class PostgresUserPreferences(_BaseRepository):
         )
         return str(row["language"]) if row else DEFAULT_LANGUAGE
 
+    # --------------------------- kiosk bələdçisi ----------------------------- #
+
+    def kiosk_onboarding_done(self, employee_id: EmployeeId) -> bool:
+        """Kiosk bələdçisi bu istifadəçi üçün göstərilibmi (Faza 10).
+
+        SƏTRİN OLMAMASI «görməyib» deməkdir — `theme_for` ilə EYNİ fail-safe:
+        heç vaxt Ayarlar-a girməmiş kiosk işçisinin sətri olmur və ona görə
+        bayraq `False` oxunur, xəta atılmır.
+        """
+        row = self._fetch_one(
+            "SELECT kiosk_onboarding_done FROM user_preferences WHERE user_id = %s",
+            (employee_id,),
+        )
+        if row is None or row["kiosk_onboarding_done"] is None:
+            return False
+        return bool(row["kiosk_onboarding_done"])
+
+    def mark_kiosk_onboarding_done(self, employee_id: EmployeeId) -> None:
+        """Bələdçini «görüldü» kimi yazır — «KEÇ» DƏ BURADAN KEÇİR.
+
+        Qəsdən İKİTƏRƏFLİDİR: məqsəd məcburiyyət deyil, tanışlıqdır; «Keç»-ə
+        basan işçinin qarşıda yenidən eyni overlay görməsi əks təsir verərdi.
+        UPSERT digər tərcih sütunlarına TOXUNMUR (`ON CONFLICT DO UPDATE`
+        yalnız bu sütunu dəyişir).
+        """
+        self._execute(
+            """
+            INSERT INTO user_preferences (user_id, kiosk_onboarding_done)
+            VALUES (%s, TRUE)
+            ON CONFLICT (user_id)
+            DO UPDATE SET kiosk_onboarding_done = TRUE
+            """,
+            (employee_id,),
+        )
+
     # -------------------------- dashboard düzülüşü --------------------------- #
 
     def load(self, employee_id: EmployeeId) -> list[str] | None:
