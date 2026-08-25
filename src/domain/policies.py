@@ -1075,6 +1075,19 @@ class SystemLimitKey(str, Enum):
     # qiymət normal planlamada da siqnal verərdi.
     WORKLOAD_FAIRNESS_MAX_GAP = "WORKLOAD_FAIRNESS_MAX_GAP"
 
+    # --- İki-nəfərlik fırıldaqçılıq aşkarlaması (`v2backlog.md` Faza 7) ---
+    #
+    # «Davranış-cüt» qaydasının ÜÇ açarı. `..._CORRELATION_THRESHOLD`
+    # spesifikasiyanın ÖZ işarələdiyi **ROOT PARAMETRİ**-dir (korrelyasiya-
+    # həddi): ortaq iş günlərinin neçə faizində iki işçi `SYNC_MINUTES`
+    # içində giriş edirsə, cüt Exception Engine-ə yazılır. Qalan ikisi
+    # yalan-pozitivi idarə edir: az ortaq gündən nümunə çıxmaq ittihamdır
+    # (`MIN_SHARED_DAYS`, BehaviorAnomalyRule-un min-sample qaydasının
+    # analoqu), sinxron pəncərəsi isə «birlikdə giriş» tərifidir.
+    BEHAVIOR_PAIR_CORRELATION_THRESHOLD = "BEHAVIOR_PAIR_CORRELATION_THRESHOLD"
+    BEHAVIOR_PAIR_MIN_SHARED_DAYS = "BEHAVIOR_PAIR_MIN_SHARED_DAYS"
+    BEHAVIOR_PAIR_SYNC_MINUTES = "BEHAVIOR_PAIR_SYNC_MINUTES"
+
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     SystemLimitKey.MONTHLY_LEAVE_MINUTES_LIMIT: "240",
@@ -1756,6 +1769,11 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # v2backlog.md Faza 6.5 — «əhəmiyyətli fərq» həddi (bax SystemLimitKey
     # şərhi). Aralıq migrations/102-də: 1..60.
     SystemLimitKey.WORKLOAD_FAIRNESS_MAX_GAP: "4",
+    # v2backlog.md Faza 7 — davranış-cüt açarları (bax SystemLimitKey şərhi).
+    # Aralıqlar migrations/103-də: 50..100, 3..60, 1..120.
+    SystemLimitKey.BEHAVIOR_PAIR_CORRELATION_THRESHOLD: "90",
+    SystemLimitKey.BEHAVIOR_PAIR_MIN_SHARED_DAYS: "10",
+    SystemLimitKey.BEHAVIOR_PAIR_SYNC_MINUTES: "5",
 }
 
 

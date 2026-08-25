@@ -3239,6 +3239,9 @@ class ApplicationContext:
         from src.application.use_cases.overtime_tracking import (  # noqa: PLC0415
             OvertimeTrackingUseCase,
         )
+        from src.application.use_cases.pair_correlation import (  # noqa: PLC0415
+            PairBehaviorCorrelationRule,
+        )
         from src.application.use_cases.performance_reviews import (  # noqa: PLC0415
             PerformanceReviewUseCase,
         )
@@ -3526,6 +3529,16 @@ class ApplicationContext:
             # tapıntını sükutla ATAR (087 dərsi). Sorğu LAQEYDDİR — bax qayda
             # başlığı.
             DuplicateFaceExceptionRule(profiles=repo("face_embeddings"))
+        )
+        exception_engine.register_rule(
+            # v2backlog.md Faza 7 — iki işçinin davranış-nümunələrinin
+            # üst-üstə düşməsi («davranış-cüt»). Mənbə + üç Root açarı
+            # migrations/103-də; ciddiyyət HIGH seed olunub ki, motorun
+            # bildirişi (spesifikasiyanın «HR_Admin-ə bildiriş» sözü)
+            # işləsin. Eyni `checkin_history` portu BehaviorAnomalyRule-un
+            # payıdır — İKİ qayda EYNİ xam mənbəyi oxuyur, lakin FƏRQLİ sual
+            # verir (sapma vs. uyğunluq).
+            PairBehaviorCorrelationRule(checkins=repo("checkin_history"))
         )
 
         # #15 AŞIM İZLƏYİCİSİ YEREL DƏYİŞƏNDİR, çünki İKİ yerdə lazımdır: həm

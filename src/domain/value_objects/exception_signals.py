@@ -96,6 +96,15 @@ FACE_ENROLLMENT_OVERDUE_SOURCE: Final = "FACE_ENROLLMENT_OVERDUE"
 #: ÖZÜ — yəni sual «bu kimsədir?» deyil, «bunlar eyni adamdırmı?»-dır.
 DUPLICATE_FACE_SOURCE: Final = "DUPLICATE_FACE"
 
+#: v2backlog.md Faza 7 — iki işçinin davranış-nümunələri arasında Root-un
+#: korrelyasiya-həddini aşan uyğunluq («davranış-cütü»). `BEHAVIOR_ANOMALY_
+#: SOURCE`-dan AYRIDIR və qarışdırılmamalıdır: o, TƏK işçinin ÖZ baz xəttinə
+#: sapmasını ölçür, bu isə İKİ işçinin BİRBİRİNƏ bənzəməsini — yəni anomaliya
+#: yox, naxış-uyğunluğudur (məs. həmişə eyni növbədə, bir-birinin qayıbını
+#: örtmə). Həll yolu da fərqlidir: sapma üçün cavab işçidən soruşmaqdır,
+#: uyğunluq üçün isə CÜTÜ ARAŞDIRMAQDIR.
+BEHAVIOR_PAIR_SOURCE: Final = "BEHAVIOR_PAIR"
+
 #: `exception_sources.code` üçün minimum uzunluq — DB `CHECK`-inin güzgüsü
 #: (`char_length(trim(code)) >= 3`). Bu, biznes həddi DEYİL, sxem
 #: məhdudiyyətidir; ona görə `system_limits`-ə aid deyil.
@@ -255,6 +264,7 @@ class RuleEvaluationContext:
 
 __all__ = [
     "BEHAVIOR_ANOMALY_SOURCE",
+    "BEHAVIOR_PAIR_SOURCE",
     "DUPLICATE_FACE_SOURCE",
     "FACE_ENROLLMENT_OVERDUE_SOURCE",
     "FACE_MISMATCH_SOURCE",
