@@ -45,6 +45,7 @@ from typing import Any
 
 import pytest
 
+from src.domain.entities.task import TaskSource, TaskStatus
 from src.shared.exceptions import KompasOSError
 from tests.conftest import requires_qt
 
@@ -69,6 +70,11 @@ class _Task:
         self.id = uuid.uuid4()
         self.title = title
         self.deadline = NOW
+        # `v2backlog.md` Faza 4.2 — `_tasks_rows()` (`kiosk_self_service.py`)
+        # `withdrawable` açarını bu ikisindən hesablayır. Defolt ADİ tapşırıq
+        # (öz-düzəliş DEYİL) — `withdrawable="0"` düzgün nəticədir.
+        self.source = TaskSource.ASSIGNED
+        self.status = TaskStatus.OPEN
 
 
 class _Money:

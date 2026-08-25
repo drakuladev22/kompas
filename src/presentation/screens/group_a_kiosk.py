@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -43,6 +44,7 @@ from src.presentation.widgets.primitives import (
     stretch,
     title_label,
 )
+from src.presentation.widgets.responsive import LayoutMode
 from src.presentation.widgets.worker_status import WorkerStatus
 
 if TYPE_CHECKING:
@@ -544,11 +546,36 @@ class EmployeeHomeScreen(QWidget):
         self._transfer_request_id: str = ""
         set_surface_color(self, theme.color("--color-content-bg"))
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(48, 32, 48, 32)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(48, 32, 48, 32)
+        outer.setSpacing(24)
+
+        # BAŞLIQ SÜRÜŞDÜRMƏDƏN KƏNARDIR — `AdminShell`-in `PageHeader`-i İLƏ
+        # EYNİ qərar (`admin_shell.py:120-149`): işçi kim olduğunu HƏMİŞƏ
+        # görməlidir, sürüşdürülən məzmun onun ALTINDA qalır.
+        outer.addWidget(self._build_header(full_name, position_name, store_name))
+
+        # KOMPAKT REJİMDƏ TAM MƏZMUN ~937px TƏLƏB EDİR (real Qt ölçüsü,
+        # `perf-screens`), 1366×768/1280×768-də görünən sahə isə ~608px-dir —
+        # şaquli zolaq ~329px (2-ci sıra kartlarının sürüşdürmədən görünməməsi
+        # ilə bağlı ətraflı izah və rədd edilən alternativlər `_build_cards_
+        # row`-dadır). `AdminShell.ContentScroll` İLƏ EYNİ NAXIŞ
+        # (`admin_shell.py:137-143`, "Kontent sürüşdürülə bilir — 1280×800-dən
+        # kiçik ekranlarda uzun formalar kəsilməməlidir" — HƏDƏF ÖLÇÜ EYNİDİR):
+        # kiosk üçün AYRI fəlsəfə İCAD OLUNMUR, mövcud qərar TƏTBİQ olunur.
+        # `AsNeeded` — geniş ekranda (1920×1080, WIDE rejim) zolaq
+        # ÜMUMİYYƏTLƏ görünmür, təcrübə DƏYİŞMİR (real ölçüdə təsdiqləndi).
+        scroll = QScrollArea()
+        scroll.setObjectName("KioskContentScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(24)
 
-        layout.addWidget(self._build_header(full_name, position_name, store_name))
         layout.addWidget(self._build_status_card())
         # FASİLƏ KARTI STATUS KARTININ DƏRHAL ALTINDADIR (nahar.md GUI, bənd 2):
         # seçim `[İcazə İstəyirəm]` düyməsindən ƏVVƏL edilir və ikisi arasında
@@ -563,6 +590,9 @@ class EmployeeHomeScreen(QWidget):
         # BURAYA keçib (əvvəl `_build_cards_row`-dadır idi) ki, boş qalan
         # şaquli sahəni bu kart tutsun.
         layout.addWidget(self._build_announcements_card(), 1)
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll, 1)
 
     # ------------------------------- başlıq ---------------------------------- #
 
@@ -762,25 +792,92 @@ class EmployeeHomeScreen(QWidget):
     # ------------------------------- kartlar ---------------------------------- #
 
     def _build_cards_row(self) -> QWidget:
-        container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(metrics.CARD_SPACING)
+        """Altı kart — `QGridLayout`-da, sütun sayı `apply_layout_mode`-dan gəlir.
 
-        layout.addWidget(self._build_tasks_card(), 1)
-        layout.addWidget(self._build_points_card(), 1)
-        layout.addWidget(self._build_fines_card(), 1)
-        layout.addWidget(self._build_open_shifts_card(), 1)
-        # #28 İllik Məzuniyyət — kartlar sırasının SONUNDA: soldan sağa
-        # "bugün → bu ay → gələcək" ritmi qorunur (tapşırıq/xal/cərimə cari
-        # dövrə, açıq növbə yaxın günlərə, məzuniyyət isə bütün ilə aiddir).
-        layout.addWidget(self._build_annual_leave_card(), 1)
-        # `v2backlog.md` Faza 3.3 — Filiallar-arası Köçürmə. SIRADA SONUNCU,
-        # İllik Məzuniyyətdən DƏRHAL SONRA: hər ikisi "GÜN/AY miqyaslı struktur
-        # dəyişiklik" sinfindəndir (bugünkü status/xal/cərimə axınına aid
-        # DEYİL), ona görə "bugün → gələcək" ritminin son pilləsində dayanır.
-        layout.addWidget(self._build_transfer_request_card(), 1)
+        NİYƏ ARTIQ `QHBoxLayout` DEYİL (kiosk skrinşot dövrəsinin tapıntısı)
+        ──────────────────────────────────────────────────────────────────────
+        Altı kart yan-yana `KIOSK_CARDS_ROW_MIN_WIDTH` (1656px) tələb edir,
+        `perf-screens` ölçdü. Tipik kiosk sensor panel (1280×800, 1366×768)
+        bundan DARDIR — sıra sərt sıxışır, düymələr üst-üstə düşür. Həll
+        `DashboardScreen._apply_grid`-in EYNİ naxışıdır (`group_c.py`): sabit
+        `QHBoxLayout` əvəzinə `QGridLayout`, sütun sayı pəncərə enindən asılı
+        olaraq dəyişir. Fərq YALNIZ ədəddədir: dashboard darda 1 sütuna
+        yığılır, bu isə 3 sütuna (2 sıra) — bax `apply_layout_mode`.
+
+        ──────────────────────────────────────────────────────────────────────
+        KOMPAKT REJİMDƏ 2-Cİ SIRA (Açıq Növbələr / İllik Məzuniyyət / Köçürmə)
+        SÜRÜŞDÜRMƏDƏN GÖRÜNMÜR — QƏSDLİ GÜZƏŞT (`perf-screens`, real Qt ölçüsü)
+        ──────────────────────────────────────────────────────────────────────
+        3-sütunlu (2-sıra) düzülüşdə tam məzmun (başlıq + status kartı +
+        fasilə kartı + kart sırası + elan kartı) ~937px tələb edir; 1366×768-
+        də `KioskContentScroll`-un görünən sahəsi (başlıq və kənar boşluqlar
+        çıxılandan sonra) ~608px-dir — fərq şaquli zolağın ~329px tutumu ilə
+        DƏQİQ üst-üstə düşür (937 − 608 = 329). Yəni ikinci sıra ekranın
+        ALTINDA qalır və görmək üçün sürüşdürmək LAZIMDIR — bu, güvəndə
+        "boş görünmə" YOX, ÖLÇÜLMÜŞ və QƏBUL EDİLMİŞ nəticədir.
+
+        Rədd edilən alternativlər:
+          * Kartları kiçiltmək — toxunma hədəfi 44px-dən aşağı düşərdi
+            (kiosk ekranı barmaqla toxunulur, siçanla YOX).
+          * Fərqli bölgü (məs. 2×3 əvəzinə 4×2) — yeddinci kart əlavə
+            olunanda EYNİ problem geri qayıdardı, yalnız yeri dəyişərdi.
+        Şaquli sürüşdürmə toxunma cihazında TƏBİİ jestdir və presedent
+        `admin_shell.py:137`-dədir ("Kontent sürüşdürülə bilir" — HƏMİN
+        qərar, kiosk üçün ayrı fəlsəfə İCAD OLUNMUR).
+        """
+        self._cards: list[Card] = [
+            self._build_tasks_card(),
+            self._build_points_card(),
+            self._build_fines_card(),
+            self._build_open_shifts_card(),
+            # #28 İllik Məzuniyyət — kartlar sırasının SONUNDA: soldan sağa
+            # "bugün → bu ay → gələcək" ritmi qorunur (tapşırıq/xal/cərimə cari
+            # dövrə, açıq növbə yaxın günlərə, məzuniyyət isə bütün ilə aiddir).
+            self._build_annual_leave_card(),
+            # `v2backlog.md` Faza 3.3 — Filiallar-arası Köçürmə. SIRADA
+            # SONUNCU, İllik Məzuniyyətdən DƏRHAL SONRA: hər ikisi "GÜN/AY
+            # miqyaslı struktur dəyişiklik" sinfindəndir (bugünkü status/xal/
+            # cərimə axınına aid DEYİL), ona görə "bugün → gələcək" ritminin
+            # son pilləsində dayanır.
+            self._build_transfer_request_card(),
+        ]
+
+        container = QWidget()
+        self._cards_grid = QGridLayout(container)
+        self._cards_grid.setContentsMargins(0, 0, 0, 0)
+        self._cards_grid.setSpacing(metrics.CARD_SPACING)
+        self._apply_cards_grid(columns=len(self._cards))
         return container
+
+    def _apply_cards_grid(self, *, columns: int) -> None:
+        """Kartları şəbəkəyə köçürür — `DashboardScreen._apply_grid` ilə EYNİ texnika.
+
+        `removeWidget` ƏVVƏLCƏDİR: `QGridLayout.addWidget` valideyni dəyişir,
+        LAKİN köhnə xana ETİKETİNİ silmir — açıq çıxarma olmasa eyni kart iki
+        xanada "qeydli" görünərdi (`group_c.py::_detach`-in EYNİ səbəbi).
+        """
+        for card in self._cards:
+            self._cards_grid.removeWidget(card)
+        for index, card in enumerate(self._cards):
+            row, column = divmod(index, columns)
+            self._cards_grid.addWidget(card, row, column)
+        for column in range(columns):
+            self._cards_grid.setColumnStretch(column, 1)
+
+    def apply_layout_mode(self, mode: LayoutMode) -> None:
+        """`KioskWindow.resizeEvent`-dən gəlir — bax `metrics.KIOSK_CARDS_ROW_MIN_WIDTH`.
+
+        `Screen.apply_layout_mode` İLƏ EYNİ AD/İMZA (məqsədli): `KioskWindow`
+        məzmunu `hasattr(content, "apply_layout_mode")` ilə DUCK-TYPE
+        çağırır — PIN klaviaturasının bu metodu YOXDUR və çağırış sükutla
+        keçilir (bax `kiosk.py`).
+        """
+        if not hasattr(self, "_cards_grid"):
+            # `__init__` HƏLƏ `_build_cards_row()`-a çatmayıb — ilk `resizeEvent`
+            # widget tam qurulmazdan ƏVVƏL gələ bilər (Qt-nin adi davranışı).
+            return
+        columns = len(self._cards) if mode is LayoutMode.WIDE else 3
+        self._apply_cards_grid(columns=columns)
 
     def _build_tasks_card(self) -> Card:
         card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING)

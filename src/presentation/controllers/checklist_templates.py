@@ -85,11 +85,26 @@ class ChecklistTemplateController:
         if owner_type == OWNER_TYPE_OFFBOARDING:
             self._owner_key = "OFFBOARDING"
             self.refresh(screen)
-        else:
-            # FIELD_REPORT — axtarış gözlənilir (ekran ARTIQ boş-vəziyyət
-            # göstərir, bax `ChecklistTemplateScreen._set_owner_type`).
-            self._owner_key = ""
-            self._templates = []
+            return
+
+        # FIELD_REPORT — `v2backlog.md` Faza 4.1: `list_all_report_types()`
+        # ARTIQ VAR (`use_cases/field_reports.py`, `ui`-nin tapdığı boşluq
+        # bağlandı) — açar ƏLLƏ axtarılmır, seçici DOLDURULUR. `set_field_
+        # report_types` İLK elementi AVTOMATİK seçib `owner_key_lookup_
+        # requested`-i ÖZÜ tətikləyir (bax ekranın metodu).
+        self._owner_key = ""
+        self._templates = []
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                types = session.field_reports.list_all_report_types(session.tenant_id)
+        except Exception:
+            _error_log.exception("CHECKLIST_TEMPLATE_FIELD_REPORT_TYPES_FAILED")
+            screen.show_error(
+                title=_LIST_FAILED_TITLE,
+                message="Hesabat növləri oxunmadı. Yenidən cəhd edin.",
+            )
+            return
+        screen.set_field_report_types([(t.code, t.name_az) for t in types])
 
     def _on_owner_key_lookup(self, screen: ChecklistTemplateScreen, owner_key: str) -> None:
         if not owner_key:

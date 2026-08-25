@@ -21,6 +21,8 @@ yalnız bağlantı əvəzlənir.
 
 from __future__ import annotations
 
+import ast
+import inspect
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -470,6 +472,65 @@ class _FakeSession:
 
     def __exit__(self, *_: object) -> None:
         return None
+
+
+def _job_handler_session_call_sites(source: str) -> set[tuple[str, str]]:
+    """`_job_*` metodlarının gövdəsindəki `session.<sahə>.<metod>(...)` cütləri.
+
+    `test_field_report_screen.py`-dəki EYNİ naxış (bax həmin faylın modul-
+    səviyyəli şərhi) — Protokolun/`Session`-un TAM səthi YOX, `_job_*`
+    metodlarının FAKTİKİ çağırdığı cütlər. `composition.py`-da `session`
+    dəyişən adı SABİTDİR (`with self.session() as session:`), ona görə
+    əsas adı `"session"` ilə məhdudlaşdırmaq TƏHLÜKƏSİZDİR.
+    """
+    tree = ast.parse(source)
+    calls: set[tuple[str, str]] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name.startswith("_job_")):
+            continue
+        for call_node in ast.walk(node):
+            if not isinstance(call_node, ast.Call):
+                continue
+            func = call_node.func
+            if (
+                isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Attribute)
+                and isinstance(func.value.value, ast.Name)
+                and func.value.value.id == "session"
+            ):
+                calls.add((func.value.attr, func.attr))
+    return calls
+
+
+def test_the_fake_session_implements_every_field_and_method_the_job_handlers_actually_call() -> (
+    None
+):
+    """Bu gün İKİNCİ dəfə eyni qüsur sinfi: `composition.py`-a YENİ iş (`transfer_
+    requests`/`users`) bağlandı, `_FakeSession`-da həmin SAHƏLƏR yox idi —
+    `AttributeError`. `test_field_report_screen.py`-dəki EYNİ qapı naxışı,
+    LAKİN İKİ SƏVİYYƏLİ (əvvəlcə `session.<sahə>`, sonra `<sahə>.<metod>`),
+    çünki `_FakeSession` TƏK use case yox, BÜTÜN sessiya obyekt qrafını
+    təqlid edir.
+    """
+    source = inspect.getsource(ApplicationContext)
+    called = _job_handler_session_call_sites(source)
+    session = _FakeSession([])
+
+    missing_field = sorted({field for field, _method in called if not hasattr(session, field)})
+    assert missing_field == [], (
+        f"`_job_*` metodları `session.<sahə>` çağırır, lakin `_FakeSession`-da "
+        f"bu sahələr YOXDUR: {missing_field}."
+    )
+
+    missing_method = sorted(
+        f"{field}.{method}"
+        for field, method in called
+        if hasattr(session, field) and not hasattr(getattr(session, field), method)
+    )
+    assert missing_method == [], (
+        f"`_job_*` metodları bu metodları çağırır, lakin `_FakeSession`-ın "
+        f"sahtələrində YOXDUR: {missing_method}."
+    )
 
 
 class _FakeUow:

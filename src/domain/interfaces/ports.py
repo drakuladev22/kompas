@@ -1178,6 +1178,17 @@ class TaskRepository(Protocol):
         """Eskalasiya planlayıcısının mənbəyi — yalnız hələ bildirilməmişlər."""
         ...
 
+    def count_self_correction_requests(self, employee_id: EmployeeId, *, since: datetime) -> int:
+        """`v2backlog.md` Faza 4.2 — `tasks.source = 'EMPLOYEE_SELF_CORRECTION'`
+        VƏ `assigned_by = employee_id` VƏ `created_at >= since` sayı.
+
+        Sui-istifadə tavanının (`SELF_CORRECTION_REQUEST_MAX_COUNT`) girişidir
+        — status/nəticədən ASILI OLMADAN sayılır (rədd edilmiş sorğu da
+        "cəhd" sayılır, əks halda işçi eyni əsassız iddianı sonsuz dəfə
+        göndərə bilərdi).
+        """
+        ...
+
     def save(self, task: Task) -> None: ...
 
 
@@ -1914,6 +1925,18 @@ class FieldReportRepository(Protocol):
         öz filialını görür). `None` = süzgəc yoxdur; BOŞ siyahı isə "heç bir
         mağazaya çıxışı yoxdur" deməkdir və heç nə qaytarmır (fail-safe,
         `ExceptionRepository.list_open` ilə eyni qərar).
+        """
+        ...
+
+    def find_for_store_and_day(
+        self, tenant_id: TenantId, *, store_id: StoreId, report_type: str, day: date
+    ) -> FieldReport | None:
+        """`v2backlog.md` Faza 4.1 — `FieldReportTemplate.once_per_day` yoxlaması üçün.
+
+        `day` server saatındandır (`Clock` portu, `use_cases/field_reports.py`
+        `submit()`-də hesablanır) — client saatına etibar edilmir (CLAUDE.md
+        TIME-1 fəlsəfəsi ilə eyni istiqamət, bax `created_at`-ın server
+        trigger-i, migrations/062).
         """
         ...
 

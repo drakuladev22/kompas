@@ -49,6 +49,18 @@ LAYOUT_BREAKPOINT_WIDE: Final = 1280
 #: (1920px monitorda yarısı 960px, 1366px-də 683px).
 LAYOUT_BREAKPOINT_COMPACT: Final = 700
 
+#: `EmployeeHomeScreen`-in (kiosk) altı-kartlıq sırasının ÖZ təbii minimum
+#: eni — `perf-screens` real Qt render ilə ölçdü.
+#:
+#: `LAYOUT_BREAKPOINT_WIDE` (1280) İLƏ QARIŞDIRILMIR, TƏKRARI DEYİL: o,
+#: admin panelin sol-panel (226px) + kontent bölgüsünün həddidir və kiosk
+#: EKRANININ HEÇ BİR sol paneli yoxdur (`group_a_kiosk.py` modul başlığı:
+#: "heç bir naviqasiya yoxdur"). Tipik kiosk sensor panel enləri (1280,
+#: 1366) HƏR İKİSİ `LAYOUT_BREAKPOINT_WIDE`-dan (`>= 1280`) YUXARIDADIR —
+#: admin sabitini təkrar işlətsəydik, kiosk HƏMİŞƏ "WIDE" sayılıb kartlar
+#: yenə sıxışardı (bax `shell/kiosk.py::KioskWindow.resizeEvent`).
+KIOSK_CARDS_ROW_MIN_WIDTH: Final = 1656
+
 #: Pəncərənin MÜTLƏQ minimumu.
 #:
 #: NİYƏ 1280 DEYİL: minimum en 1280 qaldıqca Windows-un yarım-ekran snap-i

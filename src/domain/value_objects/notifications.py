@@ -310,6 +310,12 @@ TENANT_NOTIFICATION_AUDIENCE: Final[dict[str, tuple[str, ...]]] = {
     # cədvəl sətri) — HR bunu GÖZLƏMƏDƏN öyrənməlidir, çünki hərəkəti insan
     # başlatmayıb.
     "EMPLOYEE_SCHEDULED_DEACTIVATION": ("can_manage_employees",),
+    # --- HR Lifecycle v2 (`v2backlog.md` Faza 4.2) ---
+    #
+    # `task_workflow.request_self_correction`: `SHIFT_SWAP_PENDING` ilə EYNİ
+    # naxış — konkret nəzərdən keçirən YOXDUR, sətri QAPADA bilən HƏR şəxs
+    # (`can_approve_task_evidence`) görməlidir.
+    "SELF_CORRECTION_REQUESTED": ("can_approve_task_evidence",),
 }
 
 

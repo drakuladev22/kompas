@@ -53,6 +53,7 @@ SHADOW_CARD_BASELINE: frozenset[ShadowCardKey] = frozenset(
         ("group_e.py", "LicenseInactiveScreen", "__init__", 0),
         ("group_e.py", "SupportChatWidget", "_build_panel", 0),
         ("group_f.py", "NewTaskDialog", "__init__", 0),
+        ("group_f.py", "SelfCorrectionDialog", "__init__", 0),
         ("group_g.py", "NotificationPanel", "__init__", 0),
         ("group_h.py", "CatalogEntryDialog", "__init__", 0),
         ("group_h.py", "ExportCorrectionDialog", "__init__", 0),

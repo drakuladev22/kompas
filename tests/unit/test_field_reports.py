@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -53,6 +53,7 @@ from src.domain.value_objects.authorization import (
     PermissionFlag,
     SystemRole,
 )
+from src.domain.value_objects.catalogs import ChecklistItemTemplate, ChecklistOwnerType
 from src.domain.value_objects.credentials import Username
 from src.domain.value_objects.field_reports import (
     ChecklistItemDraft,
@@ -116,6 +117,21 @@ COMPLAINT_CATEGORY = FieldReportCategory(
     report_type="INCIDENT",
     name_az="Şikayət",
     route_to_role="HR_ADMIN",
+)
+#: `v2backlog.md` Faza 4.1 — Gündəlik Açılış/Bağlanış Checklist-i, `once_per_
+#: day=True` bu şablonda TEST OLUNMASI ÜÇÜNDÜR (`STORE_AUDIT`/`INCIDENT`-in
+#: ikisi də `False` qalır).
+DAILY_OPEN_TEMPLATE = FieldReportTemplate(
+    code="DAILY_OPEN",
+    name_az="Gündəlik Açılış Checklist-i",
+    requires_checklist=True,
+    once_per_day=True,
+)
+DAILY_OPEN_CATEGORY = FieldReportCategory(
+    code="DAILY_OPEN_STANDARD",
+    report_type="DAILY_OPEN",
+    name_az="Standart açılış",
+    route_to_role=None,
 )
 
 
@@ -260,6 +276,45 @@ class FakeFieldReports:
     ) -> list[StoreAuditGap]:
         return list(self.gaps)
 
+    def find_for_store_and_day(
+        self, tenant_id: TenantId, *, store_id: StoreId, report_type: str, day: date
+    ) -> FieldReport | None:
+        """`v2backlog.md` Faza 4.1 — `once_per_day` yoxlaması. `day` `Clock`-dan
+        gəlir (bax `submit()`), sahtə də EYNİ sahəni (`created_at.date()`)
+        müqayisə edir ki, "server saatı" fərqi testdə görünməz qalmasın."""
+        for report in self.rows.values():
+            if (
+                report.tenant_id == tenant_id
+                and report.store_id == store_id
+                and report.report_type == report_type
+                and report.created_at.date() == day
+            ):
+                return report
+        return None
+
+
+class FakeChecklistTemplates:
+    """`ChecklistItemTemplateRepository` — `checklist_draft_for_type()` üçün YALNIZ oxu."""
+
+    def __init__(self, templates: list[ChecklistItemTemplate] | None = None) -> None:
+        self.items = list(templates or [])
+
+    def list_for_owner(
+        self,
+        tenant_id: TenantId,
+        *,
+        owner_type: ChecklistOwnerType,
+        owner_key: str,
+        include_inactive: bool = False,
+    ) -> list[ChecklistItemTemplate]:
+        return [
+            t
+            for t in self.items
+            if t.owner_type is owner_type
+            and t.owner_key == owner_key
+            and (include_inactive or t.is_active)
+        ]
+
 
 class FakeTasks:
     """`TaskRepository` — Tapşırıq Mühərrikinin yaddaş tərəfi."""
@@ -337,6 +392,7 @@ class Harness:
     toggles: FakeToggles
     limits: FakeLimits
     task_engine: TaskWorkflowUseCase
+    checklist_templates: FakeChecklistTemplates | None = None
     created_tasks: list[TaskId] = field(default_factory=list)
 
 
@@ -377,6 +433,7 @@ def build(
     catalog: FakeCatalog | None = None,
     limits: dict[str, str] | None = None,
     toggles_enabled: bool = True,
+    checklist_templates: FakeChecklistTemplates | None = None,
 ) -> Harness:
     clock = FakeClock()
     reports = FakeFieldReports()
@@ -405,6 +462,7 @@ def build(
         audit=audit,  # type: ignore[arg-type]
         clock=clock,  # type: ignore[arg-type]
         notifier=notifier,  # type: ignore[arg-type]
+        checklist_templates=checklist_templates,  # type: ignore[arg-type]
     )
     return Harness(
         use_case=use_case,
@@ -417,6 +475,7 @@ def build(
         toggles=toggles,
         limits=fake_limits,
         task_engine=task_engine,
+        checklist_templates=checklist_templates,
     )
 
 
@@ -1242,3 +1301,214 @@ def _bare_report() -> FieldReport:
         updated_at=NOW,
         emit_created_event=False,
     )
+
+
+# --------------------------------------------------------------------------- #
+# `v2backlog.md` Faza 4.1 — checklist kataloqu (`checklist_draft_for_type`,
+# `list_all_report_types`) VƏ `once_per_day` idempotentliyi
+# --------------------------------------------------------------------------- #
+
+
+def _daily_open_catalog() -> FakeCatalog:
+    return FakeCatalog(
+        templates=[AUDIT_TEMPLATE, INCIDENT_TEMPLATE, DAILY_OPEN_TEMPLATE],
+        categories=[AUDIT_CATEGORY, THEFT_CATEGORY, COMPLAINT_CATEGORY, DAILY_OPEN_CATEGORY],
+    )
+
+
+def daily_open_draft(*items: ChecklistItemDraft) -> FieldReportDraft:
+    return FieldReportDraft(
+        report_type="DAILY_OPEN",
+        category="DAILY_OPEN_STANDARD",
+        store_id=STORE,
+        detail="Mağaza açılış yoxlaması aparıldı.",
+        checklist=tuple(items) or (ChecklistItemDraft(item_text="Kassa açıldı"),),
+    )
+
+
+class TestChecklistCatalog:
+    """`checklist_draft_for_type()` — Root şablonundan (owner_type=FIELD_REPORT) bəndlər."""
+
+    def test_returns_empty_without_the_port_wired(self) -> None:
+        """Köhnə kompozisiya (`checklist_templates=None`) sükutla ESKİ davranışda qalır."""
+        harness = build(catalog=_daily_open_catalog())
+
+        drafts = harness.use_case.checklist_draft_for_type(
+            tenant_id=TENANT, actor=make_actor(), report_type="DAILY_OPEN"
+        )
+
+        assert drafts == []
+
+    def test_returns_empty_when_root_has_written_no_templates_for_this_type(self) -> None:
+        """Port QOŞULUB, lakin Root bu `report_type` üçün hələ bənd yazmayıb."""
+        harness = build(catalog=_daily_open_catalog(), checklist_templates=FakeChecklistTemplates())
+
+        drafts = harness.use_case.checklist_draft_for_type(
+            tenant_id=TENANT, actor=make_actor(), report_type="DAILY_OPEN"
+        )
+
+        assert drafts == []
+
+    def test_maps_root_templates_to_checklist_item_drafts_in_order(self) -> None:
+        templates = FakeChecklistTemplates(
+            [
+                ChecklistItemTemplate(
+                    template_id=None,
+                    tenant_id=TENANT,
+                    owner_type=ChecklistOwnerType.FIELD_REPORT,
+                    owner_key="DAILY_OPEN",
+                    position_no=1,
+                    item_text="Kassa açıldı",
+                    is_blocking=True,
+                    photo_required=False,
+                ),
+                ChecklistItemTemplate(
+                    template_id=None,
+                    tenant_id=TENANT,
+                    owner_type=ChecklistOwnerType.FIELD_REPORT,
+                    owner_key="DAILY_OPEN",
+                    position_no=2,
+                    item_text="Vitrin işıqları yandırıldı",
+                    is_blocking=False,
+                    photo_required=True,
+                ),
+            ]
+        )
+        harness = build(catalog=_daily_open_catalog(), checklist_templates=templates)
+
+        drafts = harness.use_case.checklist_draft_for_type(
+            tenant_id=TENANT, actor=make_actor(), report_type="DAILY_OPEN"
+        )
+
+        assert drafts == [
+            ChecklistItemDraft(item_text="Kassa açıldı", is_blocking=True, photo_required=False),
+            ChecklistItemDraft(
+                item_text="Vitrin işıqları yandırıldı", is_blocking=False, photo_required=True
+            ),
+        ]
+
+    def test_a_different_report_types_templates_are_not_mixed_in(self) -> None:
+        """`owner_key` süzgəci — `STORE_AUDIT`-in bəndi `DAILY_OPEN`-ə sızmamalıdır."""
+        templates = FakeChecklistTemplates(
+            [
+                ChecklistItemTemplate(
+                    template_id=None,
+                    tenant_id=TENANT,
+                    owner_type=ChecklistOwnerType.FIELD_REPORT,
+                    owner_key="STORE_AUDIT",
+                    position_no=1,
+                    item_text="Yanğın çıxışı yoxlanıldı",
+                )
+            ]
+        )
+        harness = build(catalog=_daily_open_catalog(), checklist_templates=templates)
+
+        drafts = harness.use_case.checklist_draft_for_type(
+            tenant_id=TENANT, actor=make_actor(), report_type="DAILY_OPEN"
+        )
+
+        assert drafts == []
+
+    def test_requires_the_flag_matching_the_templates_nature(self) -> None:
+        """`_flag_for` — `DAILY_OPEN` `requires_checklist=True`, ona görə audit flag-i."""
+        harness = build(catalog=_daily_open_catalog(), checklist_templates=FakeChecklistTemplates())
+        outsider = make_actor(flags=[])
+
+        with pytest.raises(AuthorizationError):
+            harness.use_case.checklist_draft_for_type(
+                tenant_id=TENANT, actor=outsider, report_type="DAILY_OPEN"
+            )
+
+    def test_raises_for_an_unknown_report_type(self) -> None:
+        harness = build(checklist_templates=FakeChecklistTemplates())
+
+        with pytest.raises(UnknownFieldReportTemplateError):
+            harness.use_case.checklist_draft_for_type(
+                tenant_id=TENANT, actor=make_actor(), report_type="NO_SUCH_TYPE"
+            )
+
+
+class TestListAllReportTypes:
+    """`list_all_report_types()` — `ui`-nin şablon idarəetmə ekranının seçicisi."""
+
+    def test_returns_the_full_catalog_without_any_permission_filter(self) -> None:
+        """`list_templates()`-dən FƏRQLİ — səlahiyyəti OLMAYAN aktor da BÜTÜN siyahını görür.
+
+        Çağıran ekran ARTIQ `ChecklistItemTemplateUseCase`-in öz qapısının
+        (`can_conduct_store_audit`) arxasındadır — ikinci yoxlama YOXDUR
+        (modul başlığı: "ikinci ad məkanı yaradardı").
+        """
+        harness = build(catalog=_daily_open_catalog())
+
+        result = harness.use_case.list_all_report_types(TENANT)
+
+        assert {t.code for t in result} == {"STORE_AUDIT", "INCIDENT", "DAILY_OPEN"}
+
+    def test_excludes_inactive_templates(self) -> None:
+        inactive = FieldReportTemplate(code="RETIRED", name_az="Köhnə", is_active=False)
+        harness = build(catalog=FakeCatalog(templates=[AUDIT_TEMPLATE, inactive]))
+
+        result = harness.use_case.list_all_report_types(TENANT)
+
+        assert {t.code for t in result} == {"STORE_AUDIT"}
+
+
+class TestOncePerDayIdempotency:
+    """`submit()` — `template.once_per_day` KATALOQDAN oxunur, `Clock` server saatındandır."""
+
+    def test_a_second_submission_the_same_day_is_rejected(self) -> None:
+        harness = build(catalog=_daily_open_catalog())
+        actor = make_actor()
+        harness.use_case.submit(tenant_id=TENANT, actor=actor, draft=daily_open_draft())
+
+        with pytest.raises(Exception, match="artıq təqdim edilib"):
+            harness.use_case.submit(tenant_id=TENANT, actor=actor, draft=daily_open_draft())
+
+    def test_a_submission_the_next_day_is_allowed(self) -> None:
+        """`Clock`-dan gəlir, sabit tarix YOX — gün DƏYİŞƏNDƏ qadağa da sıfırlanır."""
+        harness = build(catalog=_daily_open_catalog())
+        actor = make_actor()
+        harness.use_case.submit(tenant_id=TENANT, actor=actor, draft=daily_open_draft())
+
+        harness.clock.moment = NOW + timedelta(days=1)
+        second = harness.use_case.submit(tenant_id=TENANT, actor=actor, draft=daily_open_draft())
+
+        assert second.report.id != harness.reports.saved[0]
+        assert len(harness.reports.saved) == 2
+
+    def test_a_different_store_is_not_blocked_by_another_stores_submission(self) -> None:
+        """Qadağa `(store_id, report_type, gün)` composite-dir, tenant-səviyyəli DEYİL."""
+        harness = build(catalog=_daily_open_catalog())
+        actor_a = make_actor(store_id=STORE)
+        actor_b = make_actor(store_id=OTHER_STORE)
+        harness.use_case.submit(tenant_id=TENANT, actor=actor_a, draft=daily_open_draft())
+
+        draft_b = FieldReportDraft(
+            report_type="DAILY_OPEN",
+            category="DAILY_OPEN_STANDARD",
+            store_id=OTHER_STORE,
+            detail="Filial-2 açılış yoxlaması aparıldı.",
+            checklist=(ChecklistItemDraft(item_text="Kassa açıldı"),),
+        )
+        second = harness.use_case.submit(tenant_id=TENANT, actor=actor_b, draft=draft_b)
+
+        assert second.report.store_id == OTHER_STORE
+
+    def test_a_template_without_once_per_day_allows_multiple_submissions_the_same_day(self) -> None:
+        """MƏNFİ QAPI — `once_per_day=False` şablonlar (`STORE_AUDIT`) qadağaya düşməməlidir."""
+        harness = build()
+        actor = make_actor()
+        harness.use_case.submit(
+            tenant_id=TENANT,
+            actor=actor,
+            draft=audit_draft(ChecklistItemDraft(item_text="Yanğın çıxışı yoxlanıldı")),
+        )
+
+        second = harness.use_case.submit(
+            tenant_id=TENANT,
+            actor=actor,
+            draft=audit_draft(ChecklistItemDraft(item_text="Kassa intizamı yoxlanıldı")),
+        )
+
+        assert second.report.id != harness.reports.saved[0]
+        assert len(harness.reports.saved) == 2

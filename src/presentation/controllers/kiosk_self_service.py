@@ -37,7 +37,7 @@ ekranın özü toxunulmaz qalır və iki kontekstdə eyni sinif işlənir.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from math import ceil
 from typing import TYPE_CHECKING, Any
@@ -45,7 +45,8 @@ from uuid import UUID
 
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
-from src.domain.value_objects.identifiers import FineId
+from src.domain.entities.task import TaskSource, TaskStatus
+from src.domain.value_objects.identifiers import FineId, TaskId, new_task_id
 from src.presentation.widgets import metrics
 from src.presentation.widgets.buttons import secondary_button
 from src.presentation.widgets.primitives import stretch, title_label
@@ -181,17 +182,46 @@ class KioskSelfServiceController:
     # ------------------------------ tapşırıqlar ------------------------------- #
 
     def _open_tasks(self) -> None:
-        """İşçinin ÖZ açıq tapşırıqları.
+        """İşçinin ÖZ açıq tapşırıqları — VƏ öz-düzəliş sorğusu keçidi.
 
         `screen_data._tasks` İŞLƏDİLMİR: o, tenant üzrə «təsdiq gözləyən» və
         «gecikmiş» tapşırıqları göstərir, yəni İDARƏÇİ görünüşüdür. İşçiyə
         başqalarının tapşırıqlarını göstərmək həm mənasız, həm də məlumat
         sızmasıdır — ona görə burada `list_for_assignee` oxunur.
+
+        ──────────────────────────────────────────────────────────────────────
+        NİYƏ YENİ KART DEYİL, MƏHZ BU EKRAN (`v2backlog.md` Faza 4.2)
+        ──────────────────────────────────────────────────────────────────────
+        İşçi Ana Ekranı onsuz da altı kartdır (bax `group_a_kiosk.py`) və
+        yeddincisi kiosk sürüşdürməsini daha da doldurardı. Öz-düzəliş sorğusu
+        isə strukturca elə bir TAPŞIRIQDIR (`TaskSource.EMPLOYEE_SELF_
+        CORRECTION`) — nəticəsi bu ekranın «Açıq» sütununda görünür, çünki
+        yaradılan kimi `EVIDENCE_SUBMITTED` statusuna keçir (bax `task_
+        workflow.py::request_self_correction`) və `list_for_assignee(open_
+        only=True)` bu statusu artıq daxil edir. Yəni sorğu göndərəndən
+        SONRA işçi onu elə BURADA — öz açıq tapşırıqları arasında — görür,
+        rəyi isə mövcud `list_awaiting_review` inbox-undan gedir (YENİ
+        marşrutlama ekranı YARADILMIR).
+
+        `show_create_button=False`: «Yeni Tapşırıq» (`TaskWorkflowUseCase.
+        assign` — BAŞQASINA tapşırıq vermək) əvvəl BURADA DA görünürdü,
+        lakin heç bir kontroller `create_requested`-i dinləmirdi — işçi
+        basırdı, heç nə baş vermirdi (bax modul başlığı, "ölü düymə" —
+        `show_self_correction_button` ilə EYNİ kateqoriyadan tapıntı).
         """
         from src.presentation.screens.group_f import TasksScreen  # noqa: PLC0415
 
-        screen = TasksScreen(self._theme)
+        screen = TasksScreen(
+            self._theme, show_create_button=False, show_self_correction_button=True
+        )
+        screen.self_correction_requested.connect(lambda: self._open_self_correction(screen))
+        screen.withdraw_requested.connect(
+            lambda task_id: self._withdraw_self_correction(screen, task_id)
+        )
         self._show("Tapşırıqlarım", screen)
+        self._refresh_tasks(screen)
+
+    def _refresh_tasks(self, screen: Any) -> None:
         rows = self._read(screen, self._tasks_rows)
         if rows is None:
             return
@@ -202,13 +232,106 @@ class KioskSelfServiceController:
         tasks = session.uow.repository("tasks").list_for_assignee(self._actor.id, open_only=True)
         return [
             {
+                # AÇAR `"id"`-DİR, `"task_id"` YOX: `TaskCard.__init__`
+                # `task.get("id", "")` oxuyur (`screen_data.py::_tasks_fetch`
+                # şərhindəki EYNİ DEEP-GAP tapıntısı — bu sətir ƏVVƏL
+                # `"task_id"` idi və `TaskCard` onu HEÇ VAXT oxumurdu, yəni
+                # `withdrawn`/`approved`/`rejected` siqnalları BOŞ sətir
+                # yayardı).
+                "id": str(task.id),
                 "title": task.title,
                 "assignee": self._actor.full_name,
                 "deadline": task.deadline.strftime("%d.%m %H:%M") if task.deadline else "",
-                "task_id": str(task.id),
+                # `TaskCard` YALNIZ bu açar `"1"` olanda «Geri Çək» düyməsini
+                # QURUR (bax `group_f.py::set_tasks` — «görmək = səlahiyyət»
+                # bənd 3). `list_for_assignee` YALNIZ işçinin ÖZ sətirlərini
+                # qaytardığı üçün göndərən yoxlaması artıqdır; qalan iki şərt
+                # (mənbə + status) `withdraw_self_correction`-un ÖZ qapısı
+                # ilə EYNİDİR — burada TƏKRARLANIR ki, düymə YALNIZ real
+                # imkan olanda görünsün.
+                "withdrawable": (
+                    "1"
+                    if task.source is TaskSource.EMPLOYEE_SELF_CORRECTION
+                    and task.status is TaskStatus.EVIDENCE_SUBMITTED
+                    else "0"
+                ),
             }
             for task in tasks
         ]
+
+    # --------------------------- öz-düzəliş sorğusu --------------------------- #
+
+    def _open_self_correction(self, screen: Any) -> None:
+        """«Uyğunsuzluğu İzah Et» dialoqunu açır (`v2backlog.md` Faza 4.2)."""
+        from src.presentation.screens.group_f import SelfCorrectionDialog  # noqa: PLC0415
+
+        dialog = SelfCorrectionDialog(self._theme, parent=screen)
+        dialog.submitted.connect(lambda payload: self._submit_self_correction(screen, payload))
+        dialog.exec()
+
+    def _submit_self_correction(self, screen: Any, payload: dict[str, str]) -> None:
+        """`TaskWorkflowUseCase.request_self_correction`-a yazır.
+
+        SUİ-İSTİFADƏ TAVANI XƏTASI BURADA ÖZƏL İŞLƏNMİR: `TaskWorkflowError`
+        `user_message`-i artıq "Son N gün ərzində icazə verilən sorğu sayına
+        (M) çatmısınız" formasındadır (bax use case başlığı) — `_report`-un
+        ümumi yolu bunu OLDUĞU KİMİ göstərir, ikinci mətn YAZMAQ onu TƏKRAR
+        edərdi.
+
+        SON TARİX (`deadline`) İSTİFADƏÇİDƏN SORUŞULMUR: sorğu yaradılan kimi
+        sübutla (izahat) birlikdə `EVIDENCE_SUBMITTED`-ə keçir (`Task.
+        submit_evidence` `request_self_correction`-un ÖZÜNDƏ çağırılır) —
+        yəni tapşırıq heç vaxt "gözləyən" statusda qalmır və `deadline`
+        eskalasiyaya təsir ETMİR. Sahə yalnız `Task` konstruktorunun məcburi
+        arqumentidir, ona görə formal dəyər (indi + 1 gün) kifayətdir —
+        `NewTaskDialog`-un DEFOLT son tarixi ilə EYNİ konvensiya.
+        """
+        deadline = self._context.clock.now() + timedelta(days=1)
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                session.tasks.request_self_correction(
+                    tenant_id=session.tenant_id,
+                    actor=self._actor,
+                    title=payload["title"],
+                    description=payload["description"],
+                    deadline=deadline,
+                    task_id=new_task_id(),
+                )
+                session.commit()
+        except KompasOSError as exc:
+            _error_log.exception("SELF_CORRECTION_SUBMIT_FAILED", extra={"error": str(exc)})
+            self._report(screen, "Sorğu göndərilmədi", exc)
+            return
+        self._refresh_tasks(screen)
+
+    def _withdraw_self_correction(self, screen: Any, task_id: str) -> None:
+        """`TaskWorkflowUseCase.withdraw_self_correction`-a yazır.
+
+        `task_id` ETİBARSIZDIRSA (köhnəlmiş kart) çökmə YOX, ekranda mesaj —
+        naxış `controllers/tasks.py::_on_approve`-un EYNİSİdir (QA-13
+        tapıntısı, eyni izah): `_parse_task_id` özü loglayır, burada
+        TƏKRARLANMIR.
+        """
+        parsed_id = _parse_task_id(task_id)
+        if parsed_id is None:
+            screen.show_error(
+                title="Sorğu geri çəkilmədi",
+                message="Tapşırıq identifikatoru düzgün deyil. Səhifəni yeniləyin.",
+            )
+            return
+        try:
+            with self._context.session(user_id=self._actor.id) as session:
+                session.tasks.withdraw_self_correction(
+                    tenant_id=session.tenant_id,
+                    actor=self._actor,
+                    task_id=parsed_id,
+                )
+                session.commit()
+        except KompasOSError as exc:
+            _error_log.exception("SELF_CORRECTION_WITHDRAW_FAILED", extra={"error": str(exc)})
+            self._report(screen, "Sorğu geri çəkilmədi", exc)
+            return
+        self._refresh_tasks(screen)
 
     # -------------------------------- xallar ---------------------------------- #
 
@@ -469,6 +592,20 @@ class KioskSelfServiceController:
             title=title,
             message=getattr(exc, "user_message", "Yenidən cəhd edin."),
         )
+
+
+def _parse_task_id(raw: str) -> TaskId | None:
+    """`str` → `TaskId`; yararsız isə `None`.
+
+    `controllers/tasks.py::_parse_task_id`-in EYNİSİdir — ORAYA istinad
+    ETMİRİK: o, modulun ÖZ `__all__`-unda deyil (məqsədli daxili köməkçi),
+    idxal etsək BAŞQA modulun daxili adına ASILILIQ yaranardı.
+    """
+    try:
+        return TaskId(UUID(raw))
+    except ValueError:
+        _error_log.error("SELF_CORRECTION_TASK_ID_MALFORMED", extra={"task_id": raw})
+        return None
 
 
 __all__ = ["APPEAL_REASONS", "BACK_TEXT", "KioskSelfServiceController"]

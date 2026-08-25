@@ -103,6 +103,25 @@ class TaskPriority(str, Enum):
     HIGH = "HIGH"
 
 
+class TaskSource(str, Enum):
+    """`tasks.source` — tapşırığın MƏNBƏYİ (`v2backlog.md` Faza 4.2).
+
+    `ShiftAssignment.source` (`ADMIN_MATRIX`/`SHIFT_SWAP`) ilə EYNİ naxış:
+    sətrin haradan doğduğu "NƏ" sualı deyil, "NİYƏ belədir" sualıdır və
+    audit/sui-istifadə hesablaması üçün AYRICA sahə tələb edir.
+
+    `EMPLOYEE_SELF_CORRECTION` üçün `assignee_id == assigned_by` — işçi
+    ÖZÜNÜ təyin edir (bax `TaskWorkflowUseCase.request_self_correction`),
+    sübutu (izahat + istəyə-bağlı foto) elə YARADILIŞ anında özü təqdim
+    edir. Bu, `assigned_by`-ın "kim tapşırıq VERDİ" mənasını POZMUR — işçi
+    faktiki olaraq ÖZ-ÖZÜNƏ tapşırıq "verib", rəyi isə BAŞQASI (nəzərdən
+    keçirən) verəcək.
+    """
+
+    ASSIGNED = "ASSIGNED"
+    EMPLOYEE_SELF_CORRECTION = "EMPLOYEE_SELF_CORRECTION"
+
+
 class Task(AggregateRoot):
     """Tapşırıq qeydi — sübutla tamamlanma və təsdiq axını."""
 
@@ -120,6 +139,7 @@ class Task(AggregateRoot):
         priority: TaskPriority = TaskPriority.NORMAL,
         store_id: StoreId | None = None,
         requires_evidence: bool = True,
+        source: TaskSource = TaskSource.ASSIGNED,
     ) -> None:
         super().__init__()
         require_aware(deadline, field="deadline")
@@ -154,6 +174,7 @@ class Task(AggregateRoot):
         self.priority = priority
         self.store_id = store_id
         self.requires_evidence = requires_evidence
+        self.source = source
 
         self.status = TaskStatus.OPEN
         #: Yüklənmiş sübut sənədlərinin URL-ləri (Google Drive / Supabase Storage).
@@ -223,6 +244,7 @@ class Task(AggregateRoot):
         """ "[Təsdiqlə]" — `can_approve_task_evidence` sahibinin qərarı."""
         require_aware(reviewed_at, field="reviewed_at")
         self._require_awaiting_review()
+        self._require_not_self_review(reviewer_id)
 
         self.status = TaskStatus.APPROVED
         self.reviewed_by = reviewer_id
@@ -249,6 +271,7 @@ class Task(AggregateRoot):
         """
         require_aware(reviewed_at, field="reviewed_at")
         self._require_awaiting_review()
+        self._require_not_self_review(reviewer_id)
 
         cleaned = normalise_decision_text(reason)
         if len(cleaned) < MIN_REJECTION_REASON_LENGTH:
@@ -291,6 +314,24 @@ class Task(AggregateRoot):
                 f"Yalnız nəzərdən keçirmə gözləyən tapşırıq üçün qərar verilə bilər, "
                 f"cari status: {self.status.value}",
                 context={"task_id": str(self.id), "status": self.status.value},
+            )
+
+    def _require_not_self_review(self, reviewer_id: EmployeeId) -> None:
+        """İcraçı ÖZ sübutunu özü təsdiqləyə/rədd edə bilməz (vəzifə ayrılığı).
+
+        NORMAL təyinatda bu heç vaxt işə düşmür (`assigned_by` başqa şəxsdir,
+        `can_assign_tasks`/`can_approve_task_evidence` AYRI flag-lərdir —
+        modul başlığı). LAKİN `TaskSource.EMPLOYEE_SELF_CORRECTION`-da
+        `assignee_id == assigned_by`-dır (işçi özünü təyin edir) və məhz bu
+        hal `v2backlog.md` Faza 4.2-nin açıq tələbini yaradır: "işçi öz
+        uyğunsuzluğunu özü həll edə bilməz". `ShiftSwapRequest._decide`-dəki
+        eyni qadağanın EYNİ əsaslandırması.
+        """
+        if reviewer_id == self.assignee_id:
+            raise DomainRuleError(
+                "İcraçı öz tapşırığının sübutunu özü təsdiqləyə/rədd edə bilməz",
+                user_message="Öz tapşırığınıza qərar verə bilməzsiniz.",
+                context={"task_id": str(self.id), "assignee_id": str(self.assignee_id)},
             )
 
     # -------------------------------- eskalasiya ----------------------------- #
@@ -370,5 +411,6 @@ __all__ = [
     "MIN_TITLE_LENGTH",
     "Task",
     "TaskPriority",
+    "TaskSource",
     "TaskStatus",
 ]

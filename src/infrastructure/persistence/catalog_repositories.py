@@ -39,7 +39,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from src.domain.entities.sales_points import PointsEntry, RewardRedemption
-from src.domain.entities.task import Task, TaskPriority, TaskStatus
+from src.domain.entities.task import Task, TaskPriority, TaskSource, TaskStatus
 from src.domain.value_objects.catalogs import FineType, WorkMode
 from src.domain.value_objects.erp import MatchConfidence
 from src.domain.value_objects.gamification import (
@@ -257,7 +257,8 @@ class PostgresTaskRepository(_BaseRepository):
         SELECT t.id, t.tenant_id, t.store_id, t.title, t.description,
                t.assignee_id, t.assigned_by, t.deadline, t.status,
                t.completed_at, t.reviewed_by, t.reviewed_at, t.reject_reason,
-               t.escalated_at, t.created_at,
+               t.escalated_at, t.created_at, t.source,
+               t.priority, t.requires_evidence, t.submitted_at, t.cancelled_at,
                COALESCE(
                    ARRAY(SELECT e.file_url FROM task_evidence e
                           WHERE e.task_id = t.id ORDER BY e.uploaded_at),
@@ -305,21 +306,53 @@ class PostgresTaskRepository(_BaseRepository):
         )
         return [self._hydrate(row) for row in rows]
 
+    def count_self_correction_requests(self, employee_id: EmployeeId, *, since: datetime) -> int:
+        """Faza 4.2 (v2backlog.md) — sui-istifadə tavanının girişi.
+
+        `assigned_by = %s` (`assignee_id` YOX): `TaskSource.EMPLOYEE_SELF_
+        CORRECTION`-da `assignee_id == assigned_by` (`entities/task.py`
+        şərhi — işçi ÖZÜNÜ təyin edir), lakin `assigned_by` "kim tələb
+        etdi?" sualının SEMANTİK cavabıdır — sayğac bu sualı verir.
+        STATUSDAN ASILI DEYİL (ports.py kontraktı) — rədd edilmiş sorğu da
+        "cəhd" sayılır.
+        """
+        row = self._fetch_one(
+            """
+            SELECT count(*)::int AS n
+            FROM tasks
+            WHERE tenant_id = %s AND assigned_by = %s
+              AND source = 'EMPLOYEE_SELF_CORRECTION'
+              AND created_at >= %s
+            """,
+            (self._tenant, employee_id, since),
+        )
+        return int(row["n"]) if row else 0
+
     def save(self, task: Task) -> None:
+        """`source`/`priority`/`requires_evidence` YENİLƏMƏDƏ TOXUNULMUR
+        (`EXCLUDED`-dən çıxarılıb) — Faza 4.2 (v2backlog.md): hər üçü
+        YARADILIŞ ANININ faktıdır, digər "founding fact" sahələri
+        (`title`/`assignee_id`/`created_at`) ilə eyni əsaslandırma.
+        `submitted_at`/`cancelled_at` isə MUTABLE-dir (`submit_evidence()`/
+        `cancel()` sonradan təyin edir) — `DO UPDATE SET`-dədir."""
         self._execute(
             """
             INSERT INTO tasks
                 (id, tenant_id, store_id, title, description, assignee_id,
                  assigned_by, deadline, status, completed_at, reviewed_by,
-                 reviewed_at, reject_reason, escalated_at, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 reviewed_at, reject_reason, escalated_at, created_at, source,
+                 priority, requires_evidence, submitted_at, cancelled_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s)
             ON CONFLICT (id)
             DO UPDATE SET status        = EXCLUDED.status,
                           completed_at  = EXCLUDED.completed_at,
                           reviewed_by   = EXCLUDED.reviewed_by,
                           reviewed_at   = EXCLUDED.reviewed_at,
                           reject_reason = EXCLUDED.reject_reason,
-                          escalated_at  = EXCLUDED.escalated_at
+                          escalated_at  = EXCLUDED.escalated_at,
+                          submitted_at  = EXCLUDED.submitted_at,
+                          cancelled_at  = EXCLUDED.cancelled_at
             """,
             (
                 task.id,
@@ -337,6 +370,11 @@ class PostgresTaskRepository(_BaseRepository):
                 task.rejection_reason,
                 task.escalated_at,
                 task.created_at,
+                task.source.value,
+                task.priority.value,
+                task.requires_evidence,
+                task.submitted_at,
+                task.cancelled_at,
             ),
         )
         self._save_evidence(task)
@@ -376,17 +414,25 @@ class PostgresTaskRepository(_BaseRepository):
         task.assigned_by = EmployeeId(row["assigned_by"])
         task.deadline = deadline
         task.created_at = created_at
-        task.priority = TaskPriority.NORMAL
-        task.requires_evidence = True
+        # migrations/098 — dördü də ƏVVƏLLƏR sabit dəyərə sıfırlanırdı
+        # (`priority=NORMAL`, `requires_evidence=True`, `submitted_at`/
+        # `cancelled_at=None`); `requires_evidence` üçün bu TƏSDİQLƏNMİŞ
+        # aktiv qüsur idi (Faza 4.2 öz-düzəliş axını, bax fayl başlığı).
+        task.priority = TaskPriority(str(row.get("priority") or TaskPriority.NORMAL.value))
+        task.requires_evidence = bool(row.get("requires_evidence", True))
         task.status = TaskStatus(str(row["status"]))
         task.evidence_urls = tuple(row.get("evidence_urls") or ())
-        task.submitted_at = None
+        task.submitted_at = _aware(row.get("submitted_at"))
         task.reviewed_by = EmployeeId(row["reviewed_by"]) if row.get("reviewed_by") else None
         task.reviewed_at = _aware(row.get("reviewed_at"))
         task.rejection_reason = row.get("reject_reason")
         task.completed_at = _aware(row.get("completed_at"))
-        task.cancelled_at = None
+        task.cancelled_at = _aware(row.get("cancelled_at"))
         task.escalated_at = _aware(row.get("escalated_at"))
+        # Faza 4.2 (v2backlog.md, migrations/097): sütun YOXSA (köhnə
+        # sətir/DEFAULT) `ASSIGNED`-ə düşür — `TaskSource`-un öz defoltu ilə
+        # EYNİ, ADİ təyinat sükutla "öz-düzəliş sorğusu" kimi YOZULMASIN.
+        task.source = TaskSource(str(row.get("source") or TaskSource.ASSIGNED.value))
         return task
 
 

@@ -29,6 +29,7 @@ from typing import Any
 import pytest
 
 from src.application.use_cases.catalog_management import (
+    FIELD_REPORT_CHECKLIST_TEMPLATES_FLAG,
     CatalogPermissionError,
     ChecklistItemTemplateUseCase,
 )
@@ -557,6 +558,75 @@ def test_save_and_deactivate_are_audited(ctx: Ctx) -> None:
 
     actions = [r["action"] for r in ctx.audit.records]
     assert actions == ["CHECKLIST_ITEM_TEMPLATE_SAVED", "CHECKLIST_ITEM_TEMPLATE_DEACTIVATED"]
+
+
+# --------------------------------------------------------------------------- #
+# `_flag_for_owner` — `owner_type`-a görə BUDAQLANMA (`v2backlog.md` Faza 4.1)
+# --------------------------------------------------------------------------- #
+#
+# OFFBOARDING → `can_manage_employees` (HR-in işi), FIELD_REPORT →
+# `can_conduct_store_audit` (auditor-un işi) — İKİSİ FƏRQLİ ROLDUR, ona görə
+# BİR flag-in ikisini də ödəməsi TƏSADÜFİ ola bilməz, hər istiqamət ayrıca
+# kilidlənir.
+
+
+def _field_report_template(
+    *, position_no: int = 1, owner_key: str = "STORE_AUDIT"
+) -> ChecklistItemTemplate:
+    return ChecklistItemTemplate(
+        template_id=new_checklist_item_template_id(),
+        tenant_id=TENANT,
+        owner_type=ChecklistOwnerType.FIELD_REPORT,
+        owner_key=owner_key,
+        position_no=position_no,
+        item_text=f"Bənd {position_no}",
+        category=None,
+    )
+
+
+def test_field_report_templates_require_the_store_audit_flag_not_the_offboarding_one(
+    ctx: Ctx,
+) -> None:
+    """HR-in `can_manage_employees`-i FIELD_REPORT şablonunu idarə etməyə KİFAYƏT ETMİR."""
+    hr_manager = _employee(flags=(CHECKLIST_TEMPLATES_FLAG,))
+
+    with pytest.raises(CatalogPermissionError, match=FIELD_REPORT_CHECKLIST_TEMPLATES_FLAG):
+        ctx.template_uc().save(TENANT, hr_manager, _field_report_template())
+
+
+def test_offboarding_templates_require_the_offboarding_flag_not_the_store_audit_one(
+    ctx: Ctx,
+) -> None:
+    """Auditorun `can_conduct_store_audit`-i OFFBOARDING şablonunu idarə etməyə KİFAYƏT ETMİR."""
+    auditor = _employee(flags=(FIELD_REPORT_CHECKLIST_TEMPLATES_FLAG,))
+
+    with pytest.raises(CatalogPermissionError, match=CHECKLIST_TEMPLATES_FLAG):
+        ctx.template_uc().save(TENANT, auditor, _template())
+
+
+def test_an_auditor_can_manage_field_report_templates(ctx: Ctx) -> None:
+    auditor = _employee(flags=(FIELD_REPORT_CHECKLIST_TEMPLATES_FLAG,))
+
+    result = ctx.template_uc().save(TENANT, auditor, _field_report_template())
+
+    assert result.action == "saved"
+
+
+def test_deactivate_reads_the_owner_type_from_the_stored_row_not_the_actor(ctx: Ctx) -> None:
+    """`deactivate()` `owner_type`-ı SƏTİRDƏN oxuyur — çağıran onu ötürmür."""
+    auditor = _employee(flags=(FIELD_REPORT_CHECKLIST_TEMPLATES_FLAG,))
+    template = _field_report_template()
+    ctx.templates.items[template.template_id] = template
+
+    result = ctx.template_uc().deactivate(TENANT, auditor, template.template_id)
+
+    assert result.action == "deactivated"
+    # HR flag-i ilə eyni sətri deaktiv etmək İSƏ RƏDD OLUNMALIDIR.
+    hr_manager = _employee(flags=(CHECKLIST_TEMPLATES_FLAG,))
+    other = _field_report_template(position_no=2)
+    ctx.templates.items[other.template_id] = other
+    with pytest.raises(CatalogPermissionError, match=FIELD_REPORT_CHECKLIST_TEMPLATES_FLAG):
+        ctx.template_uc().deactivate(TENANT, hr_manager, other.template_id)
 
 
 # `offboarding_checklist.MANAGE_OFFBOARDING_FLAG`-in ÖZÜ ilə eynidir (modul

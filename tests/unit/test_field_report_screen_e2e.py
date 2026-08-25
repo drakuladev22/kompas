@@ -19,6 +19,8 @@ verilib).
 
 from __future__ import annotations
 
+import ast
+import inspect
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -28,7 +30,11 @@ import pytest
 
 from src.application.use_cases.field_reports import FieldReportSubmission
 from src.domain.entities.field_report import FieldReport
-from src.domain.value_objects.field_reports import FieldReportCategory, FieldReportTemplate
+from src.domain.value_objects.field_reports import (
+    ChecklistItemDraft,
+    FieldReportCategory,
+    FieldReportTemplate,
+)
 from src.domain.value_objects.identifiers import StoreId, TenantId, new_field_report_id
 from src.presentation.background_task import InlineExecutor
 from src.presentation.controllers.field_reports import FieldReportsController
@@ -178,6 +184,15 @@ class _UseCase:
     ) -> list[FieldReportCategory]:
         return [c for c in self.categories if c.report_type == report_type]
 
+    def checklist_draft_for_type(
+        self, *, tenant_id: Any, actor: Any, report_type: str
+    ) -> list[ChecklistItemDraft]:
+        """`v2backlog.md` Faza 4.1 — bu fayldakı testlər checklist kataloqunu
+        AYRICA sınamır (`test_field_reports.py`-in predmetidir), ona görə
+        BOŞ siyahı KÖHNƏ sərbəst-mətn rejimini SÜKUTLA saxlayır (bax
+        `controllers/field_reports.py` modul başlığı)."""
+        return []
+
     def list_open(
         self,
         *,
@@ -209,6 +224,44 @@ class _UseCase:
         self.closed.append((report_id, status, note))
         self.reports = [r for r in self.reports if r.id != report_id]
         return _report()
+
+
+def _session_field_reports_call_sites(module_source: str) -> set[str]:
+    """`test_field_report_screen.py`-dəki EYNİ köməkçi — `_UseCase`-lər AYRI
+    fayllarda, LAKİN naxış TƏKRARLANIR (`v2backlog.md` Faza 4.1 tapıntısının
+    reqressiya qıfılı, o faylın modul-səviyyəli şərhinə bax)."""
+    tree = ast.parse(module_source)
+    called: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Attribute)
+            and func.value.attr == "field_reports"
+        ):
+            called.add(func.attr)
+    return called
+
+
+def test_the_fake_use_case_implements_every_method_the_controller_actually_calls() -> None:
+    """`ui`-nin bu gün tapdığı qüsur sinfinin REQRESSİYA QIFILI (bax
+    `test_field_report_screen.py`-dəki EYNİ testin şərhi)."""
+    from src.presentation.controllers import field_reports as field_reports_controller
+
+    called = _session_field_reports_call_sites(inspect.getsource(field_reports_controller))
+    implemented = {
+        name
+        for name, value in vars(_UseCase).items()
+        if callable(value) and not name.startswith("_")
+    }
+
+    missing = sorted(called - implemented)
+    assert missing == [], (
+        "`controllers/field_reports.py` bu metodları `session.field_reports`"
+        f"-də ÇAĞIRIR, lakin bu faylın `_UseCase` sahtəsində YOXDUR: {missing}."
+    )
 
 
 class _Session:

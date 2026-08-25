@@ -72,11 +72,23 @@ FINE_TYPES_FLAG = "can_manage_fine_types"
 LEAVE_TYPES_FLAG = "can_manage_leave_types"
 #: `checklist_item_templates` (owner_type=OFFBOARDING) idarəetməsi —
 #: `offboarding_checklist.py`-dakı EYNİ flag: Faza 3.4 yeni icazə TƏLƏB ETMİR,
-#: HR-in işdən çıxarma səlahiyyəti onsuz da checklist mətnini əhatə edir. Yeni
-#: `owner_type=FIELD_REPORT` şablonları (Faza 4.1, BU sahənin hələlik işi
-#: DEYİL) fərqli flag tələb edə bilər — o zaman bu sabit ARTIQ tək başına
-#: kifayət etməyəcək və owner_type-a görə budaqlanmalı olacaq.
+#: HR-in işdən çıxarma səlahiyyəti onsuz da checklist mətnini əhatə edir.
 CHECKLIST_TEMPLATES_FLAG = MANAGE_OFFBOARDING_FLAG
+#: `checklist_item_templates` (owner_type=FIELD_REPORT) idarəetməsi — Faza 4.1
+#: (Gündəlik Açılış/Bağlanış Checklist-i). Mövcud `CONDUCT_AUDIT_FLAG`
+#: (`can_conduct_store_audit`, `field_reports.py`) təkrarlanır, yeni icazə
+#: YARADILMIR: strukturlaşdırılmış audit MƏZMUNUNU idarə edən rol artıq
+#: budur (`field_reports.py` modul başlığı — "Struktur Qərar A", eyni fərq:
+#: checklist tələb edən şablon məhz bu flag-lə qorunur).
+FIELD_REPORT_CHECKLIST_TEMPLATES_FLAG = "can_conduct_store_audit"
+
+
+def _flag_for_owner(owner_type: ChecklistOwnerType) -> str:
+    """`checklist_item_templates` üçün lazımi flag — `owner_type`-dan, `if
+    owner_key == ...` zəncirindən YOX (`field_reports.py`-ın eyni fəlsəfəsi)."""
+    if owner_type is ChecklistOwnerType.FIELD_REPORT:
+        return FIELD_REPORT_CHECKLIST_TEMPLATES_FLAG
+    return CHECKLIST_TEMPLATES_FLAG
 
 
 class CatalogPermissionError(KompasOSError):
@@ -349,7 +361,7 @@ class ChecklistItemTemplateUseCase:
         owner_type: ChecklistOwnerType,
         owner_key: str,
     ) -> list[ChecklistItemTemplate]:
-        _require(actor, CHECKLIST_TEMPLATES_FLAG, now=self._clock.now())
+        _require(actor, _flag_for_owner(owner_type), now=self._clock.now())
         return self._repository.list_for_owner(
             tenant_id, owner_type=owner_type, owner_key=owner_key, include_inactive=True
         )
@@ -371,7 +383,7 @@ class ChecklistItemTemplateUseCase:
         self, tenant_id: TenantId, actor: Employee, entry: ChecklistItemTemplate
     ) -> CatalogChange:
         now = self._clock.now()
-        _require(actor, CHECKLIST_TEMPLATES_FLAG, now=now)
+        _require(actor, _flag_for_owner(entry.owner_type), now=now)
 
         self._repository.save(entry, changed_by=actor.id)
         self._audit.record(
@@ -395,10 +407,18 @@ class ChecklistItemTemplateUseCase:
         self, tenant_id: TenantId, actor: Employee, template_id: ChecklistItemTemplateId
     ) -> CatalogChange:
         now = self._clock.now()
-        _require(actor, CHECKLIST_TEMPLATES_FLAG, now=now)
-
+        # FLAG YOXLAMASI YÜKLƏMƏDƏN SONRADIR: hansı flag lazım olduğu
+        # `owner_type`-dan asılıdır (bax `_flag_for_owner`) və o, YALNIZ
+        # sətri oxuyandan sonra bilinir (`save()`-dən FƏRQ — orada `entry`
+        # çağıran tərəfdən onsuz da `owner_type` daşıyır).
         existing = self._repository.get(template_id)
         name = existing.item_text if existing is not None else str(template_id)
+        required_flag = (
+            _flag_for_owner(existing.owner_type)
+            if existing is not None
+            else CHECKLIST_TEMPLATES_FLAG
+        )
+        _require(actor, required_flag, now=now)
 
         self._repository.deactivate(tenant_id, template_id, changed_by=actor.id)
         self._audit.record(
@@ -416,6 +436,7 @@ class ChecklistItemTemplateUseCase:
 
 __all__ = [
     "CHECKLIST_TEMPLATES_FLAG",
+    "FIELD_REPORT_CHECKLIST_TEMPLATES_FLAG",
     "FINE_TYPES_FLAG",
     "LEAVE_TYPES_FLAG",
     "WORK_MODES_FLAG",

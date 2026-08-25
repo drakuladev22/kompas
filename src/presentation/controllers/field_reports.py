@@ -161,6 +161,26 @@ class FieldReportsController:
                             report_type=template.code,
                         )
                     )
+                # `v2backlog.md` Faza 4.1 — HƏR şablon üçün AYRICA sorğu
+                # (`_apply_categories`-in "kataloq kiçikdir" əsaslandırması
+                # BURADA da keçərlidir, lakin `checklist_draft_for_type`
+                # `list_categories` kimi `owner_key`-ə görə TƏK sorğudur —
+                # ikisini eyni loop-da birləşdirmək YENİ sorğu SAYINI
+                # ARTIRMIR). Boş siyahı (`STORE_AUDIT`/`INCIDENT`) sükutla
+                # keçir — `screen.set_checklist_drafts` onu KÖHNƏ sərbəst-
+                # mətn rejimi kimi oxuyur (bax `FieldReportScreen._apply_
+                # template_checklist`).
+                checklist_drafts = {
+                    template.code: [
+                        _checklist_draft_row(draft)
+                        for draft in session.field_reports.checklist_draft_for_type(
+                            tenant_id=session.tenant_id,
+                            actor=self._actor,
+                            report_type=template.code,
+                        )
+                    ]
+                    for template in templates
+                }
                 stores = _store_choices(session)
                 min_detail = _min_detail_length(session)
                 max_photos = _max_photos(session)
@@ -182,6 +202,11 @@ class FieldReportsController:
             )
             return
 
+        # `checklist_drafts` `set_templates`-dən ƏVVƏL yazılır: `set_templates`
+        # `_on_template_changed()`-i DƏRHAL çağırır və o, `_checklist_drafts`-ı
+        # oxuyur — tərs sıra bir addımlıq "sərbəst-mətn" yalançı-müsbətinə
+        # (sonra özü-özünü düzəldən) səbəb olardı.
+        screen.set_checklist_drafts(checklist_drafts)
         screen.set_templates([_template_row(template) for template in templates])
         screen.set_categories([_category_row(category) for category in categories])
         screen.set_stores(stores)
@@ -449,6 +474,15 @@ def _template_row(template: FieldReportTemplate) -> dict[str, str]:
         "name": template.name_az,
         "description": template.description_az or "",
         "requires_checklist": "1" if template.requires_checklist else "0",
+    }
+
+
+def _checklist_draft_row(draft: ChecklistItemDraft) -> dict[str, str]:
+    """`ChecklistItemDraft` → `FieldReportScreen.set_checklist_drafts`-in gözlədiyi açarlar."""
+    return {
+        "item_text": draft.item_text,
+        "is_blocking": "1" if draft.is_blocking else "0",
+        "photo_required": "1" if draft.photo_required else "0",
     }
 
 

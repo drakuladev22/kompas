@@ -47,16 +47,18 @@ isə çox-kataloqlu ola bilər (Faza 4.1, hər hesabat növünün öz checklist-
 ona görə orada sahə AÇIQ mətn qutusudur.
 
 ──────────────────────────────────────────────────────────────────────────────
-FIELD_REPORT SƏKMƏSİNDƏ `owner_key` NİYƏ AXTARIŞLA GƏLİR, SİYAHIDAN DEYİL
+FIELD_REPORT SƏKMƏSİNDƏ `owner_key` — İNDİ SEÇİCİ, ARTIQ AXTARIŞ SAHƏSİ DEYİL
 ──────────────────────────────────────────────────────────────────────────────
-`ChecklistItemTemplateRepository`-nin (`ports.py`) "bu tenant-da hansı FIELD_
-REPORT `owner_key`-ləri mövcuddur?" sualına cavab verən metodu YOXDUR —
-`list_for_owner()` HƏMİŞƏ KONKRET `owner_key` tələb edir. Sahibi bunu Faza
-4.1-də (gündəlik açılış/bağlanış checklist-i, `v2backlog.md` FAZA 4) əlavə
-edəcək, çünki hazırda FIELD_REPORT tərəfini İSTEHLAK edən BİR TƏK yer belə
-YOXDUR (bax `catalog_management.py` başlığı). Uydurma bir siyahı (məs. sabit
-"İNCIDENT"/"AUDIT" açarları) YAZMAQ ƏVƏZİNƏ admin açarı ƏLLƏ yazıb axtarır —
-bu, mövcud olmayan bir kataloqu var kimi göstərməkdənsə DAHA DÜRÜST həlldir.
+`v2backlog.md` Faza 4.1-ə qədər `ChecklistItemTemplateRepository`-nin
+(`ports.py`) "bu tenant-da hansı FIELD_REPORT `owner_key`-ləri mövcuddur?"
+sualına cavab verən metodu YOX İDİ — `list_for_owner()` HƏMİŞƏ KONKRET
+`owner_key` tələb edir. O zaman uydurma sabit siyahı (məs. "İNCIDENT"/
+"AUDIT") YAZMAQ ƏVƏZİNƏ admin açarı ƏLLƏ yazıb axtarırdı.
+
+Faza 4.1 (Gündəlik Açılış/Bağlanış Checklist-i) `FieldReportUseCase.
+list_all_report_types()`-i əlavə etdi — indi HƏQİQİ siyahı var
+(`field_report_types` kataloqu) və axtarış sahəsi normal seçiciyə
+çevrilib (`set_field_report_types`).
 """
 
 from __future__ import annotations
@@ -69,7 +71,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QHBoxLayout,
-    QLineEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -140,7 +141,12 @@ class ChecklistTemplateScreen(Screen):
         Column("Bağlayıcı", 100),
         Column("Foto", 80),
         Column("Vəziyyət", 100),
-        Column("Əməliyyat", 180),
+        # "Redaktə"/"Deaktiv et"/"Aktivləşdir" — `CatalogScreen`-in (`group_h.py`)
+        # EYNİ düymə cütü. Adsız `180` DEYİL, `CATALOG_ACTION_COLUMN_WIDTH`:
+        # QSS-lənmiş `QPushButton` avtomatik elide ETMİR (bax `NavButton`
+        # başlığı) və `180` "Aktivləşdir" mətnini sərt kəsirdi — bu MƏHZ o
+        # düymə cütü üçün ÖLÇÜLMÜŞ adlı sabitdir, hardcode YOX.
+        Column("Əməliyyat", metrics.CATALOG_ACTION_COLUMN_WIDTH),
     ]
 
     def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
@@ -170,36 +176,20 @@ class ChecklistTemplateScreen(Screen):
         toolbar_layout.addWidget(create)
         self.add(toolbar)
 
-        # FIELD_REPORT-un `owner_key` axtarışı — YALNIZ bu dəst seçiləndə
+        # FIELD_REPORT-un `owner_key` seçicisi — YALNIZ bu dəst seçiləndə
         # görünür (modul başlığı, "FIELD_REPORT SƏKMƏSİNDƏ owner_key").
+        # `v2backlog.md` Faza 4.1: `FieldReportUseCase.list_all_report_types()`
+        # ARTIQ VAR (`domain`-in bağladığı boşluq) — AXTARIŞ SAHƏSİ YOXDUR,
+        # normal seçicidir.
         self._owner_key_row = QWidget()
-        owner_key_outer = QVBoxLayout(self._owner_key_row)
-        owner_key_outer.setContentsMargins(0, 0, 0, 0)
-        owner_key_outer.setSpacing(4)
-
-        owner_key_layout = QHBoxLayout()
+        owner_key_layout = QHBoxLayout(self._owner_key_row)
         owner_key_layout.setContentsMargins(0, 0, 0, 0)
         owner_key_layout.setSpacing(metrics.SPACE_MS)
-        owner_key_layout.addWidget(field_label("Kataloq açarı (owner_key)"))
-        self._owner_key_input = QLineEdit()
-        self._owner_key_input.setProperty("variant", "form")
-        # NÜMUNƏ DƏYƏR YOX (`test_setup_wizard_state.py::test_no_form_field_
-        # shows_example_data`) — placeholder YALNIZ nə gözlənildiyini deyir,
-        # doldurulası dəyər TƏKLİF ETMİR. İstifadəçi "məs." sözünü göstəriş
-        # yox, hərfi dəyər kimi oxuyub onu daxil edərdi (qapının öz izahı).
-        self._owner_key_input.setPlaceholderText("Kataloq açarını yazın")
-        owner_key_layout.addWidget(self._owner_key_input, 1)
-        lookup = secondary_button("Göstər")
-        lookup.clicked.connect(
-            lambda: self.owner_key_lookup_requested.emit(self._owner_key_input.text().strip())
-        )
-        owner_key_layout.addWidget(lookup)
-        owner_key_outer.addLayout(owner_key_layout)
-
-        # Nümunə BURADA icazəlidir — sahənin İÇİNDƏ deyil, altındakı köməkçi
-        # mətndədir (`test_no_form_field_shows_example_data` yalnız `place
-        # holder=`/`setPlaceholderText(...)`-i skan edir).
-        owner_key_outer.addWidget(muted_label("məsələn: STORE_AUDIT, DAILY_OPEN", size=12))
+        owner_key_layout.addWidget(field_label("Hesabat növü (owner_key)"))
+        self._owner_key_combo = QComboBox()
+        self._owner_key_combo.setProperty("variant", "form")
+        self._owner_key_combo.currentIndexChanged.connect(self._on_owner_key_selected)
+        owner_key_layout.addWidget(self._owner_key_combo, 1)
 
         self._owner_key_row.setVisible(False)
         self.add(self._owner_key_row)
@@ -218,15 +208,36 @@ class ChecklistTemplateScreen(Screen):
         for key, chip in self._filter_chips.items():
             chip.set_tone("info" if key == owner_type else "neutral")
         self._owner_key_row.setVisible(owner_type == OWNER_TYPE_FIELD_REPORT)
-        if owner_type == OWNER_TYPE_FIELD_REPORT:
-            # Axtarış aparılana qədər SİYAHI GÖSTƏRİLMİR — uydurma boş
-            # "nəticə" yerinə açıq təlimat (modul başlığı).
+        if owner_type == OWNER_TYPE_FIELD_REPORT and self._owner_key_combo.count() == 0:
+            # Kontroller `set_field_report_types()`-i HƏLƏ ÇAĞIRMAYIB (fon
+            # sorğusu davam edir) — boş seçici ilə "0 nəticə" göstərmək
+            # yanlış olardı, ötəri vəziyyət AÇIQ yazılır.
             self.show_empty(
                 icon_name="checklist",
-                title="Kataloq açarını daxil edin",
-                message="FIELD_REPORT şablonları üçün əvvəlcə açarı yazıb «Göstər»i basın.",
+                title="Hesabat növləri yüklənir",
+                message="Bir neçə saniyə gözləyin.",
             )
         self.owner_type_changed.emit(owner_type)
+
+    def set_field_report_types(self, choices: list[tuple[str, str]]) -> None:
+        """FIELD_REPORT `owner_key` seçicisi — `(kod, ad)` cütləri.
+
+        Args: `set_stores`-un (`transfer_requests.py`) EYNİ (id, ad) forması.
+        İlk element AVTOMATİK seçilir və siyahı DƏRHAL yüklənir — admin
+        boş seçicidən açarı ƏLLƏ tapmaq məcburiyyətində qalmır.
+        """
+        self._owner_key_combo.blockSignals(True)
+        self._owner_key_combo.clear()
+        for code, name in choices:
+            self._owner_key_combo.addItem(name, code)
+        self._owner_key_combo.blockSignals(False)
+        if choices:
+            self._on_owner_key_selected(0)
+
+    def _on_owner_key_selected(self, _index: int) -> None:
+        code = str(self._owner_key_combo.currentData() or "")
+        if code:
+            self.owner_key_lookup_requested.emit(code)
 
     @property
     def owner_type(self) -> str:

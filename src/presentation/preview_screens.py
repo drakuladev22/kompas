@@ -284,12 +284,24 @@ def _tasks(screen: group_f.TasksScreen) -> None:
                 "evidence": "sübut şəkli",
                 "assignee": "R. İsmayılov",
                 "due": "09:48",
+                "reviewable": "1",
             },
             {
                 "id": "t5",
                 "title": "Qiymət etiketlərinin yenilənməsi",
                 "assignee": "K. Vəliyev",
                 "due": "Dünən",
+                "reviewable": "1",
+            },
+            # `v2backlog.md` Faza 4.2 — öz-düzəliş sorğusu nümunəsi:
+            # `[Təsdiqlə]`/`[Rədd Et]` YOXDUR — açar `controllers/screen_
+            # data.py::_tasks_fetch`-lə EYNİDİR (CLAUDE.md §6).
+            {
+                "id": "t6",
+                "title": "Üz tanıma uyğunsuzluğu — öz izahatım",
+                "assignee": "Cari istifadəçi",
+                "due": "Bugün",
+                "reviewable": "0",
             },
         ],
     )

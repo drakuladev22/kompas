@@ -286,7 +286,8 @@ class PostgresEmployeeRepository(_BaseRepository):
         SELECT id, tenant_id, store_id, position_id, first_name, last_name,
                username, notification_email, password_hash, must_change_password,
                pin_hash, pin_failed_attempts, pin_locked_until, pepper_version,
-               profile_photo_url, hire_date, date_of_birth, is_active
+               profile_photo_url, hire_date, date_of_birth, is_active,
+               scheduled_deactivation_date, referred_by_employee_id, data_anonymized_at
         FROM employees
     """
 
@@ -388,6 +389,14 @@ class PostgresEmployeeRepository(_BaseRepository):
         məhz bu iki sahəni SIFIRLAYIR, yəni onlarsız anonimləşdirmə
         `data_anonymized_at`-ı doldurub HƏQİQİ PII-ni (şəkil, doğum tarixi)
         bazada SAXLAYARDI — yanlış uyğunluq siqnalı.
+
+        `hire_date` YENİ ƏLAVƏ OLUNUB (`qa`-nın `test_entity_persistence_
+        parity.py` qapısının TAPINTISI): sütun VAR, entity sahəsi VAR,
+        `UserManagementUseCase.update_employee()` onu YAZIR, LAKİN `save()`
+        heç vaxt DB-yə köçürmürdü — HR "Redaktə et" formasından işə başlama
+        tarixini dəyişəndə dəyişiklik SÜKUTLA itirdi (heç bir xəta, dəyər
+        isə əvvəlki qalırdı). EYNİ sinif qüsurun DÖRDÜNCÜ təkrarı (bax
+        anonimləşdirmə sahələri, `deactivated_at`, `tasks.source`).
         """
         self._execute(
             """
@@ -403,6 +412,7 @@ class PostgresEmployeeRepository(_BaseRepository):
                 is_active                   = %s,
                 profile_photo_url           = %s,
                 date_of_birth               = %s,
+                hire_date                   = %s,
                 scheduled_deactivation_date = %s,
                 data_anonymized_at          = %s
             WHERE id = %s AND tenant_id = %s
@@ -419,6 +429,7 @@ class PostgresEmployeeRepository(_BaseRepository):
                 employee.is_active,
                 employee.profile_photo_url,
                 employee.date_of_birth,
+                employee.hire_date,
                 employee.scheduled_deactivation_date,
                 employee.data_anonymized_at,
                 employee.id,
@@ -467,14 +478,28 @@ class PostgresEmployeeRepository(_BaseRepository):
         self._sync_store_assignments(employee)
 
     def insert(self, employee: Employee, credentials: Credentials) -> None:
-        """Yeni işçi — sirrlərlə birlikdə (yalnız yaradılış anında)."""
+        """Yeni işçi — sirrlərlə birlikdə (yalnız yaradılış anında).
+
+        `hire_date`/`date_of_birth`/`scheduled_deactivation_date`/`referred_
+        by_employee_id` — `qa`-nın `test_entity_persistence_parity.py`
+        qapısının tapıntısı (`save()`-in EYNİ boşluğu): `UserManagementUse
+        Case.create_employee()` (`user_management.py:538-539`) `hire_date`/
+        `date_of_birth`-i işçi konstruktoruna ötürür, `insert()` isə onları
+        HEÇ VAXT yazmırdı — YENİ işçi yaradılanda bu iki sahə DƏRHAL itirdi
+        (forma dolduruldu, saxlanıldı, DB-də isə NULL qaldı). `scheduled_
+        deactivation_date`/`referred_by_employee_id` YARADILIŞ ANINDA
+        doldurulan Faza 3.1/3.5 sahələridir — `save()`-ə YOX, məhz BURAYA
+        aiddir (`save()`-in şərhi: birincisi HR sonradan dəyişə bilər,
+        ikincisi "tarixi fakt olaraq daimi qalır").
+        """
         self._execute(
             """
             INSERT INTO employees
                 (id, tenant_id, store_id, position_id, first_name, last_name,
                  username, notification_email, password_hash, must_change_password,
-                 pin_hash, pepper_version, is_active)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 pin_hash, pepper_version, is_active, hire_date, date_of_birth,
+                 scheduled_deactivation_date, referred_by_employee_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 employee.id,
@@ -490,6 +515,10 @@ class PostgresEmployeeRepository(_BaseRepository):
                 credentials.pin_hash,
                 credentials.pepper_version,
                 employee.is_active,
+                employee.hire_date,
+                employee.date_of_birth,
+                employee.scheduled_deactivation_date,
+                employee.referred_by_employee_id,
             ),
         )
 

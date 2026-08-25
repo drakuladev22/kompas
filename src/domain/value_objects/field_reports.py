@@ -104,6 +104,14 @@ class FieldReportTemplate:
     description_az: str | None = None
     requires_checklist: bool = False
     is_active: bool = True
+    #: `v2backlog.md` Faza 4.1 — bu şablondan bir mağaza GÜNDƏ YALNIZ BİR
+    #: hesabat təqdim edə bilərmi (Gündəlik Açılış/Bağlanış Checklist-i).
+    #: `requires_checklist` NAXIŞININ EYNİSİ — "bu, gündəlik təkrarlanan
+    #: rutindirmi?" sualının cavabı MƏLUMATDAN gəlir, `if report_type ==
+    #: "DAILY_OPEN"` zənciri YOX (modul başlığı, `use_cases/field_reports.py`
+    #: "Struktur Qərar A"). `STORE_AUDIT`/`INCIDENT` `False` qalır: bir gündə
+    #: bir neçə audit/insident olması normaldır.
+    once_per_day: bool = False
 
 
 @dataclass(frozen=True)

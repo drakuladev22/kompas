@@ -2118,7 +2118,27 @@ class ScreenDataBinder:
         return _TasksData(
             summary=f"{len(awaiting)} təsdiq gözləyir · {len(overdue)} gecikib",
             review=[
-                {"title": task.title, "assignee": _employee_name(session, task.assignee_id)}
+                {
+                    # AÇAR `"id"`-DİR: `TaskCard.__init__` `task.get("id", "")`
+                    # oxuyur. Bu sətir ƏVVƏL YOX İDİ (DEEP-GAP tapıntısı, bu
+                    # dəyişikliklə tapıldı) — yəni `[Təsdiqlə]`/`[Rədd Et]`
+                    # düymələri `TaskReviewController._on_approve/_on_reject`-ə
+                    # HƏMİŞƏ boş sətir göndərirdi, `_parse_task_id("")` isə
+                    # `ValueError` atıb tutulur və menecer HƏR kliklə "Tapşırıq
+                    # identifikatoru düzgün deyil" xətası alırdı — düymələr
+                    # görünürdü, LAKİN heç biri işləmirdi (`FineAppealScreen`-
+                    # dəki `"fine_id"`/`"id"` qarışıqlığının EYNİSİ, bax
+                    # `kiosk_self_service.py::_fine_rows` şərhi).
+                    "id": str(task.id),
+                    "title": task.title,
+                    "assignee": _employee_name(session, task.assignee_id),
+                    # `v2backlog.md` Faza 4.2 — öz-düzəliş sorğusunda (`task.
+                    # assignee_id == self._actor.id`) `[Təsdiqlə]`/`[Rədd Et]`
+                    # ÜMUMİYYƏTLƏ QURULMUR (bax `group_f.py::set_tasks`).
+                    # Domendəki HƏQİQİ zəmanət `Task._require_not_self_review`-
+                    # dədir — bu, YALNIZ görünüş qatıdır (team-lead göstərişi).
+                    "reviewable": "0" if task.assignee_id == self._actor.id else "1",
+                }
                 for task in awaiting
             ],
             # Sütun açarları `TasksScreen._COLUMNS`-dandır: `open`/`review`/`done`.
@@ -2127,7 +2147,11 @@ class ScreenDataBinder:
             # gecikdiyi yuxarıdakı xülasə sətrindədir. Sahə adı `open_column`-
             # dur, `open` DEYİL — Python builtin-i kölgələməmək üçün.
             open_column=[
-                {"title": task.title, "assignee": _employee_name(session, task.assignee_id)}
+                {
+                    "id": str(task.id),
+                    "title": task.title,
+                    "assignee": _employee_name(session, task.assignee_id),
+                }
                 for task in overdue
             ],
         )

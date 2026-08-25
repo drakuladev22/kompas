@@ -99,7 +99,8 @@ from src.domain.entities.field_report import (
 from src.domain.entities.task import TaskPriority
 from src.domain.policies import DEFAULT_LIMITS, SystemLimitKey
 from src.domain.value_objects.authorization import AuthorizationError
-from src.domain.value_objects.field_reports import FieldReportStatus
+from src.domain.value_objects.catalogs import ChecklistOwnerType
+from src.domain.value_objects.field_reports import ChecklistItemDraft, FieldReportStatus
 from src.domain.value_objects.identifiers import (
     FieldReportId,
     new_field_report_id,
@@ -116,6 +117,7 @@ if TYPE_CHECKING:
     from src.domain.entities.employee import Employee
     from src.domain.interfaces.ports import (
         AuditTrail,
+        ChecklistItemTemplateRepository,
         Clock,
         FieldReportCatalog,
         FieldReportRepository,
@@ -123,7 +125,6 @@ if TYPE_CHECKING:
         SystemLimits,
     )
     from src.domain.value_objects.field_reports import (
-        ChecklistItemDraft,
         FieldReportCategory,
         FieldReportTemplate,
     )
@@ -230,9 +231,17 @@ class FieldReportUseCase:
         audit: AuditTrail,
         clock: Clock,
         notifier: Notifier,
+        checklist_templates: ChecklistItemTemplateRepository | None = None,
     ) -> None:
         self._reports = reports
         self._catalog = catalog
+        # `v2backlog.md` Faza 4.1 — Gündəlik Açılış/Bağlanış Checklist-inin
+        # bəndləri Root-un `checklist_item_templates` kataloqundan (owner_type=
+        # FIELD_REPORT, owner_key=report_type kodu) gəlir, sərbəst mətndən YOX
+        # (bax `checklist_draft_for_type`). `None` = port qoşulmayıb — köhnə
+        # şablonlar (STORE_AUDIT/INCIDENT) TƏSİRLƏNMİR, onlar heç vaxt bu
+        # metodu çağırmır (ekran sərbəst mətn forması göstərməyə davam edir).
+        self._checklist_templates = checklist_templates
         # TAPŞIRIQ MÜHƏRRİKİ USE CASE KİMİ ÖTÜRÜLÜR, repo kimi YOX: tapşırığın
         # audit yazısı, bildirişi və `TASK_ENGINE` toggle yoxlaması onun
         # daxilindədir (`TaskWorkflowUseCase.assign`). Repo-ya birbaşa yazsaydıq,
@@ -261,6 +270,20 @@ class FieldReportUseCase:
             if actor.has_permission(self._flag_for(template), now=now)
         ]
 
+    def list_all_report_types(self, tenant_id: TenantId) -> list[FieldReportTemplate]:
+        """Kataloqun TAM siyahısı — `checklist_item_templates` (owner_type=
+        FIELD_REPORT) şablon ekranının `owner_key` seçicisi üçün (Faza 4.1,
+        `ui`-nin tapdığı boşluq).
+
+        `list_templates()`-dən FƏRQLİ: bura SƏLAHİYYƏT SÜZGƏCİ YOXDUR — bu,
+        "kim bu şablonla hesabat yaza bilər" sualı deyil, "sistemdə hansı
+        report-type açarları MÖVCUDDUR" sualıdır. Çağıran ekran artıq
+        `ChecklistItemTemplateUseCase`-in öz flag qapısının (owner_type=
+        FIELD_REPORT üçün `can_conduct_store_audit`, `catalog_management.py`)
+        arxasındadır — ikinci yoxlama ikinci ad məkanı yaradardı.
+        """
+        return self._catalog.list_templates(tenant_id)
+
     def list_categories(
         self, *, tenant_id: TenantId, actor: Employee, report_type: str
     ) -> list[FieldReportCategory]:
@@ -268,6 +291,36 @@ class FieldReportUseCase:
         template = self._require_template(tenant_id, report_type)
         self._require(actor, tenant_id, self._flag_for(template))
         return self._catalog.list_categories(tenant_id, report_type=template.code)
+
+    def checklist_draft_for_type(
+        self, *, tenant_id: TenantId, actor: Employee, report_type: str
+    ) -> list[ChecklistItemDraft]:
+        """`v2backlog.md` Faza 4.1 — forma açılanda Root şablonundan bəndləri gətirir.
+
+        Boş siyahı QAYTARIR (istisna ATMIR) iki halda: `checklist_templates`
+        portu qoşulmayıb, VƏ YA Root bu `report_type` üçün hələ bənd
+        yazmayıb. Hər ikisində ekran KÖHNƏ davranışa (sərbəst mətn forması)
+        qayıda bilməlidir — bu, `STORE_AUDIT`/`INCIDENT` üçün HƏMİŞƏ belədir,
+        çünki onlar `checklist_item_templates`-də heç vaxt sətir daşımayıb
+        (migrations/088 başlığı: "sərbəst mətn kimi alır").
+        """
+        template = self._require_template(tenant_id, report_type)
+        self._require(actor, tenant_id, self._flag_for(template))
+        if self._checklist_templates is None:
+            return []
+        templates = self._checklist_templates.list_for_owner(
+            tenant_id,
+            owner_type=ChecklistOwnerType.FIELD_REPORT,
+            owner_key=template.code,
+        )
+        return [
+            ChecklistItemDraft(
+                item_text=t.item_text,
+                is_blocking=t.is_blocking,
+                photo_required=t.photo_required,
+            )
+            for t in templates
+        ]
 
     def list_open(
         self,
@@ -307,6 +360,19 @@ class FieldReportUseCase:
         self._require(actor, tenant_id, self._flag_for(template))
 
         now = self._clock.now()
+        # `v2backlog.md` Faza 4.1 — KATALOQDAN oxunur (`once_per_day`),
+        # `if report_type == "DAILY_OPEN"` YOX (modul başlığı, Struktur Qərar A).
+        # Gün SERVER saatındandır (`Clock`), client saatına etibar edilmir.
+        if template.once_per_day:
+            existing = self._reports.find_for_store_and_day(
+                tenant_id, store_id=draft.store_id, report_type=template.code, day=now.date()
+            )
+            if existing is not None:
+                raise FieldReportError(
+                    f"«{template.name_az}» bu gün üçün artıq təqdim edilib",
+                    user_message="Bu checklist bu gün üçün artıq doldurulub.",
+                    context={"report_type": template.code, "store_id": str(draft.store_id)},
+                )
         report_id = new_field_report_id()
         items = self._build_items(
             tenant_id=tenant_id, report_id=report_id, drafts=draft.checklist, now=now

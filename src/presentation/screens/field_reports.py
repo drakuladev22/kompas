@@ -198,6 +198,15 @@ class FieldReportScreen(Screen):
         self._categories: list[dict[str, str]] = []
         self._items: list[ChecklistEntry] = []
         self._photo_paths: list[str] = []
+        #: `v2backlog.md` Faza 4.1 — `template_code` → Root-un `checklist_
+        #: item_templates`-dən gətirdiyi SABİT bəndlər. Boş siyahı = həmin
+        #: şablon üçün ŞABLON YOXDUR (STORE_AUDIT/INCIDENT-in HƏMİŞƏKİ halı) —
+        #: bax `_on_template_changed`.
+        self._checklist_drafts: dict[str, list[dict[str, str]]] = {}
+        #: `_on_template_changed`-in son işlədiyi kod — eyni şablonun TƏKRAR
+        #: seçilməsi (məs. `set_templates` yenidən çağırılanda) mövcud
+        #: cavabları SİLMƏMƏLİDİR.
+        self._loaded_template_code = ""
         #: ROOT parametrləri — dəyər `set_*` ilə CANLI oxunur, burada sabit YOX.
         self._photo_limit = 0
         self._detail_min_length = 0
@@ -283,12 +292,22 @@ class FieldReportScreen(Screen):
         )
         card.add(Divider())
 
+        # `v2backlog.md` Faza 4.1 — sərbəst-mətn əlavə etmə bölməsi TƏK
+        # QABDA: Root şablonlu tiplərdə (DAILY_OPEN/DAILY_CLOSE) bəndlər
+        # KATALOQDAN gəlir və auditor YENİ bənd YAZMIR (bax `_apply_template_
+        # checklist`) — bu qab O HALDA gizlədilir, `_render_step()`-in özü
+        # isə TOXUNULMUR (hər iki rejimdə eyni addım-naviqasiyası işləyir).
+        self._manual_entry_row = QWidget()
+        manual_layout = QVBoxLayout(self._manual_entry_row)
+        manual_layout.setContentsMargins(0, 0, 0, 0)
+        manual_layout.setSpacing(metrics.CARD_CONTENT_SPACING)
+
         self._item_text = FormField("Bənd mətni")
-        card.add(self._item_text)
+        manual_layout.addWidget(self._item_text)
         self._item_blocking = QCheckBox("Bloklayıcı bənddir (uğursuzluq düzəliş tapşırığı yaradır)")
-        card.add(self._item_blocking)
+        manual_layout.addWidget(self._item_blocking)
         self._item_photo_required = QCheckBox("Bu bənd üçün foto-sübut məcburidir")
-        card.add(self._item_photo_required)
+        manual_layout.addWidget(self._item_photo_required)
 
         add_row = QWidget()
         add_layout = QHBoxLayout(add_row)
@@ -302,7 +321,8 @@ class FieldReportScreen(Screen):
         )
         add_button.clicked.connect(self.add_checklist_item)
         add_layout.addWidget(add_button)
-        card.add(add_row)
+        manual_layout.addWidget(add_row)
+        card.add(self._manual_entry_row)
 
         card.add(Divider())
 
@@ -416,6 +436,23 @@ class FieldReportScreen(Screen):
         self._template_combo.blockSignals(False)
         self._on_template_changed()
 
+    def set_checklist_drafts(self, drafts: dict[str, list[dict[str, str]]]) -> None:
+        """`v2backlog.md` Faza 4.1 — hər şablonun Root-dan gələn SABİT bəndləri.
+
+        Args:
+            drafts: `template_code` → `item_text`/`is_blocking`/
+                `photo_required` (`"1"`/`"0"`) açarlı sözlüklər siyahısı.
+                Açarlar `controllers/field_reports.py::_checklist_draft_row`
+                ilə EYNİDİR (CLAUDE.md §6). Boş siyahı olan/heç olmayan
+                şablon KÖHNƏ sərbəst-mətn rejimində qalır (bax
+                `_on_template_changed`).
+        """
+        self._checklist_drafts = dict(drafts)
+        # Cari seçim ARTIQ yüklənmiş sayılmır — yeni gələn şablon dəsti
+        # (məs. `refresh()` təkrar çağırılıb) cari bəndləri yeniləməlidir.
+        self._loaded_template_code = ""
+        self._on_template_changed()
+
     def set_categories(self, categories: list[dict[str, str]]) -> None:
         """BÜTÜN şablonların kateqoriyaları — süzgəc ekranda işləyir.
 
@@ -494,15 +531,18 @@ class FieldReportScreen(Screen):
     def clear_form(self) -> None:
         """Uğurlu təqdimatdan sonra formu boşaldır — kontroller çağırır."""
         self._detail.setPlainText("")
-        self._items = []
         self._photo_paths = []
-        self._step = 0
         self._item_text.set_text("")
         self._item_blocking.setChecked(False)
         self._item_photo_required.setChecked(False)
         self._refresh_photo_label()
         self._set_checklist_message("")
-        self._render_step()
+        # `_items` BURADA əl ilə boşaldılmır: `_loaded_template_code`
+        # sıfırlanır ki, `_apply_template_checklist()` cari şablonu YENİDƏN
+        # yükləsin — sabit-bəndli şablonda (DAILY_OPEN/CLOSE) növbəti hesabat
+        # YENƏ Root-un bəndləri ilə açılmalıdır, boş siyahı ilə YOX.
+        self._loaded_template_code = ""
+        self._apply_template_checklist()
 
     # ------------------------------- oxuma API -------------------------------- #
 
@@ -756,7 +796,36 @@ class FieldReportScreen(Screen):
         self._form_description.setText(template.get("description", ""))
         # Checklist bölməsinin görünməsi KATALOQDAN çıxır (modul başlığı).
         self._checklist_holder.setVisible(self.requires_checklist())
+        self._apply_template_checklist()
         self._apply_categories()
+
+    def _apply_template_checklist(self) -> None:
+        """`v2backlog.md` Faza 4.1 — Root şablonlu bəndləri yükləyir (varsa).
+
+        Şablon DƏYİŞMƏYİBSƏ (`set_checklist_drafts`/`set_templates`-in
+        TƏKRAR çağırışı, məs. səhifə yenidən oxunanda) HEÇ NƏ EDİLMİR —
+        auditor artıq cavabladığı bəndləri İTİRMƏMƏLİDİR.
+        """
+        code = str(self._template_combo.currentData() or "")
+        if code == self._loaded_template_code:
+            return
+        self._loaded_template_code = code
+        drafts = self._checklist_drafts.get(code, [])
+        # BOŞ SİYAHI = bu şablon üçün Root heç bir bənd yazmayıb — KÖHNƏ
+        # sərbəst-mətn rejimi (`STORE_AUDIT`/`INCIDENT`-in HƏMİŞƏKİ halı,
+        # bax `use_cases/field_reports.py::checklist_draft_for_type`).
+        self._manual_entry_row.setVisible(not drafts)
+        self._items = [
+            ChecklistEntry(
+                item_text=draft.get("item_text", ""),
+                is_blocking=draft.get("is_blocking") == "1",
+                photo_required=draft.get("photo_required") == "1",
+            )
+            for draft in drafts
+        ]
+        self._step = 0
+        self._set_checklist_message("")
+        self._render_step()
 
     def _apply_categories(self) -> None:
         code = str(self._template_combo.currentData() or "")

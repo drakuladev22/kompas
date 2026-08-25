@@ -1011,6 +1011,15 @@ class SystemLimitKey(str, Enum):
     #: sahə yenə doldurulur (kim tövsiyə etdiyi tarixi fakt kimi qalır),
     #: yalnız xal YAZILMIR.
     EMPLOYEE_REFERRAL_BONUS_POINTS = "EMPLOYEE_REFERRAL_BONUS_POINTS"
+    # --- HR Lifecycle v2 (`v2backlog.md` Faza 4.2) ---
+    #
+    # İşçinin öz-düzəliş sorğusu (Kamera/Face Control uyğunsuzluğu). İKİSİ DƏ
+    # ROOT PARAMETRİDİR: pəncərə "hansı müddətdə sayılır", tavan isə "həmin
+    # müddətdə neçə sorğu icazəlidir" sualına cavab verir — `DUAL_CONTROL_
+    # THRESHOLD_MINUTES`/`..._APPROVAL_TIMEOUT_MINUTES` cütü ilə EYNİ ayırma
+    # səbəbi (bir açar «nə vaxt», digəri «nə qədər»).
+    SELF_CORRECTION_REQUEST_WINDOW_DAYS = "SELF_CORRECTION_REQUEST_WINDOW_DAYS"
+    SELF_CORRECTION_REQUEST_MAX_COUNT = "SELF_CORRECTION_REQUEST_MAX_COUNT"
 
 
 DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
@@ -1656,6 +1665,14 @@ DEFAULT_LIMITS: Final[dict[SystemLimitKey, str]] = {
     # dərəcəsi ilə eyni miqyasda (`SALES_POINTS_CURRENCY_PER_POINT`) başlanğıc
     # nöqtəsi kimi seçilib — Root öz kampaniyasına görə dəyişdirir.
     SystemLimitKey.EMPLOYEE_REFERRAL_BONUS_POINTS: "50",
+    # HR Lifecycle v2 (Faza 4.2) — 30 gündə ən çox 3 öz-düzəliş sorğusu.
+    # Konkret ədədlər spesifikasiyada verilmir; ayda təxminən bir-iki real
+    # uyğunsuzluq gözlənilən tezlikdir (kamera/PIN naminə üz uyğunsuzluğu
+    # tez-tez BAŞ VERMİR — bax `face_control.py` MISMATCH_LOOKBACK_DAYS=7),
+    # 3/30 gün bu tezliyin bir neçə qat üstündə, LAKİN sui-istifadəni
+    # (gündə neçə dəfə eyni bəhanəni sınamaq) əngəlləyən tavandır.
+    SystemLimitKey.SELF_CORRECTION_REQUEST_WINDOW_DAYS: "30",
+    SystemLimitKey.SELF_CORRECTION_REQUEST_MAX_COUNT: "3",
 }
 
 

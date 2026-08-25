@@ -16,6 +16,8 @@ faylı dəyişə bilər).
 
 from __future__ import annotations
 
+import ast
+import inspect
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -29,7 +31,11 @@ from src.domain.entities.field_report import FieldReport
 from src.domain.entities.position import Position
 from src.domain.value_objects.authorization import PermissionFlag, RolePriority
 from src.domain.value_objects.credentials import Username
-from src.domain.value_objects.field_reports import FieldReportCategory, FieldReportTemplate
+from src.domain.value_objects.field_reports import (
+    ChecklistItemDraft,
+    FieldReportCategory,
+    FieldReportTemplate,
+)
 from src.domain.value_objects.identifiers import (
     EmployeeId,
     PositionId,
@@ -432,6 +438,15 @@ class _UseCase:
     ) -> list[FieldReportCategory]:
         return [c for c in self.categories if c.report_type == report_type]
 
+    def checklist_draft_for_type(
+        self, *, tenant_id: Any, actor: Any, report_type: str
+    ) -> list[ChecklistItemDraft]:
+        """`v2backlog.md` Faza 4.1 — bu fayldakı ekranlar checklist kataloqunu
+        AYRICA sınamır (`test_field_reports.py`-in predmetidir), ona görə
+        BOŞ siyahı KÖHNƏ sərbəst-mətn rejimini SÜKUTLA saxlayır (bax
+        `controllers/field_reports.py` modul başlığı)."""
+        return []
+
     def list_open(
         self,
         *,
@@ -461,6 +476,56 @@ class _UseCase:
         self.closed.append((report_id, status, note))
         self.reports = [r for r in self.reports if r.id != report_id]
         return _report()
+
+
+def _session_field_reports_call_sites(module_source: str) -> set[str]:
+    """`session.field_reports.<metod>(...)` çağırış yerlərinin adları.
+
+    Protokolun TAM səthini YOX — bu ekranın FAKTİKİ çağırdığı metodları
+    axtarır (`FieldReportUseCase`-in `notify_overdue_audits`/`attach_
+    uploaded_photo`/`list_all_report_types` kimi metodları bu ekranda
+    ÜMUMİYYƏTLƏ istifadə olunmur, ona görə `_UseCase` sahtəsi onları QƏSDƏN
+    daşımır — «Protokolun HAMISI» qapısı burada SƏHV OLARDI, saxta İSTİSNA
+    zibilliyi ilə dolardı).
+    """
+    tree = ast.parse(module_source)
+    called: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Attribute)
+            and func.value.attr == "field_reports"
+        ):
+            called.add(func.attr)
+    return called
+
+
+def test_the_fake_use_case_implements_every_method_the_controller_actually_calls() -> None:
+    """`ui`-nin bu gün tapdığı qüsur sinfinin REQRESSİYA QIFILI.
+
+    `controllers/field_reports.py`-ə `checklist_draft_for_type()` çağırışı
+    əlavə olundu, bu faylın `_UseCase` sahtəsi isə geri qaldı — nəticə
+    `AttributeError` idi, kodun ÖZÜNDƏ qüsur YOX idi (`FieldReportUseCase`-
+    də metod tam mövcud idi). Bu qapı KONTROLLERİN faktiki çağırdığı hər
+    metodun sahtədə OLDUĞUNU təsdiqləyir ki, sahtə YENİDƏN geri qalmasın.
+    """
+    from src.presentation.controllers import field_reports as field_reports_controller
+
+    called = _session_field_reports_call_sites(inspect.getsource(field_reports_controller))
+    implemented = {
+        name
+        for name, value in vars(_UseCase).items()
+        if callable(value) and not name.startswith("_")
+    }
+
+    missing = sorted(called - implemented)
+    assert missing == [], (
+        "`controllers/field_reports.py` bu metodları `session.field_reports`"
+        f"-də ÇAĞIRIR, lakin bu faylın `_UseCase` sahtəsində YOXDUR: {missing}."
+    )
 
 
 class _Session:
@@ -500,6 +565,7 @@ class _ScreenStub:
     def __init__(self) -> None:
         self.templates: list[dict[str, str]] = []
         self.categories: list[dict[str, str]] = []
+        self.checklist_drafts: dict[str, list[dict[str, str]]] = {}
         self.stores: list[tuple[str, str]] = []
         self.reports: list[dict[str, str]] = []
         self.notice = ""
@@ -514,6 +580,10 @@ class _ScreenStub:
 
     def set_categories(self, rows: list[dict[str, str]]) -> None:
         self.categories = rows
+
+    def set_checklist_drafts(self, drafts: dict[str, list[dict[str, str]]]) -> None:
+        """`v2backlog.md` Faza 4.1 — bax `FieldReportScreen.set_checklist_drafts`."""
+        self.checklist_drafts = dict(drafts)
 
     def set_stores(self, stores: list[tuple[str, str]]) -> None:
         self.stores = stores

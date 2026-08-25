@@ -70,10 +70,14 @@ class TaskCard(Card):
 
     Signals:
         approved / rejected: `task_id` — yalnız "Nəzərdən Keçirilir" sütununda.
+        withdrawn: `task_id` — yalnız işçinin ÖZ öz-düzəliş sorğusunda,
+            "Açıq" sütununda (`v2backlog.md` Faza 4.2,
+            `TaskWorkflowUseCase.withdraw_self_correction`).
     """
 
     approved = Signal(str)
     rejected = Signal(str)
+    withdrawn = Signal(str)
 
     def __init__(
         self,
@@ -81,6 +85,7 @@ class TaskCard(Card):
         theme: ThemeManager,
         *,
         reviewable: bool = False,
+        withdrawable: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(padding=16, spacing=8, parent=parent)
@@ -135,6 +140,22 @@ class TaskCard(Card):
             approve.clicked.connect(lambda: self.approved.emit(task_id))
             actions_layout.addWidget(approve)
             self.add(actions)
+
+        if withdrawable:
+            # Yalnız işçinin ÖZ göndərdiyi, hələ qərar alınmamış öz-düzəliş
+            # sorğusu — `reviewable`-lə EYNİ "görmək = səlahiyyət" prinsipi
+            # (kontroller yalnız uyğun sətirdə `"withdrawable": "1"` qoyur,
+            # bax `kiosk_self_service.py::_tasks_rows`).
+            self.add(Divider())
+            withdraw_row = QWidget()
+            withdraw_layout = QHBoxLayout(withdraw_row)
+            withdraw_layout.setContentsMargins(0, 0, 0, 0)
+            withdraw_layout.setSpacing(8)
+            withdraw_layout.addWidget(stretch())
+            withdraw = secondary_button("Geri Çək")
+            withdraw.clicked.connect(lambda: self.withdrawn.emit(task_id))
+            withdraw_layout.addWidget(withdraw)
+            self.add(withdraw_row)
 
 
 class NewTaskDialog(QDialog):
@@ -317,17 +338,168 @@ class NewTaskDialog(QDialog):
         self.accept()
 
 
+class SelfCorrectionDialog(QDialog):
+    """«Uyğunsuzluğu İzah Et» forması — `TaskWorkflowUseCase.request_self_
+    correction` üçün yük toplayır (`v2backlog.md` Faza 4.2).
+
+    ──────────────────────────────────────────────────────────────────────────
+    NİYƏ `NewTaskDialog`-DAN AYRICA
+    ──────────────────────────────────────────────────────────────────────────
+    `NewTaskDialog` "kiməsə tapşırıq VER" formasıdır — icraçı seçimi, son
+    tarix, prioritet, sübut-tələbi açarı. Öz-düzəliş isə "ÖZÜMÜ izah edirəm"
+    formasıdır: icraçı SEÇİLMİR (həmişə göndərən özüdür), son tarix, prioritet
+    və sübut-tələbi sualsız təyin olunur (use case-in özündə, bax kontroller
+    başlığı). İkisini bir dialoqa sıxsaydıq, işçi anlamadığı sahələr
+    («İcraçı», «Prioritet») görüb «bunu niyə mən seçirəm?» sualı verərdi.
+
+    ──────────────────────────────────────────────────────────────────────────
+    ŞƏKİL SAHƏSİ YOXDUR (BU VERSİYADA)
+    ──────────────────────────────────────────────────────────────────────────
+    Domen `evidence_urls`-u İSTƏYƏ-BAĞLI qəbul edir (`requires_evidence=
+    False`), lakin tapşırıq sübutları üçün presentasiya qatında (`upload_
+    queue.py::UploadOwnerType`) hələ AYRICA kanal AÇILMAYIB — cərimə etirazı
+    (`FineAppealScreen`) və sübut şəkli (`FieldReportScreen`) kanalları ÖZ
+    sahiblərinə bağlıdır, tapşırıq üçün YENİSİNİ açmaq bu dəyişikliyin
+    əhatəsindən kənardır. İzahat mətni MƏCBURİDİR və kifayətdir — foto
+    olmadan da sorğu keçərlidir.
+
+    Signals:
+        submitted: `dict` — `title`, `description`.
+    """
+
+    submitted = Signal(dict)
+
+    #: İzahatın minimum uzunluğu — boş/mənasız sorğunun rəy növbəsini
+    #: doldurmasının qarşısını burada, YAZI YOLUNA GİRMƏDƏN alır. Domendə
+    #: minimum yoxdur (`request_self_correction` yalnız boş olmamasını
+    #: yoxlamır), ona görə bu ekran-yalnız qərardır, fallback DEYİL.
+    MIN_DESCRIPTION_LENGTH: Final = 10
+
+    def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._theme = theme
+        self.setWindowTitle("Uyğunsuzluğu İzah Et")
+        self.setModal(True)
+        self.setMinimumWidth(472)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        card = Card(padding=metrics.CARD_PADDING, spacing=metrics.CARD_CONTENT_SPACING, shadow=True)
+        layout.addWidget(card)
+        card.add(title_label("Uyğunsuzluğu İzah Et", size=19))
+        # VİZUAL FAZA #1 — KÖLGƏ VAR (5-ci şərt): `muted_label` `wordWrap`
+        # AÇMIR (bax `primitives.py`), yəni bu sətrin `sizeHint()`-i tam
+        # (bükülməmiş) mətn eni ilə HESABLANIR və Card-ın təbii enini
+        # BİLAVASİTƏ MÜƏYYƏN EDİR — `NewTaskDialog`-un öz giriş cümləsi
+        # (247px başlıq + 1248px cümlə) məhz bu səbəbdən QISA saxlanılıb.
+        # Mətn buradan UZATSAN, ölçü YENİDƏN yoxlanmalıdır (`tests/unit/
+        # test_shadow_card_width_gate.py`, `MAX_SHADOW_CARD_WIDTH_PX`).
+        card.add(
+            muted_label(
+                "Nə baş verdiyini qısaca izah edin — sorğuya SİZDƏN BAŞQA bir təsdiqçi baxacaq.",
+                size=12,
+            )
+        )
+        card.add(Divider())
+
+        self._title = FormField("Başlıq", placeholder="Nə barədədir?")
+        card.add(self._title)
+
+        description_box = QWidget()
+        description_layout = QVBoxLayout(description_box)
+        description_layout.setContentsMargins(0, 0, 0, 0)
+        description_layout.setSpacing(8)
+        description_layout.addWidget(field_label("İzahınız"))
+        self._description = QPlainTextEdit()
+        self._description.setPlaceholderText(
+            "Nə baş verdi və niyə bunun uyğunsuzluq olmadığını düşünürsünüz?"
+        )
+        self._description.setFixedHeight(96)
+        description_layout.addWidget(self._description)
+        # `FormField` BURADA İŞLƏDİLMİR: onun `widget` tipi `QLineEdit |
+        # QComboBox | QAbstractSpinBox`-dır və `setMinimumHeight(FIELD_
+        # HEIGHT)` + `Fixed` ölçü siyasəti tətbiq edir — çoxsətirli
+        # `QPlainTextEdit`-i tək sətrə sıxardı (`NewTaskDialog._description`
+        # da eyni səbəbdən çılpaq işlədilir). Xəta mesajı ona görə
+        # `FormField.set_error`-in ÖZÜ deyil, EYNİ QSS açarı (`variant=
+        # "danger-text"`, bax `forms.py::FormField.set_error`) ilə əl ilə
+        # qurulur.
+        self._description_error = plain_label("")
+        self._description_error.setProperty("variant", "danger-text")
+        self._description_error.setWordWrap(True)
+        self._description_error.setVisible(False)
+        description_layout.addWidget(self._description_error)
+        card.add(description_box)
+
+        buttons = QWidget()
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(metrics.SPACE_MS)
+        buttons_layout.addWidget(stretch())
+
+        cancel = secondary_button("İmtina")
+        cancel.clicked.connect(self.reject)
+        buttons_layout.addWidget(cancel)
+
+        save = action_button("Sorğunu Göndər")
+        save.clicked.connect(self._on_submit)
+        buttons_layout.addWidget(save)
+        card.add(buttons)
+
+        save.setDefault(True)
+        save.setAutoDefault(True)
+        cancel.setAutoDefault(False)
+
+        QWidget.setTabOrder(self._title.input_widget(), self._description)
+        QWidget.setTabOrder(self._description, cancel)
+        QWidget.setTabOrder(cancel, save)
+
+        self._title.focus_input()
+
+    def _on_submit(self) -> None:
+        """Boş/qısa forma YAZI YOLUNA GİRMİR — səbəbi `NewTaskDialog._on_
+        submit`-lə EYNİDİR: modal bağlanıb istisna gələndə mətn İTMƏMƏLİDİR.
+        """
+        self._title.clear_error()
+        self._description_error.setVisible(False)
+
+        title = self._title.text().strip()
+        if not title:
+            self._title.set_error("Başlıq məcburidir")
+            return
+
+        description = self._description.toPlainText().strip()
+        if len(description) < self.MIN_DESCRIPTION_LENGTH:
+            self._description_error.setText(
+                f"İzah ən azı {self.MIN_DESCRIPTION_LENGTH} simvol olmalıdır"
+            )
+            self._description_error.setVisible(True)
+            self._description.setFocus()
+            return
+
+        self.submitted.emit({"title": title, "description": description})
+        self.accept()
+
+
 class TasksScreen(Screen):
     """Kanban: Açıq / Nəzərdən Keçirilir / Tamamlandı.
 
     Signals:
         create_requested: "Yeni Tapşırıq".
         approved / rejected: `task_id`.
+        self_correction_requested: "Uyğunsuzluğu İzah Et" (yalnız `show_
+            self_correction_button=True` olanda görünür).
+        withdraw_requested: `task_id` — işçinin öz öz-düzəliş sorğusunu geri
+            çəkməsi (yalnız uyğun kartda görünür, bax `TaskCard`).
     """
 
     create_requested = Signal()
     approved = Signal(str)
     rejected = Signal(str)
+    self_correction_requested = Signal()
+    withdraw_requested = Signal(str)
 
     COLUMNS: Final = (
         ("open", "Açıq"),
@@ -335,7 +507,33 @@ class TasksScreen(Screen):
         ("done", "Tamamlandı"),
     )
 
-    def __init__(self, theme: ThemeManager, *, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        theme: ThemeManager,
+        *,
+        parent: QWidget | None = None,
+        show_create_button: bool = True,
+        show_self_correction_button: bool = False,
+    ) -> None:
+        """
+        Args:
+            show_create_button: «Yeni Tapşırıq» ("kiməsə tapşırıq ver").
+                Admin Kanban lövhəsində DEFOLT AÇIQDIR (köhnə davranış).
+                Kioskun «Tapşırıqlarım» görünüşündə `False` ötürülür —
+                əvvəl bu düymə ORADA DA görünürdü, lakin heç bir kontroller
+                `create_requested`-i dinləmirdi (`kiosk_self_service.py`
+                işçinin ÖZ tapşırıqlarını göstərir, BAŞQASINA təyinat üçün
+                deyil) — yəni işçi basırdı, heç nə baş vermirdi. Bu, məhz
+                bu modulun öz başlığının xəbərdarlıq etdiyi "ölü düymə"
+                nümunəsidir.
+            show_self_correction_button: «Uyğunsuzluğu İzah Et». Kioskda
+                `True`, admin Kanban lövhəsində DEFOLT SÖNÜKDÜR — admin
+                lövhəsinin «Açıq» sütunu TENANT ÜZRƏ GECİKMİŞ tapşırıqlardır
+                (bax `screen_data.py::_tasks_fetch`), işçinin ÖZ siyahısı
+                DEYİL, ona görə "özüm izah edim" düyməsi orada mənasız qalar.
+                Bütün işçilər (menecer daxil) girişi kioskdan keçdiyi üçün
+                bu, əhatəni azaltmır.
+        """
         super().__init__(theme, parent=parent)
         self._column_layouts: dict[str, QVBoxLayout] = {}
         self._column_counts: dict[str, QLabel] = {}
@@ -346,13 +544,22 @@ class TasksScreen(Screen):
         self._summary = muted_label("")
         toolbar_layout.addWidget(self._summary)
         toolbar_layout.addWidget(stretch())
-        create = action_button(
-            "Yeni Tapşırıq",
-            icon_name="plus",
-            icon_color=theme.color("--color-action-text"),
-        )
-        create.clicked.connect(self.create_requested)
-        toolbar_layout.addWidget(create)
+        if show_self_correction_button:
+            self_correction = secondary_button(
+                "Uyğunsuzluğu İzah Et",
+                icon_name="edit",
+                icon_color=theme.color("--color-nav-item-text"),
+            )
+            self_correction.clicked.connect(self.self_correction_requested)
+            toolbar_layout.addWidget(self_correction)
+        if show_create_button:
+            create = action_button(
+                "Yeni Tapşırıq",
+                icon_name="plus",
+                icon_color=theme.color("--color-action-text"),
+            )
+            create.clicked.connect(self.create_requested)
+            toolbar_layout.addWidget(create)
         self.add(toolbar)
 
         board = QWidget()
@@ -405,9 +612,23 @@ class TasksScreen(Screen):
         self._column_counts[column].setText(str(len(tasks)))
 
         for task in tasks:
-            card = TaskCard(task, self.theme, reviewable=column == "review")
+            # `v2backlog.md` Faza 4.2 — öz-düzəliş sorğusunda `[Təsdiqlə]`/
+            # `[Rədd Et]` GÖRÜNMƏMƏLİDİR (`reviewer_id == assignee_id`
+            # domendə onsuz da rədd edilir, bax `Task._require_not_self_
+            # review`) — "görmək = səlahiyyət" bənd 3: düymə boz DEYİL,
+            # ÜMUMİYYƏTLƏ QURULMUR. Açar YOXDURSA (`"open"`/`"done"` sütunu,
+            # ya köhnə maket sətri) `"1"` fərz edilir — DAVRANIŞ DƏYİŞMİR.
+            reviewable = column == "review" and task.get("reviewable", "1") != "0"
+            # Açar YALNIZ kontroller `"open"` sütununda, işçinin ÖZ, hələ
+            # qərar alınmamış öz-düzəliş sorğusu üçün qoyur (`kiosk_self_
+            # service.py::_tasks_rows`) — açar yoxdursa `"0"` fərz olunur,
+            # yəni admin Kanban lövhəsi (açar heç göndərmir) DAVRANIŞ
+            # DƏYİŞMİR.
+            withdrawable = column == "open" and task.get("withdrawable", "0") == "1"
+            card = TaskCard(task, self.theme, reviewable=reviewable, withdrawable=withdrawable)
             card.approved.connect(self.approved)
             card.rejected.connect(self.rejected)
+            card.withdrawn.connect(self.withdraw_requested)
             layout.insertWidget(layout.count() - 1, card)
         self.show_content()
 

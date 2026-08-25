@@ -357,17 +357,34 @@ DUAL_CONTROL_APPROVAL_FLAG: Final[str] = "can_approve_dual_control_override"
 #: bilir və heç bir qeyd aralıq vəziyyətdə qalmır.
 #:
 #: ──────────────────────────────────────────────────────────────────────────
-#: `can_approve_shift_swap` (v2backlog Faza 2 auditi, 2026-08-25) — MÖVCUD,
-#: GİZLİ QÜSUR TAPILDI
+#: `can_approve_shift_swap` VƏ `can_approve_task_evidence` (v2backlog Faza 2
+#: auditi, 2026-08-25) — EYNİ AUDİTDƏ TAPILAN, EYNİ NÖV QÜSUR
 #: ──────────────────────────────────────────────────────────────────────────
-#: Əvvəllər BURADA YOX idi — bu, unudulma idi, qəsdən buraxılma DEYİL.
-#: Yoxlanıldı: `ShiftSwapUseCase`-də sorğunu geri çəkmək/ləğv etmək metodu
-#: yoxdur, `job_runner.py`-da (leave-appeal və points-dispute-dən fərqli
-#: olaraq) shift-swap üçün SLA-timeout/expire mexanizmi yoxdur — yəni
-#: daşıyıcısı qalmayanda gözləyən sorğu HEÇ BİR yolla son hala çatmır: işçi
-#: geri çəkə bilmir, sistem bağlamır, Root/CEO isə flag-i bərpa etməyincə
-#: sorğu əbədi "gözləyir" qalır. `can_manage_employees`-dən fərqli olaraq bu,
-#: "çətinləşən əməliyyat" deyil, "son hala çatmayan sətir"dir.
+#: İkisi də BURADA YOX idi — bu, unudulma idi, qəsdən buraxılma DEYİL, və
+#: ikisi də EYNİ meyarı ödəyir:
+#: * `can_approve_shift_swap`: `ShiftSwapUseCase`-də sorğunu geri çəkmək/
+#:   ləğv etmək metodu yoxdur, `job_runner.py`-da (leave-appeal və
+#:   points-dispute-dən fərqli olaraq) shift-swap üçün SLA-timeout/expire
+#:   mexanizmi yoxdur.
+#: * `can_approve_task_evidence`: `Task.escalate()` (`escalate_overdue()`
+#:   vasitəsilə) YALNIZ bildiriş göndərir, sətri BAĞLAMIR;
+#:   `Task.cancel()` entity-də mövcuddur, LAKİN `TaskWorkflowUseCase`-də HEÇ
+#:   BİR metod onu çağırmır (ekspoz olunmayıb); `job_runner.py`-da tapşırıq
+#:   üçün SLA-timeout yoxdur.
+#: Hər ikisində: daşıyıcısı qalmayanda gözləyən sətir HEÇ BİR yolla son hala
+#: çatmır — işçi geri çəkə bilmir, sistem bağlamır, Root/CEO isə flag-i
+#: bərpa etməyincə sətir əbədi "gözləyir" qalır. `can_manage_employees`-dən
+#: fərqli olaraq bu, "çətinləşən əməliyyat" deyil, "son hala çatmayan
+#: sətir"dir.
+#:
+#: DİQQƏT — bu siyahı `can_approve_task_evidence`-in TOPLAM daşıyıcı sayı
+#: sıfıra düşəndə (REVOKE anında) qoruyur. O, tapşırıq öz-düzəliş sorğusunda
+#: `TaskSource.EMPLOYEE_SELF_CORRECTION` səbəbindən YEGANƏ daşıyıcının ÖZ
+#: sətrini `_require_not_self_review` ilə bloklaması ssenarisini QORUMUR —
+#: bu, revoke-anı deyil, YARADILIŞ-anı hadisəsidir (siyahıya əlavə güc
+#: vermir). Həmin dar boşluğun həlli `request_self_correction`-a geri-çəkmə
+#: yolu əlavə etməkdir (`can_approve_transfer_request`-in `withdraw()`
+#: presedenti, aşağıda) — bu, `domain`-in işidir, BURADA HƏLL OLUNMUR.
 #:
 #: ──────────────────────────────────────────────────────────────────────────
 #: `can_approve_transfer_request` BURAYA QƏSDƏN DÜŞMÜR — presedent
@@ -397,6 +414,10 @@ DEADLOCK_CRITICAL_FLAGS: Final[dict[str, str]] = {
     "can_approve_shift_swap": (
         "növbə dəyişmə sorğuları qərarsız qalacaq, işçi öz standart "
         "növbəsinə çıxmağa məcbur qalacaq"
+    ),
+    "can_approve_task_evidence": (
+        "yüklənmiş tapşırıq sübutları təsdiqsiz qalacaq — o cümlədən "
+        "öz-düzəliş sorğuları (Faza 4.2) HEÇ VAXT qərara bağlanmayacaq"
     ),
 }
 

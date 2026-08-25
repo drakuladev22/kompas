@@ -54,7 +54,7 @@ from src.domain.value_objects.identifiers import (
 from src.infrastructure.persistence.repositories import _BaseRepository
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from datetime import date, datetime
 
 #: `stores_missing_audit` sorğusu.
 #:
@@ -186,6 +186,28 @@ class PostgresFieldReportRepository(_BaseRepository):
         if row is None:
             return None
         return self.get(FieldReportId(row["report_id"]))
+
+    def find_for_store_and_day(
+        self, tenant_id: TenantId, *, store_id: StoreId, report_type: str, day: date
+    ) -> FieldReport | None:
+        """Faza 4.1 (v2backlog.md) — `FieldReportTemplate.once_per_day` yoxlaması.
+
+        `(created_at AT TIME ZONE 'UTC')::date` — `uq_field_reports_once_
+        per_day` DB indeksinin (migrations/097) EYNİ ifadəsi: `day` `Clock`
+        portundan (SERVER, UTC) gəlir, sadə `created_at::date` isə Postgres
+        sessiyasının `TimeZone` GUC dəyərindən asılı olardı — ifadə bu
+        asılılığı aradan qaldırır (migrations/097 başlığı).
+        """
+        row = self._fetch_one(
+            f"""{self._SELECT}
+            WHERE tenant_id = %s AND store_id = %s AND type = %s
+              AND (created_at AT TIME ZONE 'UTC')::date = %s
+            """,
+            (tenant_id, store_id, report_type, day),
+        )
+        if row is None:
+            return None
+        return self._hydrate([row])[0]
 
     def list_open(
         self,

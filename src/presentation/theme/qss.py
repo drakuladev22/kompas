@@ -1369,6 +1369,25 @@ QScrollArea#SidebarScroll QScrollBar::handle:vertical {
     min-height: {{--space-lg}};
 }
 
+/* KİOSK EKRANININ SÜRÜŞDÜRMƏ ZOLAĞI — `#SidebarScroll` İLƏ EYNİ NAZİK
+   ÜSLUB, EYNİ SƏBƏB: toxunma cihazında qalın (16px) ümumi zolaq yer yeyir
+   (`group_a_kiosk.py::EmployeeHomeScreen`, `perf-screens`-in kompakt-
+   rejim hündürlük tapıntısı — `admin_shell.py:137`-dəki `ContentScroll`
+   presedenti tətbiq olunur, kiosk üçün AYRI fəlsəfə İCAD OLUNMUR). YENİ
+   token YARADILMIR — `#SidebarScroll` ilə EYNİ cüt (`--space-sm`,
+   `--color-border-subtle`) təkrar işlədilir. */
+QScrollArea#KioskContentScroll QScrollBar:vertical {
+    background: transparent;
+    border: none;
+    width: {{--space-sm}};
+}
+
+QScrollArea#KioskContentScroll QScrollBar::handle:vertical {
+    background: {{--color-border-subtle}};
+    border-radius: {{--radius-sm}};
+    min-height: {{--space-lg}};
+}
+
 QToolTip {
     background-color: {{--color-bg-elevated}};
     color: {{--color-text-primary}};

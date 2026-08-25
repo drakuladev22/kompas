@@ -27,6 +27,7 @@ from src.application.use_cases.root_control import (
 )
 from src.application.use_cases.sales_points import SalesPointsError, SalesPointsUseCase
 from src.application.use_cases.task_workflow import (
+    APPROVE_EVIDENCE_FLAG,
     TaskDraft,
     TaskNotFoundError,
     TaskWorkflowError,
@@ -37,10 +38,11 @@ from src.application.use_cases.user_management import (
     OpenFineExposure,
     UserManagementUseCase,
 )
+from src.domain.entities.base import DomainRuleError
 from src.domain.entities.employee import Employee, PermissionOverride
 from src.domain.entities.position import Position
 from src.domain.entities.sales_points import PointsEntry
-from src.domain.entities.task import Task, TaskStatus
+from src.domain.entities.task import Task, TaskSource, TaskStatus
 from src.domain.policies import FeatureModule, SystemLimitKey
 from src.domain.value_objects.authorization import (
     AuthorizationError,
@@ -279,6 +281,16 @@ class _TaskRepo:
         self.tasks[task.id] = task
         self.saves += 1
 
+    def count_self_correction_requests(self, employee_id: EmployeeId, *, since: datetime) -> int:
+        """Portun docstring-i: STATUS-DAN ASILI DEYİL — geri çəkilmiş sorğu da sayılır."""
+        return sum(
+            1
+            for task in self.tasks.values()
+            if task.source is TaskSource.EMPLOYEE_SELF_CORRECTION
+            and task.assigned_by == employee_id
+            and task.created_at >= since
+        )
+
 
 def _make_task(*, assignee: EmployeeId, manager: EmployeeId, hours: int = 8) -> Task:
     return Task(
@@ -390,6 +402,307 @@ def test_escalation_is_not_repeated_on_the_next_cycle() -> None:
 
     assert use_case.escalate_overdue(tenant_id=TENANT).escalated_count == 1
     assert use_case.escalate_overdue(tenant_id=TENANT).escalated_count == 0
+
+
+# --------------------------------------------------------------------------- #
+# Öz-özünü təsdiq qadağası (`v2backlog.md` Faza 4.2, `sec-v2` tapıntısı)
+# --------------------------------------------------------------------------- #
+#
+# `Task._require_not_self_review` HƏM adi təyinatlı tapşırıqlara, HƏM
+# öz-düzəliş sorğularına aiddir — struktur zəmanət `reviewer_id ==
+# assignee_id`-dədir, mənbədən (`TaskSource`) asılı deyil. Adi təyinatda bu
+# demək olar HEÇ VAXT işə düşmür (`ADMIN`/`HR_ADMIN`-in `assign` edən şəxsi
+# `assignee`-nin ÖZÜ olmur), lakin flag kombinasiyası TEXNİKİ mümkündür,
+# ona görə bu fayl hər iki mənbəni ayrıca sınayır.
+
+
+def test_a_normal_task_cannot_be_approved_by_its_own_assignee() -> None:
+    """`ADMIN`/`HR_ADMIN` hər iki flag-i defolt daşıyır — real boşluq (`sec-v2`)."""
+    actor = _employee(flags=(APPROVE_EVIDENCE_FLAG,))
+    task = _make_task(assignee=actor.id, manager=EmployeeId(uuid.uuid4()))
+    task.submit_evidence(evidence_urls=["https://drive/1.jpg"], submitted_at=NOW)
+    use_case = TaskWorkflowUseCase(
+        tasks=_TaskRepo([task]), audit=_Audit(), clock=_Clock(), notifier=_Notifier()
+    )
+
+    with pytest.raises(DomainRuleError, match="öz tapşırığının sübutunu özü"):
+        use_case.approve(tenant_id=TENANT, actor=actor, task_id=task.id)
+
+
+def test_a_normal_task_cannot_be_rejected_by_its_own_assignee() -> None:
+    actor = _employee(flags=(APPROVE_EVIDENCE_FLAG,))
+    task = _make_task(assignee=actor.id, manager=EmployeeId(uuid.uuid4()))
+    task.submit_evidence(evidence_urls=["https://drive/1.jpg"], submitted_at=NOW)
+    use_case = TaskWorkflowUseCase(
+        tasks=_TaskRepo([task]), audit=_Audit(), clock=_Clock(), notifier=_Notifier()
+    )
+
+    with pytest.raises(DomainRuleError, match="öz tapşırığının sübutunu özü"):
+        use_case.reject(tenant_id=TENANT, actor=actor, task_id=task.id, reason="Kifayət uzun səbəb")
+
+
+def test_a_different_reviewer_can_still_approve() -> None:
+    """Neqativ qapı — qadağa YALNIZ eyni şəxsə aiddir, ÜMUMİYYƏTLƏ bloklamır."""
+    assignee = _employee(flags=())
+    reviewer = _employee(flags=(APPROVE_EVIDENCE_FLAG,))
+    task = _make_task(assignee=assignee.id, manager=EmployeeId(uuid.uuid4()))
+    task.submit_evidence(evidence_urls=["https://drive/1.jpg"], submitted_at=NOW)
+    use_case = TaskWorkflowUseCase(
+        tasks=_TaskRepo([task]), audit=_Audit(), clock=_Clock(), notifier=_Notifier()
+    )
+
+    use_case.approve(tenant_id=TENANT, actor=reviewer, task_id=task.id)
+
+    assert task.status is TaskStatus.APPROVED
+
+
+# --------------------------------------------------------------------------- #
+# `request_self_correction` / `withdraw_self_correction` (Faza 4.2)
+# --------------------------------------------------------------------------- #
+
+
+def _self_correction_use_case(
+    *, tasks: _TaskRepo | None = None, limits: dict[str, str] | None = None
+) -> tuple[TaskWorkflowUseCase, _TaskRepo, _Audit]:
+    repo = tasks or _TaskRepo()
+    audit = _Audit()
+    use_case = TaskWorkflowUseCase(
+        tasks=repo,  # type: ignore[arg-type]
+        audit=audit,  # type: ignore[arg-type]
+        clock=_Clock(),
+        notifier=_Notifier(),
+        limits=_SelfCorrectionLimits(limits) if limits else None,  # type: ignore[arg-type]
+    )
+    return use_case, repo, audit
+
+
+class _SelfCorrectionLimits:
+    def __init__(self, values: dict[str, str]) -> None:
+        self.values = values
+
+    def get_int(self, tenant_id: TenantId, key: str, default: int) -> int:
+        return int(self.values.get(key, default))
+
+    def get_str(self, tenant_id: TenantId, key: str, default: str) -> str:
+        return self.values.get(key, default)
+
+
+def test_request_self_correction_does_not_require_the_assign_flag() -> None:
+    """Bax modul başlığı — bu, "kiməsə iş vermək" DEYİL, ÖZ uyğunsuzluğunu bildirməkdir."""
+    use_case, _repo, _audit = _self_correction_use_case()
+    actor = _employee(flags=())  # HEÇ bir flag YOXDUR
+
+    task = use_case.request_self_correction(
+        tenant_id=TENANT,
+        actor=actor,
+        title="Kamera qeydinə etiraz",
+        description="Gecikmə səhv qeydə alınıb, izahatım əlavədir.",
+        deadline=NOW + timedelta(days=3),
+        task_id=TaskId(uuid.uuid4()),
+    )
+
+    assert task.source is TaskSource.EMPLOYEE_SELF_CORRECTION
+    assert task.assignee_id == actor.id
+    assert task.assigned_by == actor.id
+    # Sübut YARADILIŞ ANINDA daxildir — ikinci addım GÖZLƏNMİR.
+    assert task.status is TaskStatus.EVIDENCE_SUBMITTED
+
+
+def test_request_self_correction_is_audited_and_broadcasts_with_no_specific_recipient() -> None:
+    use_case, _repo, audit = _self_correction_use_case()
+    actor = _employee(flags=())
+
+    use_case.request_self_correction(
+        tenant_id=TENANT,
+        actor=actor,
+        title="Kamera qeydinə etiraz",
+        description="Gecikmə səhv qeydə alınıb.",
+        deadline=NOW + timedelta(days=3),
+        task_id=TaskId(uuid.uuid4()),
+    )
+
+    assert audit.actions() == ["SELF_CORRECTION_REQUESTED"]
+
+
+def test_the_fourth_request_within_the_default_window_is_rejected() -> None:
+    """Defolt: 30 gün / 3 sorğu (`policies.py`) — DÖRDÜNCÜ sorğu rədd edilir."""
+    use_case, _repo, _audit = _self_correction_use_case()
+    actor = _employee(flags=())
+    for _ in range(3):
+        use_case.request_self_correction(
+            tenant_id=TENANT,
+            actor=actor,
+            title="Kamera qeydinə etiraz",
+            description="Gecikmə səhv qeydə alınıb.",
+            deadline=NOW + timedelta(days=3),
+            task_id=TaskId(uuid.uuid4()),
+        )
+
+    with pytest.raises(TaskWorkflowError, match="artıq 3 öz-düzəliş sorğusu"):
+        use_case.request_self_correction(
+            tenant_id=TENANT,
+            actor=actor,
+            title="Kamera qeydinə etiraz",
+            description="Yenə səhv qeyd.",
+            deadline=NOW + timedelta(days=3),
+            task_id=TaskId(uuid.uuid4()),
+        )
+
+
+def test_the_cap_is_a_root_parameter_not_a_hardcoded_three() -> None:
+    use_case, _repo, _audit = _self_correction_use_case(
+        limits={SystemLimitKey.SELF_CORRECTION_REQUEST_MAX_COUNT.value: "1"}
+    )
+    actor = _employee(flags=())
+    use_case.request_self_correction(
+        tenant_id=TENANT,
+        actor=actor,
+        title="Kamera qeydinə etiraz",
+        description="Gecikmə səhv qeydə alınıb.",
+        deadline=NOW + timedelta(days=3),
+        task_id=TaskId(uuid.uuid4()),
+    )
+
+    with pytest.raises(TaskWorkflowError, match="artıq 1 öz-düzəliş sorğusu"):
+        use_case.request_self_correction(
+            tenant_id=TENANT,
+            actor=actor,
+            title="Kamera qeydinə etiraz",
+            description="Yenə səhv qeyd.",
+            deadline=NOW + timedelta(days=3),
+            task_id=TaskId(uuid.uuid4()),
+        )
+
+
+def test_requests_outside_the_window_do_not_count_toward_the_cap() -> None:
+    # `_TaskRepo.count_self_correction_requests`-in `since` süzgəcini sınamaq
+    # üçün `assigned_by`/`source`/`created_at`-ı ƏLLƏ köhnəldirik.
+    actor = _employee(flags=())
+    stale = Task(
+        task_id=TaskId(uuid.uuid4()),
+        tenant_id=TENANT,
+        title="Köhnə öz-düzəliş",
+        assignee_id=actor.id,
+        assigned_by=actor.id,
+        deadline=NOW - timedelta(days=199),
+        created_at=NOW - timedelta(days=200),
+        source=TaskSource.EMPLOYEE_SELF_CORRECTION,
+    )
+    use_case, repo, _audit = _self_correction_use_case(
+        tasks=_TaskRepo([stale]),
+        limits={SystemLimitKey.SELF_CORRECTION_REQUEST_MAX_COUNT.value: "1"},
+    )
+
+    # `stale` pəncərədən (30 gün) KƏNARDADIR, ona görə say 0-dır və İLK
+    # (bu andakı) sorğu HƏLƏ tavana dəymir.
+    task = use_case.request_self_correction(
+        tenant_id=TENANT,
+        actor=actor,
+        title="Kamera qeydinə etiraz",
+        description="Gecikmə səhv qeydə alınıb.",
+        deadline=NOW + timedelta(days=3),
+        task_id=TaskId(uuid.uuid4()),
+    )
+
+    assert task.id in repo.tasks
+
+
+def test_withdraw_only_the_requester_can_withdraw() -> None:
+    actor = _employee(flags=())
+    use_case, _repo, _audit = _self_correction_use_case()
+    task = use_case.request_self_correction(
+        tenant_id=TENANT,
+        actor=actor,
+        title="Kamera qeydinə etiraz",
+        description="Gecikmə səhv qeydə alınıb.",
+        deadline=NOW + timedelta(days=3),
+        task_id=TaskId(uuid.uuid4()),
+    )
+    stranger = _employee(flags=())
+
+    with pytest.raises(TaskWorkflowError, match="Yalnız sorğunu göndərən"):
+        use_case.withdraw_self_correction(tenant_id=TENANT, actor=stranger, task_id=task.id)
+
+
+def test_withdraw_succeeds_from_evidence_submitted_and_cancels_the_task() -> None:
+    actor = _employee(flags=())
+    use_case, _repo, audit = _self_correction_use_case()
+    task = use_case.request_self_correction(
+        tenant_id=TENANT,
+        actor=actor,
+        title="Kamera qeydinə etiraz",
+        description="Gecikmə səhv qeydə alınıb.",
+        deadline=NOW + timedelta(days=3),
+        task_id=TaskId(uuid.uuid4()),
+    )
+
+    withdrawn = use_case.withdraw_self_correction(tenant_id=TENANT, actor=actor, task_id=task.id)
+
+    assert withdrawn.status is TaskStatus.CANCELLED
+    assert "SELF_CORRECTION_WITHDRAWN" in audit.actions()
+
+
+def test_withdraw_is_refused_once_the_request_has_been_rejected() -> None:
+    """QƏRAR gizlədilməsin — `REJECTED`-dən geri çəkmək QADAĞANDIR."""
+    actor = _employee(flags=())
+    reviewer = _employee(flags=(APPROVE_EVIDENCE_FLAG,))
+    use_case, repo, _audit = _self_correction_use_case()
+    task = use_case.request_self_correction(
+        tenant_id=TENANT,
+        actor=actor,
+        title="Kamera qeydinə etiraz",
+        description="Gecikmə səhv qeydə alınıb.",
+        deadline=NOW + timedelta(days=3),
+        task_id=TaskId(uuid.uuid4()),
+    )
+    use_case.reject(
+        tenant_id=TENANT,
+        actor=reviewer,
+        task_id=task.id,
+        reason="Qeyd DOĞRUDUR, sübut kifayət deyil",
+    )
+
+    with pytest.raises(TaskWorkflowError, match="Yalnız qərar gözləyən sorğu"):
+        use_case.withdraw_self_correction(tenant_id=TENANT, actor=actor, task_id=task.id)
+    assert repo.get(task.id).status is TaskStatus.REJECTED  # sükutla dəyişməyib
+
+
+def test_withdrawing_does_not_free_up_the_cap() -> None:
+    """Sui-istifadə sayğacına TƏSİR ETMİR — göndər→geri-çək dövrü tavanı yan keçməməlidir."""
+    use_case, _repo, _audit = _self_correction_use_case(
+        limits={SystemLimitKey.SELF_CORRECTION_REQUEST_MAX_COUNT.value: "1"}
+    )
+    actor = _employee(flags=())
+    first = use_case.request_self_correction(
+        tenant_id=TENANT,
+        actor=actor,
+        title="Kamera qeydinə etiraz",
+        description="Gecikmə səhv qeydə alınıb.",
+        deadline=NOW + timedelta(days=3),
+        task_id=TaskId(uuid.uuid4()),
+    )
+    use_case.withdraw_self_correction(tenant_id=TENANT, actor=actor, task_id=first.id)
+
+    with pytest.raises(TaskWorkflowError, match="artıq 1 öz-düzəliş sorğusu"):
+        use_case.request_self_correction(
+            tenant_id=TENANT,
+            actor=actor,
+            title="Kamera qeydinə etiraz",
+            description="Yenə eyni cəhd.",
+            deadline=NOW + timedelta(days=3),
+            task_id=TaskId(uuid.uuid4()),
+        )
+
+
+def test_withdraw_refuses_a_normally_assigned_task() -> None:
+    """`source != EMPLOYEE_SELF_CORRECTION` — adi tapşırıq bu yolla geri çəkilə bilməz."""
+    manager = EmployeeId(uuid.uuid4())
+    assignee = _employee(flags=())
+    task = _make_task(assignee=assignee.id, manager=manager)
+    use_case, _repo, _audit = _self_correction_use_case(tasks=_TaskRepo([task]))
+
+    with pytest.raises(TaskWorkflowError, match="Yalnız öz-düzəliş sorğuları"):
+        use_case.withdraw_self_correction(tenant_id=TENANT, actor=assignee, task_id=task.id)
 
 
 # --------------------------------------------------------------------------- #
