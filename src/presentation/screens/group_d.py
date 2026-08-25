@@ -2758,6 +2758,11 @@ class RootControlScreen(Screen):
 
         self._language_combo = QComboBox()
         self._language_combo.setProperty("variant", "form")
+        # Screen-reader üçün açıq ad — kombinatın cari DƏYƏRİ deyil, VƏZİFƏSİ.
+        self._language_combo.setAccessibleName("İnterfeys dili")
+        self._language_combo.setAccessibleDescription(
+            "Tətbiqin interfeys dilini seçir; hazırda yalnız Azərbaycan dili mövcuddur."
+        )
         for code in AVAILABLE_UI_LANGUAGES:
             self._language_combo.addItem(UI_LANGUAGE_NAMES.get(code, code), userData=code)
         card.add(self._language_combo)

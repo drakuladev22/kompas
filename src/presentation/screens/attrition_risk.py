@@ -135,6 +135,7 @@ class AttritionRiskScreen(Screen):
         self._campaign_name = QLineEdit()
         self._campaign_name.setProperty("variant", "form")
         self._campaign_name.setPlaceholderText("Məs.: Novruz kampaniyası")
+        self._campaign_name.setAccessibleName("Kampaniya adı")
         name_layout.addWidget(self._campaign_name)
         form_layout.addWidget(name_box, 2)
 
@@ -142,6 +143,7 @@ class AttritionRiskScreen(Screen):
         self._start_edit.setProperty("variant", "form")
         self._start_edit.setCalendarPopup(True)
         self._start_edit.setDisplayFormat("dd.MM.yyyy")
+        self._start_edit.setAccessibleName("Kampaniyanın başlanğıc tarixi")
         start_box = QWidget()
         start_layout = QVBoxLayout(start_box)
         start_layout.setContentsMargins(0, 0, 0, 0)
@@ -156,6 +158,7 @@ class AttritionRiskScreen(Screen):
         self._end_edit.setProperty("variant", "form")
         self._end_edit.setCalendarPopup(True)
         self._end_edit.setDisplayFormat("dd.MM.yyyy")
+        self._end_edit.setAccessibleName("Kampaniyanın bitmə tarixi")
         end_box = QWidget()
         end_layout = QVBoxLayout(end_box)
         end_layout.setContentsMargins(0, 0, 0, 0)
