@@ -533,7 +533,7 @@ jobs:
 
       # Auto-update client (Faza 3) bu release-i yoxlayır — bax bölmə 1, 8.
       - name: GitHub Release yarat
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Sxem faylları qlob ilə verilir, çünki adlarında teq var; `.exe`
           # sətirləri qəsdən olduğu kimi saxlanılır — auto-update kanalı məhz
