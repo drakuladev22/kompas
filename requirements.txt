@@ -123,7 +123,7 @@ setuptools>=80.10,<81.0
 #     platform plugin windows" çökməsidir — PyInstaller paketində ən çətin
 #     diaqnoz edilən nasazlıqlardan biri. `headless` variantı həmin GUI
 #     backend-lərini daşımır; bizə lazım olan `VideoCapture` isə eynidir.
-opencv-python-headless>=4.13,<5.0
+opencv-python-headless>=4.13,<6.0
 
 # ──────────────────────────────────────────────────────────────────────────────
 # İKON DƏSTİ (UI-FINAL vizual iş)

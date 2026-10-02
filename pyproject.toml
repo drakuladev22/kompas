@@ -43,7 +43,7 @@ dependencies = [
     "face_recognition>=1.2,<2.0",
     "face_recognition_models>=0.1,<1.0",
     "setuptools>=80.10,<81.0",
-    "opencv-python-headless>=4.13,<5.0",
+    "opencv-python-headless>=4.13,<6.0",
     # --- İkon dəsti (UI-FINAL vizual iş) ------------------------------------ #
     # Səbəb `requirements.txt`-in eyni adlı bölməsindədir (təkrarlanmır).
     "qtawesome>=1.4.2,<2.0",
