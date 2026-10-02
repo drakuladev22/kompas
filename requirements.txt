@@ -114,7 +114,7 @@ face_recognition_models>=0.1,<1.0
 #     Alt hədd layihənin öz qaydasına tabedir (qapılardan keçmiş versiya),
 #     üst hədd isə burada MAJOR sərhədi deyil, FUNKSİONAL sərhəddir: 81 həmin
 #     `pkg_resources` modulunu çıxaran buraxılışdır.
-setuptools>=80.10,<81.0
+setuptools>=80.10,<85.0
 
 # (4) Kamera: `opencv-python-headless`, ADİ `opencv-python` DEYİL.
 #     Adi paket cv2-nin `imshow` pəncərəsi üçün ÖZ Qt kitabxanalarını daşıyır
