@@ -21,7 +21,7 @@ pytest-timeout>=2.4,<3.0
 mypy>=2.3,<3.0
 ruff>=0.16.2,<0.17
 pip-audit>=2.7,<3.0
-cyclonedx-bom>=7.3,<8.0
+cyclonedx-bom>=7.3,<9.0
 # `.exe` qurma aləti. CI-da əvvəl PİNSİZ (`pip install ... pyinstaller`)
 # quraşdırılırdı — yəni yeni major çıxan gün İMZALANMIŞ istehsalat buraxılışı
 # (SEC-012) heç vaxt sınanmamış bootloader və hook dəsti ilə qurulacaqdı.
